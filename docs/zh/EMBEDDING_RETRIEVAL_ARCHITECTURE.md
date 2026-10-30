@@ -628,7 +628,7 @@ $env:REGENIC_EMBEDDING_DRIVER = "local_http"
 $env:REGENIC_EMBEDDING_BASE_URL = "http://127.0.0.1:8765"
 $env:REGENIC_EMBEDDING_TIMEOUT_MS = "30000"
 $env:REGENIC_EMBEDDING_CHUNK_TOKENS = "256"
-$env:REGENIC_EMBEDDING_MAX_CHUNKS = "128"
+$env:REGENIC_EMBEDDING_MAX_CHUNKS = "1024"
 pnpm --filter @regenic/local-cli... build
 pnpm --filter @regenic/local-cli start context-embedding-index --database C:\data\regenic.db --blob-root C:\data\blobs --org local-owner
 pnpm --filter @regenic/local-cli start context-embedding-status --database C:\data\regenic.db --blob-root C:\data\blobs --org local-owner
@@ -643,7 +643,7 @@ pnpm --filter @regenic/local-cli start context-embedding-status --database C:\da
 pnpm --filter @regenic/local-cli start context-embedding-retry --database C:\data\regenic.db --blob-root C:\data\blobs --org local-owner --event "<event-id>"
 ```
 
-256-token chunk、128 chunks/Event 与 30 秒超时是可调整的实验默认值，不是质量或延迟承诺。
+256-token chunk、1024 chunks/Event 与 30 秒超时是可调整的实验默认值，不是质量或延迟承诺。
 chunk 参数改变会创建新 generation；本批没有 alias 切换、跨 generation 融合或旧 generation GC。
 第二批参考服务串行处理请求；第 19 节新增有界并发接入与查询优先调度，仍不提供生产吞吐保证。
 
@@ -983,10 +983,27 @@ V2 chunk 区间是“正文 + 附件抽取文本 + 视觉单元”的连续投�
 结果依然绑定原 Authority Event/content hash，并经当前授权与生命周期检查；视觉向量不是 OCR，
 文档抽取正文也不会被当作未经核验的原始消息正文回传。
 
-向量 sidecar 升为 schema v3，保留旧 manifest、generation 和回滚能力。
+向量 sidecar 升为 schema v4，兼容迁移 v1–v3，保留旧 manifest、generation 和回滚能力。
+这里的回滚是 generation 切换；旧版只支持 v3 的程序不能直接打开 v4 sidecar，
+若要降级程序须先停止服务并恢复升级前的一致备份。
 升级后独立回填 V2；所有当前任务完成或确认为空后才从旧文本 generation 自动切换一次，
 显式回滚后不会被后台再次自动切回。损坏或不支持的附件会阻止自动切换，不能伪造完整覆盖。
 历史文本 generation 的隔离任务保留供诊断，不会通过删除旧任务来掩盖问题。
+
+大附件按每轮最多 8 个新增 chunk 持久化断点并让出 worker；每个成功向量立即写入
+`staged_chunks`，正常让出不计失败或重试次数。中断或重启后按 Event/hash、generation、
+租约和生命周期 fence 校验断点，再从已完成文本区间继续，不重复生成已保存的文本向量。
+分批期间不写 coverage、不对检索可见；正文及所有附件全部完成后才在同一事务发布。
+修订、撤回会删除旧断点，清理组织数据及回收 generation 也会级联清理。
+附件抽取缓存仍只在进程内；重启可能重新解析附件或生成视觉单元，不代表视觉处理也支持断点。
+
+运行配置的默认 Event 总预算从 128 提高至 1024，仍保持每块 256 token 和原模型精度。
+预算纳入 generation 配方，不修改旧 manifest：升级后回填新代，所有当前任务完成后才
+从相同 chunk 大小的旧低预算 V2 自动切换一次；显式回滚后不强制切回。
+原来需要 567 块的 Excel 可完整处理，无需拆文件、修改原附件或截断内容。
+若显式设置 `REGENIC_EMBEDDING_MAX_CHUNKS=128` 则仍保留旧限制；超过新总预算或上述
+解析资源上限仍明确隔离，不宣称附件大小或处理时间无限制。此次改动不降低 Python 模型常驻内存。
+仅此次分批升级无需重装模型组件，更新并重启应用即可回填；首次安装多模态支持仍按下文操作。
 
 桌面安装标记绑定 `serve.py` 和固定依赖指纹。**更新桌面构建后，在设置页停止并重新安装
 本地模型组件，再启动本地模型**，以校验视觉权重并补齐 PDF/XML/视频运行库；

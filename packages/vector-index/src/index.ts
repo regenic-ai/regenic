@@ -13,6 +13,7 @@ import {
   type ContextVectorChunk,
   type EmbeddingGeneration,
   type EmbeddingJob,
+  type EmbeddingJobSummary,
   type EmbeddingJobStore,
 } from "@regenic/domain";
 
@@ -46,7 +47,7 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
       this.db.pragma("secure_delete = ON");
       this.db.pragma("busy_timeout = 5000");
       const version = this.db.pragma("user_version", { simple: true });
-      if (version !== 0 && version !== 1 && version !== 2 && version !== 3) throw new VectorIndexSchemaError("Unsupported vector index schema");
+      if (version !== 0 && version !== 1 && version !== 2 && version !== 3 && version !== 4) throw new VectorIndexSchemaError("Unsupported vector index schema");
       this.db.transaction(() => {
         this.db.exec(`
           CREATE TABLE IF NOT EXISTS generations (
@@ -68,6 +69,12 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
             FOREIGN KEY (org_id, generation) REFERENCES generations(org_id, generation) ON DELETE CASCADE
           );
           CREATE INDEX IF NOT EXISTS jobs_due ON jobs(org_id, generation, status, retry_at, lease_until, id);
+          CREATE TABLE IF NOT EXISTS staged_chunks (
+            job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+            ordinal INTEGER NOT NULL, start INTEGER NOT NULL, end INTEGER NOT NULL,
+            text_hash TEXT NOT NULL, vector BLOB NOT NULL,
+            PRIMARY KEY (job_id, ordinal)
+          );
           CREATE TABLE IF NOT EXISTS coverage (
             org_id TEXT NOT NULL, generation TEXT NOT NULL, event_id TEXT NOT NULL,
             content_hash TEXT NOT NULL, source TEXT NOT NULL, external_id TEXT NOT NULL, chunk_count INTEGER NOT NULL,
@@ -98,7 +105,7 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
             event_id TEXT PRIMARY KEY,
             content_hash TEXT NOT NULL
           ) WITHOUT ROWID;
-          PRAGMA user_version = 3;
+          PRAGMA user_version = 4;
         `);
       }).immediate();
     } catch (error) {
@@ -240,6 +247,9 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
           this.db.prepare(`UPDATE jobs SET status='superseded',owner=NULL,lease_until=NULL
             WHERE org_id=? AND source=? AND external_id=? AND event_id<>?`)
             .run(input.org_id, head.source, head.external_id, head.event_id);
+          this.db.prepare(`DELETE FROM staged_chunks WHERE job_id IN (
+            SELECT id FROM jobs WHERE org_id=? AND source=? AND external_id=? AND status='superseded'
+          )`).run(input.org_id, head.source, head.external_id);
         }
         this.db.prepare(`INSERT OR IGNORE INTO jobs (
           org_id,generation,source,external_id,event_id,content_hash,operation,lineage_json,fence,status
@@ -277,6 +287,71 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
       .run(new Date(Date.parse(now) + leaseMs).toISOString(), job.id, job.org_id, job.generation, owner, now, job.fence).changes === 1;
   }
 
+  private ownsJob(job: EmbeddingJob, owner: string, now: string): boolean {
+    required(owner); timestamp(now);
+    return Boolean(this.db.prepare(`SELECT j.id FROM jobs j JOIN source_heads h
+      ON h.org_id=j.org_id AND h.source=j.source AND h.external_id=j.external_id
+      WHERE j.id=? AND j.org_id=? AND j.generation=? AND j.event_id=? AND j.content_hash=?
+      AND j.source=? AND j.external_id=? AND j.fence=? AND j.status='running' AND j.owner=? AND j.lease_until>?
+      AND h.event_id=j.event_id AND h.fence=j.fence`)
+      .get(job.id, job.org_id, job.generation, job.event_id, job.content_hash,
+        job.source, job.external_id, job.fence, owner, now));
+  }
+
+  async loadStagedChunks(job: EmbeddingJob, owner: string, now: string): Promise<ContextVectorChunk[]> {
+    if (!this.ownsJob(job, owner, now)) throw new Error("Embedding checkpoint lease lost");
+    const generation = this.manifest(job.org_id, job.generation);
+    const rows = this.db.prepare("SELECT ordinal,start,end,text_hash,vector FROM staged_chunks WHERE job_id=? ORDER BY ordinal")
+      .all(job.id) as Array<{ ordinal: number; start: number; end: number; text_hash: string; vector: Buffer }>;
+    if (rows.length > generation.max_chunks_per_event) throw new ContextVectorUnavailableError("corrupt");
+    let end = 0;
+    return rows.map((row, ordinal) => {
+      if (row.ordinal !== ordinal || row.start !== end || !Number.isSafeInteger(row.end) || row.end <= end ||
+        !validHash(row.text_hash) || !Buffer.isBuffer(row.vector) || row.vector.length !== generation.model.dimensions * 4) {
+        throw new ContextVectorUnavailableError("corrupt");
+      }
+      const vector = Array.from({ length: generation.model.dimensions }, (_, i) => row.vector.readFloatLE(i * 4));
+      validateEmbeddingVector(vector, generation.model.dimensions);
+      end = row.end;
+      return { ordinal, start: row.start, end: row.end, text_hash: row.text_hash, vector };
+    });
+  }
+
+  async stageChunk(input: Parameters<EmbeddingJobStore["stageChunk"]>[0]): Promise<boolean> {
+    const { job, owner, now, chunk } = input;
+    const generation = this.manifest(job.org_id, job.generation);
+    if (!Number.isSafeInteger(chunk.ordinal) || chunk.ordinal < 0 ||
+      chunk.ordinal >= generation.max_chunks_per_event ||
+      !Number.isSafeInteger(chunk.start) || !Number.isSafeInteger(chunk.end) ||
+      chunk.start < 0 || chunk.end <= chunk.start || !validHash(chunk.text_hash)) {
+      throw new Error("Invalid staged embedding chunk");
+    }
+    validateEmbeddingVector(chunk.vector, generation.model.dimensions);
+    return this.db.transaction(() => {
+      if (!this.ownsJob(job, owner, now)) return false;
+      const previous = this.db.prepare("SELECT ordinal,end FROM staged_chunks WHERE job_id=? ORDER BY ordinal DESC LIMIT 1")
+        .get(job.id) as { ordinal: number; end: number } | undefined;
+      if (chunk.ordinal !== (previous ? previous.ordinal + 1 : 0) || chunk.start !== (previous?.end ?? 0)) {
+        throw new Error("Non-contiguous embedding checkpoint");
+      }
+      const bytes = Buffer.alloc(chunk.vector.length * 4);
+      chunk.vector.forEach((value, i) => bytes.writeFloatLE(value, i * 4));
+      this.db.prepare("INSERT INTO staged_chunks VALUES (?,?,?,?,?,?)")
+        .run(job.id, chunk.ordinal, chunk.start, chunk.end, chunk.text_hash, bytes);
+      return true;
+    }).immediate();
+  }
+
+  async yieldJob(job: EmbeddingJob, owner: string, now: string): Promise<boolean> {
+    return this.db.transaction(() => {
+      if (!this.ownsJob(job, owner, now)) return false;
+      this.db.prepare(`UPDATE jobs SET status='pending',owner=NULL,lease_until=NULL,retry_at=NULL,
+        attempts=MAX(attempts-1,0) WHERE id=?`)
+        .run(job.id);
+      return true;
+    }).immediate();
+  }
+
   async complete(input: Parameters<EmbeddingJobStore["complete"]>[0]): Promise<boolean> {
     const { job, owner, now, chunks } = input;
     required(owner); timestamp(now);
@@ -295,13 +370,7 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
       end = chunk.end;
     }
     return this.db.transaction(() => {
-      const current = this.db.prepare(`SELECT j.id FROM jobs j JOIN source_heads h
-        ON h.org_id=j.org_id AND h.source=j.source AND h.external_id=j.external_id
-        WHERE j.id=? AND j.org_id=? AND j.generation=? AND j.event_id=? AND j.content_hash=?
-        AND j.source=? AND j.external_id=? AND j.fence=? AND j.status='running' AND j.owner=? AND j.lease_until>?
-        AND h.event_id=j.event_id AND h.fence=j.fence`)
-        .get(job.id, job.org_id, job.generation, job.event_id, job.content_hash, job.source, job.external_id, job.fence, owner, now);
-      if (!current) return false;
+      if (!this.ownsJob(job, owner, now)) return false;
       this.db.prepare("DELETE FROM coverage WHERE org_id=? AND generation=? AND event_id=?")
         .run(job.org_id, job.generation, job.event_id);
       if (!noContent) {
@@ -316,6 +385,7 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
       }
       this.db.prepare("UPDATE jobs SET status=?,owner=NULL,lease_until=NULL,retry_at=NULL,error_code=NULL WHERE id=?")
         .run(noContent ? "skipped" : "succeeded", job.id);
+      this.db.prepare("DELETE FROM staged_chunks WHERE job_id=?").run(job.id);
       return true;
     }).immediate();
   }
@@ -334,6 +404,38 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
     required(orgId); required(generation);
     return (this.db.prepare("SELECT * FROM jobs WHERE org_id=? AND generation=? ORDER BY id")
       .all(orgId, generation) as JobRow[]).map(jobFromRow);
+  }
+
+  async summarizeJobs(orgId: string, generation: string): Promise<EmbeddingJobSummary> {
+    required(orgId); required(generation);
+    const counts: EmbeddingJobSummary["counts"] = {
+      pending: 0, running: 0, succeeded: 0, skipped: 0,
+      failed: 0, quarantined: 0, superseded: 0,
+    };
+    const statuses = this.db.prepare(`SELECT status,COUNT(*) AS count FROM jobs
+      WHERE org_id=? AND generation=? GROUP BY status`).all(orgId, generation) as Array<{
+      status: EmbeddingJob["status"]; count: number;
+    }>;
+    for (const row of statuses) counts[row.status] = row.count;
+
+    const failures = this.db.prepare(`SELECT error_code,status,COUNT(*) AS count FROM jobs
+      WHERE org_id=? AND generation=? AND status IN ('failed','quarantined')
+      GROUP BY error_code,status`).all(orgId, generation) as Array<{
+      error_code: string | null; status: "failed" | "quarantined"; count: number;
+    }>;
+    const byCode = new Map<string, EmbeddingJobSummary["failures"][number]>();
+    for (const row of failures) {
+      const code = row.error_code ?? "indexing_failed";
+      const failure = byCode.get(code) ?? {
+        error_code: code, failed: 0, quarantined: 0,
+      };
+      failure[row.status] += row.count;
+      byCode.set(code, failure);
+    }
+    return {
+      counts,
+      failures: [...byCode.values()].sort((a, b) => a.error_code.localeCompare(b.error_code)),
+    };
   }
 
   async retryQuarantined(orgId: string, generation: string, eventId: string): Promise<boolean> {

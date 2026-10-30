@@ -23,6 +23,9 @@ const DEFAULT_RUN_MAX_JOBS = 16;
 const DEFAULT_RUN_BUDGET_MS = 1_500;
 const MAX_RUN_JOBS = 100;
 const MAX_RUN_BUDGET_MS = 30_000;
+const CHECKPOINT_BATCH_CHUNKS = 8;
+
+class EmbeddingBatchYield extends Error {}
 
 type EmbeddingRunOptions = NonNullable<Parameters<ContextEmbeddingRunner["runOnce"]>[0]>;
 type EmbeddingRunResult = Awaited<ReturnType<ContextEmbeddingRunner["runOnce"]>>;
@@ -102,7 +105,7 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
     const reads = new Map<string, ContextSourceRead>();
     let attempted = 0;
 
-    while (attempted < maxJobs && Date.now() < deadline && !this.abort.signal.aborted && !options.pause_if?.()) {
+    work: while (attempted < maxJobs && Date.now() < deadline && !this.abort.signal.aborted && !options.pause_if?.()) {
       let found = false;
       for (let offset = 0; offset < manifests.length; offset++) {
         const cursor = (this.generationCursor + offset) % manifests.length;
@@ -117,6 +120,7 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
           total.failed += run.result.failed;
           total.superseded += run.result.superseded;
           this.generationCursor = (cursor + 1) % manifests.length;
+          if (run.yielded) break work;
           break;
         }
       }
@@ -128,7 +132,10 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
       const target = entries.find((entry) => entry.manifest.id === this.generation.id);
       const active = entries.find((entry) => entry.active);
       if (target?.previously_active === false &&
-        active?.manifest.extractor_version === "stored-body-text-v1") {
+        (active?.manifest.extractor_version === "stored-body-text-v1" ||
+          (active?.manifest.extractor_version === this.generation.extractor_version &&
+            active.manifest.max_chunks_per_event < this.generation.max_chunks_per_event &&
+            active.manifest.chunk_tokens === this.generation.chunk_tokens))) {
         const jobs = await this.jobs.listJobs(this.orgId, this.generation.id);
         if (jobs.every((job) => ["succeeded", "skipped", "superseded"].includes(job.status))) {
           try {
@@ -152,6 +159,7 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
       now: new Date().toISOString(), lease_ms: 90000, limit: 1,
     });
     const result = { processed: 0, failed: 0, superseded: 0 };
+    let yielded = false;
     if (claimed.length === 0) return { claimed: false, read, result };
     for (const job of claimed) {
       if (this.abort.signal.aborted) break;
@@ -185,8 +193,38 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
           throw new EmbeddingError("input_too_large", false);
         }
         let chunks: ContextVectorChunk[] = [];
+        const staged = await this.jobs.loadStagedChunks(job, this.owner, new Date().toISOString());
+        let freshChunks = 0;
+        const saveChunk = async (chunk: ContextVectorChunk) => {
+          if (chunk.ordinal >= generation.max_chunks_per_event) throw new EmbeddingError("input_too_large", false);
+          if (!await this.jobs.stageChunk({
+            job, owner: this.owner, now: new Date().toISOString(), chunk,
+          })) throw new Error("Embedding checkpoint lease lost");
+          freshChunks++;
+          if (freshChunks >= CHECKPOINT_BATCH_CHUNKS) throw new EmbeddingBatchYield();
+        };
+        const appendText = async (value: string) => {
+          const start = chunks.at(-1)?.end ?? 0;
+          const ordinal = chunks.length;
+          const textChunks = staged.slice(ordinal).filter((chunk) =>
+            chunk.start >= start && chunk.end <= start + value.length,
+          ).map((chunk, index) => ({
+            ...chunk, ordinal: index, start: chunk.start - start, end: chunk.end - start,
+          }));
+          const extracted = await chunkEmbeddingText(value, this.provider, {
+            ...generation, max_chunks_per_event: generation.max_chunks_per_event - ordinal,
+          }, this.abort.signal, {
+            chunks: textChunks,
+            save: (chunk) => saveChunk({
+              ...chunk, ordinal: ordinal + chunk.ordinal, start: start + chunk.start, end: start + chunk.end,
+            }),
+          });
+          chunks.push(...extracted.map((chunk) => ({
+            ...chunk, ordinal: ordinal + chunk.ordinal, start: start + chunk.start, end: start + chunk.end,
+          })));
+        };
         if (typeof text === "string" && text.trim()) {
-          chunks = await chunkEmbeddingText(text, this.provider, generation, this.abort.signal);
+          await appendText(text);
         }
         if (material?.attachments.length) {
           if (!this.provider.processAttachment) throw new EmbeddingError("unavailable", true);
@@ -203,19 +241,11 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
               if (Buffer.byteLength(processed.text, "utf8") > 262144) {
                 throw new EmbeddingError("input_too_large", false);
               }
-              const extracted = await chunkEmbeddingText(processed.text, this.provider, generation, this.abort.signal);
-              const start = chunks.at(-1)?.end ?? 0;
-              const ordinal = chunks.length;
-              chunks.push(...extracted.map((chunk, index) => ({
-                ...chunk,
-                ordinal: ordinal + index,
-                start: start + chunk.start,
-                end: start + chunk.end,
-              })));
+              await appendText(processed.text);
             }
             for (const [index, vector] of processed.vectors.entries()) {
               const cursor = chunks.length ? chunks[chunks.length - 1].end : 0;
-              chunks.push({
+              const chunk = {
                 ordinal: chunks.length,
                 start: cursor,
                 end: cursor + 1,
@@ -223,7 +253,17 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
                   .update(`${attachment.content_hash}:${index}`)
                   .digest("hex"),
                 vector,
-              });
+              };
+              const saved = staged[chunk.ordinal];
+              if (saved) {
+                if (saved.text_hash !== chunk.text_hash || saved.start !== chunk.start || saved.end !== chunk.end) {
+                  throw new Error("Embedding checkpoint content mismatch");
+                }
+                chunks.push(saved);
+              } else {
+                await saveChunk(chunk);
+                chunks.push(chunk);
+              }
             }
             if (chunks.length > generation.max_chunks_per_event) {
               throw new EmbeddingError("input_too_large", false);
@@ -232,6 +272,7 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
         }
         const noContent = chunks.length === 0 && !material?.attachments.length &&
           generation.extractor_version === "stored-body-and-attachments-v2";
+        if (staged.length > chunks.length) throw new Error("Embedding checkpoint content mismatch");
         if (chunks.length === 0 && !noContent) throw new EmbeddingError("invalid_input", false);
         read = await this.read(generation);
         await heartbeat;
@@ -247,6 +288,11 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
         if (completed) result.processed += 1;
         else result.superseded += 1;
       } catch (error) {
+        if (error instanceof EmbeddingBatchYield) {
+          yielded = await this.jobs.yieldJob(job, this.owner, new Date().toISOString());
+          if (!yielded) result.superseded += 1;
+          continue;
+        }
         const code = error instanceof EmbeddingError ? error.code
           : error instanceof ContextTextMaterialError ? "invalid_input" : "indexing_failed";
         const retryable = error instanceof ContextTextMaterialError ? false
@@ -264,7 +310,7 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
         await heartbeat;
       }
     }
-    return { claimed: true, read, result };
+    return { claimed: true, read, result, yielded };
   }
 }
 
@@ -331,23 +377,42 @@ export async function chunkEmbeddingText(
   provider: EmbeddingProvider,
   generation: EmbeddingGeneration,
   signal?: AbortSignal,
+  checkpoint?: { chunks: ContextVectorChunk[]; save(chunk: ContextVectorChunk): Promise<void> },
 ): Promise<ContextVectorChunk[]> {
-  const characters = Array.from(text);
-  const chunks: ContextVectorChunk[] = [];
-  const [wholeTokens] = await provider.countTokens([text], "document", signal);
-  if (!Number.isSafeInteger(wholeTokens) || wholeTokens < 1) {
-    throw new EmbeddingError("invalid_response", true);
+  const chunks: ContextVectorChunk[] = checkpoint?.chunks.map((chunk) => ({ ...chunk })) ?? [];
+  let start = 0;
+  for (const [ordinal, chunk] of chunks.entries()) {
+    if (chunk.ordinal !== ordinal || chunk.start !== start || !Number.isSafeInteger(chunk.end) ||
+      chunk.end <= start || chunk.end > text.length ||
+      chunk.text_hash !== createHash("sha256").update(text.slice(chunk.start, chunk.end)).digest("hex")) {
+      throw new Error("Embedding checkpoint content mismatch");
+    }
+    start = chunk.end;
   }
-  if (wholeTokens <= generation.chunk_tokens) {
-    const vectors = await provider.embed([text], "document", signal);
+  if (chunks.length > generation.max_chunks_per_event) throw new EmbeddingError("input_too_large", false);
+  if (start === text.length) return chunks;
+  const characters = Array.from(text.slice(start));
+  const encode = async (slice: string): Promise<ContextVectorChunk> => {
+    const vectors = await provider.embed([slice], "document", signal);
     if (vectors.length !== 1) throw new EmbeddingError("invalid_response", true);
-    return [{
-      ordinal: 0, start: 0, end: text.length,
-      text_hash: createHash("sha256").update(text).digest("hex"), vector: vectors[0],
-    }];
+    const chunk = {
+      ordinal: chunks.length, start, end: start + slice.length,
+      text_hash: createHash("sha256").update(slice).digest("hex"), vector: vectors[0],
+    };
+    await checkpoint?.save(chunk);
+    return chunk;
+  };
+  if (chunks.length === 0) {
+    const [wholeTokens] = await provider.countTokens([text], "document", signal);
+    if (!Number.isSafeInteger(wholeTokens) || wholeTokens < 1) {
+      throw new EmbeddingError("invalid_response", true);
+    }
+    if (wholeTokens <= generation.chunk_tokens) {
+      if (generation.max_chunks_per_event < 1) throw new EmbeddingError("input_too_large", false);
+      return [await encode(text)];
+    }
   }
   let offset = 0;
-  let start = 0;
   while (offset < characters.length) {
     if (signal?.aborted) throw new EmbeddingError("cancelled", true);
     if (chunks.length >= generation.max_chunks_per_event) throw new EmbeddingError("input_too_large", false);
@@ -380,12 +445,7 @@ export async function chunkEmbeddingText(
       [tokens] = await provider.countTokens([slice], "document", signal);
     }
     if (!Number.isSafeInteger(tokens) || tokens < 1 || tokens > generation.chunk_tokens) throw new EmbeddingError("invalid_response", true);
-    const vectors = await provider.embed([slice], "document", signal);
-    if (vectors.length !== 1) throw new EmbeddingError("invalid_response", true);
-    chunks.push({
-      ordinal: chunks.length, start, end: start + slice.length,
-      text_hash: createHash("sha256").update(slice).digest("hex"), vector: vectors[0],
-    });
+    chunks.push(await encode(slice));
     offset += length;
     start += slice.length;
   }

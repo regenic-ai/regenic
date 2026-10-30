@@ -179,7 +179,7 @@ API authentication for this setup. Direct `/v1/me/*` calls require a valid
 | `REGENIC_EMBEDDING_BASE_URL` | Required when enabled; example `http://127.0.0.1:8765` |
 | `REGENIC_EMBEDDING_TIMEOUT_MS` | 30000; integer 1-300000 ms |
 | `REGENIC_EMBEDDING_CHUNK_TOKENS` | 256; integer 32-8192 |
-| `REGENIC_EMBEDDING_MAX_CHUNKS` | 128; per-Event limit, integer 1-1024 |
+| `REGENIC_EMBEDDING_MAX_CHUNKS` | 1024; per-Event limit, integer 1-1024 |
 | `HF_HOME` | Python model cache; keep the same path on restart |
 | `HF_HUB_OFFLINE` | Set to `1` after downloading to load from cache offline |
 | `REGENIC_MODEL_DRIVER` | Answer-generation model; search can keep `none` |
@@ -189,6 +189,14 @@ query parameters or a fragment. Do not use `localhost`, an external hostname or 
 `/v1` suffix. The client also accepts `[::1]`, but the reference Python service
 binds IPv4 only, so use `127.0.0.1` as shown. Chunk settings are part of an immutable
 generation; changing them is not a fix for a model identity mismatch.
+
+Indexing checkpoints each successful chunk and yields after eight new chunks.
+After interruption, saved text vectors are reused; coverage is published only when
+the entire Event, including all attachments, is complete. Raising the default
+budget creates a new generation and backfills it before a one-time automatic
+switch from the lower-budget recipe. Explicit rollback is respected. Chunk size
+and model precision are unchanged; files are not truncated or modified.
+Attachment parsing and visual inference may run again after a process restart.
 
 If starting desktop directly with environment variables instead of a separate API,
 external configuration is preserved only while no desktop semantic preference has

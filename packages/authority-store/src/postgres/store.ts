@@ -921,6 +921,7 @@ export class PostgresAuthorityStore
       const before = await this.storeFootprint(orgId, client);
       await this.execute(`DELETE FROM work_deliveries WHERE org_id = $1`, [orgId], client);
       await this.execute(`DELETE FROM work_runs WHERE org_id = $1`, [orgId], client);
+      await this.execute(`DELETE FROM search_answers WHERE org_id = $1`, [orgId], client);
       await this.execute(`DELETE FROM work_items WHERE org_id = $1`, [orgId], client);
       await this.execute(`DELETE FROM customer_service_tasks WHERE org_id = $1`, [orgId], client);
       await this.execute(`DELETE FROM context_snapshot_index WHERE org_id = $1`, [orgId], client);

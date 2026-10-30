@@ -53,6 +53,113 @@ async function fixture(t, embedding = provider(), gen = generation) {
 }
 
 describe("independent embedding indexing worker", () => {
+  it("resumes a 567-chunk attachment across batches without publishing partial coverage or repeating inference", async (t) => {
+    const large = embeddingGeneration(descriptor, 32, 1024);
+    const extracted = "x".repeat(27 * 566 + 1);
+    let calls = 0;
+    const embedding = provider({
+      async embed(texts) { calls += texts.length; return texts.map(() => [1, 0]); },
+      async processAttachment() { return { text: extracted, vectors: [] }; },
+    });
+    const f = await fixture(t, embedding, large);
+    const input = batch("create", undefined);
+    input.records[0].content = [{
+      role: "attachment", media_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      source_filename: "large.xlsx", bytes: Buffer.from("PK\u0003\u0004synthetic"),
+    }];
+    await f.ingest.ingest(input);
+    assert.deepEqual(await f.worker.runOnce(), { processed: 0, failed: 0, superseded: 0 });
+    assert.equal(calls, 8);
+    const [job] = await f.index.listJobs("org", large.id);
+    const query = () => f.index.matchAuthorized({
+      org_id: "org", generation: large.id,
+      authorized: [{ event_id: job.event_id, content_hash: job.content_hash }],
+      query_vector: [1, 0], limit: 1,
+    });
+    assert.deepEqual((await query()).covered, []);
+    await f.worker.stop();
+    const resumed = new ContextEmbeddingWorker("org", f.source, embedding, f.index, f.index, large, f.index);
+    t.after(() => resumed.stop());
+    let runs = 1;
+    while ((await f.index.listJobs("org", large.id))[0].status !== "succeeded") {
+      assert.ok(runs++ < 80);
+      const result = await resumed.runOnce();
+      assert.equal(result.failed, 0);
+      if (!result.processed) assert.deepEqual((await query()).covered, []);
+    }
+    assert.equal(calls, 567);
+    assert.equal((await f.index.listJobs("org", large.id))[0].attempts, 1);
+    const result = await query();
+    assert.equal(result.covered.length, 1);
+    assert.equal(result.matched[0].material_length, extracted.length);
+  });
+
+  it("promotes a complete higher-budget V2 generation once and respects explicit rollback", async (t) => {
+    const upgraded = embeddingGeneration(descriptor, 32, 1024);
+    const f = await fixture(t, provider(), upgraded);
+    await f.index.registerGeneration("org", generation);
+    await f.ingest.ingest(batch("create", "budget upgrade"));
+    await f.worker.runOnce();
+    assert.equal((await f.index.activeGeneration("org")).id, upgraded.id);
+    await activateEmbeddingGeneration("org", generation.id, f.source, f.index, f.index);
+    await f.worker.runOnce();
+    assert.equal((await f.index.activeGeneration("org")).id, generation.id);
+  });
+
+  it("resumes Unicode text, multiple attachments and visual units with contiguous coordinates", async (t) => {
+    const embedded = [];
+    const texts = ["😀".repeat(220), "文档\n".repeat(80)];
+    const f = await fixture(t, provider({
+      async embed(values) { embedded.push(...values); return values.map(() => [1, 0]); },
+      async processAttachment(input) {
+        return { text: texts[input.source_filename === "one.pdf" ? 0 : 1], vectors: [[0, 1]] };
+      },
+    }));
+    const input = batch("create", "body");
+    for (const name of ["one.pdf", "two.pdf"]) input.records[0].content.push({
+      role: "attachment", media_type: "application/pdf", source_filename: name,
+      bytes: Buffer.from(`%PDF-${name}`),
+    });
+    await f.ingest.ingest(input);
+    let runs = 0;
+    do {
+      assert.ok(runs++ < 15);
+      assert.equal((await f.worker.runOnce()).failed, 0);
+    } while ((await f.index.listJobs("org", generation.id))[0].status !== "succeeded");
+    assert.equal(embedded.join(""), "body" + texts.join(""));
+    const [job] = await f.index.listJobs("org", generation.id);
+    const result = await f.index.matchAuthorized({
+      org_id: "org", generation: generation.id,
+      authorized: [{ event_id: job.event_id, content_hash: job.content_hash }],
+      query_vector: [0, 1], limit: 1,
+    });
+    assert.equal(result.matched[0].material_length, 4 + texts[0].length + texts[1].length + 2);
+  });
+
+  it("retains completed chunks across retryable failures without counting normal batches as retries", async (t) => {
+    let calls = 0;
+    const body = "x".repeat(27 * 18);
+    const f = await fixture(t, provider({
+      async embed(values) {
+        if (++calls === 10) throw new EmbeddingError("timeout", true);
+        return values.map(() => [1, 0]);
+      },
+    }));
+    await f.ingest.ingest(batch("create", body));
+    assert.equal((await f.worker.runOnce()).failed, 0);
+    assert.equal((await f.worker.runOnce()).failed, 1);
+    const [failed] = await f.index.listJobs("org", generation.id);
+    assert.equal(failed.attempts, 1);
+    assert.equal(await f.index.retryFailed("org", generation.id, 1), 1);
+    let runs = 0;
+    do {
+      assert.ok(runs++ < 4);
+      assert.equal((await f.worker.runOnce()).failed, 0);
+    } while ((await f.index.listJobs("org", generation.id))[0].status !== "succeeded");
+    assert.equal(calls, 19);
+    assert.equal((await f.index.listJobs("org", generation.id))[0].attempts, 2);
+  });
+
   it("dual-writes retained recipes, refuses incomplete activation and catches up before rollback", async (t) => {
     const f = await fixture(t);
     const next = embeddingGeneration(descriptor, 64);
