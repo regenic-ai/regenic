@@ -573,6 +573,22 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
         const first = rows[offset];
         let best: { score: number; chunk_ordinal: number; start: number; end: number } | undefined;
         const parts = new Map<number, NonNullable<ContextVectorMatch["search_matches"]>[number]>();
+        let textRun: { origin: ContextChunkOrigin; texts: string[]; end: number; score: number } | undefined;
+        const admitPart = (origin: ContextChunkOrigin, score: number, lexical = false) => {
+          if (!input.query || input.search_kind === "messages") return;
+          const previous = parts.get(origin.part_index);
+          if (!previous || (lexical && !previous.lexical) || (lexical === previous.lexical && score > previous.score)) {
+            parts.set(origin.part_index, { origin, score, lexical });
+          }
+        };
+        const flushTextRun = () => {
+          if (!textRun) return;
+          const origin = { ...textRun.origin, text: textRun.texts.join("") };
+          if (scoreContextLexicalText(origin.text, input.query).lexical > 0) {
+            admitPart(origin, textRun.score, true);
+          }
+          textRun = undefined;
+        };
         let chunks = 0;
         let materialLength = 0;
         while (offset < rows.length && rows[offset].event_id === first.event_id) {
@@ -595,11 +611,23 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
             generation.model.dimensions,
           );
           const origin = parseOrigin(chunk.origin_json, chunk.text_hash, chunk.end! - chunk.start!);
-          if (origin && input.query) {
-            const lexical = origin.mode === "text" && scoreContextLexicalText(origin.text, input.query).lexical > 0;
-            const previous = parts.get(origin.part_index);
-            if (!previous || (lexical && !previous.lexical) || (lexical === previous.lexical && score > previous.score)) {
-              parts.set(origin.part_index, { origin, score, lexical });
+          if (input.query && input.search_kind !== "messages") {
+            // Token boundaries belong to continuous file text, not embedding chunks.
+            if (origin?.mode === "text") {
+              admitPart(origin, score);
+              if (textRun && (textRun.origin.part_index !== origin.part_index ||
+                textRun.origin.content_hash !== origin.content_hash || textRun.end !== origin.start)) {
+                flushTextRun();
+              }
+              if (!textRun) {
+                textRun = { origin, texts: [], end: origin.start, score };
+              }
+              textRun.texts.push(origin.text!);
+              textRun.end = origin.start + origin.text!.length;
+              textRun.score = Math.max(textRun.score, score);
+            } else {
+              flushTextRun();
+              if (origin) admitPart(origin, score);
             }
           }
           const eligibleChunk = input.search_kind === "files" ? Boolean(origin)
@@ -617,6 +645,7 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
           materialLength = chunk.end!;
           offset += 1;
         }
+        flushTextRun();
         if (chunks !== first.chunk_count || chunks === 0) {
           throw new ContextVectorUnavailableError("corrupt");
         }

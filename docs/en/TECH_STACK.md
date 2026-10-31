@@ -76,8 +76,12 @@ The vector sidecar migrates additively to schema v5, retaining v4 staged chunks,
 fences, complete-only publication and generation rollback. New chunks persist
 attachment provenance and extracted text with their existing text hash; keyword
 search of completed extracted chunks also works while inference is offline.
-Only authorized current Event/hash keys can read this projection. Text locations
-are bounded, file-local UTF-16 `[start,end)` ranges in stored/extracted text;
+Only authorized current Event/hash keys can read this projection.
+Keyword tokenization spans continuous text chunks of the same Event/hash and
+attachment part/hash, preserving file-local offsets; it stops at provenance
+gaps, missing origins and visual units. Messages-only vector ranking excludes
+attachment matches before top-k selection.
+Text locations are bounded, file-local UTF-16 `[start,end)` ranges in stored/extracted text;
 visual hits identify only the file. No page, sheet, cell or bounding-box locations
 are inferred. Old chunks without provenance and chunks crossing material parts
 remain Event-level semantic evidence, never guessed file matches. Existing

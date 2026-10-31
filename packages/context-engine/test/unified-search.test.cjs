@@ -25,7 +25,7 @@ const file = (name, text, media = "text/plain") => ({
   bytes: Buffer.from(text),
 });
 
-async function fixture(t) {
+async function fixture(t, providerOverrides = {}) {
   const root = await mkdtemp(join(tmpdir(), "regenic-unified-search-"));
   const authority = await SqliteSplitAuthorityStore.open(join(root, "authority.db"));
   const blobs = new FsBlobStore(join(root, "blobs"));
@@ -43,6 +43,7 @@ async function fixture(t) {
         ? { text: undefined, vectors: [marker.includes("target") ? [1, 0] : [0, 1]] }
         : { text: "Extracted nebula invoice terms.", vectors: [] };
     },
+    ...providerOverrides,
   };
   const blocked = new Set();
   const retrievers = new MemoryContextRetrieverRegistry();
@@ -66,7 +67,10 @@ async function fixture(t) {
   let sequence = 0;
   return {
     source, index, worker, blocked,
-    offline() { offline = true; },
+    offline() {
+      offline = true;
+      provider.countTokens = async () => { throw new EmbeddingError("unavailable", true); };
+    },
     async ingest(id, content, operation = "create") {
       const result = await ingestion.ingest({
         schema_version: "1.0", connector_id: "synthetic", org_id: "org", delivery_id: `${sequence++}`,
@@ -82,13 +86,66 @@ async function fixture(t) {
       const read = await source.openRead({ org_id: "org" });
       return read.events.find((event) => event.event.external_id === id && event.event.operation === operation).event;
     },
-    async search(query, kind = "all") {
-      return new ContextSearcher(engine).search(contextSearchRequest({ query, kind, limit: 20 }, {
+    async search(query, kind = "all", limit = 20) {
+      return new ContextSearcher(engine).search(contextSearchRequest({ query, kind, limit }, {
         id: `query-${sequence++}`, org_id: "org", principal: { actor_type: "human", actor_id: "owner" },
       }));
     },
   };
 }
+
+it("retains a semantic message in the 50-candidate window despite 50 mixed attachment keyword hits", async (t) => {
+  const f = await fixture(t, {
+    async embed(texts, mode) {
+      return texts.map((text) => mode === "query" || text === "stellar answer" ? [1, 0] : [0, 1]);
+    },
+  });
+  for (let index = 0; index < 50; index++) {
+    await f.ingest(`mixed-${index}`, [body("ordinary"), file("report.pdf", "%PDF synthetic", "application/pdf")]);
+  }
+  const message = await f.ingest("message", [body("stellar answer")]);
+  assert.equal((await f.worker.runOnce({ max_jobs: 60 })).processed, 51);
+  const messages = await f.search("nebula", "messages", 10);
+  assert.deepEqual(messages.items.map((hit) => hit.event_id), [message.event_id]);
+  assert.deepEqual(messages.items[0].matches.map((match) => [match.kind, match.via]), [["message", ["semantic"]]]);
+  const files = await f.search("nebula", "files", 10);
+  assert.equal(files.items.length, 10);
+  assert.ok(files.items.every((hit) => hit.matches.every((match) => match.kind === "file" && match.via.includes("text"))));
+  assert.equal((await f.search("nebula", "all", 10)).items.length, 10);
+});
+
+it("finds PDF keywords split by the unchanged 32-token worker chunks, including offline", async (t) => {
+  const extracted = `${"x".repeat(24)} nebula invoice`;
+  const f = await fixture(t, {
+    async countTokens(texts) { return texts.map((text) => Array.from(text).length + 5); },
+    async processAttachment(input) {
+      return { text: input.source_filename === "control.pdf" ? "nebula invoice" : extracted, vectors: [] };
+    },
+  });
+  const event = await f.ingest("split", [body("ordinary"), file("report.pdf", "%PDF synthetic", "application/pdf")]);
+  await f.ingest("control", [body("ordinary"), file("control.pdf", "%PDF control", "application/pdf")]);
+  assert.equal((await f.worker.runOnce({ max_jobs: 2 })).processed, 2);
+  const input = {
+    org_id: "org", generation: generation.id, authorized: [{ event_id: event.event_id, content_hash: event.content_hash }],
+    query_vector: [1, 0], limit: 50, query: "ne", search_kind: "files",
+  };
+  const fragments = (await f.index.matchAuthorized(input)).matched[0].search_matches;
+  assert.ok(fragments.some((hit) => hit.origin.text.endsWith(" ne")));
+  assert.ok(fragments.every((hit) => !hit.lexical), "partial chunk tokens must not become file keywords");
+  const online = await f.search("nebula", "files");
+  f.offline();
+  const offline = await f.search("NEBULA", "files");
+  assert.ok(offline.degradation_flags.includes("embedding_unavailable"));
+  for (const result of [online, offline]) {
+    assert.equal(result.items.length, 2);
+    const hit = result.items.find((hit) => hit.event_id === event.event_id).matches[0];
+    assert.equal(hit.part_index, 1);
+    assert.deepEqual(hit.via, ["text"]);
+    assert.ok(hit.snippet.includes("nebula"));
+    assert.equal(extracted.slice(hit.start, hit.end), hit.snippet);
+    assert.ok(result.items.some((item) => item.matches[0].filename === "control.pdf"));
+  }
+});
 
 it("finds filename-only and empty files, keeps part indexes distinct and filters before the result budget", async (t) => {
   const f = await fixture(t);

@@ -60,6 +60,8 @@ Event 仍是融合排序和预算单位。`items[].matches` 以 Event 内容 has
 向量 sidecar 以增量迁移升级 schema v5，保留 v4 staged_chunks、租约围栏、完整后原子发布与代际回滚。
 新块在既有 text hash 之外保存附件身份和抽取文本，已完成的抽取文本关键词在模型离线时仍可检索；
 读取始终限定于授权的当前 Event/hash。可验证位置是文件内已存/抽取文本的 UTF-16 `[start,end)` 区间；
+关键词按同 Event/hash、同附件 part/hash 且文件内偏移连续的文本块分词；遇来源缺口、
+缺失来源块或视觉单元即中断，不拼接不同附件。仅消息检索在 top-k 排序前排除附件命中的影响。
 视觉结果只定位文件，不编造页码、工作表、单元格或图像框。旧无来源块及跨 material 边界的语义块
 保留 Event 级命中，不能假装具体附件；不会自动重建既有 generation。历史 direct blob 若未存 envelope，
 用 Event hash 与 part `-1` 标识；缺失的文件名不能恢复。个人搜索会在授权范围逐 Event 验证文件名与正文，
