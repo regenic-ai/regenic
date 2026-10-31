@@ -364,7 +364,7 @@ export const ContextCandidateSchema: z.ZodType<ContextCandidate> = z
     recorded_at: timestampSchema,
     status: z.enum(["current", "superseded", "retracted"]).optional(),
     content_hash: contentHashSchema.optional(),
-    scores: z.record(z.number().finite()),
+    scores: z.record(z.string(), z.number().finite()),
     estimated_tokens: nonNegativeIntegerSchema,
     conflicts: z.array(nonEmptyStringSchema).optional(),
     projection: ContextProjectionReferenceSchema.optional(),
@@ -726,7 +726,10 @@ function validate<T>(schema: z.ZodType<T>, input: unknown): ContextValidationRes
   }
   return {
     success: false,
-    issues: result.error.issues.map((issue) => ({ path: issue.path, message: issue.message })),
+    issues: result.error.issues.map((issue) => ({
+      path: issue.path.map((part) => typeof part === "symbol" ? String(part) : part),
+      message: issue.message,
+    })),
   };
 }
 
