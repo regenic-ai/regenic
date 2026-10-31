@@ -25,7 +25,7 @@ export const JsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
     z.boolean(),
     z.null(),
     z.array(JsonValueSchema),
-    z.record(JsonValueSchema),
+    z.record(z.string(), JsonValueSchema),
   ]),
 );
 
@@ -103,7 +103,7 @@ export const IngestRecordSchema: z.ZodType<IngestRecord> = z
     content: z.array(ContentPartSchema).min(1).optional(),
     direction_tags: z.array(nonEmptyStringSchema).optional(),
     weight_hints: WeightHintsSchema.optional(),
-    attrs: z.record(JsonValueSchema).optional(),
+    attrs: z.record(z.string(), JsonValueSchema).optional(),
   })
   .strict();
 
@@ -140,7 +140,7 @@ export function validateIngestBatch(input: unknown): IngestBatchValidationResult
   }
 
   const issues = result.error.issues.map((issue) => ({
-    path: issue.path,
+    path: issue.path.map((part) => typeof part === "symbol" ? String(part) : part),
     message: issue.message,
   }));
   const hasRecordIssue = issues.some(

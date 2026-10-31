@@ -1,6 +1,6 @@
 {
   "name": "@regenic/connector-contract",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Serializable types and pure helpers for Regenic connectors.",
   "license": "MIT",
   "repository": {
@@ -27,7 +27,7 @@
   },
   "dependencies": {
     "@regenic/plugin-host": "workspace:*",
-    "zod": "^3.24.1"
+    "zod": "^4.6.7"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
