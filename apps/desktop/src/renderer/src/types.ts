@@ -532,9 +532,22 @@ export interface PersonalContextSearchResult {
     snippet_start: number;
     snippet_end: number;
     evidence: PersonalContextEvidence[];
+    matches?: PersonalSearchMatch[];
   }>;
   degradation_flags: string[];
   truncated: boolean;
+}
+
+export interface PersonalSearchMatch {
+  kind: "message" | "file" | "event";
+  part_index?: number;
+  content_hash?: string;
+  filename?: string;
+  media_type?: string;
+  via: Array<"filename" | "metadata" | "text" | "semantic" | "visual">;
+  snippet?: string;
+  start?: number;
+  end?: number;
 }
 
 export interface PersonalSearchBoundary {
@@ -609,6 +622,7 @@ export interface PersonalSearchSource {
   text: string;
   snapshot_id: string;
   item: InboxViewItem | null;
+  attachment?: { part_index: number; content_hash?: string; filename?: string; media_type: string };
 }
 
 export interface PersonalContextSnapshotIndexEntry {

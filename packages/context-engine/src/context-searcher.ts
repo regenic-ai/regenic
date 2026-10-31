@@ -3,6 +3,7 @@ import {
   type ContextEngine,
   type ContextRequest,
   type EvidenceReference,
+  type ContextSearchMatch,
 } from "@regenic/domain";
 import { ContextEngineError } from "./deterministic-context-engine";
 
@@ -23,6 +24,7 @@ export interface ContextSearchResult {
     snippet_start: number;
     snippet_end: number;
     evidence: EvidenceReference[];
+    matches?: ContextSearchMatch[];
   }>;
   degradation_flags: string[];
   truncated: boolean;
@@ -45,6 +47,7 @@ export function contextSearchRequest(
     purpose: "display authorized personal search results",
     allowed_uses: ["display"],
     query: body.query.trim(),
+    search_kind: body.kind ?? "all",
     ...(body.filters ? { filters: body.filters } : {}),
     temporal: { mode: "current" },
     budget: { profile: "personal-search-v1", max_tokens: 8_000, max_items: limit, max_raw_evidence: limit },
@@ -65,7 +68,7 @@ export class ContextSearcher {
         throw new ContextEngineError("invalid_candidate", "Search evidence is not bound to an authorized Event");
       }
       const route = trace?.routes.find((entry) => entry.event_id === item.resource_id);
-      let start = route?.start ?? 0;
+      let start = item.search_matches ? 0 : route?.start ?? 0;
       if (start > 0 && /[\uDC00-\uDFFF]/.test(item.text.charAt(start)) &&
         /[\uD800-\uDBFF]/.test(item.text.charAt(start - 1))) start--;
       const snippet = Array.from(item.text.slice(start, start + 962)).slice(0, 480).join("");
@@ -74,6 +77,7 @@ export class ContextSearcher {
         source: reference.source, occurred_at: reference.occurred_at, rank: index + 1,
         snippet, snippet_start: start, snippet_end: start + snippet.length,
         evidence: item.evidence,
+        ...(item.search_matches ? { matches: item.search_matches } : {}),
       };
     });
     return {

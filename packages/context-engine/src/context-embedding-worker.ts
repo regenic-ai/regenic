@@ -203,9 +203,28 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
           freshChunks++;
           if (freshChunks >= CHECKPOINT_BATCH_CHUNKS) throw new EmbeddingBatchYield();
         };
-        const appendText = async (value: string) => {
+        const appendText = async (
+          value: string,
+          origin?: { part_index: number; content_hash: string },
+        ) => {
           const start = chunks.at(-1)?.end ?? 0;
           const ordinal = chunks.length;
+          const bind = (chunk: ContextVectorChunk): ContextVectorChunk => {
+            const part = !origin ? material?.search_parts?.find((part) =>
+              part.content_hash && part.projection_start !== undefined && part.text !== undefined &&
+              chunk.start >= part.projection_start && chunk.end <= part.projection_start + part.text.length,
+            ) : undefined;
+            const binding = origin ?? (part?.content_hash ? {
+              part_index: part.part_index, content_hash: part.content_hash,
+            } : undefined);
+            return {
+              ...chunk, ordinal: ordinal + chunk.ordinal, start: start + chunk.start, end: start + chunk.end,
+              ...(binding ? { origin: {
+                ...binding, mode: "text" as const, start: chunk.start - (part?.projection_start ?? 0),
+                text: value.slice(chunk.start, chunk.end),
+              } } : {}),
+            };
+          };
           const textChunks = staged.slice(ordinal).filter((chunk) =>
             chunk.start >= start && chunk.end <= start + value.length,
           ).map((chunk, index) => ({
@@ -215,13 +234,9 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
             ...generation, max_chunks_per_event: generation.max_chunks_per_event - ordinal,
           }, this.abort.signal, {
             chunks: textChunks,
-            save: (chunk) => saveChunk({
-              ...chunk, ordinal: ordinal + chunk.ordinal, start: start + chunk.start, end: start + chunk.end,
-            }),
+            save: (chunk) => saveChunk(bind(chunk)),
           });
-          chunks.push(...extracted.map((chunk) => ({
-            ...chunk, ordinal: ordinal + chunk.ordinal, start: start + chunk.start, end: start + chunk.end,
-          })));
+          chunks.push(...extracted.map(bind));
         };
         if (typeof text === "string" && text.trim()) {
           await appendText(text);
@@ -241,7 +256,9 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
               if (Buffer.byteLength(processed.text, "utf8") > 262144) {
                 throw new EmbeddingError("input_too_large", false);
               }
-              await appendText(processed.text);
+              await appendText(processed.text, attachment.part_index === undefined ? undefined : {
+                part_index: attachment.part_index, content_hash: attachment.content_hash,
+              });
             }
             for (const [index, vector] of processed.vectors.entries()) {
               const cursor = chunks.length ? chunks[chunks.length - 1].end : 0;
@@ -253,13 +270,17 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
                   .update(`${attachment.content_hash}:${index}`)
                   .digest("hex"),
                 vector,
+                ...(attachment.part_index === undefined ? {} : { origin: {
+                  part_index: attachment.part_index, content_hash: attachment.content_hash,
+                  mode: "visual" as const, start: index,
+                } }),
               };
               const saved = staged[chunk.ordinal];
               if (saved) {
                 if (saved.text_hash !== chunk.text_hash || saved.start !== chunk.start || saved.end !== chunk.end) {
                   throw new Error("Embedding checkpoint content mismatch");
                 }
-                chunks.push(saved);
+                chunks.push({ ...saved, ...(chunk.origin ? { origin: chunk.origin } : {}) });
               } else {
                 await saveChunk(chunk);
                 chunks.push(chunk);

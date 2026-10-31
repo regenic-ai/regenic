@@ -49,7 +49,8 @@ export class IndexedEventRetriever implements ContextRetriever {
       materialize ? await materialize(sources.map((source) => source.event.event_id)) : sources,
       plan,
     );
-    if (!plan.request.query) {
+    // Filename metadata is not part of legacy Event lexical coverage.
+    if (!plan.request.query || plan.request.search_kind) {
       return { candidates: await candidatesFor(eligible) };
     }
     const authorized = eligible.flatMap((source) => source.event.content_hash

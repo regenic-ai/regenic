@@ -3,6 +3,7 @@ const { mkdtemp, rm } = require("node:fs/promises");
 const { tmpdir } = require("node:os");
 const { join } = require("node:path");
 const { performance } = require("node:perf_hooks");
+const { createHash } = require("node:crypto");
 const { describe, it } = require("node:test");
 const Database = require("better-sqlite3");
 const { embeddingGeneration } = require("@regenic/domain");
@@ -45,6 +46,147 @@ function query(index, authorized, extra = {}) {
 }
 
 describe("SQLite vector projection and independent durable jobs", () => {
+  it("excludes attachment lexical priority from messages-only top-k while preserving file/all priority", async (t) => {
+    const f = await fixture(t);
+    const heads = [...Array.from({ length: 50 }, (_, index) => head(`mixed-${index}`)), head("message")];
+    await reconcile(f.index, heads);
+    for (;;) {
+      const jobs = await claim(f.index);
+      if (!jobs.length) break;
+      for (const job of jobs) {
+        const body = chunk(job.event_id === "message" ? [1, 0] : [0, 1]);
+        const text = "nebula";
+        const attachment = {
+          ordinal: 1, start: 2, end: 2 + text.length, vector: [0, 1],
+          text_hash: createHash("sha256").update(text).digest("hex"),
+          origin: { part_index: 1, content_hash: hash, mode: "text", start: 0, text },
+        };
+        await f.index.complete({ job, owner: "owner", now: at,
+          chunks: job.event_id === "message" ? [body] : [body, attachment] });
+      }
+    }
+    const authorized = heads.map((value) => ({ event_id: value.event_id, content_hash: hash, body_length: 2 }));
+    const messages = await query(f.index, authorized, { query: "nebula", search_kind: "messages", limit: 50 });
+    assert.equal(messages.matched[0].event_id, "message");
+    assert.ok(messages.matched.every((hit) => hit.search_matches === undefined));
+    for (const search_kind of ["all", "files"]) {
+      const result = await query(f.index, authorized, { query: "nebula", search_kind, limit: 50 });
+      assert.equal(result.matched.length, 50);
+      assert.ok(result.matched.every((hit) => hit.event_id.startsWith("mixed-") && hit.search_matches[0].lexical));
+    }
+  });
+
+  it("matches continuous file text across chunks but not attachments, hashes, gaps, visual units or missing provenance", async (t) => {
+    const f = await fixture(t);
+    const cases = ["continuous", "control", "attachment", "hash", "gap", "visual", "missing", "event-a", "event-b"];
+    await reconcile(f.index, cases.map((id) => head(id)));
+    const textChunk = (text, ordinal, start, partIndex, localStart, contentHash = hash) => ({
+      ordinal, start, end: start + text.length, vector: [0, 1],
+      text_hash: createHash("sha256").update(text).digest("hex"),
+      origin: { part_index: partIndex, content_hash: contentHash, mode: "text", start: localStart, text },
+    });
+    for (const job of await claim(f.index)) {
+      let chunks;
+      if (job.event_id === "control") {
+        chunks = [textChunk("😀 nebula invoice", 0, 0, 1, 7)];
+      } else if (job.event_id.startsWith("event-")) {
+        chunks = [textChunk(job.event_id === "event-a" ? " ne" : "bula invoice", 0, 0, 1, 0)];
+      } else {
+        chunks = [textChunk("😀 ne", 0, 0, 1, 7)];
+        if (job.event_id === "visual") {
+          chunks.push({ ordinal: 1, start: 5, end: 6, vector: [0, 1],
+            text_hash: createHash("sha256").update(`${hash}:0`).digest("hex"),
+            origin: { part_index: 1, content_hash: hash, mode: "visual", start: 0 } });
+        } else if (job.event_id === "missing") {
+          chunks.push({ ...chunk([0, 1], 1), start: 5, end: 6 });
+        }
+        chunks.push(textChunk("bula invoice", chunks.length, chunks.at(-1).end,
+          job.event_id === "attachment" ? 2 : 1, job.event_id === "gap" ? 13 : 12,
+          job.event_id === "hash" ? "c".repeat(64) : hash));
+      }
+      await f.index.complete({ job, owner: "owner", now: at, chunks });
+    }
+    f.reopen();
+    const authorized = cases.map((event_id) => ({ event_id, content_hash: hash }));
+    for (const result of [
+      await query(f.index, authorized, { query: "nebula", search_kind: "files" }),
+      await f.index.matchAuthorizedText({ org_id: "org", generation: generation.id, authorized, query: "nebula", limit: 10 }),
+    ]) {
+      const lexical = result.matched.filter((hit) => hit.search_matches.some((match) => match.lexical));
+      assert.deepEqual(lexical.map((hit) => hit.event_id), ["continuous", "control"]);
+      for (const hit of lexical) {
+        const origin = hit.search_matches.find((match) => match.lexical).origin;
+        assert.equal(origin.part_index, 1);
+        assert.equal(origin.start, 7);
+        assert.equal(origin.text, "😀 nebula invoice");
+      }
+    }
+    const partial = await f.index.matchAuthorizedText({
+      org_id: "org", generation: generation.id,
+      authorized: authorized.filter((key) => ["continuous", "control"].includes(key.event_id)),
+      query: "ne", limit: 10,
+    });
+    assert.deepEqual(partial.matched, []);
+  });
+
+  it("applies message/file vector selection before top-k rather than filling it with the other kind", async (t) => {
+    const f = await fixture(t);
+    await reconcile(f.index, [head("file"), head("message")]);
+    for (const job of await claim(f.index)) {
+      const value = chunk(job.event_id === "file" ? [1, 0] : [0.8, 0.6]);
+      if (job.event_id === "file") {
+        value.origin = { part_index: 1, content_hash: hash, mode: "text", start: 0, text: "xx" };
+        value.text_hash = createHash("sha256").update("xx").digest("hex");
+      }
+      await f.index.complete({ job, owner: "owner", now: at, chunks: [value] });
+    }
+    const authorized = [
+      { event_id: "file", content_hash: hash, body_length: 0 },
+      { event_id: "message", content_hash: hash, body_length: 2 },
+    ];
+    assert.deepEqual((await query(f.index, authorized, { limit: 1, query: "other", search_kind: "messages" })).matched.map((hit) => hit.event_id), ["message"]);
+    assert.deepEqual((await query(f.index, authorized, { limit: 1, query: "other", search_kind: "files" })).matched.map((hit) => hit.event_id), ["file"]);
+  });
+
+  it("round-trips attachment provenance through fenced checkpoints and authorized completed reads", async (t) => {
+    const f = await fixture(t);
+    await reconcile(f.index, [head("origin")]);
+    const [job] = await claim(f.index);
+    const text = "nebula";
+    const origin = { part_index: 3, content_hash: "c".repeat(64), mode: "text", start: 0, text };
+    const value = { ordinal: 0, start: 0, end: text.length, text_hash: createHash("sha256").update(text).digest("hex"), vector: [0, 1], origin };
+    assert.equal(await f.index.stageChunk({ job, owner: "owner", now: at, chunk: value }), true);
+    f.reopen();
+    assert.deepEqual(await f.index.loadStagedChunks(job, "owner", at), [value]);
+    assert.deepEqual((await query(f.index, [{ event_id: job.event_id, content_hash: hash }], { query: text })).matched, []);
+    assert.equal(await f.index.complete({ job, owner: "owner", now: at, chunks: [value] }), true);
+    f.reopen();
+    const result = await query(f.index, [{ event_id: job.event_id, content_hash: hash }], { query: text });
+    assert.deepEqual(result.matched[0].search_matches, [{ origin, score: 0, lexical: true }]);
+    assert.deepEqual((await query(f.index, [], { query: text })).matched, []);
+    const keyword = await f.index.matchAuthorizedText({
+      org_id: "org", generation: generation.id, authorized: [{ event_id: job.event_id, content_hash: hash }],
+      query: text, limit: 1,
+    });
+    assert.equal(keyword.matched[0].score, -1);
+    assert.deepEqual(keyword.matched[0].search_matches[0].origin, origin);
+  });
+
+  it("migrates schema v4 additively without discarding complete or staged chunks", async (t) => {
+    const f = await fixture(t);
+    await reconcile(f.index, [head("complete"), head("pending")]);
+    const jobs = await claim(f.index);
+    await f.index.complete({ job: jobs[0], owner: "owner", now: at, chunks: [chunk()] });
+    await f.index.stageChunk({ job: jobs[1], owner: "owner", now: at, chunk: chunk() });
+    f.index.close();
+    const database = new Database(f.path);
+    database.exec("ALTER TABLE chunks DROP COLUMN origin_json; ALTER TABLE staged_chunks DROP COLUMN origin_json; PRAGMA user_version=4;");
+    database.close();
+    f.reopen();
+    assert.equal((await query(f.index, [{ event_id: jobs[0].event_id, content_hash: hash }])).covered.length, 1);
+    assert.deepEqual(await f.index.loadStagedChunks(jobs[1], "owner", at), [chunk()]);
+  });
+
   it("persists fenced staging across restart and publishes nothing before completion", async (t) => {
     const f = await fixture(t);
     await reconcile(f.index, [head("staged")]);
@@ -165,7 +307,7 @@ describe("SQLite vector projection and independent durable jobs", () => {
     database.transaction(() => {
       const insertHead = database.prepare("INSERT INTO source_heads VALUES (?, ?, ?, ?, ?)");
       const insertCoverage = database.prepare("INSERT INTO coverage VALUES (?, ?, ?, ?, ?, ?, ?)");
-      const insertChunk = database.prepare("INSERT INTO chunks VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+      const insertChunk = database.prepare("INSERT INTO chunks (org_id,generation,event_id,ordinal,start,end,text_hash,vector) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
       for (let value = 0; value < 4000; value += 1) {
         const eventId = `event-${String(value).padStart(5, "0")}`;
         insertHead.run("org", "synthetic", eventId, eventId, 1);

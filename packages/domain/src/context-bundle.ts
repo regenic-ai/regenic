@@ -12,6 +12,7 @@ export interface ContextBundleItem {
   kind: ContextCandidateKind;
   status?: "current" | "superseded" | "retracted";
   text?: string;
+  search_matches?: import("./context-search").ContextSearchMatch[];
   content_hash?: string;
   evidence: EvidenceReference[];
   estimated_tokens: number;

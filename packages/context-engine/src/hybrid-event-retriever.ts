@@ -19,6 +19,7 @@ import {
 } from "@regenic/domain";
 import { eligibleEventSources, eventCandidateMaterialFor, retrievalTimeFor } from "./deterministic-event-retriever";
 import { ContextEngineError } from "./deterministic-context-engine";
+import { searchMatchesFor, searchSnippet } from "./search-matches";
 
 export const HYBRID_EVENT_RETRIEVER_ID = "event-hybrid";
 export const HYBRID_RETRIEVAL_PROFILE = {
@@ -81,8 +82,12 @@ export class HybridEventRetriever implements ContextRetriever {
     if (plan.request.temporal.mode !== "current") return fallback("vector_temporal_unsupported");
     if (!this.index) return fallback("vector_index_absent");
     if (!allowed.size) return { ...lexical, trace };
+    if (materialize && plan.request.search_kind === "messages") {
+      for (const source of await materialize([...allowed.keys()])) allowed.set(source.event.event_id, source);
+    }
     let result: Awaited<ReturnType<ContextVectorIndex["matchAuthorized"]>>;
     let generation = this.generation;
+    let embeddingDegradation: string | undefined;
     const vectorLimit = vectorCandidateLimit(plan);
     try {
       generation = await this.generations?.activeGeneration(plan.request.org_id) ?? this.generation;
@@ -96,12 +101,32 @@ export class HybridEventRetriever implements ContextRetriever {
         org_id: plan.request.org_id, generation: generation.id, query_vector: [...queryVector],
         authorized: eligible.map((source) => ({
           event_id: source.event.event_id, content_hash: source.event.content_hash!,
+          ...(plan.request.search_kind === "messages" ? {
+            body_length: (allowed.get(source.event.event_id)!.search_body ?? allowed.get(source.event.event_id)!.text ?? "").length,
+          } : {}),
         })), limit: vectorLimit,
+        ...(plan.request.search_kind ? { query: plan.request.query, search_kind: plan.request.search_kind } : {}),
       });
     } catch (error) {
       if (error instanceof ContextVectorUnavailableError) return fallback(`vector_index_${error.reason}`);
       if (!(error instanceof EmbeddingError) || error.code === "input_too_large" || error.code === "invalid_input") throw error;
-      return fallback(error.code === "timeout" ? "embedding_timeout" : "embedding_unavailable");
+      embeddingDegradation = error.code === "timeout" ? "embedding_timeout" : "embedding_unavailable";
+      if (!plan.request.search_kind || plan.request.search_kind === "messages" ||
+        !this.index.matchAuthorizedText) return fallback(embeddingDegradation);
+      try {
+        result = await this.index.matchAuthorizedText({
+          org_id: plan.request.org_id, generation: generation.id, query: plan.request.query,
+          authorized: eligible.map((source) => ({
+            event_id: source.event.event_id, content_hash: source.event.content_hash!,
+          })), limit: vectorLimit,
+        });
+      } catch (indexError) {
+        if (indexError instanceof ContextVectorUnavailableError) return {
+          ...fallback(embeddingDegradation),
+          degradation_flags: [...(lexical.degradation_flags ?? []), embeddingDegradation, `vector_index_${indexError.reason}`],
+        };
+        throw indexError;
+      }
     }
     // Invalid keys or chunk bindings are a boundary failure, never a lexical fallback.
     if (!result || result.generation !== generation.id || !Array.isArray(result.covered) ||
@@ -157,11 +182,32 @@ export class HybridEventRetriever implements ContextRetriever {
         allowed.set(source.event.event_id, source);
       }
     }
-    const vector = result.matched.filter((hit) => hit.score >= this.profile.vector_min_score)
+    const searchMatches = new Map<string, ReturnType<typeof searchMatchesFor>>();
+    if (plan.request.search_kind) {
+      for (const hit of result.matched) {
+        const source = allowed.get(hit.event_id)!;
+        const matches = searchMatchesFor(source, plan.request, hit.search_matches, this.profile.vector_min_score);
+        if (hit.score >= this.profile.vector_min_score && plan.request.search_kind !== "files") {
+          const body = source.search_body ?? source.text ?? "";
+          if (hit.end <= body.length && !matches.some((match) => match.kind === "message")) {
+            matches.push({ kind: "message", via: ["semantic"],
+              ...searchSnippet(body.slice(hit.start, hit.end), undefined, hit.start) });
+          } else if (plan.request.search_kind === "all" && !matches.length) {
+            // Legacy and cross-part chunks are Event evidence, not an attachment identity.
+            matches.push({ kind: "event", via: ["semantic"] });
+          }
+        }
+        searchMatches.set(hit.event_id, matches);
+      }
+    }
+    const vector = result.matched.filter((hit) => plan.request.search_kind
+      ? searchMatches.get(hit.event_id)!.length > 0
+      : hit.score >= this.profile.vector_min_score)
       .sort((a, b) => b.score - a.score || compare(a.event_id, b.event_id));
     const significantTerms = contextLexicalQueryTerms(plan.request.query).filter((term) =>
       !/^[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]$/u.test(term));
     const admittedLexical = rankedLexical.filter((value) => {
+      if (plan.request.search_kind) return true;
       if (!covered.has(value.candidate.resource_id) || significantTerms.length === 0) return true;
       const terms = new Set(contextLexicalTerms(allowed.get(value.candidate.resource_id)?.text));
       return significantTerms.some((term) => terms.has(term));
@@ -182,7 +228,16 @@ export class HybridEventRetriever implements ContextRetriever {
     const candidates = new Map(admittedLexical.map((candidate) => [candidate.candidate.resource_id, candidate]));
     for (const hit of vector) {
       const material = eventCandidateMaterialFor(allowed.get(hit.event_id)!, plan.request, retrievalTimeFor(plan));
-      if (material) candidates.set(hit.event_id, material);
+      if (material) {
+        const matches = searchMatches.get(hit.event_id);
+        if (matches) {
+          material.item.search_matches = matches;
+          material.item.estimated_tokens = material.candidate.estimated_tokens =
+            Math.ceil(((material.item.text?.length ?? 0) +
+              matches.reduce((sum, match) => sum + (match.snippet?.length ?? match.filename?.length ?? 0), 0)) / 4);
+        }
+        candidates.set(hit.event_id, material);
+      }
     }
     for (const [id, value] of candidates) {
       const route = ranks.get(id);
@@ -194,6 +249,7 @@ export class HybridEventRetriever implements ContextRetriever {
     return {
       candidates: [...candidates.values()].sort((a, b) => compare(a.candidate.candidate_id, b.candidate.candidate_id)),
       degradation_flags: [...(lexical.degradation_flags ?? []),
+        ...(embeddingDegradation ? [embeddingDegradation] : []),
         ...(covered.size + skipped.size < allowed.size ? ["vector_index_partial"] : [])],
       trace,
     };
