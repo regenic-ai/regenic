@@ -196,10 +196,13 @@ test("install uses isolated fixed assets, actual verification before marker and 
     assert.ok(f.calls[1].args.includes(join(f.root, "venv")));
     assert.ok(f.calls[2].args.includes(join(f.assets, "requirements.txt")));
     assert.ok(f.calls[3].args.includes("--download-only"));
+    assert.deepEqual(f.calls[3].args.slice(-4), ["--device", "cpu", "--precision", "bfloat16"]);
     assert.equal(f.calls[3].options.env?.HF_HOME, join(f.root, "cache"));
     await f.runtime.start();
     assert.equal(f.runtime.view(true, true).stage, "running");
     assert.match(f.runtime.endpoint()!, /^http:\/\/127\.0\.0\.1:\d+$/);
+    assert.ok(f.calls[4].args.includes("--precision"));
+    assert.ok(f.calls[4].args.includes("bfloat16"));
     assert.equal(f.calls[4].options.env?.HF_HUB_OFFLINE, "1");
     await f.runtime.start();
     assert.equal(f.calls.length, 5);

@@ -35,7 +35,14 @@ tokenizers is not supported:
 | Dimensions / input window | 768 / 8192 tokens |
 | Query prefix | `task: search result \| query: ` |
 | Document prefix | `title: none \| text: ` |
-| Output | float32, L2 normalized, cosine similarity |
+| CPU weights / output | BF16 weights by default; float32 output, L2 normalized, cosine similarity |
+
+The desktop-managed service loads CPU weights as BF16 by default while retaining the
+text and vision encoders. Vectors are still converted to float32 and normalized again,
+so the vector protocol and generation identity do not change. BF16 materially reduces
+resident memory, but CPUs without native BF16 instructions take longer to run inference,
+primarily affecting background image, PDF and video indexing. A manually managed service
+can use `--precision float32` as a faster, higher-memory fallback.
 
 [requirements.txt](../../packages/embedding-provider/python/requirements.txt) is
 authoritative: `sentence-transformers[image]==6.1.0`, `transformers==5.19.0`,
@@ -110,11 +117,11 @@ Remove-Item Env:HF_HUB_OFFLINE -ErrorAction SilentlyContinue
 
 & $python -m pip install --disable-pip-version-check -r (Join-Path $repo 'packages\embedding-provider\python\requirements.txt')
 if ($LASTEXITCODE -ne 0) { throw 'Dependency installation failed' }
-& $python -B (Join-Path $repo 'packages\embedding-provider\python\serve.py') --download-only --device cpu
+& $python -B (Join-Path $repo 'packages\embedding-provider\python\serve.py') --download-only --device cpu --precision bfloat16
 if ($LASTEXITCODE -ne 0) { throw 'Model download/load verification failed' }
 
 $env:HF_HUB_OFFLINE = '1'
-& $python -B (Join-Path $repo 'packages\embedding-provider\python\serve.py') --port 8765 --device cpu
+& $python -B (Join-Path $repo 'packages\embedding-provider\python\serve.py') --port 8765 --device cpu --precision bfloat16
 ```
 
 The download step actually loads the model; it does not merely create a pipeline.

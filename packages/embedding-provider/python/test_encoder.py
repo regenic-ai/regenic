@@ -35,13 +35,22 @@ def encoder_with(vector):
 
 
 class EncoderTests(unittest.TestCase):
-    def test_cpu_loads_float32_and_keeps_vision_enabled(self):
+    def test_cpu_defaults_to_bfloat16_and_keeps_vision_enabled(self):
         model = FakeModel([1.0] + [0.0] * 767)
         with patch("sentence_transformers.SentenceTransformer", return_value=model) as constructor, \
                 patch("transformers.AutoTokenizer.from_pretrained", return_value=FakeTokenizer()):
             TextEncoder("cpu")
-        self.assertEqual(constructor.call_args.kwargs["model_kwargs"], {"dtype": "float32"})
+        self.assertEqual(constructor.call_args.kwargs["model_kwargs"], {"dtype": "bfloat16"})
         self.assertEqual(constructor.call_args.kwargs["config_kwargs"], {"audio_config": None})
+
+    def test_cpu_float32_fallback_is_explicit(self):
+        model = FakeModel([1.0] + [0.0] * 767)
+        with patch("sentence_transformers.SentenceTransformer", return_value=model) as constructor, \
+                patch("transformers.AutoTokenizer.from_pretrained", return_value=FakeTokenizer()):
+            TextEncoder("cpu", "float32")
+        self.assertEqual(constructor.call_args.kwargs["model_kwargs"], {"dtype": "float32"})
+        with self.assertRaisesRegex(ValueError, "unsupported precision"):
+            TextEncoder("cpu", "float16")
 
     def test_float32_normalization_after_low_precision_inference(self):
         encoder = encoder_with([0.9984] + [0.0] * 767)
