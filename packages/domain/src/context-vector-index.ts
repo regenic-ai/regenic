@@ -126,6 +126,9 @@ export interface EmbeddingJobStore {
   }): Promise<boolean>;
   listJobs(orgId: string, generation: string): Promise<EmbeddingJob[]>;
   summarizeJobs(orgId: string, generation: string): Promise<EmbeddingJobSummary>;
+  loadStagedChunks(job: EmbeddingJob, owner: string, now: string): Promise<ContextVectorChunk[]>;
+  stageChunk(input: { job: EmbeddingJob; owner: string; now: string; chunk: ContextVectorChunk }): Promise<boolean>;
+  yieldJob(job: EmbeddingJob, owner: string, now: string): Promise<boolean>;
   retryQuarantined(orgId: string, generation: string, eventId: string): Promise<boolean>;
   retryFailed(orgId: string, generation: string, limit: number): Promise<number>;
 }

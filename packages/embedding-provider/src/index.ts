@@ -43,7 +43,7 @@ export function embeddingConfigFromEnv(env: NodeJS.ProcessEnv): LocalEmbeddingCo
     base_url: env.REGENIC_EMBEDDING_BASE_URL ?? "",
     timeout_ms: integer(env.REGENIC_EMBEDDING_TIMEOUT_MS, 30000, 1, 300000),
     chunk_tokens: integer(env.REGENIC_EMBEDDING_CHUNK_TOKENS, 256, 32, EMBEDDINGGEMMA_2.max_input_tokens),
-    max_chunks_per_event: integer(env.REGENIC_EMBEDDING_MAX_CHUNKS, 128, 1, 1024),
+    max_chunks_per_event: integer(env.REGENIC_EMBEDDING_MAX_CHUNKS, 1024, 1, 1024),
   };
   endpoint(config.base_url);
   return config;

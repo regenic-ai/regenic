@@ -161,6 +161,11 @@ describe("local embedding provider", () => {
 
   it("defaults off and rejects public endpoints, floating models and invalid configuration", () => {
     assert.equal(embeddingConfigFromEnv({}), undefined);
+    const env = {
+      REGENIC_EMBEDDING_DRIVER: "local_http", REGENIC_EMBEDDING_BASE_URL: "http://127.0.0.1:8765",
+    };
+    assert.equal(embeddingConfigFromEnv(env).max_chunks_per_event, 1024);
+    assert.equal(embeddingConfigFromEnv({ ...env, REGENIC_EMBEDDING_MAX_CHUNKS: "128" }).max_chunks_per_event, 128);
     for (const url of ["https://example.com", "http://localhost:8765", "http://127.0.0.1:8765/path", "http://127.0.0.1:8765/?x=1"]) {
       assert.throws(() => new LocalHttpEmbeddingProvider({ base_url: url }), /numeric loopback/);
     }

@@ -156,7 +156,7 @@ API 启动入口读取进程环境，不会自动加载仓库的 `.env.example`�
 | `REGENIC_EMBEDDING_BASE_URL` | 启用时必须指定；示例 `http://127.0.0.1:8765` |
 | `REGENIC_EMBEDDING_TIMEOUT_MS` | 30000；整数范围 1–300000 ms |
 | `REGENIC_EMBEDDING_CHUNK_TOKENS` | 256；整数范围 32–8192 |
-| `REGENIC_EMBEDDING_MAX_CHUNKS` | 128；每 Event 的上限，整数范围 1–1024 |
+| `REGENIC_EMBEDDING_MAX_CHUNKS` | 1024；每 Event 的上限，整数范围 1–1024 |
 | `HF_HOME` | Python 服务的模型缓存；重启时保持相同目录 |
 | `HF_HUB_OFFLINE` | 下载完成后设为 `1`，从缓存离线加载 |
 | `REGENIC_MODEL_DRIVER` | 回答生成模型；语义搜索可保持 `none` |
@@ -165,6 +165,11 @@ Embedding URL 必须是数值回环 HTTP 地址，无用户名、密码、路径
 不要用 `localhost`、外网域名或 `/v1` 后缀。客户端也接受 `[::1]`，
 但此处参考 Python 服务只监听 IPv4，所以按示例使用 `127.0.0.1`。
 chunk 配置属于不可变 generation，不要通过改它来修复模型身份不匹配。
+
+索引每个成功 chunk 都保存断点，每新增 8 块让出一轮；中断后复用已保存的文本向量。
+只有正文和全部附件都完成后才发布检索覆盖。默认总预算提高会创建并回填新 generation，
+完成后从旧低预算配方自动切换一次，显式回滚后不强制切回。每块大小及模型精度不变，
+不截断或修改文件；进程重启后附件解析和视觉推理可能重新执行。
 
 若直接用环境变量启动桌面而不是独立 API：仅在桌面尚未保存语义开关时保留外部配置；
 明确禁用会覆盖环境中的 driver，启用则使用桌面自己的模型端点。

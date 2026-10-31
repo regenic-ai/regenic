@@ -45,6 +45,68 @@ function query(index, authorized, extra = {}) {
 }
 
 describe("SQLite vector projection and independent durable jobs", () => {
+  it("persists fenced staging across restart and publishes nothing before completion", async (t) => {
+    const f = await fixture(t);
+    await reconcile(f.index, [head("staged")]);
+    const [job] = await claim(f.index);
+    assert.equal(await f.index.stageChunk({ job, owner: "owner", now: at, chunk: chunk() }), true);
+    assert.deepEqual((await query(f.index, [{ event_id: job.event_id, content_hash: hash }])).covered, []);
+    f.reopen();
+    assert.deepEqual(await f.index.loadStagedChunks(job, "owner", at), [chunk()]);
+    assert.equal(await f.index.stageChunk({ job, owner: "wrong", now: at, chunk: chunk([1, 0], 1) }), false);
+    assert.equal(await f.index.yieldJob(job, "owner", at), true);
+    const [next] = await claim(f.index, "new-owner");
+    assert.equal(await f.index.stageChunk({ job, owner: "owner", now: at, chunk: chunk([1, 0], 1) }), false);
+    assert.deepEqual(await f.index.loadStagedChunks(next, "new-owner", at), [chunk()]);
+    await reconcile(f.index, [head("revised", {
+      external_id: "staged", operation: "revise", lineage: ["staged", "revised"],
+    })]);
+    assert.equal(await f.index.stageChunk({
+      job: next, owner: "new-owner", now: at, chunk: chunk([1, 0], 1),
+    }), false);
+    const database = new Database(f.path);
+    try {
+      assert.equal(database.prepare("SELECT COUNT(*) AS n FROM staged_chunks").get().n, 0);
+    } finally { database.close(); }
+  });
+
+  it("recovers staged chunks after lease expiry and removes them in the final publication transaction", async (t) => {
+    const f = await fixture(t);
+    await reconcile(f.index, [head("expired")]);
+    const [old] = await claim(f.index);
+    await f.index.stageChunk({ job: old, owner: "owner", now: at, chunk: chunk() });
+    const [job] = await claim(f.index, "replacement", later);
+    assert.equal(await f.index.yieldJob(old, "owner", later), false);
+    assert.equal(await f.index.stageChunk({ job: old, owner: "owner", now: later, chunk: chunk([0, 1], 1) }), false);
+    const saved = await f.index.loadStagedChunks(job, "replacement", later);
+    await f.index.stageChunk({ job, owner: "replacement", now: later, chunk: chunk([0, 1], 1) });
+    assert.equal(await f.index.complete({
+      job, owner: "replacement", now: later, chunks: [...saved, chunk([0, 1], 1)],
+    }), true);
+    assert.equal((await query(f.index, [{ event_id: job.event_id, content_hash: hash }])).covered.length, 1);
+    const database = new Database(f.path);
+    try { assert.equal(database.prepare("SELECT COUNT(*) AS n FROM staged_chunks").get().n, 0); }
+    finally { database.close(); }
+  });
+
+  for (const action of ["tombstone", "clear"]) {
+    it(`removes staged vectors on ${action} without publishing partial coverage`, async (t) => {
+      const f = await fixture(t);
+      await reconcile(f.index, [head("original")]);
+      const [job] = await claim(f.index);
+      await f.index.stageChunk({ job, owner: "owner", now: at, chunk: chunk() });
+      if (action === "clear") await f.index.clearOrganization("org");
+      else await reconcile(f.index, [head("deleted", {
+        external_id: "original", operation: "tombstone", lineage: ["original", "deleted"],
+      })]);
+      const database = new Database(f.path);
+      try {
+        assert.equal(database.prepare("SELECT COUNT(*) AS n FROM staged_chunks").get().n, 0);
+        assert.equal(database.prepare("SELECT COUNT(*) AS n FROM coverage").get().n, 0);
+      } finally { database.close(); }
+    });
+  }
+
   it("summarizes job counts and failure categories without materializing every job", async (t) => {
     const { index, path } = await fixture(t);
     await reconcile(index, ["pending", "running", "done", "quarantined"].map((id) => head(id)));
