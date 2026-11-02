@@ -50,6 +50,23 @@ generation 回填、激活、回滚、GC 和真实模型合成评测已实现。
 诊断仅暴露固定分类，重试保留租约、围栏和成功覆盖；worker 仍在处理前复核生命周期。
 桌面操作固定最多 10 个并需确认；搜索/索引请求耗时仅含客户端网络等待，不是生产性能指标。
 
+搜索使用统一输入；`/search`、`/search/expand` 可传 `kind: "all" | "messages" | "files"`，
+默认 `all`；CLI `context-search --kind`、MCP `search_conversations.kind` 使用相同协议。
+Event 仍是融合排序和预算单位。`items[].matches` 以 Event 内容 hash + 原始 envelope part index
+标识并去重附件，不以文件名合并；提供已存文件名、格式、hash，以及文件名、类型元数据、
+文本关键词、文本语义或视觉命中来源。只有文件命中的 Event 不冒充消息命中或会话锚点。
+打开文件结果会重新校验当前授权 Event/hash 与精确 part，再跳转来源会话，不宣称打开 PDF 页。
+
+向量 sidecar 以增量迁移升级 schema v5，保留 v4 staged_chunks、租约围栏、完整后原子发布与代际回滚。
+新块在既有 text hash 之外保存附件身份和抽取文本，已完成的抽取文本关键词在模型离线时仍可检索；
+读取始终限定于授权的当前 Event/hash。可验证位置是文件内已存/抽取文本的 UTF-16 `[start,end)` 区间；
+关键词按同 Event/hash、同附件 part/hash 且文件内偏移连续的文本块分词；遇来源缺口、
+缺失来源块或视觉单元即中断，不拼接不同附件。仅消息检索在 top-k 排序前排除附件命中的影响。
+视觉结果只定位文件，不编造页码、工作表、单元格或图像框。旧无来源块及跨 material 边界的语义块
+保留 Event 级命中，不能假装具体附件；不会自动重建既有 generation。历史 direct blob 若未存 envelope，
+用 Event hash 与 part `-1` 标识；缺失的文件名不能恢复。个人搜索会在授权范围逐 Event 验证文件名与正文，
+不信任旧正文 FTS 覆盖来排除附件；这是正确性回退，不是新增文件名索引或生产延迟保证。
+
 ## 2. 组件
 
 | 层 | 选择 |

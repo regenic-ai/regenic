@@ -612,8 +612,8 @@ source fence 跨 generation 共享。观察到 revision/tombstone 后，事务�
 
 默认 `REGENIC_EMBEDDING_DRIVER=none`。以下为 Windows PowerShell 示例，
 在仓库根目录执行；Python 运行库与权重需要联网下载，权重不包含在 Node 安装包或镜像中。
-参考服务使用固定 revision 的文本路径（禁用 vision/audio），不读 Regenic 数据库，
-不记录请求正文；运行库的 `image` extra 用于模型 processor 初始化，不表示启用了图片索引。
+参考服务使用固定 revision 的文本和视觉路径（禁用 audio），不读 Regenic 数据库，
+不记录请求正文；附件处理范围和升级方式见第 20 节。
 
 ```powershell
 python -m venv .venv-embedding
@@ -628,7 +628,7 @@ $env:REGENIC_EMBEDDING_DRIVER = "local_http"
 $env:REGENIC_EMBEDDING_BASE_URL = "http://127.0.0.1:8765"
 $env:REGENIC_EMBEDDING_TIMEOUT_MS = "30000"
 $env:REGENIC_EMBEDDING_CHUNK_TOKENS = "256"
-$env:REGENIC_EMBEDDING_MAX_CHUNKS = "128"
+$env:REGENIC_EMBEDDING_MAX_CHUNKS = "1024"
 pnpm --filter @regenic/local-cli... build
 pnpm --filter @regenic/local-cli start context-embedding-index --database C:\data\regenic.db --blob-root C:\data\blobs --org local-owner
 pnpm --filter @regenic/local-cli start context-embedding-status --database C:\data\regenic.db --blob-root C:\data\blobs --org local-owner
@@ -643,7 +643,7 @@ pnpm --filter @regenic/local-cli start context-embedding-status --database C:\da
 pnpm --filter @regenic/local-cli start context-embedding-retry --database C:\data\regenic.db --blob-root C:\data\blobs --org local-owner --event "<event-id>"
 ```
 
-256-token chunk、128 chunks/Event 与 30 秒超时是可调整的实验默认值，不是质量或延迟承诺。
+256-token chunk、1024 chunks/Event 与 30 秒超时是可调整的实验默认值，不是质量或延迟承诺。
 chunk 参数改变会创建新 generation；本批没有 alias 切换、跨 generation 融合或旧 generation GC。
 第二批参考服务串行处理请求；第 19 节新增有界并发接入与查询优先调度，仍不提供生产吞吐保证。
 
@@ -940,6 +940,84 @@ worker 原有的执行前/发布前生命周期复核仍会拒绝过时任务。
 使用独立 userData、合成库和协议 stub，覆盖原文、隐藏会话跳转/高亮、诊断/重试、
 修订后旧结果拒绝、origin 重置及退出清理。它不是模型质量、规模或生产指标认证；
 真实用户数据验收、资源基线及跨平台安装仍需单独执行。
+
+## 20. 连接器附件的本机索引
+
+新配方 `stored-body-and-attachments-v2` 将正文和已落盘附件共同纳入索引，
+不要求飞书或其它连接器先把二进制附件转成消息正文，也不上传到 Google。
+`EmbeddingGemma 2` 使用同一固定 revision，启用视觉编码器、保留文本模板，
+音频编码器仍关闭；MP4 **仅处理画面，不转写或索引音轨**。
+CPU 默认以 BF16 加载权重以降低多模态模型常驻内存；返回向量仍按现有协议转换成 float32
+并再次做 L2 归一化。手动服务可用 `--precision float32` 回退；它降低推理延迟但增加内存。
+
+2026-10-30 在 Windows x64、AMD EPYC 7763、同一固定 revision 上的合成实测：
+完成查询预热后，服务 Working Set 从 2992.5 MiB 降至 1919.1 MiB（下降 35.9%），
+Private Bytes 从 4314.4 MiB 降至 3040.1 MiB（下降 29.5%）。单条热查询均值从
+112.1 ms 增至 265.4 ms；首次 512×512 图片编码从 3.3 s 增至 23.5 s。
+development、holdout 和 confirmation 共 49 条检索用例全部通过，混合召回指标与既有基线一致。
+这些数字是该 CPU 上的合成基线，不是跨硬件 SLO；没有原生 BF16 指令的 CPU 会把主要代价
+放在空闲时执行的视觉附件回填上。
+
+| 内容 | 本机处理 |
+| --- | --- |
+| 文本、代码、Markdown、CSV、HTML | UTF-8 读取；压缩包内 HTML 去掉 script/style |
+| PNG、JPEG 等 Pillow 支持的图片 | 从字节识别格式，原生视觉向量，不生成或虚构 OCR 正文 |
+| PDF | PDFium 提取正文并逐页渲染、编码，扫描页也有视觉向量 |
+| DOCX、XLSX、PPTX | 有界 ZIP/XML 解析，读取段落、表格单元格、幻灯片/备注及内嵌图片 |
+| ZIP | 在内存中按相同规则递归处理成员；不解压到磁盘、不打开外部链接 |
+| MP4 | PyAV 解码，约每秒一帧，每 16 帧以内组成一个原生视频片段向量，不读取音轨 |
+
+字节签名优先于 MIME 和扩展名，因此 JPEG 被命名为 `.png` 或二进制文件无扩展名
+不再仅因元数据不符而被当作无效文本。未知格式、损坏文件、加密文件及超限文件明确失败；
+不发布“只有正文、漏掉失败附件”的部分覆盖。文本附件的内容哈希和 UTF-8 均校验。
+只有确实没有正文、也没有已落盘附件的事件标为 `skipped`，不产生 coverage/零向量，
+不计为已索引；设置页单独显示跳过数量及“不支持的附件”诊断。
+
+独立 `/attachment` 接口仍只接受数值回环地址、拒绝浏览器 Origin 和重定向。
+同一服务一次只接收一个附件请求，繁忙时在读取请求体前返回 503，文本查询仍可并发接入。
+单附件上限 16 MiB，请求上限 23 MiB；抽取文本上限 256 KiB，视觉向量最多 128 个，
+图片上限 2000 万像素。ZIP 最多 512 个成员、展开总量 32 MiB、嵌套深度 3，
+仅支持 STORE/DEFLATE，拒绝路径穿越、符号链接、加密和超过 200 倍压缩比的成员。
+PDF 最多 128 页；视频最多约 128 秒、7680 个解码帧，超限明确隔离，不静默截断。
+上述限制仍受每个 Event 的 `max_chunks_per_event` 总预算约束。
+附件请求超时至少 300 秒；已开始的 CPU 推理仍不能被 HTTP 取消抢占。
+视觉单元复用查询优先队列，查询可在 PDF 页面、图片或视频片段之间插入，
+而不是等待整份附件处理完成；PDFium 解析另有进程内互斥，避免并发调用其非线程安全接口。
+Node adapter 按内容和元数据哈希缓存成功抽取结果，进程内最多 128 项、估算 16 MiB，
+不缓存失败，不写附件正文缓存文件。
+
+V2 chunk 区间是“正文 + 附件抽取文本 + 视觉单元”的连续投影坐标，不是假装存在的原文字符。
+检索命中使用持久 chunk 集合的 `material_length` 校验边界；旧 V1 仍校验正文字符区间。
+结果依然绑定原 Authority Event/content hash，并经当前授权与生命周期检查；视觉向量不是 OCR，
+文档抽取正文也不会被当作未经核验的原始消息正文回传。
+
+向量 sidecar 升为 schema v4，兼容迁移 v1–v3，保留旧 manifest、generation 和回滚能力。
+这里的回滚是 generation 切换；旧版只支持 v3 的程序不能直接打开 v4 sidecar，
+若要降级程序须先停止服务并恢复升级前的一致备份。
+升级后独立回填 V2；所有当前任务完成或确认为空后才从旧文本 generation 自动切换一次，
+显式回滚后不会被后台再次自动切回。损坏或不支持的附件会阻止自动切换，不能伪造完整覆盖。
+历史文本 generation 的隔离任务保留供诊断，不会通过删除旧任务来掩盖问题。
+
+大附件按每轮最多 8 个新增 chunk 持久化断点并让出 worker；每个成功向量立即写入
+`staged_chunks`，正常让出不计失败或重试次数。中断或重启后按 Event/hash、generation、
+租约和生命周期 fence 校验断点，再从已完成文本区间继续，不重复生成已保存的文本向量。
+分批期间不写 coverage、不对检索可见；正文及所有附件全部完成后才在同一事务发布。
+修订、撤回会删除旧断点，清理组织数据及回收 generation 也会级联清理。
+附件抽取缓存仍只在进程内；重启可能重新解析附件或生成视觉单元，不代表视觉处理也支持断点。
+
+运行配置的默认 Event 总预算从 128 提高至 1024，仍保持每块 256 token 和原模型精度。
+预算纳入 generation 配方，不修改旧 manifest：升级后回填新代，所有当前任务完成后才
+从相同 chunk 大小的旧低预算 V2 自动切换一次；显式回滚后不强制切回。
+原来需要 567 块的 Excel 可完整处理，无需拆文件、修改原附件或截断内容。
+若显式设置 `REGENIC_EMBEDDING_MAX_CHUNKS=128` 则仍保留旧限制；超过新总预算或上述
+解析资源上限仍明确隔离，不宣称附件大小或处理时间无限制。此次改动不降低 Python 模型常驻内存。
+仅此次分批升级无需重装模型组件，更新并重启应用即可回填；首次安装多模态支持仍按下文操作。
+
+桌面安装标记绑定 `serve.py` 和固定依赖指纹。**更新桌面构建后，在设置页停止并重新安装
+本地模型组件，再启动本地模型**，以校验视觉权重并补齐 PDF/XML/视频运行库；
+随后后台回填新 generation。不要仅把旧隔离任务反复重试到仍只支持文本的模型服务。
+命令行用户重新安装 `requirements.txt` 并重启参考服务；运行时仍可使用 offline 模式。
+用户的 Authority 和 Blob 无需修改或重新同步。
 
 [event-types]: https://github.com/regenic-ai/regenic/blob/4e5b6e9f606f6c95a348725fc04f3fcd1815bfb8/packages/domain/src/ingestion.ts#L121-L176
 [ingest-write]: https://github.com/regenic-ai/regenic/blob/4e5b6e9f606f6c95a348725fc04f3fcd1815bfb8/packages/domain/src/ingestion-service.ts#L590-L679

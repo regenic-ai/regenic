@@ -50,6 +50,7 @@ export interface ContextRequest {
   purpose: string;
   allowed_uses: ContextAllowedUse[];
   query?: string;
+  search_kind?: import("./context-search").ContextSearchKind;
   anchors?: ContextAnchor[];
   filters?: ContextRequestFilters;
   temporal: ContextTemporalSelection;

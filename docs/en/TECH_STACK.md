@@ -56,10 +56,41 @@ can be restarted by model management; custom kernels are managed independently.
 The guarded `GET /v1/me/context/embedding/status` returns provider/vector readiness
 and aggregate per-generation job counts, never raw job inputs or model URLs.
 `POST /v1/me/context/embedding/index` accepts only `{}` and runs at most one job.
-`POST /v1/me/context/search/source` accepts only an Event/hash reference, rechecks
+`POST /v1/me/context/search/source` accepts an Event/hash reference and optional
+`part_index`, rechecks
 current authorized evidence and returns bounded source text plus an optional inbox
 mapping. Desktop previews escaped text and can navigate/highlight the original
 message without unhiding its conversation.
+
+Search now has one input and an optional `kind: "all" | "messages" | "files"`
+(default `all`) on `/search` and `/search/expand`; CLI `context-search --kind`
+and MCP `search_conversations.kind` use the same contract. Authorized current
+Events remain the ranking/budget unit. `items[].matches` deduplicates each file by
+its Event content hash and stored envelope part index (not by filename), includes
+MIME type, stored filename/hash when available, and identifies filename, metadata,
+text, semantic or visual match routes. File-only hits do not become conversation
+message anchors. Opening a file result rechecks the Event/hash and exact part,
+then navigates to its source conversation; it does not claim to open a PDF page.
+
+The vector sidecar migrates additively to schema v5, retaining v4 staged chunks,
+fences, complete-only publication and generation rollback. New chunks persist
+attachment provenance and extracted text with their existing text hash; keyword
+search of completed extracted chunks also works while inference is offline.
+Only authorized current Event/hash keys can read this projection.
+Keyword tokenization spans continuous text chunks of the same Event/hash and
+attachment part/hash, preserving file-local offsets; it stops at provenance
+gaps, missing origins and visual units. Messages-only vector ranking excludes
+attachment matches before top-k selection.
+Text locations are bounded, file-local UTF-16 `[start,end)` ranges in stored/extracted text;
+visual hits identify only the file. No page, sheet, cell or bounding-box locations
+are inferred. Old chunks without provenance and chunks crossing material parts
+remain Event-level semantic evidence, never guessed file matches. Existing
+generations are not automatically reindexed. Historical direct blobs can lack a
+filename/part envelope; their verified identity is the Event hash and part `-1`.
+Filename metadata cannot be recovered when ingestion did not preserve it.
+Personal search verifies stored text and filename metadata across authorized
+Events rather than trusting legacy body-only FTS coverage; this is a correctness
+fallback, not a new filename index or a production latency guarantee.
 Status also returns allowlisted failure categories. The guarded
 `POST /v1/me/context/embedding/retry` accepts a retained `generation` and an integer
 `limit` (default 10, maximum 20); it requires healthy provider/vector storage and

@@ -11,6 +11,48 @@ const { EmbeddingError } = require("@regenic/domain");
 const { ContextEngineError } = require("@regenic/context-engine");
 const { PersonalContextService } = require("../dist/personal-context.service");
 
+it("expands file-only searches without false message anchors and reauthorizes the exact part on open", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "regenic-api-search-files-"));
+  const database = join(root, "authority.db");
+  const host = await createKernelHost({
+    authority: { plugin: sqliteAuthorityPlugin, config: { path: database } },
+    blobs: { plugin: fsBlobPlugin, config: { root: join(root, "blobs") } },
+    orgId: "owner", lexicalDatabase: `${database}.lexical.db`,
+  });
+  t.after(async () => { await host.dispose(); await rm(root, { recursive: true, force: true }); });
+  const runtime = { orgId: () => "owner", requireHost: () => host };
+  const service = new PersonalContextService(runtime);
+  const ingest = async (operation, content) => host.get("ingest").ingest({
+    schema_version: "1.0", connector_id: "synthetic", org_id: "owner", delivery_id: operation,
+    received_at: "2026-10-30T00:00:00.000Z",
+    records: [{
+      operation, source: "synthetic", external_id: "files", occurred_at: "2026-10-30T00:00:00.000Z",
+      actor: { id: "actor" }, scope: { id: "thread" }, type: "message", ...(content ? { content } : {}),
+    }],
+  });
+  await ingest("create", [
+    { role: "body", media_type: "text/plain", text: "ordinary message" },
+    { role: "attachment", media_type: "text/plain", source_filename: "budget.txt", bytes: Buffer.from("invoice content") },
+    { role: "attachment", media_type: "text/plain", source_filename: "other.txt", bytes: Buffer.from("other") },
+  ]);
+  const result = await service.searchExpanded({ query: "budget.txt", kind: "files" });
+  assert.equal(result.items.length, 1);
+  assert.deepEqual(result.conversations, []);
+  assert.equal(result.expansion.returned_messages, 0);
+  const hit = result.items[0];
+  assert.equal(hit.matches[0].part_index, 1);
+  assert.equal((await service.searchExpanded({ query: "budget.txt", kind: "messages" })).items.length, 0);
+  await assert.rejects(service.searchExpanded({ query: "budget", kind: "invalid" }), (error) => error.code === "invalid_request");
+  const reference = { event_id: hit.event_id, content_hash: hit.content_hash, part_index: 1 };
+  const opened = await service.searchSource(reference);
+  assert.equal(opened.attachment.filename, "budget.txt");
+  assert.equal(opened.attachment.content_hash, hit.matches[0].content_hash);
+  await assert.rejects(service.searchSource({ ...reference, part_index: 0 }), (error) => error.code === "not_found");
+  await assert.rejects(service.searchSource({ ...reference, part_index: 100 }), (error) => error.code === "not_found");
+  await ingest("tombstone");
+  await assert.rejects(service.searchSource(reference), (error) => error.code === "not_found");
+});
+
 it("maps observed Authority races to 503 and invalid embedding queries to 400", async () => {
   for (const [error, status, code] of [
     [new ContextEngineError("source_boundary", "private detail"), 503, "retrieval_unavailable"],

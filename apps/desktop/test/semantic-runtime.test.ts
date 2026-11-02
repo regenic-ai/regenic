@@ -73,11 +73,14 @@ test("semantic actions and search input are bounded and literal", () => {
   for (const action of ["install", "start", "stop"]) assert.equal(semanticAction(action), action);
   for (const action of [null, {}, "exec", "START"]) assert.throws(() => semanticAction(action));
   assert.deepEqual(contextSearchInput(" query ", " mail ", " literal/thread ", 20), {
-    query: "query", limit: 20, filters: { sources: ["mail"], thread_ids: ["literal/thread"] },
+    query: "query", limit: 20, kind: "all", filters: { sources: ["mail"], thread_ids: ["literal/thread"] },
     context: SEARCH_CONTEXT,
   });
 
-  assert.deepEqual(contextSearchInput("x", "", "", 1), { query: "x", limit: 1, context: SEARCH_CONTEXT });
+  assert.deepEqual(contextSearchInput("x", "", "", 1), { query: "x", limit: 1, kind: "all", context: SEARCH_CONTEXT });
+  for (const kind of ["all", "messages", "files"] as const) {
+    assert.equal(contextSearchInput("budget.xlsx", "", "", 10, kind).kind, kind);
+  }
   for (const [query, limit] of [["", 20], ["x".repeat(8001), 20], ["x", 21], ["x", 1.2]] as const) {
     assert.throws(() => contextSearchInput(query, "", "", limit), /search.invalid/);
   }
@@ -193,10 +196,13 @@ test("install uses isolated fixed assets, actual verification before marker and 
     assert.ok(f.calls[1].args.includes(join(f.root, "venv")));
     assert.ok(f.calls[2].args.includes(join(f.assets, "requirements.txt")));
     assert.ok(f.calls[3].args.includes("--download-only"));
+    assert.deepEqual(f.calls[3].args.slice(-4), ["--device", "cpu", "--precision", "bfloat16"]);
     assert.equal(f.calls[3].options.env?.HF_HOME, join(f.root, "cache"));
     await f.runtime.start();
     assert.equal(f.runtime.view(true, true).stage, "running");
     assert.match(f.runtime.endpoint()!, /^http:\/\/127\.0\.0\.1:\d+$/);
+    assert.ok(f.calls[4].args.includes("--precision"));
+    assert.ok(f.calls[4].args.includes("bfloat16"));
     assert.equal(f.calls[4].options.env?.HF_HUB_OFFLINE, "1");
     await f.runtime.start();
     assert.equal(f.calls.length, 5);

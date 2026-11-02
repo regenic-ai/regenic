@@ -413,7 +413,7 @@ export class DeterministicContextEngine implements ContextEngine {
         throw new ContextEngineError("invalid_candidate", "Retriever returned a candidate kind outside the request");
       }
       assertItemMatchesCandidate(value);
-      assertCandidateEvidenceBinding(value, visibleById);
+      assertCandidateEvidenceBinding(value, visibleById, request);
       if (!await this.policy.visible(clone({
         request,
         resource: {
@@ -702,6 +702,7 @@ function assertItemMatchesCandidate(value: RetrievedContextCandidate): void {
 function assertCandidateEvidenceBinding(
   value: RetrievedContextCandidate,
   visibleById: Map<string, AuthorizedContextSourceEvent>,
+  request: ContextRequest,
 ): void {
   const candidate = value.candidate;
   const evidenceSources = candidate.evidence.map((evidence) => {
@@ -738,10 +739,27 @@ function assertCandidateEvidenceBinding(
     candidate.status !== source.status ||
     canonicalContextJson(uniqueSorted(candidate.required_scope_ids)) !==
       canonicalContextJson(uniqueSorted(source.required_scope_ids)) ||
-    value.item.text !== source.text ||
+    value.item.text !== (request.search_kind
+      ? Array.from(source.search_body ?? source.text ?? "").slice(0, 480).join("") : source.text) ||
     candidate.projection !== undefined
   ) {
     throw new ContextEngineError("invalid_candidate", "Event candidate does not match its authorized source event");
+  }
+  for (const match of value.item.search_matches ?? []) {
+    if (!request.search_kind) throw new ContextEngineError("invalid_candidate", "Search matches require a search request");
+    if (match.kind !== "file") {
+      if (match.snippet !== undefined && (source.search_body ?? source.text ?? "").slice(match.start, match.end) !== match.snippet) {
+        throw new ContextEngineError("invalid_candidate", "Search text range does not match its authorized message");
+      }
+      continue;
+    }
+    const part = source.search_parts?.find((part) => part.part_index === match.part_index);
+    if (!part || part.content_hash !== match.content_hash || part.filename !== match.filename ||
+      part.media_type !== match.media_type ||
+      (part.text !== undefined && match.snippet !== undefined &&
+        part.text.slice(match.start, match.end) !== match.snippet)) {
+      throw new ContextEngineError("invalid_candidate", "Search attachment does not match its authorized source");
+    }
   }
 }
 
@@ -1190,7 +1208,8 @@ function candidateMetadata(candidate: ContextCandidate): Omit<ContextCandidate, 
 }
 
 function normalizedTokenCost(value: RetrievedContextCandidate): RetrievedContextCandidate {
-  const textEstimate = estimateTextTokens(value.item.text);
+  const textEstimate = estimateTextTokens(value.item.text) +
+    (value.item.search_matches ?? []).reduce((sum, match) => sum + estimateTextTokens(match.snippet ?? match.filename), 0);
   const estimatedTokens = Math.max(value.candidate.estimated_tokens, value.item.estimated_tokens, textEstimate);
   return {
     ...clone(value),
@@ -1260,8 +1279,11 @@ function assertMaterializedEvents(
   }
 }
 
-function withoutMaterial(source: AuthorizedContextSourceEvent): Omit<AuthorizedContextSourceEvent, "text" | "estimated_tokens"> {
-  const { text: _text, estimated_tokens: _estimatedTokens, ...metadata } = source;
+function withoutMaterial(source: AuthorizedContextSourceEvent) {
+  const {
+    text: _text, estimated_tokens: _estimatedTokens,
+    search_parts: _searchParts, search_body: _searchBody, ...metadata
+  } = source;
   return metadata;
 }
 

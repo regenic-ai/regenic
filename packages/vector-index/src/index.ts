@@ -1,4 +1,5 @@
 import { mkdirSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { dirname } from "node:path";
 import Database from "better-sqlite3";
 import { definePlugin } from "@regenic/plugin-host";
@@ -7,15 +8,40 @@ import {
   embeddingGeneration,
   validateEmbeddingVector,
   ContextVectorUnavailableError,
+  EmbeddingGenerationNotReadyError,
+  scoreContextLexicalText,
+  type ContextChunkOrigin,
+  type ContextVectorMatch,
   type ContextVectorIndex,
   type ContextVectorGenerationStore,
   type ContextVectorChunk,
   type EmbeddingGeneration,
   type EmbeddingJob,
+  type EmbeddingJobSummary,
   type EmbeddingJobStore,
 } from "@regenic/domain";
 
 export class VectorIndexSchemaError extends Error {}
+
+function parseOrigin(json: string | null, hash: string, length: number): ContextChunkOrigin | undefined {
+  if (json === null) return undefined;
+  let value: ContextChunkOrigin;
+  try {
+    value = JSON.parse(json);
+  } catch (error) {
+    if (error instanceof SyntaxError) throw new ContextVectorUnavailableError("corrupt");
+    throw error;
+  }
+  if (!value || !Number.isSafeInteger(value.part_index) || value.part_index < -1 ||
+    !validHash(value.content_hash) || !Number.isSafeInteger(value.start) || value.start < 0 ||
+    (value.mode !== "text" && value.mode !== "visual") ||
+    (value.mode === "text" && (typeof value.text !== "string" || value.text.length !== length)) ||
+    (value.mode === "visual" && (value.text !== undefined || length !== 1)) ||
+    createHash("sha256").update(value.mode === "text" ? value.text! : `${value.content_hash}:${value.start}`).digest("hex") !== hash) {
+    throw new ContextVectorUnavailableError("corrupt");
+  }
+  return value;
+}
 
 interface JobRow {
   id: number; org_id: string; generation: string; source: string; external_id: string;
@@ -31,6 +57,8 @@ interface AuthorizedChunkRow {
   start: number | null;
   end: number | null;
   vector: Buffer | null;
+  origin_json: string | null;
+  text_hash: string;
 }
 
 export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVectorGenerationStore, EmbeddingJobStore {
@@ -45,7 +73,7 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
       this.db.pragma("secure_delete = ON");
       this.db.pragma("busy_timeout = 5000");
       const version = this.db.pragma("user_version", { simple: true });
-      if (version !== 0 && version !== 1 && version !== 2) throw new VectorIndexSchemaError("Unsupported vector index schema");
+      if (version !== 0 && version !== 1 && version !== 2 && version !== 3 && version !== 4 && version !== 5) throw new VectorIndexSchemaError("Unsupported vector index schema");
       this.db.transaction(() => {
         this.db.exec(`
           CREATE TABLE IF NOT EXISTS generations (
@@ -67,6 +95,12 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
             FOREIGN KEY (org_id, generation) REFERENCES generations(org_id, generation) ON DELETE CASCADE
           );
           CREATE INDEX IF NOT EXISTS jobs_due ON jobs(org_id, generation, status, retry_at, lease_until, id);
+          CREATE TABLE IF NOT EXISTS staged_chunks (
+            job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+            ordinal INTEGER NOT NULL, start INTEGER NOT NULL, end INTEGER NOT NULL,
+            text_hash TEXT NOT NULL, vector BLOB NOT NULL,
+            PRIMARY KEY (job_id, ordinal)
+          );
           CREATE TABLE IF NOT EXISTS coverage (
             org_id TEXT NOT NULL, generation TEXT NOT NULL, event_id TEXT NOT NULL,
             content_hash TEXT NOT NULL, source TEXT NOT NULL, external_id TEXT NOT NULL, chunk_count INTEGER NOT NULL,
@@ -87,12 +121,26 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
             org_id TEXT NOT NULL, generation TEXT NOT NULL, manifest_json TEXT NOT NULL, retired_at TEXT NOT NULL,
             PRIMARY KEY (org_id, generation)
           );
+          CREATE TABLE IF NOT EXISTS generation_activations (
+            org_id TEXT NOT NULL, generation TEXT NOT NULL,
+            PRIMARY KEY (org_id, generation),
+            FOREIGN KEY (org_id, generation) REFERENCES generations(org_id, generation) ON DELETE CASCADE
+          );
+          INSERT OR IGNORE INTO generation_activations SELECT org_id,generation FROM active_generations;
           CREATE TEMP TABLE IF NOT EXISTS vector_authorized (
             event_id TEXT PRIMARY KEY,
             content_hash TEXT NOT NULL
           ) WITHOUT ROWID;
-          PRAGMA user_version = 2;
         `);
+        if (version !== 5) {
+          for (const table of ["chunks", "staged_chunks"]) {
+            const columns = this.db.pragma(`table_info(${table})`) as Array<{ name: string }>;
+            if (!columns.some((column) => column.name === "origin_json")) {
+              this.db.exec(`ALTER TABLE ${table} ADD COLUMN origin_json TEXT;`);
+            }
+          }
+        }
+        this.db.pragma("user_version = 5");
       }).immediate();
     } catch (error) {
       this.db.close();
@@ -104,7 +152,9 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
 
   async registerGeneration(orgId: string, generation: EmbeddingGeneration): Promise<void> {
     required(orgId);
-    const expected = embeddingGeneration(generation.model, generation.chunk_tokens, generation.max_chunks_per_event);
+    const expected = embeddingGeneration(
+      generation.model, generation.chunk_tokens, generation.max_chunks_per_event, generation.extractor_version,
+    );
     if (canonicalContextJson(generation) !== canonicalContextJson(expected)) throw new Error("Invalid vector generation manifest");
     this.db.transaction(() => {
       if (this.db.prepare("SELECT 1 FROM retired_generations WHERE org_id=? AND generation=?").get(orgId, generation.id)) {
@@ -114,6 +164,8 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
         .run(orgId, generation.id, canonicalContextJson(generation));
       this.manifest(orgId, generation.id);
       this.db.prepare("INSERT OR IGNORE INTO active_generations VALUES (?,?)").run(orgId, generation.id);
+      this.db.prepare(`INSERT OR IGNORE INTO generation_activations
+        SELECT org_id,generation FROM active_generations WHERE org_id=?`).run(orgId);
     }).immediate();
   }
 
@@ -127,6 +179,9 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
       }>;
     return rows.map((row) => ({
       manifest: this.manifest(orgId, row.generation), active: row.active === 1,
+      previously_active: Boolean(this.db.prepare(
+        "SELECT 1 FROM generation_activations WHERE org_id=? AND generation=?",
+      ).get(orgId, row.generation)),
       ...(row.reconciled_epoch ? { reconciled_epoch: row.reconciled_epoch } : {}),
     }));
   }
@@ -155,13 +210,13 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
       const manifest = this.manifest(input.org_id, input.generation);
       const row = this.db.prepare("SELECT reconciled_epoch FROM generations WHERE org_id=? AND generation=?")
         .get(input.org_id, input.generation) as { reconciled_epoch: string | null };
-      if (row.reconciled_epoch !== input.read_epoch) throw new Error("Generation requires reconciliation at the current Authority epoch");
+      if (row.reconciled_epoch !== input.read_epoch) throw new EmbeddingGenerationNotReadyError("authority_changed");
       for (const key of input.required) {
         const coverage = this.db.prepare(`SELECT c.chunk_count FROM coverage c JOIN source_heads h
           ON h.org_id=c.org_id AND h.source=c.source AND h.external_id=c.external_id AND h.event_id=c.event_id
           WHERE c.org_id=? AND c.generation=? AND c.event_id=? AND c.content_hash=?`)
           .get(input.org_id, input.generation, key.event_id, key.content_hash) as { chunk_count: number } | undefined;
-        if (!coverage) throw new Error("Generation is not fully covered; backfill or retry first");
+        if (!coverage) throw new EmbeddingGenerationNotReadyError("backfill_incomplete");
         const chunks = this.db.prepare("SELECT ordinal,start,end,vector FROM chunks WHERE org_id=? AND generation=? AND event_id=? ORDER BY ordinal")
           .all(input.org_id, input.generation, key.event_id) as Array<{ ordinal: number; start: number; end: number; vector: Buffer }>;
         let end = 0;
@@ -176,6 +231,8 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
       }
       this.db.prepare(`INSERT INTO active_generations VALUES (?,?)
         ON CONFLICT(org_id) DO UPDATE SET generation=excluded.generation`).run(input.org_id, input.generation);
+      this.db.prepare("INSERT OR IGNORE INTO generation_activations VALUES (?,?)")
+        .run(input.org_id, input.generation);
     }).immediate();
   }
 
@@ -224,6 +281,9 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
           this.db.prepare(`UPDATE jobs SET status='superseded',owner=NULL,lease_until=NULL
             WHERE org_id=? AND source=? AND external_id=? AND event_id<>?`)
             .run(input.org_id, head.source, head.external_id, head.event_id);
+          this.db.prepare(`DELETE FROM staged_chunks WHERE job_id IN (
+            SELECT id FROM jobs WHERE org_id=? AND source=? AND external_id=? AND status='superseded'
+          )`).run(input.org_id, head.source, head.external_id);
         }
         this.db.prepare(`INSERT OR IGNORE INTO jobs (
           org_id,generation,source,external_id,event_id,content_hash,operation,lineage_json,fence,status
@@ -261,38 +321,109 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
       .run(new Date(Date.parse(now) + leaseMs).toISOString(), job.id, job.org_id, job.generation, owner, now, job.fence).changes === 1;
   }
 
+  private ownsJob(job: EmbeddingJob, owner: string, now: string): boolean {
+    required(owner); timestamp(now);
+    return Boolean(this.db.prepare(`SELECT j.id FROM jobs j JOIN source_heads h
+      ON h.org_id=j.org_id AND h.source=j.source AND h.external_id=j.external_id
+      WHERE j.id=? AND j.org_id=? AND j.generation=? AND j.event_id=? AND j.content_hash=?
+      AND j.source=? AND j.external_id=? AND j.fence=? AND j.status='running' AND j.owner=? AND j.lease_until>?
+      AND h.event_id=j.event_id AND h.fence=j.fence`)
+      .get(job.id, job.org_id, job.generation, job.event_id, job.content_hash,
+        job.source, job.external_id, job.fence, owner, now));
+  }
+
+  async loadStagedChunks(job: EmbeddingJob, owner: string, now: string): Promise<ContextVectorChunk[]> {
+    if (!this.ownsJob(job, owner, now)) throw new Error("Embedding checkpoint lease lost");
+    const generation = this.manifest(job.org_id, job.generation);
+    const rows = this.db.prepare("SELECT ordinal,start,end,text_hash,vector,origin_json FROM staged_chunks WHERE job_id=? ORDER BY ordinal")
+      .all(job.id) as Array<{ ordinal: number; start: number; end: number; text_hash: string; vector: Buffer; origin_json: string | null }>;
+    if (rows.length > generation.max_chunks_per_event) throw new ContextVectorUnavailableError("corrupt");
+    let end = 0;
+    return rows.map((row, ordinal) => {
+      if (row.ordinal !== ordinal || row.start !== end || !Number.isSafeInteger(row.end) || row.end <= end ||
+        !validHash(row.text_hash) || !Buffer.isBuffer(row.vector) || row.vector.length !== generation.model.dimensions * 4) {
+        throw new ContextVectorUnavailableError("corrupt");
+      }
+      const vector = Array.from({ length: generation.model.dimensions }, (_, i) => row.vector.readFloatLE(i * 4));
+      validateEmbeddingVector(vector, generation.model.dimensions);
+      end = row.end;
+      const origin = parseOrigin(row.origin_json, row.text_hash, row.end - row.start);
+      return { ordinal, start: row.start, end: row.end, text_hash: row.text_hash, vector, ...(origin ? { origin } : {}) };
+    });
+  }
+
+  async stageChunk(input: Parameters<EmbeddingJobStore["stageChunk"]>[0]): Promise<boolean> {
+    const { job, owner, now, chunk } = input;
+    const generation = this.manifest(job.org_id, job.generation);
+    if (!Number.isSafeInteger(chunk.ordinal) || chunk.ordinal < 0 ||
+      chunk.ordinal >= generation.max_chunks_per_event ||
+      !Number.isSafeInteger(chunk.start) || !Number.isSafeInteger(chunk.end) ||
+      chunk.start < 0 || chunk.end <= chunk.start || !validHash(chunk.text_hash)) {
+      throw new Error("Invalid staged embedding chunk");
+    }
+    validateEmbeddingVector(chunk.vector, generation.model.dimensions);
+    if (chunk.origin) parseOrigin(JSON.stringify(chunk.origin), chunk.text_hash, chunk.end - chunk.start);
+    return this.db.transaction(() => {
+      if (!this.ownsJob(job, owner, now)) return false;
+      const previous = this.db.prepare("SELECT ordinal,end FROM staged_chunks WHERE job_id=? ORDER BY ordinal DESC LIMIT 1")
+        .get(job.id) as { ordinal: number; end: number } | undefined;
+      if (chunk.ordinal !== (previous ? previous.ordinal + 1 : 0) || chunk.start !== (previous?.end ?? 0)) {
+        throw new Error("Non-contiguous embedding checkpoint");
+      }
+      const bytes = Buffer.alloc(chunk.vector.length * 4);
+      chunk.vector.forEach((value, i) => bytes.writeFloatLE(value, i * 4));
+      this.db.prepare("INSERT INTO staged_chunks VALUES (?,?,?,?,?,?,?)")
+        .run(job.id, chunk.ordinal, chunk.start, chunk.end, chunk.text_hash, bytes, chunk.origin ? JSON.stringify(chunk.origin) : null);
+      return true;
+    }).immediate();
+  }
+
+  async yieldJob(job: EmbeddingJob, owner: string, now: string): Promise<boolean> {
+    return this.db.transaction(() => {
+      if (!this.ownsJob(job, owner, now)) return false;
+      this.db.prepare(`UPDATE jobs SET status='pending',owner=NULL,lease_until=NULL,retry_at=NULL,
+        attempts=MAX(attempts-1,0) WHERE id=?`)
+        .run(job.id);
+      return true;
+    }).immediate();
+  }
+
   async complete(input: Parameters<EmbeddingJobStore["complete"]>[0]): Promise<boolean> {
     const { job, owner, now, chunks } = input;
     required(owner); timestamp(now);
     const generation = this.manifest(job.org_id, job.generation);
-    if (!validHash(job.content_hash) || !Array.isArray(chunks) || chunks.length === 0 ||
+    const noContent = input.no_content === true;
+    if (noContent && (generation.extractor_version !== "stored-body-and-attachments-v2" || chunks.length !== 0)) {
+      throw new Error("Invalid empty embedding publication");
+    }
+    if (!validHash(job.content_hash) || !Array.isArray(chunks) || (!noContent && chunks.length === 0) ||
       chunks.length > generation.max_chunks_per_event) throw new Error("Invalid embedding publication");
     let end = 0;
     for (const [ordinal, chunk] of chunks.entries()) {
       if (chunk.ordinal !== ordinal || !Number.isSafeInteger(chunk.start) || !Number.isSafeInteger(chunk.end) ||
         chunk.start !== end || chunk.end <= chunk.start || !validHash(chunk.text_hash)) throw new Error("Invalid embedding chunk");
       validateEmbeddingVector(chunk.vector, generation.model.dimensions);
+      if (chunk.origin) parseOrigin(JSON.stringify(chunk.origin), chunk.text_hash, chunk.end - chunk.start);
       end = chunk.end;
     }
     return this.db.transaction(() => {
-      const current = this.db.prepare(`SELECT j.id FROM jobs j JOIN source_heads h
-        ON h.org_id=j.org_id AND h.source=j.source AND h.external_id=j.external_id
-        WHERE j.id=? AND j.org_id=? AND j.generation=? AND j.event_id=? AND j.content_hash=?
-        AND j.source=? AND j.external_id=? AND j.fence=? AND j.status='running' AND j.owner=? AND j.lease_until>?
-        AND h.event_id=j.event_id AND h.fence=j.fence`)
-        .get(job.id, job.org_id, job.generation, job.event_id, job.content_hash, job.source, job.external_id, job.fence, owner, now);
-      if (!current) return false;
+      if (!this.ownsJob(job, owner, now)) return false;
       this.db.prepare("DELETE FROM coverage WHERE org_id=? AND generation=? AND event_id=?")
         .run(job.org_id, job.generation, job.event_id);
-      this.db.prepare("INSERT INTO coverage VALUES (?,?,?,?,?,?,?)")
-        .run(job.org_id, job.generation, job.event_id, job.content_hash, job.source, job.external_id, chunks.length);
+      if (!noContent) {
+        this.db.prepare("INSERT INTO coverage VALUES (?,?,?,?,?,?,?)")
+          .run(job.org_id, job.generation, job.event_id, job.content_hash, job.source, job.external_id, chunks.length);
+      }
       for (const chunk of chunks) {
         const bytes = Buffer.alloc(chunk.vector.length * 4);
         chunk.vector.forEach((value, index) => bytes.writeFloatLE(value, index * 4));
-        this.db.prepare("INSERT INTO chunks VALUES (?,?,?,?,?,?,?,?)")
-          .run(job.org_id, job.generation, job.event_id, chunk.ordinal, chunk.start, chunk.end, chunk.text_hash, bytes);
+        this.db.prepare("INSERT INTO chunks VALUES (?,?,?,?,?,?,?,?,?)")
+          .run(job.org_id, job.generation, job.event_id, chunk.ordinal, chunk.start, chunk.end, chunk.text_hash, bytes,
+            chunk.origin ? JSON.stringify(chunk.origin) : null);
       }
-      this.db.prepare("UPDATE jobs SET status='succeeded',owner=NULL,lease_until=NULL,retry_at=NULL,error_code=NULL WHERE id=?").run(job.id);
+      this.db.prepare("UPDATE jobs SET status=?,owner=NULL,lease_until=NULL,retry_at=NULL,error_code=NULL WHERE id=?")
+        .run(noContent ? "skipped" : "succeeded", job.id);
+      this.db.prepare("DELETE FROM staged_chunks WHERE job_id=?").run(job.id);
       return true;
     }).immediate();
   }
@@ -311,6 +442,38 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
     required(orgId); required(generation);
     return (this.db.prepare("SELECT * FROM jobs WHERE org_id=? AND generation=? ORDER BY id")
       .all(orgId, generation) as JobRow[]).map(jobFromRow);
+  }
+
+  async summarizeJobs(orgId: string, generation: string): Promise<EmbeddingJobSummary> {
+    required(orgId); required(generation);
+    const counts: EmbeddingJobSummary["counts"] = {
+      pending: 0, running: 0, succeeded: 0, skipped: 0,
+      failed: 0, quarantined: 0, superseded: 0,
+    };
+    const statuses = this.db.prepare(`SELECT status,COUNT(*) AS count FROM jobs
+      WHERE org_id=? AND generation=? GROUP BY status`).all(orgId, generation) as Array<{
+      status: EmbeddingJob["status"]; count: number;
+    }>;
+    for (const row of statuses) counts[row.status] = row.count;
+
+    const failures = this.db.prepare(`SELECT error_code,status,COUNT(*) AS count FROM jobs
+      WHERE org_id=? AND generation=? AND status IN ('failed','quarantined')
+      GROUP BY error_code,status`).all(orgId, generation) as Array<{
+      error_code: string | null; status: "failed" | "quarantined"; count: number;
+    }>;
+    const byCode = new Map<string, EmbeddingJobSummary["failures"][number]>();
+    for (const row of failures) {
+      const code = row.error_code ?? "indexing_failed";
+      const failure = byCode.get(code) ?? {
+        error_code: code, failed: 0, quarantined: 0,
+      };
+      failure[row.status] += row.count;
+      byCode.set(code, failure);
+    }
+    return {
+      counts,
+      failures: [...byCode.values()].sort((a, b) => a.error_code.localeCompare(b.error_code)),
+    };
   }
 
   async retryQuarantined(orgId: string, generation: string, eventId: string): Promise<boolean> {
@@ -343,17 +506,37 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
     }
   }
 
+  async matchAuthorizedText(input: Parameters<NonNullable<ContextVectorIndex["matchAuthorizedText"]>>[0]) {
+    const generation = this.manifest(input.org_id, input.generation);
+    // Reuse the same authorization/coverage/fence and corruption checks without inference.
+    const vector = Array.from({ length: generation.model.dimensions }, (_, index) => index === 0 ? 1 : 0);
+    const result = await this.matchAuthorized({ ...input, query_vector: vector });
+    return {
+      ...result,
+      matched: result.matched.filter((hit) => hit.search_matches?.some((match) => match.lexical))
+        .map((hit) => ({
+          ...hit, score: -1,
+          search_matches: hit.search_matches!.filter((match) => match.lexical).map((match) => ({ ...match, score: -1 })),
+        })),
+    };
+  }
+
   private async matchAuthorizedView(input: Parameters<ContextVectorIndex["matchAuthorized"]>[0]): ReturnType<ContextVectorIndex["matchAuthorized"]> {
     const generation = this.manifest(input.org_id, input.generation);
     validateEmbeddingVector(input.query_vector, generation.model.dimensions);
     const queryNorm = Math.sqrt(input.query_vector.reduce((sum, value) => sum + value * value, 0));
     bounded(input.limit, 1, 1000);
     if (!Array.isArray(input.authorized)) throw new Error("Invalid vector authorization set");
+    const bodyLengths = new Map<string, number>();
     const seen = new Set<string>();
     for (const key of input.authorized) {
       required(key.event_id);
       if (!validHash(key.content_hash) || seen.has(key.event_id)) throw new Error("Invalid vector authorization key");
       seen.add(key.event_id);
+      if (key.body_length !== undefined) {
+        bounded(key.body_length, 0, Number.MAX_SAFE_INTEGER);
+        bodyLengths.set(key.event_id, key.body_length);
+      }
     }
     return this.db.transaction(() => {
       this.db.prepare("DELETE FROM vector_authorized").run();
@@ -365,7 +548,7 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
       }
       const rows = this.db.prepare(`
         SELECT c.event_id, c.content_hash, c.chunk_count,
-               ch.ordinal, ch.start, ch.end, ch.vector
+               ch.ordinal, ch.start, ch.end, ch.vector, ch.origin_json, ch.text_hash
         FROM vector_authorized a
         JOIN coverage c
           ON c.event_id=a.event_id AND c.content_hash=a.content_hash
@@ -381,20 +564,33 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
         input.generation,
       ) as AuthorizedChunkRow[];
       const covered: Array<{ event_id: string; content_hash: string }> = [];
-      const matched: Array<{
-        event_id: string;
-        content_hash: string;
-        score: number;
-        chunk_ordinal: number;
-        start: number;
-        end: number;
-      }> = [];
-      const rank = (a: { score: number; event_id: string }, b: { score: number; event_id: string }) =>
+      const matched: ContextVectorMatch[] = [];
+      const rank = (a: ContextVectorMatch, b: ContextVectorMatch) =>
+        Number(Boolean(b.search_matches?.some((match) => match.lexical))) -
+          Number(Boolean(a.search_matches?.some((match) => match.lexical))) ||
         b.score - a.score || compare(a.event_id, b.event_id);
       for (let offset = 0; offset < rows.length;) {
         const first = rows[offset];
         let best: { score: number; chunk_ordinal: number; start: number; end: number } | undefined;
+        const parts = new Map<number, NonNullable<ContextVectorMatch["search_matches"]>[number]>();
+        let textRun: { origin: ContextChunkOrigin; texts: string[]; end: number; score: number } | undefined;
+        const admitPart = (origin: ContextChunkOrigin, score: number, lexical = false) => {
+          if (!input.query || input.search_kind === "messages") return;
+          const previous = parts.get(origin.part_index);
+          if (!previous || (lexical && !previous.lexical) || (lexical === previous.lexical && score > previous.score)) {
+            parts.set(origin.part_index, { origin, score, lexical });
+          }
+        };
+        const flushTextRun = () => {
+          if (!textRun) return;
+          const origin = { ...textRun.origin, text: textRun.texts.join("") };
+          if (scoreContextLexicalText(origin.text, input.query).lexical > 0) {
+            admitPart(origin, textRun.score, true);
+          }
+          textRun = undefined;
+        };
         let chunks = 0;
+        let materialLength = 0;
         while (offset < rows.length && rows[offset].event_id === first.event_id) {
           const chunk = rows[offset];
           if (
@@ -404,6 +600,7 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
             || !Number.isSafeInteger(chunk.start)
             || !Number.isSafeInteger(chunk.end)
             || !Buffer.isBuffer(chunk.vector)
+            || chunk.ordinal !== chunks || chunk.start !== materialLength || chunk.end! <= materialLength
           ) {
             throw new ContextVectorUnavailableError("corrupt");
           }
@@ -413,7 +610,30 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
             queryNorm,
             generation.model.dimensions,
           );
-          if (!best || score > best.score) {
+          const origin = parseOrigin(chunk.origin_json, chunk.text_hash, chunk.end! - chunk.start!);
+          if (input.query && input.search_kind !== "messages") {
+            // Token boundaries belong to continuous file text, not embedding chunks.
+            if (origin?.mode === "text") {
+              admitPart(origin, score);
+              if (textRun && (textRun.origin.part_index !== origin.part_index ||
+                textRun.origin.content_hash !== origin.content_hash || textRun.end !== origin.start)) {
+                flushTextRun();
+              }
+              if (!textRun) {
+                textRun = { origin, texts: [], end: origin.start, score };
+              }
+              textRun.texts.push(origin.text!);
+              textRun.end = origin.start + origin.text!.length;
+              textRun.score = Math.max(textRun.score, score);
+            } else {
+              flushTextRun();
+              if (origin) admitPart(origin, score);
+            }
+          }
+          const eligibleChunk = input.search_kind === "files" ? Boolean(origin)
+            : input.search_kind === "messages" ? !origin && chunk.end! <= (bodyLengths.get(first.event_id) ?? 0)
+            : true;
+          if (eligibleChunk && (!best || score > best.score)) {
             best = {
               score,
               chunk_ordinal: chunk.ordinal!,
@@ -422,14 +642,22 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
             };
           }
           chunks += 1;
+          materialLength = chunk.end!;
           offset += 1;
         }
-        if (!best || chunks !== first.chunk_count) {
+        flushTextRun();
+        if (chunks !== first.chunk_count || chunks === 0) {
           throw new ContextVectorUnavailableError("corrupt");
         }
         const key = { event_id: first.event_id, content_hash: first.content_hash };
         covered.push(key);
-        matched.push({ ...key, ...best });
+        if (!best) continue;
+        matched.push({
+          ...key, ...best,
+          ...(parts.size ? { search_matches: [...parts.values()] } : {}),
+          ...(generation.extractor_version === "stored-body-and-attachments-v2"
+            ? { material_length: materialLength } : {}),
+        });
         if (matched.length >= input.limit * 2) {
           matched.sort(rank);
           matched.length = input.limit;
@@ -466,7 +694,17 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
       covered.sort((a, b) => compare(a.event_id, b.event_id));
       const meta = this.db.prepare("SELECT reconciled_epoch FROM generations WHERE org_id=? AND generation=?")
         .get(input.org_id, input.generation) as { reconciled_epoch: string | null };
-      return { generation: input.generation, covered, matched: matched.slice(0, input.limit), ...(meta.reconciled_epoch ? { reconciled_epoch: meta.reconciled_epoch } : {}) };
+      const skipped = this.db.prepare(`SELECT j.event_id,j.content_hash FROM vector_authorized a
+        JOIN jobs j ON j.event_id=a.event_id AND j.content_hash=a.content_hash
+        JOIN source_heads h ON h.org_id=j.org_id AND h.source=j.source
+          AND h.external_id=j.external_id AND h.event_id=j.event_id AND h.fence=j.fence
+        WHERE j.org_id=? AND j.generation=? AND j.status='skipped' ORDER BY j.event_id`)
+        .all(input.org_id, input.generation) as Array<{ event_id: string; content_hash: string }>;
+      return {
+        generation: input.generation, covered, matched: matched.slice(0, input.limit),
+        ...(skipped.length ? { skipped } : {}),
+        ...(meta.reconciled_epoch ? { reconciled_epoch: meta.reconciled_epoch } : {}),
+      };
     })();
   }
 
@@ -488,7 +726,9 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
     let value: EmbeddingGeneration;
     try {
       value = JSON.parse(row.manifest_json);
-      if (canonicalContextJson(value) !== canonicalContextJson(embeddingGeneration(value.model, value.chunk_tokens, value.max_chunks_per_event))) {
+      if (canonicalContextJson(value) !== canonicalContextJson(embeddingGeneration(
+        value.model, value.chunk_tokens, value.max_chunks_per_event, value.extractor_version,
+      ))) {
         throw new ContextVectorUnavailableError("corrupt");
       }
     } catch (error) {

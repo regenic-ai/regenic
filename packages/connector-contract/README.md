@@ -10,6 +10,32 @@ Install it with `@regenic/plugin-host`. The kernel, authority store, and blob st
 
 Requires Node.js 20 or newer.
 
+## 0.2.0 validation migration
+
+This release candidate uses Zod `^4.6.7` to address
+[GHSA-mrhx-c7xc-m3w5](https://github.com/advisories/GHSA-mrhx-c7xc-m3w5).
+The minor version bump reflects the exported schemas' public Zod 4 types;
+consumers composing schemas must migrate to Zod 4 rather than `zod/v3`.
+`@regenic/plugin-host` remains compatible at `0.1.0`. `IngestBatch` wire version
+`1.0` and `SendNotAcceptedError` identity/re-exports are unchanged.
+
+Validation retains strict unknown-field rejection, recursive JSON attributes,
+`Uint8Array` content, offset timestamps, custom messages, error classification,
+and string/number issue paths. Library-generated diagnostic text follows Zod 4;
+use `error_code` and issue paths rather than matching that text.
+
+The upstream fix rejects oversized **bounded** collections before parsing their
+elements. It does not impose bounds on unbounded collections. Ingest records,
+content, tags and recursive attributes currently have no collection/depth
+budgets; the API's 96 MB JSON body limit is not a node-count or recursion limit
+and does not cover in-process callers. This dependency upgrade is not a claim
+that all resource-exhaustion risks are eliminated. New public ingest budgets
+require a separate compatibility decision, including explicit producer
+batching/cursor handling; validation must never silently truncate records.
+
+Preparing a tarball or this version bump does not publish the package. External
+consumers cannot resolve `0.2.0` from npm until a separately authorized release.
+
 ## Installation lifecycle (in-process drivers)
 
 Drivers owning local processes or long-lived collection opt in with

@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   assertEmbeddingDescriptor,
   EmbeddingError,
+  EmbeddingGenerationNotReadyError,
   type AuthorizedContextSourceEvent,
   type ContextEmbeddingRunner,
   type ContextEvidenceSource,
@@ -22,6 +23,9 @@ const DEFAULT_RUN_MAX_JOBS = 16;
 const DEFAULT_RUN_BUDGET_MS = 1_500;
 const MAX_RUN_JOBS = 100;
 const MAX_RUN_BUDGET_MS = 30_000;
+const CHECKPOINT_BATCH_CHUNKS = 8;
+
+class EmbeddingBatchYield extends Error {}
 
 type EmbeddingRunOptions = NonNullable<Parameters<ContextEmbeddingRunner["runOnce"]>[0]>;
 type EmbeddingRunResult = Awaited<ReturnType<ContextEmbeddingRunner["runOnce"]>>;
@@ -80,8 +84,11 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
     const read = await this.source.openRead(request);
     if (read.lifecycle_complete !== true) throw new Error("Embedding requires a complete authority lifecycle view");
     await this.jobs.reconcile({
-      org_id: this.orgId, generation: generation.id, read_epoch: read.read_epoch,
-      heads: headsFor(read), now: new Date().toISOString(),
+      org_id: this.orgId,
+      generation: generation.id,
+      read_epoch: read.read_epoch,
+      heads: headsFor(read),
+      now: new Date().toISOString(),
     });
     return read;
   }
@@ -98,7 +105,7 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
     const reads = new Map<string, ContextSourceRead>();
     let attempted = 0;
 
-    while (attempted < maxJobs && Date.now() < deadline && !this.abort.signal.aborted && !options.pause_if?.()) {
+    work: while (attempted < maxJobs && Date.now() < deadline && !this.abort.signal.aborted && !options.pause_if?.()) {
       let found = false;
       for (let offset = 0; offset < manifests.length; offset++) {
         const cursor = (this.generationCursor + offset) % manifests.length;
@@ -113,10 +120,34 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
           total.failed += run.result.failed;
           total.superseded += run.result.superseded;
           this.generationCursor = (cursor + 1) % manifests.length;
+          if (run.yielded) break work;
           break;
         }
       }
       if (!found) break;
+    }
+    if (this.generations && !this.abort.signal.aborted && reads.has(this.generation.id) &&
+      this.generation.extractor_version === "stored-body-and-attachments-v2") {
+      const entries = await this.generations.listGenerations(this.orgId);
+      const target = entries.find((entry) => entry.manifest.id === this.generation.id);
+      const active = entries.find((entry) => entry.active);
+      if (target?.previously_active === false &&
+        (active?.manifest.extractor_version === "stored-body-text-v1" ||
+          (active?.manifest.extractor_version === this.generation.extractor_version &&
+            active.manifest.max_chunks_per_event < this.generation.max_chunks_per_event &&
+            active.manifest.chunk_tokens === this.generation.chunk_tokens))) {
+        const jobs = await this.jobs.listJobs(this.orgId, this.generation.id);
+        if (jobs.every((job) => ["succeeded", "skipped", "superseded"].includes(job.status))) {
+          try {
+            await activateEmbeddingGeneration(
+              this.orgId, this.generation.id, this.source, this.jobs, this.generations,
+            );
+          } catch (error) {
+            if (!(error instanceof EmbeddingGenerationNotReadyError)) throw error;
+            console.warn("Embedding generation upgrade deferred", error.reason);
+          }
+        }
+      }
     }
     return total;
   }
@@ -128,6 +159,7 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
       now: new Date().toISOString(), lease_ms: 90000, limit: 1,
     });
     const result = { processed: 0, failed: 0, superseded: 0 };
+    let yielded = false;
     if (claimed.length === 0) return { claimed: false, read, result };
     for (const job of claimed) {
       if (this.abort.signal.aborted) break;
@@ -146,13 +178,123 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
           continue;
         }
         const authorized: AuthorizedContextSourceEvent = { ...event, status: "current" };
-        const materialized = this.source.materialize
-          ? await this.source.materialize([authorized])
-          : [authorized];
-        const text = materialized[0]?.text;
-        if (typeof text !== "string" || !text.trim()) throw new EmbeddingError("invalid_input", false);
-        if (Buffer.byteLength(text, "utf8") > 262144) throw new EmbeddingError("input_too_large", false);
-        const chunks = await chunkEmbeddingText(text, this.provider, generation, this.abort.signal);
+        const material = this.source.materializeForEmbedding
+          ? (await this.source.materializeForEmbedding([authorized], generation.extractor_version))[0]
+          : undefined;
+        if (this.source.materializeForEmbedding &&
+          (!material || material.event_id !== job.event_id || !Array.isArray(material.attachments))) {
+          throw new EmbeddingError("invalid_response", true);
+        }
+        const textMaterial = material ? undefined : this.source.materialize
+          ? (await this.source.materialize([authorized]))[0]
+          : authorized;
+        const text = material?.text ?? textMaterial?.text;
+        if (typeof text === "string" && Buffer.byteLength(text, "utf8") > 262144) {
+          throw new EmbeddingError("input_too_large", false);
+        }
+        let chunks: ContextVectorChunk[] = [];
+        const staged = await this.jobs.loadStagedChunks(job, this.owner, new Date().toISOString());
+        let freshChunks = 0;
+        const saveChunk = async (chunk: ContextVectorChunk) => {
+          if (chunk.ordinal >= generation.max_chunks_per_event) throw new EmbeddingError("input_too_large", false);
+          if (!await this.jobs.stageChunk({
+            job, owner: this.owner, now: new Date().toISOString(), chunk,
+          })) throw new Error("Embedding checkpoint lease lost");
+          freshChunks++;
+          if (freshChunks >= CHECKPOINT_BATCH_CHUNKS) throw new EmbeddingBatchYield();
+        };
+        const appendText = async (
+          value: string,
+          origin?: { part_index: number; content_hash: string },
+        ) => {
+          const start = chunks.at(-1)?.end ?? 0;
+          const ordinal = chunks.length;
+          const bind = (chunk: ContextVectorChunk): ContextVectorChunk => {
+            const part = !origin ? material?.search_parts?.find((part) =>
+              part.content_hash && part.projection_start !== undefined && part.text !== undefined &&
+              chunk.start >= part.projection_start && chunk.end <= part.projection_start + part.text.length,
+            ) : undefined;
+            const binding = origin ?? (part?.content_hash ? {
+              part_index: part.part_index, content_hash: part.content_hash,
+            } : undefined);
+            return {
+              ...chunk, ordinal: ordinal + chunk.ordinal, start: start + chunk.start, end: start + chunk.end,
+              ...(binding ? { origin: {
+                ...binding, mode: "text" as const, start: chunk.start - (part?.projection_start ?? 0),
+                text: value.slice(chunk.start, chunk.end),
+              } } : {}),
+            };
+          };
+          const textChunks = staged.slice(ordinal).filter((chunk) =>
+            chunk.start >= start && chunk.end <= start + value.length,
+          ).map((chunk, index) => ({
+            ...chunk, ordinal: index, start: chunk.start - start, end: chunk.end - start,
+          }));
+          const extracted = await chunkEmbeddingText(value, this.provider, {
+            ...generation, max_chunks_per_event: generation.max_chunks_per_event - ordinal,
+          }, this.abort.signal, {
+            chunks: textChunks,
+            save: (chunk) => saveChunk(bind(chunk)),
+          });
+          chunks.push(...extracted.map(bind));
+        };
+        if (typeof text === "string" && text.trim()) {
+          await appendText(text);
+        }
+        if (material?.attachments.length) {
+          if (!this.provider.processAttachment) throw new EmbeddingError("unavailable", true);
+          for (const attachment of material.attachments) {
+            const processed = await this.provider.processAttachment({
+              media_type: attachment.media_type,
+              ...(attachment.source_filename ? { source_filename: attachment.source_filename } : {}),
+              bytes: attachment.bytes,
+            }, this.abort.signal);
+            if (!processed.text?.trim() && processed.vectors.length === 0) {
+              throw new EmbeddingError("invalid_response", true);
+            }
+            if (processed.text?.trim()) {
+              if (Buffer.byteLength(processed.text, "utf8") > 262144) {
+                throw new EmbeddingError("input_too_large", false);
+              }
+              await appendText(processed.text, attachment.part_index === undefined ? undefined : {
+                part_index: attachment.part_index, content_hash: attachment.content_hash,
+              });
+            }
+            for (const [index, vector] of processed.vectors.entries()) {
+              const cursor = chunks.length ? chunks[chunks.length - 1].end : 0;
+              const chunk = {
+                ordinal: chunks.length,
+                start: cursor,
+                end: cursor + 1,
+                text_hash: createHash("sha256")
+                  .update(`${attachment.content_hash}:${index}`)
+                  .digest("hex"),
+                vector,
+                ...(attachment.part_index === undefined ? {} : { origin: {
+                  part_index: attachment.part_index, content_hash: attachment.content_hash,
+                  mode: "visual" as const, start: index,
+                } }),
+              };
+              const saved = staged[chunk.ordinal];
+              if (saved) {
+                if (saved.text_hash !== chunk.text_hash || saved.start !== chunk.start || saved.end !== chunk.end) {
+                  throw new Error("Embedding checkpoint content mismatch");
+                }
+                chunks.push({ ...saved, ...(chunk.origin ? { origin: chunk.origin } : {}) });
+              } else {
+                await saveChunk(chunk);
+                chunks.push(chunk);
+              }
+            }
+            if (chunks.length > generation.max_chunks_per_event) {
+              throw new EmbeddingError("input_too_large", false);
+            }
+          }
+        }
+        const noContent = chunks.length === 0 && !material?.attachments.length &&
+          generation.extractor_version === "stored-body-and-attachments-v2";
+        if (staged.length > chunks.length) throw new Error("Embedding checkpoint content mismatch");
+        if (chunks.length === 0 && !noContent) throw new EmbeddingError("invalid_input", false);
         read = await this.read(generation);
         await heartbeat;
         if (heartbeatFailed) throw new Error("Embedding lease renewal failed");
@@ -162,10 +304,16 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
         }
         const completed = await this.jobs.complete({
           job, owner: this.owner, now: new Date().toISOString(), chunks,
+          ...(noContent ? { no_content: true } : {}),
         });
         if (completed) result.processed += 1;
         else result.superseded += 1;
       } catch (error) {
+        if (error instanceof EmbeddingBatchYield) {
+          yielded = await this.jobs.yieldJob(job, this.owner, new Date().toISOString());
+          if (!yielded) result.superseded += 1;
+          continue;
+        }
         const code = error instanceof EmbeddingError ? error.code
           : error instanceof ContextTextMaterialError ? "invalid_input" : "indexing_failed";
         const retryable = error instanceof ContextTextMaterialError ? false
@@ -183,7 +331,7 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
         await heartbeat;
       }
     }
-    return { claimed: true, read, result };
+    return { claimed: true, read, result, yielded };
   }
 }
 
@@ -203,6 +351,9 @@ export async function activateEmbeddingGeneration(
   generations: ContextVectorGenerationStore,
 ): Promise<void> {
   const request = embeddingMaintenanceRequest(orgId, `generation-switch:${randomUUID()}`);
+  const manifest = (await generations.listGenerations(orgId))
+    .find((entry) => entry.manifest.id === generation)?.manifest;
+  if (!manifest) throw new Error("Generation activation requires a registered generation");
   const read = await source.openRead(request);
   if (read.lifecycle_complete !== true) throw new Error("Generation activation requires a complete Authority lifecycle");
   const heads = headsFor(read);
@@ -213,14 +364,22 @@ export async function activateEmbeddingGeneration(
   const current: AuthorizedContextSourceEvent[] = read.events.filter((entry) => ids.has(entry.event.event_id))
     .map((entry) => ({ ...entry, status: "current" }));
   if (!source.materialize) throw new Error("Generation activation requires verified Authority text materialization");
-  const materialized = await source.materialize(current);
-  const required = materialized.filter((entry) => typeof entry.text === "string" && entry.text.trim())
-    .map((entry) => {
-      if (!entry.event.content_hash) throw new Error("Text Event is missing its content hash");
-      return { event_id: entry.event.event_id, content_hash: entry.event.content_hash };
-    });
+  const required = source.materializeForEmbedding
+    ? (await source.materializeForEmbedding(current, manifest.extractor_version))
+      .filter((entry) => Boolean(entry.text?.trim()) || entry.attachments.length > 0)
+      .map((entry) => {
+        const event = current.find((sourceEvent) => sourceEvent.event.event_id === entry.event_id)!;
+        if (!event.event.content_hash) throw new Error("Indexable Event is missing its content hash");
+        return { event_id: entry.event_id, content_hash: event.event.content_hash };
+      })
+    : (await source.materialize(current))
+      .filter((entry) => typeof entry.text === "string" && entry.text.trim())
+      .map((entry) => {
+        if (!entry.event.content_hash) throw new Error("Text Event is missing its content hash");
+        return { event_id: entry.event.event_id, content_hash: entry.event.content_hash };
+      });
   const latest = await source.openRead(request);
-  if (latest.read_epoch !== read.read_epoch) throw new Error("Authority changed during activation; retry after reconciliation");
+  if (latest.read_epoch !== read.read_epoch) throw new EmbeddingGenerationNotReadyError("authority_changed");
   await generations.activateGeneration({ org_id: orgId, generation, read_epoch: read.read_epoch, required });
 }
 
@@ -239,23 +398,42 @@ export async function chunkEmbeddingText(
   provider: EmbeddingProvider,
   generation: EmbeddingGeneration,
   signal?: AbortSignal,
+  checkpoint?: { chunks: ContextVectorChunk[]; save(chunk: ContextVectorChunk): Promise<void> },
 ): Promise<ContextVectorChunk[]> {
-  const characters = Array.from(text);
-  const chunks: ContextVectorChunk[] = [];
-  const [wholeTokens] = await provider.countTokens([text], "document", signal);
-  if (!Number.isSafeInteger(wholeTokens) || wholeTokens < 1) {
-    throw new EmbeddingError("invalid_response", true);
+  const chunks: ContextVectorChunk[] = checkpoint?.chunks.map((chunk) => ({ ...chunk })) ?? [];
+  let start = 0;
+  for (const [ordinal, chunk] of chunks.entries()) {
+    if (chunk.ordinal !== ordinal || chunk.start !== start || !Number.isSafeInteger(chunk.end) ||
+      chunk.end <= start || chunk.end > text.length ||
+      chunk.text_hash !== createHash("sha256").update(text.slice(chunk.start, chunk.end)).digest("hex")) {
+      throw new Error("Embedding checkpoint content mismatch");
+    }
+    start = chunk.end;
   }
-  if (wholeTokens <= generation.chunk_tokens) {
-    const vectors = await provider.embed([text], "document", signal);
+  if (chunks.length > generation.max_chunks_per_event) throw new EmbeddingError("input_too_large", false);
+  if (start === text.length) return chunks;
+  const characters = Array.from(text.slice(start));
+  const encode = async (slice: string): Promise<ContextVectorChunk> => {
+    const vectors = await provider.embed([slice], "document", signal);
     if (vectors.length !== 1) throw new EmbeddingError("invalid_response", true);
-    return [{
-      ordinal: 0, start: 0, end: text.length,
-      text_hash: createHash("sha256").update(text).digest("hex"), vector: vectors[0],
-    }];
+    const chunk = {
+      ordinal: chunks.length, start, end: start + slice.length,
+      text_hash: createHash("sha256").update(slice).digest("hex"), vector: vectors[0],
+    };
+    await checkpoint?.save(chunk);
+    return chunk;
+  };
+  if (chunks.length === 0) {
+    const [wholeTokens] = await provider.countTokens([text], "document", signal);
+    if (!Number.isSafeInteger(wholeTokens) || wholeTokens < 1) {
+      throw new EmbeddingError("invalid_response", true);
+    }
+    if (wholeTokens <= generation.chunk_tokens) {
+      if (generation.max_chunks_per_event < 1) throw new EmbeddingError("input_too_large", false);
+      return [await encode(text)];
+    }
   }
   let offset = 0;
-  let start = 0;
   while (offset < characters.length) {
     if (signal?.aborted) throw new EmbeddingError("cancelled", true);
     if (chunks.length >= generation.max_chunks_per_event) throw new EmbeddingError("input_too_large", false);
@@ -288,12 +466,7 @@ export async function chunkEmbeddingText(
       [tokens] = await provider.countTokens([slice], "document", signal);
     }
     if (!Number.isSafeInteger(tokens) || tokens < 1 || tokens > generation.chunk_tokens) throw new EmbeddingError("invalid_response", true);
-    const vectors = await provider.embed([slice], "document", signal);
-    if (vectors.length !== 1) throw new EmbeddingError("invalid_response", true);
-    chunks.push({
-      ordinal: chunks.length, start, end: start + slice.length,
-      text_hash: createHash("sha256").update(slice).digest("hex"), vector: vectors[0],
-    });
+    chunks.push(await encode(slice));
     offset += length;
     start += slice.length;
   }

@@ -211,6 +211,7 @@ const contextFiltersSchema = z.object({
 
 export const ContextSearchInputSchema = z.object({
   query: querySchema,
+  kind: z.enum(["all", "messages", "files"]).optional(),
   filters: contextFiltersSchema.optional(),
   temporal: z.object({ mode: z.literal("current") }).strict().optional(),
   limit: positiveIntegerSchema.max(100).optional(),
@@ -226,6 +227,7 @@ export const ContextRequestSchema: z.ZodType<ContextRequest> = z
     purpose: nonEmptyStringSchema,
     allowed_uses: z.array(z.enum(CONTEXT_ALLOWED_USES)).min(1).max(CONTEXT_ALLOWED_USES.length),
     query: querySchema.optional(),
+    search_kind: z.enum(["all", "messages", "files"]).optional(),
     anchors: z
       .array(z.object({ kind: z.enum(CONTEXT_ANCHOR_KINDS), id: nonEmptyStringSchema }).strict())
       .max(100)
@@ -362,7 +364,7 @@ export const ContextCandidateSchema: z.ZodType<ContextCandidate> = z
     recorded_at: timestampSchema,
     status: z.enum(["current", "superseded", "retracted"]).optional(),
     content_hash: contentHashSchema.optional(),
-    scores: z.record(z.number().finite()),
+    scores: z.record(z.string(), z.number().finite()),
     estimated_tokens: nonNegativeIntegerSchema,
     conflicts: z.array(nonEmptyStringSchema).optional(),
     projection: ContextProjectionReferenceSchema.optional(),
@@ -503,6 +505,25 @@ const ContextBundleItemSchema: z.ZodType<ContextBundleItem> = z
     kind: z.enum(CONTEXT_CANDIDATE_KINDS),
     status: z.enum(["current", "superseded", "retracted"]).optional(),
     text: z.string().optional(),
+    search_matches: z.array(z.object({
+      kind: z.enum(["message", "file", "event"]),
+      part_index: z.number().int().min(-1).optional(),
+      media_type: z.string().optional(),
+      filename: z.string().optional(),
+      content_hash: contentHashSchema.optional(),
+      via: z.array(z.enum(["filename", "metadata", "text", "semantic", "visual"])).min(1),
+      snippet: z.string().max(960).optional(),
+      start: nonNegativeIntegerSchema.optional(),
+      end: nonNegativeIntegerSchema.optional(),
+    }).strict().superRefine((match, context) => {
+      if ((match.kind === "file" && (match.part_index === undefined || !match.media_type)) ||
+        (match.snippet === undefined
+          ? match.start !== undefined || match.end !== undefined
+          : match.start === undefined || match.end === undefined ||
+            match.end - match.start !== match.snippet.length)) {
+        context.addIssue({ code: z.ZodIssueCode.custom, message: "Invalid search identity or text range" });
+      }
+    })).optional(),
     content_hash: contentHashSchema.optional(),
     evidence: z.array(EvidenceReferenceSchema).min(1).max(10_000),
     estimated_tokens: nonNegativeIntegerSchema,
@@ -705,7 +726,10 @@ function validate<T>(schema: z.ZodType<T>, input: unknown): ContextValidationRes
   }
   return {
     success: false,
-    issues: result.error.issues.map((issue) => ({ path: issue.path, message: issue.message })),
+    issues: result.error.issues.map((issue) => ({
+      path: issue.path.map((part) => typeof part === "symbol" ? String(part) : part),
+      message: issue.message,
+    })),
   };
 }
 

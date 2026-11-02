@@ -25,6 +25,11 @@ export function isTextMediaType(mediaType: string): boolean {
   );
 }
 
+export function isTextFilename(filename: string | null | undefined): boolean {
+  return typeof filename === "string" &&
+    /\.(?:txt|md|markdown|csv|tsv|log|json|xml|ya?ml|html?|rst|ics|js|mjs|cjs|jsx|ts|mts|cts|tsx|py|rb|go|java|c|h|cpp|hpp|rs|sh|bash|zsh|sql|toml|ini|conf|properties|css|scss|less|svg)$/i.test(filename);
+}
+
 export function parseStoredContentParts(
   bytes: Uint8Array,
 ): StoredContentPart[] | undefined {

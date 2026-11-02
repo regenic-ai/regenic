@@ -20,6 +20,7 @@ import type {
   ContextRetrievalTrace,
 } from "./context-snapshot";
 import type { EventRecord, JsonValue, WeightHints } from "./ingestion";
+import type { ContextEmbeddingMaterial, EmbeddingGeneration } from "./embedding-provider";
 
 export interface ContextProjectionCapabilities {
   artifact_kinds: ContextArtifactKind[];
@@ -127,6 +128,8 @@ export interface ContextSourceEvent {
   required_scope_ids: string[];
   content_media_type?: string;
   text?: string;
+  search_parts?: import("./context-search").ContextSearchPart[];
+  search_body?: string;
   estimated_tokens?: number;
   direction_tags?: string[];
   weight_hints?: WeightHints;
@@ -156,6 +159,10 @@ export interface ContextEvidenceSource {
   materialize?(
     events: AuthorizedContextSourceEvent[],
   ): Promise<AuthorizedContextSourceEvent[]>;
+  materializeForEmbedding?(
+    events: AuthorizedContextSourceEvent[],
+    extractorVersion?: EmbeddingGeneration["extractor_version"],
+  ): Promise<ContextEmbeddingMaterial[]>;
 }
 
 export interface ContextAuthorityRead {

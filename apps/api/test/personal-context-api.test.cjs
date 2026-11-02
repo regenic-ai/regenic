@@ -319,6 +319,7 @@ describe("personal context API", () => {
     assert.equal(semanticIssue("cancelled"), "indexing_failed");
     assert.equal(semanticIssue("unavailable"), "provider_unavailable");
     assert.equal(semanticIssue("invalid_input"), "input_invalid");
+    assert.equal(semanticIssue("unsupported_attachment"), "unsupported_attachment");
   });
 
   it("opens only the current authorized search source and rejects stale, deleted, foreign or forged references", async () => {

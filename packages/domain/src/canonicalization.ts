@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import {
   CONTENT_PARTS_MEDIA_TYPE,
   isTextMediaType,
+  isTextFilename,
 } from "./content-parts";
 import { isUsableAttachmentBytes } from "./content-resolution";
 import type { BlobMetaInput, BlobObject, ContentPart, IngestRecord } from "./ingestion";
@@ -48,6 +49,12 @@ function isEmptyAttachment(part: ContentPart): boolean {
   );
 }
 
+function needsAttachmentEnvelope(part: ContentPart): boolean {
+  return part.role === "attachment" &&
+    !isTextMediaType(part.media_type) &&
+    isTextFilename(part.source_filename);
+}
+
 function encodeEnvelopePart(
   part: ContentPart,
   blobs: BlobObject[],
@@ -65,7 +72,7 @@ function encodeEnvelopePart(
   if (
     part.role === "attachment" &&
     (part.bytes === undefined ||
-      !isUsableAttachmentBytes(part.bytes, part.media_type))
+      !isUsableAttachmentBytes(part.bytes, part.media_type, part.source_filename))
   ) {
     return encoded;
   }
@@ -89,7 +96,11 @@ function canonicalizeParts(parts: ContentPart[]): {
   media_type: string;
   blobs: BlobObject[];
 } {
-  if (parts.length === 1 && !isPointerPart(parts[0])) {
+  if (
+    parts.length === 1 &&
+    !needsAttachmentEnvelope(parts[0]) &&
+    !isPointerPart(parts[0])
+  ) {
     return {
       bytes: canonicalizePart(parts[0]),
       media_type: parts[0].media_type,

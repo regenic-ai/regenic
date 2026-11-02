@@ -5,6 +5,7 @@ const {
   CONTEXT_REQUEST_SCHEMA_VERSION,
   CONTEXT_SNAPSHOT_SCHEMA_VERSION,
   EVIDENCE_BUNDLE_SCHEMA_VERSION,
+  ContextRequestSchema,
   canonicalContextJson,
   diffContextBundles,
   hashCanonicalContext,
@@ -25,6 +26,22 @@ const {
 
 const HASH_A = "a".repeat(64);
 const HASH_B = "b".repeat(64);
+
+it("rejects oversized context anchors without visiting their elements", () => {
+  let visits = 0;
+  const anchors = Array.from({ length: 101 }, () => ({
+    kind: "conversation",
+    get id() {
+      visits += 1;
+      throw new Error("Oversized anchors must not be parsed");
+    },
+  }));
+  const input = request({ anchors });
+  const result = ContextRequestSchema.safeParse(input);
+  assert.equal(result.success, false);
+  assert.equal(visits, 0);
+  assert.deepEqual(result.error.issues.map((issue) => issue.path), [["anchors"]]);
+});
 
 function evidence(overrides = {}) {
   return {

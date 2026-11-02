@@ -23,7 +23,7 @@
     "@regenic/connector-contract": "workspace:*",
     "@regenic/connector-test-utils": "workspace:*",
     "@regenic/plugin-host": "workspace:*",
-    "zod": "^3.24.1"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

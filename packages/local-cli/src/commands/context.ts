@@ -96,7 +96,7 @@ export async function searchContext(
   stdout: CliOutput,
   createId: () => string,
 ): Promise<void> {
-  assertObjectKeys(options, new Set(["database", "blob-root", "org", "query", "limit", "source", "thread", "temporal"]), "search option");
+  assertObjectKeys(options, new Set(["database", "blob-root", "org", "query", "kind", "limit", "source", "thread", "temporal"]), "search option");
   for (const [key, value] of Object.entries(options)) {
     if (typeof value !== "string") throw new Error(`--${key} requires a value`);
   }
@@ -105,6 +105,7 @@ export async function searchContext(
   const thread = optionString(options, "thread");
   const request = contextSearchRequest({
     query: requireOption(options, "query"),
+    kind: optionString(options, "kind") ?? "all",
     limit: requirePositiveInteger(options, "limit", 20),
     temporal: { mode: optionString(options, "temporal") ?? "current" },
     ...((source || thread) ? { filters: {

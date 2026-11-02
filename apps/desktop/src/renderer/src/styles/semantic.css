@@ -67,6 +67,12 @@
   cursor: pointer;
 }
 .search-recent-chip:hover { background: var(--wash-6); }
+.search-recent-chip[aria-pressed="true"] { background: var(--wash-6); border-color: var(--text); font-weight: 600; }
+.search-file { overflow-wrap: anywhere; }
+.search-file h3 { margin: 0; font-size: 15px; }
+.search-file p { white-space: pre-wrap; }
+.search-file dl { user-select: text; }
+.search-file dd { margin: 0 0 6px; }
 
 .semantic-search-meta {
   display: flex;

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import {
   CONTENT_PARTS_MEDIA_TYPE,
   isTextMediaType,
+  isTextFilename,
   parseStoredContentParts,
   storedPartContentHash,
   type StoredContentPart,
@@ -39,7 +40,7 @@ export async function preserveResolvedAttachments(
     if (
       part.role !== "attachment" ||
       !part.external_locator ||
-      (part.bytes && isUsableAttachmentBytes(part.bytes, part.media_type))
+      (part.bytes && isUsableAttachmentBytes(part.bytes, part.media_type, part.source_filename))
     ) {
       merged.push(part);
       continue;
@@ -47,7 +48,9 @@ export async function preserveResolvedAttachments(
     const prior = byLocator.get(part.external_locator);
     const hash = prior ? storedPartContentHash(prior) : undefined;
     const bytes = hash ? await readBlob(hash) : undefined;
-    if (bytes && isUsableAttachmentBytes(bytes, prior?.media_type ?? part.media_type)) {
+    if (bytes && isUsableAttachmentBytes(
+      bytes, prior?.media_type ?? part.media_type, prior?.source_filename ?? part.source_filename,
+    )) {
       merged.push({
         role: "attachment",
         media_type: prior?.media_type ?? part.media_type,
@@ -93,11 +96,12 @@ export function isLikelyJsonDocument(bytes: Uint8Array): boolean {
 export function isUsableAttachmentBytes(
   bytes: Uint8Array,
   mediaType: string,
+  sourceFilename?: string | null,
 ): boolean {
   if (bytes.byteLength === 0) {
     return false;
   }
-  if (jsonMediaType(mediaType)) {
+  if (jsonMediaType(mediaType) || isTextFilename(sourceFilename)) {
     return true;
   }
   return !isLikelyJsonDocument(bytes);
@@ -115,7 +119,7 @@ export function resolutionFromParts(
     }
     if (
       part.bytes &&
-      isUsableAttachmentBytes(part.bytes, part.media_type)
+      isUsableAttachmentBytes(part.bytes, part.media_type, part.source_filename)
     ) {
       const hash = createHash("sha256").update(part.bytes).digest("hex");
       if (!seen.has(hash)) {
@@ -196,7 +200,7 @@ function resolutionFromStoredParts(
       const stored = blobs.get(hash);
       if (
         !stored ||
-        !isUsableAttachmentBytes(stored, part.media_type ?? "")
+        !isUsableAttachmentBytes(stored, part.media_type ?? "", part.source_filename)
       ) {
         unresolved += 1;
         continue;

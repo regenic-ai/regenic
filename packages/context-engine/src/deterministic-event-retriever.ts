@@ -1,4 +1,5 @@
 import { scoreContextLexicalText } from "@regenic/domain";
+import { searchMatchesFor } from "./search-matches";
 import type {
   AuthorizedContextSourceEvent,
   AuthorizedContextRetrievalPlan,
@@ -95,7 +96,8 @@ export function eventCandidateFor(
   recordedAt: string,
 ): RetrievedContextCandidate | null {
   const material = eventCandidateMaterialFor(source, request, recordedAt);
-  if (request.query && material?.candidate.scores.lexical === 0) {
+  if (request.query && (request.search_kind
+    ? !material?.item.search_matches?.length : material?.candidate.scores.lexical === 0)) {
     return null;
   }
   return material;
@@ -110,8 +112,26 @@ export function eventCandidateMaterialFor(
   if (!contentHash) {
     return null;
   }
-  const queryScore = scoreContextLexicalText(source.text, request.query);
-  const estimatedTokens = source.estimated_tokens ?? estimateTokens(source.text);
+  const searchTexts = request.search_kind ? [
+    ...(request.search_kind === "files" ? [] : [source.search_body ?? source.text]),
+    ...(request.search_kind === "messages" ? [] : (source.search_parts ?? [])
+      .flatMap((part) => [part.filename, part.media_type, part.text])),
+  ] : [source.text];
+  const queryScore = searchTexts.reduce((score, text) => {
+    const next = scoreContextLexicalText(text, request.query);
+    return {
+      lexical: Math.max(score.lexical, next.lexical),
+      exact_match: Math.max(score.exact_match, next.exact_match),
+    };
+  }, { lexical: 0, exact_match: 0 });
+  const searchMatches = request.search_kind ? searchMatchesFor(source, request) : undefined;
+  if (searchMatches?.length) {
+    queryScore.lexical = Math.max(queryScore.lexical, queryScore.exact_match);
+  }
+  const text = request.search_kind ? Array.from(source.search_body ?? source.text ?? "").slice(0, 480).join("") : source.text;
+  const estimatedTokens = request.search_kind
+    ? estimateTokens(text) + (searchMatches ?? []).reduce((sum, match) => sum + estimateTokens(match.snippet ?? match.filename), 0)
+    : source.estimated_tokens ?? estimateTokens(text);
   const evidence = [{
     event_id: source.event.event_id,
     source: source.event.source,
@@ -145,7 +165,8 @@ export function eventCandidateMaterialFor(
       resource_id: candidate.resource_id,
       kind: candidate.kind,
       status: candidate.status,
-      ...(source.text === undefined ? {} : { text: source.text }),
+      ...(text === undefined ? {} : { text }),
+      ...(searchMatches ? { search_matches: searchMatches } : {}),
       content_hash: contentHash,
       evidence,
       estimated_tokens: estimatedTokens,

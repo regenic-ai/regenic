@@ -1349,6 +1349,7 @@ const DESKTOP_CONTEXT_PURPOSE = "display context for the open personal conversat
 export async function searchPersonalContext(
   input: {
     query: string;
+    kind?: "all" | "messages" | "files";
     limit?: number;
     filters?: { sources?: string[]; thread_ids?: string[] };
     context?: { before?: number; after?: number; reply_depth?: number; max_messages?: number };
@@ -1461,7 +1462,7 @@ export async function sendCustomerServiceTask(
 }
 
 export async function fetchSearchSource(
-  input: { event_id: string; content_hash: string },
+  input: { event_id: string; content_hash: string; part_index?: number },
   signal: AbortSignal,
 ): Promise<PersonalSearchSource> {
   const response = await kernelFetch(`/v1/me/context/search/source?locale=${activeLocale()}`, {

@@ -1,11 +1,14 @@
 export const SEARCH_CONTEXT = { before: 2, after: 2, reply_depth: 8, max_messages: 40 } as const;
 
-export function contextSearchInput(query: string, source: string, thread: string, limit: number) {
+export function contextSearchInput(
+  query: string, source: string, thread: string, limit: number,
+  kind: "all" | "messages" | "files" = "all",
+) {
   if (!query.trim() || query.length > 8000 || !Number.isInteger(limit) || limit < 1 || limit > 20) {
     throw new Error("search.invalid");
   }
   return {
-    query: query.trim(), limit,
+    query: query.trim(), limit, kind,
     ...((source.trim() || thread.trim()) ? { filters: {
       ...(source.trim() ? { sources: [source.trim()] } : {}),
       ...(thread.trim() ? { thread_ids: [thread.trim()] } : {}),

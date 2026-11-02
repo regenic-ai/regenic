@@ -1550,6 +1550,27 @@ describe("SQLite context artifact store", () => {
     await store.putBundle(bundleValue);
     await store.putSnapshotIndex(snapshotIndex(snapshotValue));
     await store.putCheckpoint(checkpoint);
+    const searchItemId = "search-answer-work-item";
+    await store.putWorkItem({
+      id: searchItemId,
+      org_id: "example-org",
+      thread_id: "system:search-answer:search-answer-work-item",
+      unit_key: searchItemId,
+      record_class: "utterance",
+      thread_facet: "agent",
+      status: "open",
+      created_at: "2026-08-30T00:01:00.000Z",
+      updated_at: "2026-08-30T00:01:00.000Z",
+    });
+    await store.putSearchAnswer({
+      id: "search-answer",
+      org_id: "example-org",
+      work_item_id: searchItemId,
+      query: "Who was selected?",
+      event_ids: ["event-1"],
+      created_at: "2026-08-30T00:01:00.000Z",
+      updated_at: "2026-08-30T00:01:00.000Z",
+    });
     const before = await store.summarizeStore("example-org");
     assert.deepEqual({
       artifacts: before.context_artifacts,
@@ -1589,6 +1610,7 @@ describe("SQLite context artifact store", () => {
       principal: bundleValue.principal,
       consumer_id: bundleValue.consumer_id,
     }), null);
+    assert.equal(await store.getSearchAnswer("example-org", "search-answer"), null);
     assert.equal(await store.getCheckpoint(
       "example-org",
       checkpoint.projector_id,

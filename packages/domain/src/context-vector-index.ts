@@ -8,12 +8,22 @@ export class ContextVectorUnavailableError extends Error {
   }
 }
 
+export class EmbeddingGenerationNotReadyError extends Error {
+  constructor(readonly reason: "authority_changed" | "backfill_incomplete") {
+    super(reason === "authority_changed"
+      ? "Authority changed during activation; retry after reconciliation at the current Authority epoch"
+      : "Generation is not fully covered; backfill or retry first");
+    this.name = "EmbeddingGenerationNotReadyError";
+  }
+}
+
 export interface ContextVectorChunk {
   ordinal: number;
   start: number;
   end: number;
   text_hash: string;
   vector: number[];
+  origin?: import("./context-search").ContextChunkOrigin;
 }
 
 export interface ContextVectorMatch extends ContextLexicalKey {
@@ -21,19 +31,35 @@ export interface ContextVectorMatch extends ContextLexicalKey {
   chunk_ordinal: number;
   start: number;
   end: number;
+  material_length?: number;
+  search_matches?: Array<{
+    origin: import("./context-search").ContextChunkOrigin;
+    score: number;
+    lexical: boolean;
+  }>;
 }
 
 export interface ContextVectorIndex {
+  matchAuthorizedText?(input: {
+    org_id: string;
+    generation: string;
+    authorized: Array<ContextLexicalKey & { body_length?: number }>;
+    query: string;
+    limit: number;
+  }): ReturnType<ContextVectorIndex["matchAuthorized"]>;
   registerGeneration(orgId: string, generation: EmbeddingGeneration): Promise<void>;
   matchAuthorized(input: {
     org_id: string;
     generation: string;
-    authorized: ContextLexicalKey[];
+    authorized: Array<ContextLexicalKey & { body_length?: number }>;
     query_vector: number[];
     limit: number;
+    query?: string;
+    search_kind?: import("./context-search").ContextSearchKind;
   }): Promise<{
     generation: string;
     covered: ContextLexicalKey[];
+    skipped?: ContextLexicalKey[];
     matched: ContextVectorMatch[];
     reconciled_epoch?: string;
   }>;
@@ -53,6 +79,7 @@ export interface ContextVectorGenerationStore {
   listGenerations(orgId: string): Promise<Array<{
     manifest: EmbeddingGeneration;
     active: boolean;
+    previously_active?: boolean;
     reconciled_epoch?: string;
   }>>;
   activeGeneration(orgId: string): Promise<EmbeddingGeneration | undefined>;
@@ -71,8 +98,13 @@ export interface EmbeddingJob extends EmbeddingSourceHead {
   generation: string;
   fence: number;
   attempts: number;
-  status: "pending" | "running" | "succeeded" | "failed" | "quarantined" | "superseded";
+  status: "pending" | "running" | "succeeded" | "skipped" | "failed" | "quarantined" | "superseded";
   error_code?: string;
+}
+
+export interface EmbeddingJobSummary {
+  counts: Record<EmbeddingJob["status"], number>;
+  failures: Array<{ error_code: string; failed: number; quarantined: number }>;
 }
 
 export interface EmbeddingJobStore {
@@ -97,6 +129,7 @@ export interface EmbeddingJobStore {
     owner: string;
     now: string;
     chunks: ContextVectorChunk[];
+    no_content?: boolean;
   }): Promise<boolean>;
   fail(input: {
     job: EmbeddingJob;
@@ -107,6 +140,10 @@ export interface EmbeddingJobStore {
     retryable: boolean;
   }): Promise<boolean>;
   listJobs(orgId: string, generation: string): Promise<EmbeddingJob[]>;
+  summarizeJobs(orgId: string, generation: string): Promise<EmbeddingJobSummary>;
+  loadStagedChunks(job: EmbeddingJob, owner: string, now: string): Promise<ContextVectorChunk[]>;
+  stageChunk(input: { job: EmbeddingJob; owner: string; now: string; chunk: ContextVectorChunk }): Promise<boolean>;
+  yieldJob(job: EmbeddingJob, owner: string, now: string): Promise<boolean>;
   retryQuarantined(orgId: string, generation: string, eventId: string): Promise<boolean>;
   retryFailed(orgId: string, generation: string, limit: number): Promise<number>;
 }

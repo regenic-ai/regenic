@@ -53,6 +53,113 @@ async function fixture(t, embedding = provider(), gen = generation) {
 }
 
 describe("independent embedding indexing worker", () => {
+  it("resumes a 567-chunk attachment across batches without publishing partial coverage or repeating inference", async (t) => {
+    const large = embeddingGeneration(descriptor, 32, 1024);
+    const extracted = "x".repeat(27 * 566 + 1);
+    let calls = 0;
+    const embedding = provider({
+      async embed(texts) { calls += texts.length; return texts.map(() => [1, 0]); },
+      async processAttachment() { return { text: extracted, vectors: [] }; },
+    });
+    const f = await fixture(t, embedding, large);
+    const input = batch("create", undefined);
+    input.records[0].content = [{
+      role: "attachment", media_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      source_filename: "large.xlsx", bytes: Buffer.from("PK\u0003\u0004synthetic"),
+    }];
+    await f.ingest.ingest(input);
+    assert.deepEqual(await f.worker.runOnce(), { processed: 0, failed: 0, superseded: 0 });
+    assert.equal(calls, 8);
+    const [job] = await f.index.listJobs("org", large.id);
+    const query = () => f.index.matchAuthorized({
+      org_id: "org", generation: large.id,
+      authorized: [{ event_id: job.event_id, content_hash: job.content_hash }],
+      query_vector: [1, 0], limit: 1,
+    });
+    assert.deepEqual((await query()).covered, []);
+    await f.worker.stop();
+    const resumed = new ContextEmbeddingWorker("org", f.source, embedding, f.index, f.index, large, f.index);
+    t.after(() => resumed.stop());
+    let runs = 1;
+    while ((await f.index.listJobs("org", large.id))[0].status !== "succeeded") {
+      assert.ok(runs++ < 80);
+      const result = await resumed.runOnce();
+      assert.equal(result.failed, 0);
+      if (!result.processed) assert.deepEqual((await query()).covered, []);
+    }
+    assert.equal(calls, 567);
+    assert.equal((await f.index.listJobs("org", large.id))[0].attempts, 1);
+    const result = await query();
+    assert.equal(result.covered.length, 1);
+    assert.equal(result.matched[0].material_length, extracted.length);
+  });
+
+  it("promotes a complete higher-budget V2 generation once and respects explicit rollback", async (t) => {
+    const upgraded = embeddingGeneration(descriptor, 32, 1024);
+    const f = await fixture(t, provider(), upgraded);
+    await f.index.registerGeneration("org", generation);
+    await f.ingest.ingest(batch("create", "budget upgrade"));
+    await f.worker.runOnce();
+    assert.equal((await f.index.activeGeneration("org")).id, upgraded.id);
+    await activateEmbeddingGeneration("org", generation.id, f.source, f.index, f.index);
+    await f.worker.runOnce();
+    assert.equal((await f.index.activeGeneration("org")).id, generation.id);
+  });
+
+  it("resumes Unicode text, multiple attachments and visual units with contiguous coordinates", async (t) => {
+    const embedded = [];
+    const texts = ["😀".repeat(220), "文档\n".repeat(80)];
+    const f = await fixture(t, provider({
+      async embed(values) { embedded.push(...values); return values.map(() => [1, 0]); },
+      async processAttachment(input) {
+        return { text: texts[input.source_filename === "one.pdf" ? 0 : 1], vectors: [[0, 1]] };
+      },
+    }));
+    const input = batch("create", "body");
+    for (const name of ["one.pdf", "two.pdf"]) input.records[0].content.push({
+      role: "attachment", media_type: "application/pdf", source_filename: name,
+      bytes: Buffer.from(`%PDF-${name}`),
+    });
+    await f.ingest.ingest(input);
+    let runs = 0;
+    do {
+      assert.ok(runs++ < 15);
+      assert.equal((await f.worker.runOnce()).failed, 0);
+    } while ((await f.index.listJobs("org", generation.id))[0].status !== "succeeded");
+    assert.equal(embedded.join(""), "body" + texts.join(""));
+    const [job] = await f.index.listJobs("org", generation.id);
+    const result = await f.index.matchAuthorized({
+      org_id: "org", generation: generation.id,
+      authorized: [{ event_id: job.event_id, content_hash: job.content_hash }],
+      query_vector: [0, 1], limit: 1,
+    });
+    assert.equal(result.matched[0].material_length, 4 + texts[0].length + texts[1].length + 2);
+  });
+
+  it("retains completed chunks across retryable failures without counting normal batches as retries", async (t) => {
+    let calls = 0;
+    const body = "x".repeat(27 * 18);
+    const f = await fixture(t, provider({
+      async embed(values) {
+        if (++calls === 10) throw new EmbeddingError("timeout", true);
+        return values.map(() => [1, 0]);
+      },
+    }));
+    await f.ingest.ingest(batch("create", body));
+    assert.equal((await f.worker.runOnce()).failed, 0);
+    assert.equal((await f.worker.runOnce()).failed, 1);
+    const [failed] = await f.index.listJobs("org", generation.id);
+    assert.equal(failed.attempts, 1);
+    assert.equal(await f.index.retryFailed("org", generation.id, 1), 1);
+    let runs = 0;
+    do {
+      assert.ok(runs++ < 4);
+      assert.equal((await f.worker.runOnce()).failed, 0);
+    } while ((await f.index.listJobs("org", generation.id))[0].status !== "succeeded");
+    assert.equal(calls, 19);
+    assert.equal((await f.index.listJobs("org", generation.id))[0].attempts, 2);
+  });
+
   it("dual-writes retained recipes, refuses incomplete activation and catches up before rollback", async (t) => {
     const f = await fixture(t);
     const next = embeddingGeneration(descriptor, 64);
@@ -95,6 +202,222 @@ describe("independent embedding indexing worker", () => {
     f.blobs.getMany = originalGet;
     assert.equal((await f.index.listJobs("org", generation.id))[1].error_code, "invalid_input");
     assert.equal(calls, 0);
+  });
+
+  it("indexes text file attachments stored as connector blobs", async (t) => {
+    const embedded = [];
+    const f = await fixture(t, provider({
+      async embed(texts) {
+        embedded.push(...texts);
+        return texts.map(() => [1, 0]);
+      },
+    }));
+    const input = batch("create", undefined);
+    input.records[0].content = [{
+      role: "attachment",
+      media_type: "application/octet-stream",
+      source_filename: "meeting-notes.txt",
+      bytes: Buffer.from("飞书同步的文件正文"),
+    }];
+    await f.ingest.ingest(input);
+
+    assert.deepEqual(await f.worker.runOnce(), { processed: 1, failed: 0, superseded: 0 });
+    assert.ok(embedded.some((text) => text.includes("飞书同步的文件正文")));
+  });
+
+  it("preserves valid JSON files mislabeled as octet-stream instead of discarding them as error payloads", async (t) => {
+    const embedded = [];
+    const f = await fixture(t, provider({
+      async embed(texts) { embedded.push(...texts); return texts.map(() => [1, 0]); },
+    }));
+    const input = batch("create", undefined);
+    input.records[0].content = [{
+      role: "attachment", media_type: "application/octet-stream",
+      source_filename: "data.json", bytes: Buffer.from('{"name":"local"}'),
+    }];
+    await f.ingest.ingest(input);
+    assert.equal((await f.worker.runOnce()).processed, 1);
+    assert.ok(embedded.includes('{"name":"local"}'));
+  });
+
+  it("indexes body, extracted Office/PDF text and visual units as one fenced projection", async (t) => {
+    const seen = [];
+    const f = await fixture(t, provider({
+      async processAttachment(input) {
+        seen.push(input);
+        return { text: "extracted document", vectors: [[0, 1], [1, 0]] };
+      },
+    }));
+    const input = batch("create", "body");
+    input.records[0].content.push({
+      role: "attachment", media_type: "application/pdf", source_filename: "notes.pdf",
+      bytes: Buffer.from("%PDF-synthetic"),
+    });
+    await f.ingest.ingest(input);
+    assert.deepEqual(await f.worker.runOnce(), { processed: 1, failed: 0, superseded: 0 });
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0].source_filename, "notes.pdf");
+    assert.equal(Buffer.from(seen[0].bytes).toString(), "%PDF-synthetic");
+    const [job] = await f.index.listJobs("org", generation.id);
+    const match = await f.index.matchAuthorized({
+      org_id: "org", generation: generation.id,
+      authorized: [{ event_id: job.event_id, content_hash: job.content_hash }],
+      query_vector: [0, 1], limit: 10,
+    });
+    assert.equal(match.matched[0].chunk_ordinal, 2);
+    assert.equal(match.matched[0].start, "bodyextracted document".length);
+    assert.equal(match.matched[0].material_length, "bodyextracted document".length + 2);
+  });
+
+  it("supports direct binary blobs and rejects partial or unavailable attachment inference", async (t) => {
+    let fail = true;
+    const f = await fixture(t, provider({
+      async processAttachment(input) {
+        assert.equal(input.media_type, "image/jpeg");
+        if (fail) throw new EmbeddingError("unsupported_attachment", false);
+        return { vectors: [[1, 0]] };
+      },
+    }));
+    const input = batch("create", undefined);
+    input.records[0].content = [{
+      role: "attachment", media_type: "image/jpeg", bytes: Buffer.from([255, 216, 255]),
+    }];
+    await f.ingest.ingest(input);
+    assert.equal((await f.worker.runOnce()).failed, 1);
+    let [job] = await f.index.listJobs("org", generation.id);
+    assert.equal(job.error_code, "unsupported_attachment");
+    assert.equal(job.status, "quarantined");
+    await assert.rejects(activateEmbeddingGeneration("org", generation.id, f.source, f.index, f.index),
+      /not fully covered/);
+    fail = false;
+    assert.equal(await f.index.retryQuarantined("org", generation.id, job.event_id), true);
+    assert.equal((await f.worker.runOnce()).processed, 1);
+    [job] = await f.index.listJobs("org", generation.id);
+    assert.equal(job.status, "succeeded");
+  });
+
+  it("uses binary signatures before connector text MIME or filename hints", async (t) => {
+    let calls = 0;
+    const f = await fixture(t, provider({
+      async processAttachment(input) {
+        calls++;
+        assert.deepEqual([...input.bytes.subarray(0, 3)], [255, 216, 255]);
+        return { vectors: [[1, 0]] };
+      },
+    }));
+    for (const withBody of [true, false]) {
+      const input = batch("create", withBody ? "caption" : undefined,
+        `delivery-${withBody}`, `file-${withBody}`);
+      input.records[0].content ??= [];
+      input.records[0].content.push({
+        role: "attachment", media_type: "text/plain", source_filename: "wrong.txt",
+        bytes: Buffer.from([255, 216, 255, 0, 1, 2]),
+      });
+      await f.ingest.ingest(input);
+    }
+    assert.equal((await f.worker.runOnce()).processed, 2);
+    assert.equal(calls, 2);
+  });
+
+  it("fails explicitly when an attachment provider is unavailable, rather than skipping a file", async (t) => {
+    const f = await fixture(t);
+    const input = batch("create", undefined);
+    input.records[0].content = [{
+      role: "attachment", media_type: "image/png", bytes: Buffer.from("synthetic image"),
+    }];
+    await f.ingest.ingest(input);
+    assert.equal((await f.worker.runOnce()).failed, 1);
+    const [job] = await f.index.listJobs("org", generation.id);
+    assert.equal(job.status, "failed");
+    assert.equal(job.error_code, "unavailable");
+  });
+
+  it("fences an attachment deleted during local visual inference", async (t) => {
+    const f = await fixture(t, provider({
+      async processAttachment() {
+        await f.ingest.ingest(batch("tombstone", undefined));
+        return { vectors: [[1, 0]] };
+      },
+    }));
+    const input = batch("create", undefined);
+    input.records[0].content = [{
+      role: "attachment", media_type: "image/png", bytes: Buffer.from("synthetic image"),
+    }];
+    await f.ingest.ingest(input);
+    assert.deepEqual(await f.worker.runOnce(), { processed: 0, failed: 0, superseded: 1 });
+    const [job] = await f.index.listJobs("org", generation.id);
+    assert.equal(job.status, "superseded");
+    assert.deepEqual((await f.index.matchAuthorized({
+      org_id: "org", generation: generation.id,
+      authorized: [{ event_id: job.event_id, content_hash: job.content_hash }],
+      query_vector: [1, 0], limit: 10,
+    })).covered, []);
+  });
+
+  it("skips empty events without creating vector coverage or running inference", async (t) => {
+    const f = await fixture(t, provider({
+      async embed() { assert.fail("empty input must not run inference"); },
+      async processAttachment() { assert.fail("empty input must not run inference"); },
+    }));
+    await f.ingest.ingest(batch("create", "  \n "));
+    assert.deepEqual(await f.worker.runOnce(), { processed: 1, failed: 0, superseded: 0 });
+    const [job] = await f.index.listJobs("org", generation.id);
+    assert.equal(job.status, "skipped");
+    const result = await f.index.matchAuthorized({
+      org_id: "org", generation: generation.id,
+      authorized: [{ event_id: job.event_id, content_hash: job.content_hash }],
+      query_vector: [1, 0], limit: 10,
+    });
+    assert.deepEqual(result.covered, []);
+    assert.deepEqual(result.skipped, [{ event_id: job.event_id, content_hash: job.content_hash }]);
+    await activateEmbeddingGeneration("org", generation.id, f.source, f.index, f.index);
+  });
+
+  it("keeps legacy manifests readable and promotes attachment coverage only once", async (t) => {
+    const legacy = embeddingGeneration(descriptor, 32, 128, "stored-body-text-v1");
+    const embedded = [];
+    const f = await fixture(t, provider({
+      async embed(texts) { embedded.push(...texts); return texts.map(() => [1, 0]); },
+      async processAttachment() { return { vectors: [[1, 0]] }; },
+    }));
+    await f.index.registerGeneration("org", legacy);
+    const input = batch("create", "legacy body");
+    input.records[0].content.push({
+      role: "attachment", media_type: "application/octet-stream",
+      source_filename: "notes.txt", bytes: Buffer.from("attachment"),
+    });
+    await f.ingest.ingest(input);
+    await f.worker.runOnce();
+    assert.ok(embedded.includes("legacy body"));
+    assert.ok(embedded.includes("legacy body\n\nattachment"));
+    assert.equal((await f.index.activeGeneration("org")).id, generation.id);
+    assert.equal((await f.index.listGenerations("org")).find(
+      (entry) => entry.manifest.id === generation.id,
+    ).previously_active, true);
+    await activateEmbeddingGeneration("org", legacy.id, f.source, f.index, f.index);
+    await f.worker.runOnce();
+    assert.equal((await f.index.activeGeneration("org")).id, legacy.id);
+    assert.notEqual(legacy.id, generation.id);
+  });
+
+  it("does not publish body coverage when attachment processing exceeds chunk limits", async (t) => {
+    const small = embeddingGeneration(descriptor, 32, 1);
+    const f = await fixture(t, provider({
+      async processAttachment() { return { vectors: [[1, 0]] }; },
+    }), small);
+    const input = batch("create", "body");
+    input.records[0].content.push({
+      role: "attachment", media_type: "application/pdf", bytes: Buffer.from("%PDF-synthetic"),
+    });
+    await f.ingest.ingest(input);
+    assert.equal((await f.worker.runOnce()).failed, 1);
+    const [job] = await f.index.listJobs("org", small.id);
+    assert.equal(job.error_code, "input_too_large");
+    assert.deepEqual((await f.index.matchAuthorized({
+      org_id: "org", generation: small.id,
+      authorized: [{ event_id: job.event_id, content_hash: job.content_hash }],
+      query_vector: [1, 0], limit: 10,
+    })).covered, []);
   });
 
   it("cancels and drains inference before clearing projection, then resumes indexing", async (t) => {

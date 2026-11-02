@@ -30,9 +30,10 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@cursor/sdk": "^1.0.30",
+    "@cursor/sdk": "^1.2.0",
     "@regenic/plugin-host": "workspace:*",
-    "@regenic/connector-contract": "workspace:*"
+    "@regenic/connector-contract": "workspace:*",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
