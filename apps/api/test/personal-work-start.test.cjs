@@ -134,6 +134,50 @@ describe("durable executor start", () => {
     assert.equal((await f.ports.authority.listWorkRuns(ORG, f.item.id)).length, 1);
   });
 
+  it("adds related conversations from search when the recipe includes context", async (t) => {
+    const f = await fixture(t);
+    const recipe = { ...f.recipe, include_context: true };
+    await f.ports.authority.putRecipe(recipe);
+    const lookups = [];
+    let stdin = "";
+    f.hooks.stdin = async (_thread, text) => { stdin = text; };
+    const related = async (threadId, query) => {
+      lookups.push({ threadId, query });
+      return "## Slack · #billing\nAnn: refund for order 42 approved";
+    };
+    const dispatch = new PersonalWorkDispatch(
+      f.runtime, f.channel, f.supervise(), { attach() {} }, related,
+    );
+    await dispatch.startItem(f.item, recipe, "where is my refund for order 42");
+    assert.deepEqual(lookups, [{ threadId: "feishu:oc_1", query: "where is my refund for order 42" }]);
+    assert.match(stdin, /<related>\n## Slack · #billing\nAnn: refund for order 42 approved\n<\/related>/);
+    assert.ok(stdin.indexOf("<related>\n") < stdin.indexOf("<current>\n"));
+  });
+
+  it("starts without related context when search fails or context is off", async (t) => {
+    const f = await fixture(t);
+    let calls = 0;
+    let stdin = "";
+    f.hooks.stdin = async (_thread, text) => { stdin = text; };
+    const failing = async () => { calls += 1; throw new Error("index offline"); };
+    const contextOn = { ...f.recipe, include_context: true };
+    await f.ports.authority.putRecipe(contextOn);
+    const run = await new PersonalWorkDispatch(
+      f.runtime, f.channel, f.supervise(), { attach() {} }, failing,
+    ).startItem(f.item, contextOn, "evidence");
+    assert.equal(run.external_run_id, "dsh:session-1");
+    assert.equal(calls, 1);
+    assert.equal(stdin.includes("<related>"), false);
+
+    const g = await fixture(t);
+    let offCalls = 0;
+    await new PersonalWorkDispatch(
+      g.runtime, g.channel, g.supervise(), { attach() {} },
+      async () => { offCalls += 1; return "## x\ny: z"; },
+    ).startItem(g.item, g.recipe, "evidence");
+    assert.equal(offCalls, 0);
+  });
+
   it("does not invoke the executor if the atomic claim cannot be persisted", async (t) => {
     const f = await fixture(t);
     t.mock.method(f.ports.authority, "claimWorkRunStart", async () => { throw new Error("disk full"); });

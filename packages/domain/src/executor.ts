@@ -6,6 +6,9 @@ import {
   WORK_EVIDENCE_CURRENT_OPEN,
   WORK_EVIDENCE_GAP,
   WORK_EVIDENCE_OMITTED,
+  WORK_EVIDENCE_RELATED_CLOSE,
+  WORK_EVIDENCE_RELATED_HINT,
+  WORK_EVIDENCE_RELATED_OPEN,
   WORK_EVIDENCE_SPLIT_HINT,
   wrapEvidenceSection,
 } from "@regenic/connector-contract";
@@ -40,7 +43,11 @@ export {
   WORK_EVIDENCE_CURRENT_CLOSE,
   WORK_EVIDENCE_CURRENT_OPEN,
   WORK_EVIDENCE_OMITTED,
+  WORK_EVIDENCE_RELATED_CLOSE,
+  WORK_EVIDENCE_RELATED_HINT,
+  WORK_EVIDENCE_RELATED_OPEN,
   WORK_EVIDENCE_SPLIT_HINT,
+  WORK_RELATED_FILENAME,
   WORK_WORKSPACE_PULL_HINT,
   composeWorkspaceInstructionFiles,
   composeWorkspacePointerEvidence,
@@ -167,6 +174,53 @@ export const WORK_FILE_THREAD_LIMIT = 200;
 export const WORK_FILE_FETCH_LIMIT = 400;
 /** File conversation budget. Oldest lines drop first. */
 export const WORK_FILE_CHAR_LIMIT = 80_000;
+/** Other conversations search may add next to the work item's own thread. */
+export const WORK_RELATED_THREAD_LIMIT = 3;
+/** Related-conversation budget. Lower-ranked conversations drop first. */
+export const WORK_RELATED_CHAR_LIMIT = 6_000;
+
+export interface WorkRelatedConversation {
+  title?: string;
+  channel?: string;
+  lines: WorkEvidenceLine[];
+}
+
+/**
+ * Formats search hits from other conversations. Callers pass conversations
+ * best match first; whole lines are kept until the budget runs out.
+ */
+export function formatRelatedConversations(
+  conversations: readonly WorkRelatedConversation[],
+  charLimit = WORK_RELATED_CHAR_LIMIT,
+): string {
+  const sections: string[] = [];
+  let budget = charLimit;
+  for (const conversation of conversations.slice(0, WORK_RELATED_THREAD_LIMIT)) {
+    const heading = `## ${[conversation.channel, conversation.title]
+      .map((part) => part?.trim())
+      .filter(Boolean)
+      .join(" · ") || "Conversation"}`;
+    const lines: string[] = [];
+    let cost = heading.length + 1;
+    for (const line of conversation.lines) {
+      if (!line.text.trim()) {
+        continue;
+      }
+      const formatted = formatEvidenceLine(line);
+      if (cost + formatted.length + 1 > budget) {
+        break;
+      }
+      cost += formatted.length + 1;
+      lines.push(formatted);
+    }
+    if (!lines.length) {
+      break;
+    }
+    budget -= cost + 1;
+    sections.push([heading, ...lines].join("\n"));
+  }
+  return sections.join("\n\n");
+}
 
 export function formatEvidenceLine(line: WorkEvidenceLine): string {
   const text = line.text.trim();
@@ -409,6 +463,8 @@ export function composeWorkConversation(input: {
   thread_overflow?: boolean;
   file_line_limit?: number;
   file_char_limit?: number;
+  /** Formatted hits from other conversations (formatRelatedConversations). */
+  related_text?: string;
 }): WorkConversationEvidence & { inline_text?: string } {
   const current = input.trigger_text?.trim() || input.head_text?.trim() || undefined;
   if (!input.include_context) {
@@ -444,31 +500,61 @@ export function composeWorkConversation(input: {
         reply_to: split.currentLine?.reply_to,
       })
     : undefined;
+  const related = input.related_text?.trim() || undefined;
+  const relatedSection = related
+    ? wrapEvidenceSection(
+        WORK_EVIDENCE_RELATED_OPEN,
+        WORK_EVIDENCE_RELATED_CLOSE,
+        related,
+      )
+    : undefined;
   let inline_text: string | undefined;
   if (!current) {
-    inline_text = packed.text || undefined;
-  } else if (!packed.text) {
+    inline_text = relatedSection
+      ? [
+          WORK_EVIDENCE_RELATED_HINT,
+          packed.text
+            ? wrapEvidenceSection(
+                WORK_EVIDENCE_BACKGROUND_OPEN,
+                WORK_EVIDENCE_BACKGROUND_CLOSE,
+                packed.text,
+              )
+            : undefined,
+          relatedSection,
+        ]
+          .filter(Boolean)
+          .join("\n\n")
+      : packed.text || undefined;
+  } else if (!packed.text && !relatedSection) {
     inline_text = currentLine || current;
   } else {
     inline_text = [
-      WORK_EVIDENCE_SPLIT_HINT,
-      wrapEvidenceSection(
-        WORK_EVIDENCE_BACKGROUND_OPEN,
-        WORK_EVIDENCE_BACKGROUND_CLOSE,
-        packed.text,
-      ),
+      relatedSection
+        ? `${WORK_EVIDENCE_SPLIT_HINT} ${WORK_EVIDENCE_RELATED_HINT}`
+        : WORK_EVIDENCE_SPLIT_HINT,
+      packed.text
+        ? wrapEvidenceSection(
+            WORK_EVIDENCE_BACKGROUND_OPEN,
+            WORK_EVIDENCE_BACKGROUND_CLOSE,
+            packed.text,
+          )
+        : undefined,
+      relatedSection,
       wrapEvidenceSection(
         WORK_EVIDENCE_CURRENT_OPEN,
         WORK_EVIDENCE_CURRENT_CLOSE,
         currentLine ?? current,
       ),
-    ].join("\n\n");
+    ]
+      .filter(Boolean)
+      .join("\n\n");
   }
   return {
     current,
     current_line: currentLine,
     background: filePacked.text || undefined,
     omitted: filePacked.omitted,
+    ...(related ? { related } : {}),
     inline_text,
   };
 }

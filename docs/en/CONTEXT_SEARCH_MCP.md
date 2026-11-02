@@ -108,3 +108,7 @@ If the underlying conversation changed, Regenic rejects the stale `read_epoch`; 
 5. Query the authorized business system for current status before making customer-facing claims.
 
 The server exposes read-only context tools. It does not grant new authorization, execute business queries, approve drafts, or send messages.
+
+## Automation rules
+
+Automation rules with **Include related context** already run one search before the agent starts. The kernel uses the current message as the query, skips the source conversation, and passes up to 3 matched conversations as a `<related>` section (`related.md` for local-workspace agents). Configure this MCP when the agent should search again or read further from those anchors.

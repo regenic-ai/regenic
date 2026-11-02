@@ -137,6 +137,8 @@ export interface WorkConversationEvidence {
   current_line?: string;
   background?: string;
   omitted?: boolean;
+  /** Possibly relevant messages from other conversations, found by search. */
+  related?: string;
 }
 
 /** Fields an executor may read. A full WorkItem remains assignable. */
@@ -290,6 +292,11 @@ export const WORK_EVIDENCE_CURRENT_OPEN = "<current>";
 export const WORK_EVIDENCE_CURRENT_CLOSE = "</current>";
 export const WORK_EVIDENCE_SPLIT_HINT =
   "Treat <background> as established context. Act on <current>.";
+export const WORK_EVIDENCE_RELATED_OPEN = "<related>";
+export const WORK_EVIDENCE_RELATED_CLOSE = "</related>";
+export const WORK_EVIDENCE_RELATED_HINT =
+  "<related> holds messages from other conversations that search matched. They may be unrelated; use them only as reference.";
+export const WORK_RELATED_FILENAME = "related.md";
 export const WORK_WORKSPACE_PULL_HINT =
   "Review the conversation in this workspace and work from it.";
 
@@ -327,8 +334,10 @@ export function composeWorkspacePointerEvidence(input: {
 export function composeWorkspaceInstructionFiles(input: {
   background?: string;
   omitted?: boolean;
+  related?: string;
 }): Record<string, string> {
   const background = input.background?.trim() ?? "";
+  const related = input.related?.trim() ?? "";
   const omitted =
     input.omitted && !background.startsWith(WORK_EVIDENCE_OMITTED)
       ? `${WORK_EVIDENCE_OMITTED}\n\n`
@@ -337,9 +346,14 @@ export function composeWorkspaceInstructionFiles(input: {
   const agents = [
     "This session handles one work item from a source chat.",
     "The user message is the task. Prior turns are established background.",
-    inline
-      ? "Prior turns follow. Use them as context. Do not restate them."
-      : "Prior turns are in conversation.md. Read that file only if you need background. Do not restate it.",
+    !background
+      ? ""
+      : inline
+        ? "Prior turns follow. Use them as context. Do not restate them."
+        : "Prior turns are in conversation.md. Read that file only if you need background. Do not restate it.",
+    related
+      ? `Messages from other conversations that search matched are in ${WORK_RELATED_FILENAME}. They may be unrelated; use them only as reference.`
+      : "",
     inline && background ? `\n## Prior turns\n\n${omitted}${background}` : "",
   ]
     .filter(Boolean)
@@ -347,6 +361,9 @@ export function composeWorkspaceInstructionFiles(input: {
   const files: Record<string, string> = { [WORK_AGENTS_FILENAME]: agents };
   if (background && !inline) {
     files[WORK_CONVERSATION_FILENAME] = `${omitted}${background}`.trim();
+  }
+  if (related) {
+    files[WORK_RELATED_FILENAME] = related;
   }
   return files;
 }
@@ -357,13 +374,15 @@ export async function stageConversationWorkspace(
   workItemId?: string,
 ): Promise<{ cwd: string } | undefined> {
   const background = conversation?.background?.trim();
-  if (!background || !ctx.writeWorkFiles) {
+  const related = conversation?.related?.trim();
+  if ((!background && !related) || !ctx.writeWorkFiles) {
     return undefined;
   }
   return ctx.writeWorkFiles(
     composeWorkspaceInstructionFiles({
       background,
       omitted: conversation?.omitted,
+      related,
     }),
     workItemId ? { work_item_id: workItemId } : undefined,
   );

@@ -185,7 +185,7 @@ A finished job plus a new `head_event_id` opens a **new** job. The list face is 
 
 `can_write_back` is required for egress (on by default for pull). Seeing a digest is not send grant.
 
-When `include_context` is true or `trigger.kind=pull`, start packs only a recent page of the source thread into evidence (capped by line and character count; overflow is marked omitted). It must not load thousands of messages into the kernel or the executor. Push defaults to only the triggering or head message. This is kernel evidence policy, not an `executor_config` key.
+When `include_context` is true or `trigger.kind=pull`, start packs only a recent page of the source thread into evidence (capped by line and character count; overflow is marked omitted). It must not load thousands of messages into the kernel or the executor. Start also searches other conversations with the triggering or head message (same index and authorization as desktop search and the Context Search MCP), excludes the source thread, and adds up to 3 conversations (about 6,000 characters) as a `<related>` evidence section (`related.md` for local-workspace executors). A search failure or 5-second timeout never blocks the start. Push defaults to only the triggering or head message. This is kernel evidence policy, not an `executor_config` key.
 
 `max_concurrent` caps **auto start**, not ingest. In-scope work still lands and opens WorkItems. Auto `start` counts `running` + `waiting_human` on that recipe. Omit it for unlimited. Connectors must not keep a separate processing window. Manual “Handle now” is not capped.
 
