@@ -1,4 +1,5 @@
 import type { Plugin, PluginHandle } from "@regenic/plugin-host";
+import type { WorkMcpServer } from "./executor";
 import type {
   AttentionAck,
   MessageReceipt,
@@ -151,6 +152,11 @@ export interface ChannelCapabilities {
    * Omit it (DSH): `createThread` opens an empty session; the first text is a normal send.
    */
   create_with_task?: boolean;
+  /**
+   * `createThread` attaches `mcp_servers` to the new agent, so it can call
+   * tools such as the work context MCP. Omit when the agent cannot.
+   */
+  create_mcp?: boolean;
   /**
    * Outbound follow-ups during `activity: working` are held by this connector
    * until the current run ends. Desktop may count them as waiting.
@@ -402,7 +408,12 @@ export interface ChannelSinkPort {
     installation: ConnectorInstallation,
     host: ConnectorHost,
     env: NodeJS.ProcessEnv,
-    options?: { cwd?: string; text?: string },
+    options?: {
+      cwd?: string;
+      text?: string;
+      /** Only drivers that declare `create_mcp` read this. */
+      mcp_servers?: Record<string, WorkMcpServer>;
+    },
   ): Promise<ConversationThread>;
   bindEgress(
     installation: ConnectorInstallation,

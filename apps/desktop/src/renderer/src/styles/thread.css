@@ -898,3 +898,35 @@
   font-size: 14px;
 }
 
+
+.agent-reads {
+  margin: 4px 0 8px;
+}
+
+.agent-reads-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.agent-reads-toggle.is-open .work-result-caret {
+  transform: rotate(180deg);
+}
+
+.agent-reads-list {
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.agent-reads-list li {
+  display: flex;
+  gap: 8px;
+}

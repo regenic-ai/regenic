@@ -250,6 +250,74 @@ export class PersonalContextService {
     });
   }
 
+  /**
+   * Messages around one event in one thread, reply chain included. Used by
+   * agents reading the chat a work item came from. Anchors on the latest
+   * message when the event is gone or not given.
+   */
+  async readTaskConversation(input: {
+    thread_id: string;
+    event_id?: string;
+    before?: number;
+    after?: number;
+  }) {
+    const before = boundedInteger(input.before ?? 20, "before", 0, 50);
+    const after = boundedInteger(input.after ?? 10, "after", 0, 50);
+    return this.runContext(async () => {
+      const threadId = input.thread_id;
+      const { read_epoch, events } = await this.conversations.readThread(threadId);
+      if (!events.length) {
+        return {
+          thread_id: threadId,
+          read_epoch,
+          anchor_event_id: null,
+          messages: [],
+          continuation: { before: null, after: null, gaps: [] },
+        };
+      }
+      const anchor = (input.event_id
+        ? events.find((event) => event.id === input.event_id)
+        : undefined) ?? events[events.length - 1];
+      const selected = selectContextIndexes(events.map((event) => ({
+        id: event.id,
+        source: event.source,
+        external_id: event.external_id,
+        parent_external_id: stringAttribute(event.attrs, "parent_external_id"),
+      })), [anchor.id], {
+        before, after, replyDepth: 8, maxMessages: before + after + 9,
+      });
+      const { messages, kept, unreadable } = await this.conversations.readMessages(
+        threadId,
+        events,
+        selected.indexes,
+        selected.reasons,
+      );
+      const readableBetween = (from: number, to: number) => {
+        for (let index = from; index < to; index += 1) {
+          if (!unreadable.has(index)) return true;
+        }
+        return false;
+      };
+      const first = kept[0];
+      const last = kept.at(-1);
+      return {
+        thread_id: threadId,
+        read_epoch,
+        anchor_event_id: anchor.id,
+        messages,
+        continuation: {
+          before: first !== undefined && readableBetween(0, first)
+            ? contextBoundary(events[first])
+            : null,
+          after: last !== undefined && readableBetween(last + 1, events.length)
+            ? contextBoundary(events[last])
+            : null,
+          gaps: contextGaps(events, kept, unreadable),
+        },
+      };
+    });
+  }
+
   async searchWindow(input: unknown) {
     return this.runContext(() => this.conversations.window(input));
   }

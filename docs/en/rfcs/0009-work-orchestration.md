@@ -185,7 +185,16 @@ A finished job plus a new `head_event_id` opens a **new** job. The list face is 
 
 `can_write_back` is required for egress (on by default for pull). Seeing a digest is not send grant.
 
-When `include_context` is true or `trigger.kind=pull`, start packs only a recent page of the source thread into evidence (capped by line and character count; overflow is marked omitted). It must not load thousands of messages into the kernel or the executor. Start also searches all conversations (same index and authorization as desktop search and the Context Search MCP) with up to three queries fused by rank: the triggering or head message, that message with the three messages before it, and identifiers found in them (order numbers, emails, phones, links, ticket keys). Messages already in the packed history are skipped by event ID; older parts of the source thread stay and are labeled. It adds up to 3 conversations (about 6,000 characters) as a `<related>` evidence section (`related.md` for local-workspace executors). A search failure or 5-second timeout never blocks the start. Push defaults to only the triggering or head message. This is kernel evidence policy, not an `executor_config` key.
+When `include_context` is true or `trigger.kind=pull`, start packs only a recent page of the source thread into evidence (capped by line and character count; overflow is marked omitted). It must not load thousands of messages into the kernel or the executor. Push defaults to only the triggering or head message. This is kernel evidence policy, not an `executor_config` key.
+
+Every start also carries **earlier runs** on the same WorkItem (newest three finished runs: time, status, executor, result summary). Push-only executors get them inline in `<earlier_runs>`; local workspaces get `history.md`. This holds even when `include_context` is off, so a retry knows what already failed.
+
+With context on, a local executor runs in one of two modes:
+
+- **Self-serve (Mode 1).** The executor can mount an MCP server (driver capability `create_mcp`, or DSH running locally). The kernel issues a run-scoped read-only credential for `POST /v1/agent/context/mcp` and stages `AGENTS.md` with the task locator (`thread_id`, `event_id`) and tool order: `read_task_conversation`, then `read_conversation_window`, then `search_conversations`. No chat transcript is pushed. The agent reads what the task needs, across conversations if necessary.
+- **Push (Mode 2).** Otherwise the recent page above is staged as `conversation.md` (or sent inline), with an omitted-messages warning when it was truncated.
+
+`TaskExecutor.contextSelfServe(ctx)` reports which mode applies; the desktop shows it on the executor card. Each self-serve call is recorded per run (`GET /v1/me/work-runs/:id/reads`) so the user can see what the agent looked up. The kernel does not rewrite the task into search queries or push cross-conversation hits; judging relevance is the agent's job.
 
 `max_concurrent` caps **auto start**, not ingest. In-scope work still lands and opens WorkItems. Auto `start` counts `running` + `waiting_human` on that recipe. Omit it for unlimited. Connectors must not keep a separate processing window. Manual “Handle now” is not capped.
 

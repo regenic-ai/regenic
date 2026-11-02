@@ -238,6 +238,7 @@ export interface WorkFace {
   start_state?: "pending" | "submitted" | "uncertain";
   recipe_id?: string;
   executor_type?: string;
+  run_id?: string;
   agent_thread_id?: string;
   head_event_id?: string;
   can_write_back?: boolean;
@@ -325,6 +326,15 @@ export interface ExecutorCatalogEntry {
   fields: ExecutorCatalogField[];
 }
 
+export interface AgentContextRead {
+  at: string;
+  tool: string;
+  query?: string;
+  thread_id?: string;
+  title?: string;
+  messages: number;
+}
+
 export interface EngineExecutorView {
   id: string;
   kind: ExecutorKind;
@@ -332,6 +342,7 @@ export interface EngineExecutorView {
   status: ExecutorInstallStatus;
   label: string;
   detail: string | null;
+  context_self_serve?: boolean;
   connector_id?: string;
   base_url?: string;
   auth_env?: string;

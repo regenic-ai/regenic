@@ -534,6 +534,11 @@ export class PersonalController {
     return this.guard(() => this.work.runWorkItem(id));
   }
 
+  @Get("work-runs/:id/reads")
+  workRunReads(@Param("id") id: string) {
+    return this.guard(() => this.work.workRunReads(id));
+  }
+
   @Post("work-items/:id/dismiss")
   dismissWorkItem(@Param("id") id: string) {
     return this.guard(() => this.work.dismissWorkItem(id));

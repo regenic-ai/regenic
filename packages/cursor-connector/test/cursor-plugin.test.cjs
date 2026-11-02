@@ -104,6 +104,7 @@ describe("cursorAgentDriver", () => {
       await_reply: true,
       list_title: "prompt",
       create_with_task: true,
+      create_mcp: true,
       hold_while_working: true,
     });
     assert.equal(

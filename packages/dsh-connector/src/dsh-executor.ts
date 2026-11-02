@@ -16,6 +16,7 @@ import {
 } from "@regenic/connector-contract";
 import { dshLocaleTables } from "./locales";
 import { resolveOperatorDshBaseUrl } from "./dsh-url";
+import { ensureDshContextPatch } from "./dsh-context-patch";
 
 export const DSH_PROMPT_FIELD = "prompt";
 export const DSH_SKILL_FIELD = "skill";
@@ -82,6 +83,10 @@ export const dshTaskExecutor: TaskExecutor = {
     };
   },
 
+  async contextSelfServe(ctx: ExecutorContext) {
+    return dshCanReadLocalWorkspace(ctx.env) && Boolean(ctx.writeWorkFiles);
+  },
+
   locales() {
     return dshLocaleTables;
   },
@@ -113,8 +118,18 @@ export const dshTaskExecutor: TaskExecutor = {
   },
 
   async start(input: ExecutorStartInput, ctx: ExecutorContext) {
-    const staged = dshCanReadLocalWorkspace(ctx.env)
-      ? await stageConversationWorkspace(ctx, input.conversation, input.work_item.id)
+    const local = dshCanReadLocalWorkspace(ctx.env);
+    const access = local ? input.conversation?.access : undefined;
+    const selfServe = access?.agent_key && input.conversation?.task
+      ? (await ensureDshContextPatch(access, ctx.env).catch(() => ({ ready: false }))).ready
+      : false;
+    const staged = local
+      ? await stageConversationWorkspace(
+          ctx,
+          input.conversation,
+          input.work_item.id,
+          selfServe && access ? { self_serve: { run_id: access.run_id } } : undefined,
+        )
       : undefined;
     const thread = await ctx.spawnSysout(staged?.cwd ? { cwd: staged.cwd } : undefined);
     const sysoutId = `${thread.source}:${thread.target}`;

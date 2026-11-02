@@ -121,10 +121,18 @@ export interface ExecutorContext {
   org_id: string;
   env: NodeJS.ProcessEnv;
   /** Absentee sysout. Not a Session. */
-  spawnSysout(options?: { cwd?: string }): Promise<ConversationThread>;
+  spawnSysout(options?: {
+    cwd?: string;
+    mcp_servers?: Record<string, WorkMcpServer>;
+  }): Promise<ConversationThread>;
   writeStdin(thread: ConversationThread, text: string): Promise<void>;
   listPrompts(thread: ConversationThread): Promise<ThreadPrompt[]>;
   readTranscript(sysoutId: string): Promise<Transcript | null>;
+  /**
+   * Whether spawnSysout honors `mcp_servers`, i.e. the spawned agent can call
+   * the context tools itself. Absent means no.
+   */
+  sysoutSupportsMcp?(): Promise<boolean>;
   /** Write files the local agent can read from cwd. Same machine only. */
   writeWorkFiles?(
     files: Record<string, string>,
@@ -137,8 +145,51 @@ export interface WorkConversationEvidence {
   current_line?: string;
   background?: string;
   omitted?: boolean;
-  /** Possibly relevant messages from other conversations, found by search. */
-  related?: string;
+  /** Earlier runs on this work item, newest first (formatWorkRunHistory). */
+  history?: string;
+  /** Where the task came from, so a self-serving agent can read around it. */
+  task?: WorkTaskRef;
+  /** Context tools a local agent may call during this run. */
+  access?: WorkContextAccess;
+}
+
+export interface WorkTaskRef {
+  thread_id: string;
+  event_id?: string;
+  title?: string;
+  channel?: string;
+}
+
+/** HTTP MCP server config, as Cursor, Claude Code and DSH accept it. */
+export interface WorkMcpServer {
+  url: string;
+  headers?: Record<string, string>;
+}
+
+export interface WorkContextAccess {
+  /** Streamable HTTP MCP endpoint on this machine. */
+  url: string;
+  run_id: string;
+  /** Bearer valid only while this run is running or waiting on a human. */
+  run_token: string;
+  /**
+   * Read-only key for agents whose MCP config outlives one run (DSH profile).
+   * Every call made with it must name an active run_id.
+   */
+  agent_key?: string;
+}
+
+export const WORK_CONTEXT_MCP_SERVER = "regenic-context";
+
+export function workContextMcpServers(
+  access: WorkContextAccess,
+): Record<string, WorkMcpServer> {
+  return {
+    [WORK_CONTEXT_MCP_SERVER]: {
+      url: access.url,
+      headers: { Authorization: `Bearer ${access.run_token}` },
+    },
+  };
 }
 
 /** Fields an executor may read. A full WorkItem remains assignable. */
@@ -226,6 +277,8 @@ export interface TaskExecutor {
   ): Promise<ExecutorRunHandle>;
   status(run: WorkRun, ctx: ExecutorContext): Promise<ExecutorRunHandle>;
   cancel?(run: WorkRun, ctx: ExecutorContext): Promise<void>;
+  /** Whether the agent can look up chat context itself (Mode 1) when a recipe includes context. */
+  contextSelfServe?(ctx: ExecutorContext): Promise<boolean>;
 }
 
 /**
@@ -292,11 +345,6 @@ export const WORK_EVIDENCE_CURRENT_OPEN = "<current>";
 export const WORK_EVIDENCE_CURRENT_CLOSE = "</current>";
 export const WORK_EVIDENCE_SPLIT_HINT =
   "Treat <background> as established context. Act on <current>.";
-export const WORK_EVIDENCE_RELATED_OPEN = "<related>";
-export const WORK_EVIDENCE_RELATED_CLOSE = "</related>";
-export const WORK_EVIDENCE_RELATED_HINT =
-  "<related> holds messages from other conversations that search matched. They may be unrelated; use them only as reference.";
-export const WORK_RELATED_FILENAME = "related.md";
 export const WORK_WORKSPACE_PULL_HINT =
   "Review the conversation in this workspace and work from it.";
 
@@ -331,13 +379,34 @@ export function composeWorkspacePointerEvidence(input: {
   return composeWorkspaceTaskEvidence(input);
 }
 
+export const WORK_HISTORY_FILENAME = "history.md";
+
+/** How a self-serving agent reaches the context tools for this run. */
+export interface WorkSelfServe {
+  /** Set when the agent's key spans runs: every tool call must pass it. */
+  run_id?: string;
+}
+
 export function composeWorkspaceInstructionFiles(input: {
   background?: string;
   omitted?: boolean;
-  related?: string;
+  history?: string;
+  task?: WorkTaskRef;
+  /** The agent can call the context tools; nothing from the chat is pushed. */
+  self_serve?: WorkSelfServe;
 }): Record<string, string> {
+  const history = input.history?.trim() ?? "";
+  const historyLine = history
+    ? `Earlier runs on this work item and their results are in ${WORK_HISTORY_FILENAME}. Do not redo finished work.`
+    : "";
+  if (input.self_serve && input.task) {
+    const files: Record<string, string> = {
+      [WORK_AGENTS_FILENAME]: selfServeAgents(input.task, input.self_serve, historyLine),
+    };
+    if (history) files[WORK_HISTORY_FILENAME] = history;
+    return files;
+  }
   const background = input.background?.trim() ?? "";
-  const related = input.related?.trim() ?? "";
   const omitted =
     input.omitted && !background.startsWith(WORK_EVIDENCE_OMITTED)
       ? `${WORK_EVIDENCE_OMITTED}\n\n`
@@ -350,10 +419,11 @@ export function composeWorkspaceInstructionFiles(input: {
       ? ""
       : inline
         ? "Prior turns follow. Use them as context. Do not restate them."
-        : "Prior turns are in conversation.md. Read that file only if you need background. Do not restate it.",
-    related
-      ? `Messages from other conversations that search matched are in ${WORK_RELATED_FILENAME}. They may be unrelated; use them only as reference.`
+        : `Prior turns are in ${WORK_CONVERSATION_FILENAME}. Read that file only if you need background. Do not restate it.`,
+    background && input.omitted
+      ? "Older messages in this chat were left out. Ask before acting on anything that depends on them."
       : "",
+    historyLine,
     inline && background ? `\n## Prior turns\n\n${omitted}${background}` : "",
   ]
     .filter(Boolean)
@@ -362,30 +432,125 @@ export function composeWorkspaceInstructionFiles(input: {
   if (background && !inline) {
     files[WORK_CONVERSATION_FILENAME] = `${omitted}${background}`.trim();
   }
-  if (related) {
-    files[WORK_RELATED_FILENAME] = related;
-  }
+  if (history) files[WORK_HISTORY_FILENAME] = history;
   return files;
+}
+
+function selfServeAgents(
+  task: WorkTaskRef,
+  selfServe: WorkSelfServe,
+  historyLine: string,
+): string {
+  const where = [task.channel, task.title]
+    .map((part) => part?.trim())
+    .filter(Boolean)
+    .join(" · ");
+  const ids = [
+    `thread_id: ${task.thread_id}`,
+    task.event_id ? `current event_id: ${task.event_id}` : "",
+    selfServe.run_id ? `run_id: ${selfServe.run_id}` : "",
+  ]
+    .filter(Boolean)
+    .join(", ");
+  const tool = (name: string) => `${WORK_CONTEXT_MCP_SERVER} ${name}`;
+  return [
+    "This session handles one work item from a source chat.",
+    "The user message is the task. Only the current message is included; the rest of the chat is not.",
+    `Source: ${where ? `${where} (${ids})` : ids}.`,
+    "",
+    "## Before you act",
+    "",
+    `1. Read the chat with ${tool("read_task_conversation")}. It returns the messages around the current one, including what it replies to.`,
+    `2. If the task depends on something earlier, page back with ${tool("read_conversation_window")} using the returned boundary and read_epoch.`,
+    `3. Use ${tool("search_conversations")} only when the task needs other chats (for example the same customer's earlier orders). Hits may be about someone else; check before you rely on them.`,
+    selfServe.run_id
+      ? `\nPass run_id "${selfServe.run_id}" on every ${WORK_CONTEXT_MCP_SERVER} call.`
+      : "",
+    "Do not restate the chat. Do not guess facts the chat would tell you; read it.",
+    historyLine,
+  ]
+    .filter((line, index, lines) => line || lines[index - 1])
+    .join("\n")
+    .trim();
 }
 
 export async function stageConversationWorkspace(
   ctx: ExecutorContext,
   conversation: WorkConversationEvidence | undefined,
   workItemId?: string,
+  options?: { self_serve?: WorkSelfServe },
 ): Promise<{ cwd: string } | undefined> {
-  const background = conversation?.background?.trim();
-  const related = conversation?.related?.trim();
-  if ((!background && !related) || !ctx.writeWorkFiles) {
+  if (!ctx.writeWorkFiles || !conversation) {
+    return undefined;
+  }
+  const selfServe = options?.self_serve && conversation.task
+    ? options.self_serve
+    : undefined;
+  const background = conversation.background?.trim();
+  const history = conversation.history?.trim();
+  if (!selfServe && !background && !history) {
     return undefined;
   }
   return ctx.writeWorkFiles(
     composeWorkspaceInstructionFiles({
-      background,
-      omitted: conversation?.omitted,
-      related,
+      background: selfServe ? undefined : background,
+      omitted: conversation.omitted,
+      history,
+      task: conversation.task,
+      self_serve: selfServe,
     }),
     workItemId ? { work_item_id: workItemId } : undefined,
   );
+}
+
+/**
+ * Stages the workspace for a local agent spawned through spawnSysout. When the
+ * agent can call the context tools itself, only the task is staged and the
+ * tools ride along on the spawn; otherwise the chat is pushed as files.
+ */
+export async function prepareLocalAgentStart(
+  input: ExecutorStartInput,
+  ctx: ExecutorContext,
+): Promise<{
+  spawn: { cwd?: string; mcp_servers?: Record<string, WorkMcpServer> };
+  evidence_text: string;
+  self_serve: boolean;
+}> {
+  const conversation = input.conversation;
+  const access = conversation?.access;
+  const selfServe = Boolean(
+    access &&
+      conversation?.task &&
+      ctx.writeWorkFiles &&
+      (await ctx.sysoutSupportsMcp?.().catch(() => false)),
+  );
+  const staged = await stageConversationWorkspace(
+    ctx,
+    conversation,
+    input.work_item.id,
+    selfServe ? { self_serve: {} } : undefined,
+  );
+  const evidence_text = staged?.cwd
+    ? formatWorkEvidence({
+        thread_id: input.work_item.thread_id,
+        record_class: input.work_item.record_class,
+        thread_facet: input.work_item.thread_facet,
+        source: input.work_item.thread_id.split(":")[0] ?? "",
+        text: composeWorkspaceTaskEvidence({
+          current_line: conversation?.current_line,
+        }),
+      })
+    : input.evidence_text;
+  return {
+    spawn: {
+      ...(staged?.cwd ? { cwd: staged.cwd } : {}),
+      ...(selfServe && staged?.cwd && access
+        ? { mcp_servers: workContextMcpServers(access) }
+        : {}),
+    },
+    evidence_text,
+    self_serve: selfServe && Boolean(staged?.cwd),
+  };
 }
 
 export function formatWorkEvidence(input: {

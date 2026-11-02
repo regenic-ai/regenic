@@ -134,54 +134,6 @@ describe("durable executor start", () => {
     assert.equal((await f.ports.authority.listWorkRuns(ORG, f.item.id)).length, 1);
   });
 
-  it("adds related conversations from search when the recipe includes context", async (t) => {
-    const f = await fixture(t);
-    const recipe = { ...f.recipe, include_context: true };
-    await f.ports.authority.putRecipe(recipe);
-    const lookups = [];
-    let stdin = "";
-    f.hooks.stdin = async (_thread, text) => { stdin = text; };
-    const related = async (request) => {
-      lookups.push(request);
-      return "## Slack · #billing\nAnn: refund for order 42 approved";
-    };
-    const dispatch = new PersonalWorkDispatch(
-      f.runtime, f.channel, f.supervise(), { attach() {} }, related,
-    );
-    await dispatch.startItem(f.item, recipe, "where is my refund for order 42");
-    assert.equal(lookups.length, 1);
-    assert.equal(lookups[0].thread_id, "feishu:oc_1");
-    assert.equal(lookups[0].current, "where is my refund for order 42");
-    assert.ok(Array.isArray(lookups[0].recent));
-    assert.ok(Array.isArray(lookups[0].covered_event_ids));
-    assert.match(stdin, /<related>\n## Slack · #billing\nAnn: refund for order 42 approved\n<\/related>/);
-    assert.ok(stdin.indexOf("<related>\n") < stdin.indexOf("<current>\n"));
-  });
-
-  it("starts without related context when search fails or context is off", async (t) => {
-    const f = await fixture(t);
-    let calls = 0;
-    let stdin = "";
-    f.hooks.stdin = async (_thread, text) => { stdin = text; };
-    const failing = async () => { calls += 1; throw new Error("index offline"); };
-    const contextOn = { ...f.recipe, include_context: true };
-    await f.ports.authority.putRecipe(contextOn);
-    const run = await new PersonalWorkDispatch(
-      f.runtime, f.channel, f.supervise(), { attach() {} }, failing,
-    ).startItem(f.item, contextOn, "evidence");
-    assert.equal(run.external_run_id, "dsh:session-1");
-    assert.equal(calls, 1);
-    assert.equal(stdin.includes("<related>"), false);
-
-    const g = await fixture(t);
-    let offCalls = 0;
-    await new PersonalWorkDispatch(
-      g.runtime, g.channel, g.supervise(), { attach() {} },
-      async () => { offCalls += 1; return "## x\ny: z"; },
-    ).startItem(g.item, g.recipe, "evidence");
-    assert.equal(offCalls, 0);
-  });
-
   it("does not invoke the executor if the atomic claim cannot be persisted", async (t) => {
     const f = await fixture(t);
     t.mock.method(f.ports.authority, "claimWorkRunStart", async () => { throw new Error("disk full"); });
@@ -670,4 +622,51 @@ describe("durable executor start", () => {
       assert.equal((await f.ports.authority.getWorkItem(ORG, f.item.id)).status, itemStatus);
     });
   }
+
+  it("tells the agent what earlier runs on the item did", async (t) => {
+    const f = await fixture(t);
+    const earlier = new Date(Date.now() - 60_000).toISOString();
+    await f.ports.authority.putWorkRun({
+      id: "run-earlier", org_id: ORG, work_item_id: f.item.id, recipe_id: f.recipe.id,
+      executor_type: "session", status: "failed", result: { summary: "Refund API timed out" },
+      created_at: earlier, updated_at: earlier,
+    });
+    let sent = "";
+    f.hooks.stdin = async (_thread, text) => { sent = text; };
+    await f.dispatch().startItem(f.item, f.recipe, "refund order 42");
+    assert.match(sent, /<earlier_runs>[\s\S]*failed[\s\S]*Refund API timed out[\s\S]*<\/earlier_runs>/);
+    assert.match(sent, /refund order 42/);
+  });
+
+  it("hands local executors run-scoped context access only when context is on", async (t) => {
+    const f = await fixture(t);
+    const seen = [];
+    f.setExecutor({
+      executor_type: "session",
+      capabilities: () => ({ start: true, resume: true, status: true, local_workspace: true }),
+      catalog: () => ({ executor_type: "session", label: { literal: "S" }, fields: [] }),
+      async start(input) {
+        seen.push(input.conversation);
+        return { external_run_id: "x", status: "completed" };
+      },
+      async resume() { return { external_run_id: "x", status: "completed" }; },
+      async status() { return { external_run_id: "x", status: "completed" }; },
+    });
+    const accessFor = (runId, options) => ({
+      url: "http://127.0.0.1:4370/v1/agent/context/mcp",
+      run_id: runId,
+      run_token: `rgc1.${runId}.sig`,
+      ...(options?.agent_key ? { agent_key: "rgk1.sig" } : {}),
+    });
+    const dispatch = new PersonalWorkDispatch(
+      f.runtime, f.channel, f.supervise(), { attach() {} }, { accessFor },
+    );
+    await dispatch.startItem(f.item, f.recipe, "evidence");
+    assert.equal(seen[0], undefined);
+    await f.ports.authority.putWorkItem({ ...f.item, status: "open", updated_at: new Date().toISOString() });
+    const run = await dispatch.startItem(f.item, { ...f.recipe, include_context: true }, "evidence");
+    assert.deepEqual(seen[1].task, { thread_id: f.item.thread_id });
+    assert.equal(seen[1].access.run_id, run.id);
+    assert.equal(seen[1].access.agent_key, "rgk1.sig");
+  });
 });

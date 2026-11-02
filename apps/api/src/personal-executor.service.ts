@@ -23,6 +23,7 @@ import {
   type ExecutorKind,
   type JsonValue,
 } from "@regenic/domain";
+import { PersonalWorkChannel } from "./personal-work-channel";
 import { EXECUTOR_INSTALL_DOCS, type CatalogDocRef } from "./install-docs";
 import { PersonalConnectorError } from "./personal-errors";
 import { toInstallationView } from "./personal-connector-view";
@@ -41,6 +42,8 @@ export interface EngineExecutorView {
   status: ExecutorInstallStatus;
   label: string;
   detail: string | null;
+  /** The agent can look up chat context itself; otherwise the chat is sent with the task. */
+  context_self_serve?: boolean;
   connector_id?: string;
   base_url?: string;
   auth_env?: string;
@@ -114,7 +117,16 @@ export class PersonalExecutorService {
       host.get("authority").listExecutorInstallations(orgId),
       host.get("authority").listInstallations(orgId),
     ]);
-    return rows.map((row) => this.toView(row, connectors, locale));
+    const views = rows.map((row) => this.toView(row, connectors, locale));
+    const executors = host.get("executors");
+    const channel = new PersonalWorkChannel(this.runtime, this.drivers);
+    await Promise.all(views.map(async (view) => {
+      const executor = view.kind === "local_connector" ? executors.get(view.id) : undefined;
+      view.context_self_serve = executor?.contextSelfServe
+        ? await executor.contextSelfServe(channel.contextFor(executor)).catch(() => false)
+        : false;
+    }));
+    return views;
   }
 
   kindCatalog(

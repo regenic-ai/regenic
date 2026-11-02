@@ -311,6 +311,121 @@ async function getJson(url) {
   return { response, text: await response.text() };
 }
 
+async function seedAgentRun(database, blobRoot) {
+  const eventIds = await ingestConversationEvidence(database, blobRoot);
+  const authority = new SqliteAuthorityStore(database);
+  const now = new Date().toISOString();
+  const old = new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString();
+  await authority.putRecipe({
+    id: "recipe-ctx", org_id: "local-owner", name: "Ctx", match: { record_class: "message" },
+    trigger: { kind: "push" }, executor_type: "session", executor_config: {},
+    include_context: true, can_write_back: false, enabled: true, created_at: now, updated_at: now,
+  });
+  await authority.putWorkItem({
+    id: "work-ctx", org_id: "local-owner", recipe_id: "recipe-ctx",
+    thread_id: "synthetic-chat:customer-a", unit_key: "u-ctx", head_event_id: eventIds[1],
+    record_class: "message", thread_facet: "customer", status: "running", created_at: now, updated_at: now,
+  });
+  for (const [id, status, created] of [["run-open", "running", now], ["run-done", "completed", now], ["run-old", "running", old]]) {
+    await authority.putWorkRun({
+      id, org_id: "local-owner", work_item_id: "work-ctx", recipe_id: "recipe-ctx",
+      executor_type: "session", status, created_at: created, updated_at: created,
+    });
+  }
+  authority.close();
+  return eventIds;
+}
+
+async function mcp(origin, token, method, params, headers = {}) {
+  const response = await fetch(`${origin}/v1/agent/context/mcp`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
+      ...headers,
+    },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, ...(params ? { params } : {}) }),
+  });
+  const text = await response.text();
+  return { status: response.status, body: text ? JSON.parse(text) : undefined };
+}
+
+describe("agent context MCP", () => {
+  it("lets a run read its own chat with a run token and records what it read", async () => {
+    const root = await createRoot();
+    const { app, origin } = await startApi(root, { driver: "none" }, undefined, seedAgentRun);
+    const { PersonalAgentContextAccessService } = require("../dist/personal-agent-context-access.service");
+    const access = app.get(PersonalAgentContextAccessService);
+    const token = access.runToken("run-open");
+
+    assert.equal((await mcp(origin, undefined, "ping")).status, 401);
+    assert.equal((await mcp(origin, "rgc1.run-open.forged", "ping")).status, 401);
+    assert.equal((await mcp(origin, token, "ping", undefined, { origin: "https://evil.example" })).status, 403);
+    assert.equal((await fetch(`${origin}/v1/agent/context/mcp`)).status, 405);
+
+    const init = await mcp(origin, token, "initialize", { protocolVersion: "2025-06-18" });
+    assert.equal(init.body.result.serverInfo.name, "regenic-context");
+    const listed = await mcp(origin, token, "tools/list");
+    assert.deepEqual(
+      listed.body.result.tools.map((tool) => tool.name),
+      ["read_task_conversation", "read_conversation_window", "search_conversations"],
+    );
+    assert.equal(listed.body.result.tools[0].inputSchema.properties.run_id, undefined);
+
+    const read = await mcp(origin, token, "tools/call", {
+      name: "read_task_conversation", arguments: { before: 5, after: 5 },
+    });
+    const result = read.body.result.structuredContent;
+    assert.equal(read.body.result.isError, undefined, JSON.stringify(read.body));
+    assert.equal(result.thread_id, "synthetic-chat:customer-a");
+    assert.equal(result.messages.length, 3);
+    assert.match(result.messages[1].text, /pending-answer-question/);
+
+    const reads = await getJson(`${origin}/v1/me/work-runs/run-open/reads`);
+    const logged = JSON.parse(reads.text).reads;
+    assert.equal(logged.length, 1);
+    assert.equal(logged[0].tool, "read_task_conversation");
+    assert.equal(logged[0].messages, 3);
+
+    for (const runId of ["run-done", "run-old", "run-missing"]) {
+      const denied = await mcp(origin, access.runToken(runId), "tools/call", {
+        name: "read_task_conversation", arguments: {},
+      });
+      assert.equal(denied.body.result.isError, true, runId);
+    }
+  });
+
+  it("requires a run_id with the shared agent key", async () => {
+    const root = await createRoot();
+    const { app, origin } = await startApi(root, { driver: "none" }, undefined, seedAgentRun);
+    const { PersonalAgentContextAccessService } = require("../dist/personal-agent-context-access.service");
+    const key = app.get(PersonalAgentContextAccessService).agentKey();
+    const listed = await mcp(origin, key, "tools/list");
+    assert.ok(listed.body.result.tools.every((tool) => tool.inputSchema.required.includes("run_id")));
+    const missing = await mcp(origin, key, "tools/call", { name: "read_task_conversation", arguments: {} });
+    assert.equal(missing.body.result.isError, true);
+    assert.match(missing.body.result.content[0].text, /run_id is required/);
+    const ok = await mcp(origin, key, "tools/call", {
+      name: "read_task_conversation", arguments: { run_id: "run-open", before: 0, after: 0 },
+    });
+    assert.equal(ok.body.result.isError, undefined, JSON.stringify(ok.body));
+    const window = ok.body.result.structuredContent;
+    assert.ok(window.continuation.before);
+    const earlier = await mcp(origin, key, "tools/call", {
+      name: "read_conversation_window",
+      arguments: {
+        run_id: "run-open",
+        thread_id: window.thread_id,
+        read_epoch: window.read_epoch,
+        direction: "before",
+        boundary: window.continuation.before,
+      },
+    });
+    assert.equal(earlier.body.result.isError, undefined, JSON.stringify(earlier.body));
+    assert.ok(earlier.body.result.structuredContent.messages.length >= 1);
+  });
+});
+
 describe("personal context API", () => {
   it("maps unknown provider/job errors to a fixed safe diagnostic category", () => {
     const { semanticIssue } = require("../dist/semantic-diagnostics");
