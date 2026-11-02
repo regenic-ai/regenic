@@ -419,6 +419,10 @@ export const ContextRetrievalTraceSchema = z.object({
     lexical_rank: z.number().int().positive().optional(),
     vector_rank: z.number().int().positive().optional(),
     vector_score: z.number().finite().min(-1).max(1).optional(),
+    thread_id: nonEmptyStringSchema.optional(),
+    thread_rank: z.number().int().positive().optional(),
+    thread_score: z.number().finite().min(0).max(1).optional(),
+    evidence_diversity: z.number().finite().min(0).max(1).optional(),
     chunk_ordinal: z.number().int().min(0).optional(),
     start: z.number().int().min(0).optional(),
     end: z.number().int().positive().optional(),
@@ -427,6 +431,9 @@ export const ContextRetrievalTraceSchema = z.object({
   if (trace.covered_count > trace.authorized_count ||
     new Set(trace.routes.map((route) => route.event_id)).size !== trace.routes.length ||
     (trace.mode === "hybrid" && (!trace.generation || !trace.model_revision)) ||
+    trace.routes.some((route) =>
+      (route.thread_id === undefined) !== (route.thread_rank === undefined) ||
+      (route.thread_id === undefined) !== (route.thread_score === undefined)) ||
     trace.routes.some((route) => (route.start === undefined) !== (route.end === undefined) ||
       (route.start !== undefined && route.end! <= route.start))) {
     context.addIssue({ code: z.ZodIssueCode.custom, message: "Invalid retrieval trace" });

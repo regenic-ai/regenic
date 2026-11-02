@@ -831,8 +831,13 @@ v2 三个集合的负例选择率均为 0。仅用合成 policy 测了授权键�
   返回词法结果及 `vector_index_capacity`，coverage 为 null，不伪造向量成功。
   Authority 正文读取仍未实现两阶段优化；长 Event 仍受完整证据预算约束。
 
-当前 `personal-hybrid-rrf-v3` 保留 v2 的评分、阈值和弱词法命中规则，
-取消授权全集的一万条硬上限，并将授权元数据筛选与正文读取分离。
+`personal-hybrid-thread-rrf-v4` 保留 v3 的阈值、弱词法命中规则、无上限授权集合和
+惰性正文读取，再增加确定性的两阶段 Thread 重排。第一阶段仍按 Event 计算 lexical/vector
+RRF；第二阶段只对已授权候选按 `thread_id` 聚合，使用最佳 Event、查询词覆盖和最多三份
+非重复证据计算 Thread 分。同一 Thread 内能补充新查询词或不同正文的 Event 获得递减的
+evidence diversity 分；规范化后重复的正文不获得 Thread/diversity 加成。
+无 `thread_id` 的 Event 独立成组，不与其它来源合并。
+trace 记录 `thread_id`、Thread rank/score 和 evidence diversity，旧 snapshot 保留原 profile。
 索引查询不截断授权集合，向量扫描只保留全局 top-k 候选；
 trace 的授权、覆盖计数不再受一万条限制。旧 snapshot 继续保留其原 profile。
 这不改变精确向量扫描的线性复杂度，也不把上述 v2 实测外推为更大规模的性能承诺。

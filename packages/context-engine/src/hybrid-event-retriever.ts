@@ -7,6 +7,7 @@ import {
   contextLexicalQueryTerms,
   contextLexicalTerms,
   type AuthorizedContextRetrievalPlan,
+  type AuthorizedContextSourceEvent,
   type ContextRetriever,
   type ContextEventMaterializer,
   type ContextRetrievalResult,
@@ -23,8 +24,11 @@ import { searchMatchesFor, searchSnippet } from "./search-matches";
 
 export const HYBRID_EVENT_RETRIEVER_ID = "event-hybrid";
 export const HYBRID_RETRIEVAL_PROFILE = {
-  version: "personal-hybrid-rrf-v3",
-  score_weights: { anchor: 4, exact_match: 3, lexical: 2, recency: 1, hybrid: 8 },
+  version: "personal-hybrid-thread-rrf-v4",
+  score_weights: {
+    anchor: 4, exact_match: 3, lexical: 2, recency: 1,
+    hybrid: 8, thread: 3, evidence_diversity: 1,
+  },
   vector_min_score: 0.7,
 };
 const MIN_VECTOR_CANDIDATES = 50;
@@ -52,7 +56,7 @@ export class HybridEventRetriever implements ContextRetriever {
   }
 
   capabilities() {
-    return { ...this.lexical.capabilities(), vector: true, lazy_materialization: true };
+    return { ...this.lexical.capabilities(), vector: true, rerank: true, lazy_materialization: true };
   }
 
   async retrieve(
@@ -246,6 +250,8 @@ export class HybridEventRetriever implements ContextRetriever {
         (route.vector_rank ? 1 / (RRF_K + route.vector_rank) : 0);
       value.candidate.scores = { anchor: value.candidate.scores.anchor ?? 0, hybrid: Number((score * (RRF_K + 1) / 2).toFixed(9)) };
     }
+    rerankThreads(candidates, allowed, ranks, plan.request.query);
+    trace.routes = [...ranks.values()].sort((a, b) => compare(a.event_id, b.event_id));
     return {
       candidates: [...candidates.values()].sort((a, b) => compare(a.candidate.candidate_id, b.candidate.candidate_id)),
       degradation_flags: [...(lexical.degradation_flags ?? []),
@@ -318,4 +324,100 @@ function lexicalScore(value: RetrievedContextCandidate): number {
   const scores = value.candidate.scores;
   return 3 * (scores.exact_match ?? 0) + 2 * (scores.lexical ?? 0) + (scores.recency ?? 0);
 }
+
+function rerankThreads(
+  candidates: Map<string, RetrievedContextCandidate>,
+  allowed: Map<string, AuthorizedContextSourceEvent>,
+  routes: Map<string, ContextRetrievalTrace["routes"][number]>,
+  query: string,
+): void {
+  const queryTerms = new Set(contextLexicalQueryTerms(query));
+  const groups = new Map<string, {
+    threadId?: string;
+    members: Array<{
+      eventId: string;
+      evidenceKey: string;
+      coveredTerms: Set<string>;
+      hybrid: number;
+    }>;
+  }>();
+  for (const [eventId, candidate] of candidates) {
+    const source = allowed.get(eventId);
+    if (!source) continue;
+    const threadId = source.thread_id?.trim() || undefined;
+    const key = threadId ? `thread:${threadId}` : `event:${eventId}`;
+    const text = source.search_body ?? source.text ?? "";
+    const terms = new Set(contextLexicalTerms(text).filter((term) => queryTerms.has(term)));
+    const group = groups.get(key) ?? { ...(threadId ? { threadId } : {}), members: [] };
+    group.members.push({
+      eventId,
+      evidenceKey: normalizedEvidenceKey(text, source.event.content_hash!, eventId),
+      coveredTerms: terms,
+      hybrid: candidate.candidate.scores.hybrid ?? 0,
+    });
+    groups.set(key, group);
+  }
+  const ranked = [...groups.values()].map((group) => {
+    const uniqueEvidence = new Set(group.members.map((member) => member.evidenceKey));
+    const coveredTerms = new Set(group.members.flatMap((member) => [...member.coveredTerms]));
+    const best = Math.max(...group.members.map((member) => member.hybrid));
+    const coverage = queryTerms.size ? coveredTerms.size / queryTerms.size : 0;
+    const support = Math.min(1, Math.max(0, uniqueEvidence.size - 1) / 2);
+    return {
+      ...group,
+      score: Number((0.8 * best + 0.15 * coverage + 0.05 * support).toFixed(9)),
+    };
+  }).sort((left, right) =>
+    right.score - left.score ||
+    compare(left.threadId ?? left.members[0].eventId, right.threadId ?? right.members[0].eventId));
+
+  ranked.forEach((group, threadIndex) => {
+    const seenEvidence = new Set<string>();
+    const coveredTerms = new Set<string>();
+    let uniqueOrdinal = 0;
+    group.members.sort((left, right) =>
+      right.hybrid - left.hybrid || compare(left.eventId, right.eventId));
+    for (const member of group.members) {
+      const candidate = candidates.get(member.eventId)!;
+      const duplicate = seenEvidence.has(member.evidenceKey);
+      let diversity = 0;
+      if (!duplicate) {
+        uniqueOrdinal += 1;
+        seenEvidence.add(member.evidenceKey);
+        const newlyCovered = [...member.coveredTerms].filter((term) => !coveredTerms.has(term));
+        for (const term of newlyCovered) coveredTerms.add(term);
+        diversity = Math.max(
+          1 / uniqueOrdinal,
+          queryTerms.size ? newlyCovered.length / queryTerms.size : 0,
+        );
+      }
+      candidate.candidate.scores = {
+        ...candidate.candidate.scores,
+        thread: duplicate ? 0 : group.score,
+        evidence_diversity: Number(diversity.toFixed(9)),
+      };
+      const route = routes.get(member.eventId);
+      if (route && group.threadId) {
+        routes.set(member.eventId, {
+          ...route,
+          thread_id: group.threadId,
+          thread_rank: threadIndex + 1,
+          thread_score: group.score,
+          evidence_diversity: Number(diversity.toFixed(9)),
+        });
+      } else if (route) {
+        routes.set(member.eventId, {
+          ...route,
+          evidence_diversity: Number(diversity.toFixed(9)),
+        });
+      }
+    }
+  });
+}
+
+function normalizedEvidenceKey(text: string, contentHash: string, eventId: string): string {
+  const normalized = text.normalize("NFKC").toLocaleLowerCase().replace(/\s+/gu, " ").trim();
+  return normalized ? createHash("sha256").update(normalized).digest("hex") : contentHash || eventId;
+}
+
 function compare(a: string, b: string): number { return a < b ? -1 : a > b ? 1 : 0; }
