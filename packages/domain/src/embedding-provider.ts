@@ -26,10 +26,20 @@ export interface ProcessedEmbeddingAttachment {
   vectors: number[][];
 }
 
+export interface CountedEmbeddingBatch {
+  counts: number[];
+  vectors: number[][];
+}
+
 export interface EmbeddingProvider {
   readonly descriptor: EmbeddingModelDescriptor;
   countTokens(texts: string[], mode: EmbeddingMode, signal?: AbortSignal): Promise<number[]>;
   embed(texts: string[], mode: EmbeddingMode, signal?: AbortSignal): Promise<number[][]>;
+  embedWithTokenCounts?(
+    texts: string[],
+    mode: EmbeddingMode,
+    signal?: AbortSignal,
+  ): Promise<CountedEmbeddingBatch>;
   processAttachment?(
     attachment: EmbeddingAttachmentInput,
     signal?: AbortSignal,

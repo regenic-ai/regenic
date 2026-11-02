@@ -54,9 +54,11 @@ class EncoderTests(unittest.TestCase):
 
     def test_float32_normalization_after_low_precision_inference(self):
         encoder = encoder_with([0.9984] + [0.0] * 767)
-        vectors = encoder.embed(["synthetic"], "document")
+        counts, vectors = encoder.embed_with_counts(["synthetic"], "document")
+        self.assertEqual(counts, [len("title: none | text: synthetic")])
         self.assertEqual(len(vectors[0]), DESCRIPTOR["dimensions"])
         self.assertAlmostEqual(np.linalg.norm(vectors[0]), 1.0, places=6)
+        self.assertEqual(encoder.embed(["synthetic"], "document"), vectors)
 
     def test_invalid_vectors_are_not_repaired_into_success(self):
         for vector in ([0.0] * 768, [float("nan")] * 768, [1.0, 0.0]):

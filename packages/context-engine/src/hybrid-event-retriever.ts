@@ -280,19 +280,32 @@ export class HybridEventRetriever implements ContextRetriever {
       return cached;
     }
     const pending = (async () => {
-      const [tokens] = await this.provider.countTokens([query], "query");
+      let batch;
+      if (this.provider.embedWithTokenCounts) {
+        batch = await this.provider.embedWithTokenCounts([query], "query");
+      } else {
+        const counts = await this.provider.countTokens([query], "query");
+        const [count] = counts;
+        if (!Number.isSafeInteger(count) || count < 1) {
+          throw new EmbeddingError("invalid_response", true);
+        }
+        if (count > generation.model.max_input_tokens) {
+          throw new EmbeddingError("input_too_large", false);
+        }
+        batch = { counts, vectors: await this.provider.embed([query], "query") };
+      }
+      const [tokens] = batch.counts;
       if (!Number.isSafeInteger(tokens) || tokens < 1) {
         throw new EmbeddingError("invalid_response", true);
       }
       if (tokens > generation.model.max_input_tokens) {
         throw new EmbeddingError("input_too_large", false);
       }
-      const vectors = await this.provider.embed([query], "query");
-      if (vectors.length !== 1) {
+      if (batch.counts.length !== 1 || batch.vectors.length !== 1) {
         throw new EmbeddingError("invalid_response", true);
       }
-      validateEmbeddingVector(vectors[0], generation.model.dimensions);
-      return vectors[0];
+      validateEmbeddingVector(batch.vectors[0], generation.model.dimensions);
+      return batch.vectors[0];
     })();
     this.queryVectors.set(key, pending);
     if (this.queryVectors.size > QUERY_VECTOR_CACHE_SIZE) {

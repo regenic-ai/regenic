@@ -6,6 +6,7 @@ import {
   type EmbeddingMode,
   type EmbeddingModelDescriptor,
   type EmbeddingProvider,
+  type CountedEmbeddingBatch,
   type EmbeddingAttachmentInput,
   type ProcessedEmbeddingAttachment,
 } from "@regenic/domain";
@@ -74,7 +75,25 @@ export class LocalHttpEmbeddingProvider implements EmbeddingProvider {
 
   async embed(texts: string[], mode: EmbeddingMode, signal?: AbortSignal): Promise<number[][]> {
     const value = await this.call("embed", texts, mode, signal);
-    if (!Array.isArray(value.vectors) || value.vectors.length !== texts.length) {
+    return this.vectors(value, texts.length);
+  }
+
+  async embedWithTokenCounts(
+    texts: string[],
+    mode: EmbeddingMode,
+    signal?: AbortSignal,
+  ): Promise<CountedEmbeddingBatch> {
+    const value = await this.call("embed", texts, mode, signal);
+    if (!Array.isArray(value.counts) || value.counts.length !== texts.length ||
+      value.counts.some((count: unknown) =>
+        typeof count !== "number" || !Number.isSafeInteger(count) || count < 1)) {
+      throw new EmbeddingError("invalid_response", true);
+    }
+    return { counts: value.counts as number[], vectors: this.vectors(value, texts.length) };
+  }
+
+  private vectors(value: Record<string, unknown>, expected: number): number[][] {
+    if (!Array.isArray(value.vectors) || value.vectors.length !== expected) {
       throw new EmbeddingError("invalid_response", true);
     }
     for (const vector of value.vectors) validateEmbeddingVector(vector, this.descriptor.dimensions);

@@ -132,7 +132,10 @@ it("indexes and assembles zero-lexical semantic evidence through the actual kern
         return new Response(JSON.stringify({
           descriptor: EMBEDDINGGEMMA_2,
           ...(url.endsWith("/tokens") ? { counts: input.texts.map(() => 10) }
-            : { vectors: input.texts.map(() => [1, ...Array(767).fill(0)]) }),
+            : {
+                counts: input.texts.map(() => 10),
+                vectors: input.texts.map(() => [1, ...Array(767).fill(0)]),
+              }),
         }));
       },
     },
@@ -161,6 +164,7 @@ it("indexes and assembles zero-lexical semantic evidence through the actual kern
   assert.equal(result.snapshot.retrieval_trace[0].mode, "hybrid");
   assert.equal(result.snapshot.retrieval_trace[0].routes[0].lexical_rank, undefined);
   assert.ok(modes.includes("document") && modes.includes("query"));
+  assert.equal(modes.filter((mode) => mode === "query").length, 1);
 });
 
 for (const corrupt of [false, true]) {

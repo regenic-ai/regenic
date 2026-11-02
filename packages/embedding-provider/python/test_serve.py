@@ -12,6 +12,9 @@ class FakeEncoder:
     def embed(self, texts, mode):
         return [[1.0] + [0.0] * 767 for text in texts]
 
+    def embed_with_counts(self, texts, mode):
+        return self.count(texts, mode), self.embed(texts, mode)
+
 
 class ProtocolTests(unittest.TestCase):
     def test_health_is_descriptor_only_and_rejects_browser_origins(self):
@@ -43,16 +46,16 @@ class ProtocolTests(unittest.TestCase):
         order = []
 
         class Encoder(FakeEncoder):
-            def embed(self, texts, mode):
+            def embed_with_counts(self, texts, mode):
                 if texts == ["first"]:
                     started.set()
                     if not release.wait(5):
                         raise RuntimeError("test_timeout")
                 order.append(texts[0])
-                return super().embed(texts, mode)
+                return super().embed_with_counts(texts, mode)
 
         encoder = PriorityEncoder(Encoder(), max_pending=2)
-        threads = [threading.Thread(target=encoder.embed, args=(texts, mode)) for texts, mode in (
+        threads = [threading.Thread(target=encoder.embed_with_counts, args=(texts, mode)) for texts, mode in (
             (["first"], "document"), (["background"], "document"), (["interactive"], "query"),
         )]
         threads[0].start()
@@ -63,7 +66,7 @@ class ProtocolTests(unittest.TestCase):
             with encoder.condition:
                 self.assertTrue(encoder.condition.wait_for(lambda: encoder.pending == 2, timeout=5))
             with self.assertRaises(InputError) as rejected:
-                encoder.embed(["excess"], "query")
+                encoder.embed_with_counts(["excess"], "query")
             self.assertEqual(rejected.exception.status, 429)
         finally:
             release.set()
@@ -119,6 +122,8 @@ class ProtocolTests(unittest.TestCase):
                 value = json.loads(response.read())
                 self.assertEqual(value["descriptor"], DESCRIPTOR)
                 self.assertEqual(len(value[expected]), 1)
+                if path == "/embed":
+                    self.assertEqual(value["counts"], [14])
                 self.assertNotIn("synthetic", json.dumps(value))
                 connection.close()
             connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)

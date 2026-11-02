@@ -31,7 +31,9 @@ it("runs local HTTP indexing/status/retry commands with durable progress across 
     } else {
       embeddings++;
       response.end(JSON.stringify({
-        descriptor: input.descriptor, vectors: input.texts.map(() => [1, ...Array(767).fill(0)]),
+        descriptor: input.descriptor,
+        counts: input.texts.map((text) => Array.from(text).length + 5),
+        vectors: input.texts.map(() => [1, ...Array(767).fill(0)]),
       }));
     }
   });

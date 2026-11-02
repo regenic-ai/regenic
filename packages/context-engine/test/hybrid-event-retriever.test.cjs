@@ -98,6 +98,52 @@ it("admits semantic zero-lexical evidence, deduplicates and pins replayable retr
   assert.equal(f.calls, 1);
 });
 
+it("uses one counted embedding call when the provider supports it", async () => {
+  let combined = 0;
+  const retriever = new HybridEventRetriever(new DeterministicEventRetriever(), {
+    descriptor,
+    async countTokens() { throw new Error("separate token call"); },
+    async embed() { throw new Error("separate embed call"); },
+    async embedWithTokenCounts() {
+      combined++;
+      return { counts: [12], vectors: [[1, 0]] };
+    },
+  }, {
+    async matchAuthorized(input) {
+      return { generation: generation.id, covered: input.authorized, matched: [] };
+    },
+  }, generation);
+  await retriever.retrieve(fixture().plan);
+  assert.equal(combined, 1);
+
+  for (const batch of [
+    { counts: [], vectors: [[1, 0]] },
+    { counts: [0], vectors: [[1, 0]] },
+    { counts: [12], vectors: [] },
+  ]) {
+    const invalid = new HybridEventRetriever(new DeterministicEventRetriever(), {
+      descriptor,
+      async countTokens() { throw new Error("separate token call"); },
+      async embed() { throw new Error("separate embed call"); },
+      async embedWithTokenCounts() { return batch; },
+    }, {
+      async matchAuthorized() { throw new Error("invalid batch reached index"); },
+    }, generation);
+    const result = await invalid.retrieve(fixture().plan);
+    assert.ok(result.degradation_flags.includes("embedding_unavailable"));
+  }
+  const oversized = new HybridEventRetriever(new DeterministicEventRetriever(), {
+    descriptor,
+    async countTokens() { throw new Error("separate token call"); },
+    async embed() { throw new Error("separate embed call"); },
+    async embedWithTokenCounts() { return { counts: [129], vectors: [[1, 0]] }; },
+  }, {
+    async matchAuthorized() { throw new Error("oversized batch reached index"); },
+  }, generation);
+  await assert.rejects(oversized.retrieve(fixture().plan),
+    (error) => error instanceof EmbeddingError && error.code === "input_too_large");
+});
+
 it("reranks authorized threads, rewards complementary evidence and suppresses repeated text", async () => {
   const sources = [
     event("alpha-member", "Alice was selected for the launch.", "alpha"),

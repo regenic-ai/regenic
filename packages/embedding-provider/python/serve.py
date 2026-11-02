@@ -379,6 +379,9 @@ class TextEncoder:
         return [len(tokens) for tokens in encoded["input_ids"]]
 
     def embed(self, texts, mode):
+        return self.embed_with_counts(texts, mode)[1]
+
+    def embed_with_counts(self, texts, mode):
         import numpy as np
 
         counts = self.count(texts, mode)
@@ -402,7 +405,7 @@ class TextEncoder:
             raise RuntimeError("invalid_embedding_output")
         # BF16 normalization can drift; normalize again after the float32 cast.
         vectors /= norms
-        return vectors.tolist()
+        return counts, vectors.tolist()
 
     def image(self, image, _mode=None):
         return self.visual({"text": "<|image|>", "image": [image]})
@@ -483,6 +486,9 @@ class PriorityEncoder:
     def embed(self, texts, mode):
         return self.call("embed", texts, mode)
 
+    def embed_with_counts(self, texts, mode):
+        return self.call("embed_with_counts", texts, mode)
+
     def attachment(self, value):
         return process_attachment(self, value)
 
@@ -561,9 +567,13 @@ def handler_for(encoder):
                     self.reply(200, {"descriptor": DESCRIPTOR, **encoder.attachment(value)})
                     return
                 texts, mode = validate_request(value)
-                field = "counts" if self.path == "/tokens" else "vectors"
-                result = encoder.count(texts, mode) if field == "counts" else encoder.embed(texts, mode)
-                self.reply(200, {"descriptor": DESCRIPTOR, field: result})
+                if self.path == "/tokens":
+                    self.reply(200, {"descriptor": DESCRIPTOR, "counts": encoder.count(texts, mode)})
+                else:
+                    counts, vectors = encoder.embed_with_counts(texts, mode)
+                    self.reply(200, {
+                        "descriptor": DESCRIPTOR, "counts": counts, "vectors": vectors,
+                    })
             except InputError as error:
                 logging.warning("embedding_request_rejected status=%d", error.status)
                 self.reply(error.status, {"error": "invalid_embedding_request"})
