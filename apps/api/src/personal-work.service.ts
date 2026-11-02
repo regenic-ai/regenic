@@ -50,7 +50,6 @@ import { PersonalRuntimeService } from "./personal-runtime.service";
 import { backgroundSyncReleased } from "./personal-interactive-gate";
 import { PersonalWorkChannel } from "./personal-work-channel";
 import { PersonalWorkDispatch } from "./personal-work-dispatch";
-import { PersonalWorkRelated } from "./personal-work-related";
 import { workInboxFaces, type WorkInboxFace } from "./personal-work-faces";
 import { PersonalWorkFlush } from "./personal-work-flush";
 import { normalizeRecipe, type RecipeInput } from "./personal-work-recipe";
@@ -62,6 +61,7 @@ import {
 import { PersonalWorkWait } from "./personal-work-wait";
 import { PersonalWorkSupervise } from "./personal-work-supervise";
 import { PersonalEventsService } from "./personal-events.service";
+import { PersonalAgentContextAccessService } from "./personal-agent-context-access.service";
 import {
   isSearchAnswerRecipeId,
   isSystemRecipeId,
@@ -141,6 +141,8 @@ export class PersonalWorkService implements OnModuleDestroy {
     connectors: PersonalConnectorService,
     @Inject(PersonalEventsService)
     private readonly events: PersonalEventsService,
+    @Inject(PersonalAgentContextAccessService)
+    private readonly contextAccess: PersonalAgentContextAccessService,
   ) {
     this.channel = new PersonalWorkChannel(runtime, drivers);
     this.supervise = new PersonalWorkSupervise(runtime, this.channel, () => {
@@ -153,7 +155,7 @@ export class PersonalWorkService implements OnModuleDestroy {
       this.channel,
       this.supervise,
       this.waits,
-      new PersonalWorkRelated(runtime, drivers).lookup,
+      contextAccess,
     );
     this.flush = new PersonalWorkFlush(runtime, this.channel);
   }
@@ -228,6 +230,11 @@ export class PersonalWorkService implements OnModuleDestroy {
       this.tickSupervise(),
       this.tickFlush(),
     ]);
+  }
+
+  /** What the agent looked up in chats while working this run. */
+  async workRunReads(runId: string) {
+    return { run_id: runId, reads: await this.contextAccess.reads(runId) };
   }
 
   async getPersonalDispatchPolicy(): Promise<PersonalDispatchPolicy> {

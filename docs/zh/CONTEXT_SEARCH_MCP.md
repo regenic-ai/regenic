@@ -92,6 +92,30 @@ pnpm --filter @regenic/local-cli... build
 
 如果底层对话已经变化，Regenic 会拒绝过期的 `read_epoch`。此时应重新调用 `search_conversations`，不能把新旧证据混合使用。
 
+## 执行器运行端点
+
+自动化规则跑任务时不需要 stdio 服务。规则打开上下文、且本地执行器能挂 MCP 时，Regenic 在个人 API 上提供 streamable HTTP 端点：
+
+```text
+POST http://127.0.0.1:4370/v1/agent/context/mcp
+Authorization: Bearer <凭据>
+```
+
+- **运行令牌**（`rgc1.…`）：只对一次运行有效。Cursor 等在创建会话时接受 MCP 配置的执行器会自动以 `regenic-context` 挂上。
+- **Agent 密钥**（`rgk1.…`）：给从配置文件加载 MCP 的 DSH 用。Regenic 在 `$DSH_HOME/cordis.patch.yml`（默认 `~/.dsh`）里写入 `regenic-context`（位于 `# BEGIN regenic-context` / `# END regenic-context` 标记之间）。用这个密钥时，每次调用都要带 `AGENTS.md` 里给出的 `run_id`。文件无法安全修改时 Regenic 不动它，改为推送会话记录。
+
+两种凭据都只读，只在运行处于 `running` 或 `waiting_human` 且不超过 24 小时时有效；带 `Origin` 头的请求一律拒绝；需要开启个人 API。
+
+工具：
+
+| 工具 | 用途 |
+|---|---|
+| `read_task_conversation` | 读取本次任务所在会话、任务消息前后的记录（`before`、`after`，可选 `event_id`）。先调这个。 |
+| `read_conversation_window` | 用返回的边界继续往前、往后或在缺口之间读，同上文。 |
+| `search_conversations` | 检索全部会话。命中可能是别人的事，使用前先确认。 |
+
+每次调用都记在本次运行上，桌面端会话里显示为“Agent 查阅了 N 次会话记录”。
+
 ## Agent 使用原则
 
 1. 搜索命中只是上下文锚点，不是完整答案。
@@ -101,7 +125,3 @@ pnpm --filter @regenic/local-cli... build
 5. 面向客户输出当前状态前，仍须查询已授权业务系统。
 
 该 MCP 只提供只读上下文工具，不会授予新权限、执行业务查询、批准草稿或发送消息。
-
-## 自动化规则
-
-自动化规则打开 **带上相关上下文** 后，内核会在 Agent 开跑前先检索一次：用当前消息、当前消息加前几条、其中的订单号/邮箱/链接/工单号分别查询并融合排序，跳过 Agent 已拿到的历史消息，把最多 3 个命中会话作为 `<related>` 段交给 Agent（本地工作区 Agent 写到 `related.md`）。需要 Agent 自己继续检索或从这些锚点往前后续读时，再配置本 MCP。

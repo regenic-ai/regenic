@@ -3,11 +3,11 @@ import {
   advanceRecipePull,
   WORK_FILE_FETCH_LIMIT,
   composeWorkConversation,
-  workRelatedSeed,
   conversationId,
   deliveryErrorMessage,
   failedWorkStart,
   formatWorkEvidence,
+  formatWorkRunHistory,
   isActiveWorkStatus,
   isPullDue,
   openOrUpdateWorkItem,
@@ -35,12 +35,12 @@ import {
   type TaskExecutor,
   type WorkItem,
   type WorkRun,
+  type WorkContextAccess,
 } from "@regenic/domain";
 import { resolveInboxBodies, type InboxBody } from "./inbox-body";
 import { PersonalConnectorError } from "./personal-errors";
 import { PersonalWorkChannel } from "./personal-work-channel";
 import { PersonalWorkWait } from "./personal-work-wait";
-import type { WorkRelatedLookup } from "./personal-work-related";
 import { PersonalWorkSupervise } from "./personal-work-supervise";
 import { PersonalRuntimeService } from "./personal-runtime.service";
 import { shouldDeferWorkForThread } from "./personal-sync-phase";
@@ -56,7 +56,9 @@ export class PersonalWorkDispatch {
     private readonly channel: PersonalWorkChannel,
     private readonly supervise: PersonalWorkSupervise,
     private readonly waits: PersonalWorkWait,
-    private readonly related?: WorkRelatedLookup,
+    private readonly contextAccess?: {
+      accessFor(runId: string, options?: { agent_key?: boolean }): WorkContextAccess;
+    },
   ) {}
 
   async reconcileInbox(): Promise<void> {
@@ -487,34 +489,26 @@ export class PersonalWorkDispatch {
           anchorEventId: item.head_event_id,
         })
       : { lines: [], overflow: false };
-    const headText =
-      evidenceText || !item.head_event_id
-        ? undefined
-        : await this.channel.evidenceText(item.thread_id, item.head_event_id);
-    const relatedText =
-      includeContext && this.related
-        ? await this.related({
-            thread_id: item.thread_id,
-            ...workRelatedSeed({
-              trigger_text: evidenceText,
-              head_text: headText,
-              current_event_id: item.head_event_id,
-              thread_lines: thread.lines,
-            }),
-          }).catch(() => undefined)
-        : undefined;
+    const runId = `run-${randomUUID()}`;
+    const history = formatWorkRunHistory(
+      await host.get("authority").listWorkRuns(item.org_id, item.id),
+      runId,
+    );
     const composed = composeWorkConversation({
       include_context: includeContext,
+      history,
       trigger_text: evidenceText,
       current_event_id: item.head_event_id,
-      head_text: headText,
+      head_text:
+        evidenceText || !item.head_event_id
+          ? undefined
+          : await this.channel.evidenceText(item.thread_id, item.head_event_id),
       thread_lines: thread.lines,
       thread_overflow: thread.overflow,
-      related_text: relatedText,
     });
     const authority = host.get("authority");
     const run: WorkRun & { status: "running"; start_state: "pending" } = {
-      id: `run-${randomUUID()}`,
+      id: runId,
       org_id: item.org_id,
       work_item_id: item.id,
       recipe_id: recipe.id,
@@ -555,7 +549,14 @@ export class PersonalWorkDispatch {
                 current_line: composed.current_line,
                 background: composed.background,
                 omitted: composed.omitted,
-                related: composed.related,
+                history: composed.history,
+                task: {
+                  thread_id: item.thread_id,
+                  ...(item.head_event_id ? { event_id: item.head_event_id } : {}),
+                },
+                ...(workspace && this.contextAccess
+                  ? { access: this.contextAccess.accessFor(run.id, { agent_key: true }) }
+                  : {}),
               }
             : undefined,
         },

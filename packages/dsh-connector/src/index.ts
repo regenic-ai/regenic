@@ -13,5 +13,6 @@ export * from "./plugin";
 export * from "./dsh-session-driver";
 export * from "./dsh-sync-source";
 export * from "./dsh-executor";
+export * from "./dsh-context-patch";
 export * from "./dsh-url";
 export * from "./probe";

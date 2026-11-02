@@ -34,6 +34,8 @@ export interface CursorLocalCreateInput {
   cwd: string;
   text: string;
   model?: string;
+  /** HTTP MCP servers for this agent; resupplied when it is resumed. */
+  mcpServers?: Record<string, { url: string; headers?: Record<string, string> }>;
 }
 
 export interface CursorLocalSendInput {
@@ -60,6 +62,7 @@ let injected: CursorLocalClient | undefined;
 let sdkModuleOverride: SdkModule | undefined;
 const liveAgents = new Map<string, { agent: Record<string, unknown>; cwd: string; createdAt: string }>();
 const liveRuns = new Map<string, LiveRun>();
+const agentMcpServers = new Map<string, NonNullable<CursorLocalCreateInput["mcpServers"]>>();
 const agentLocks = new Map<string, Promise<void>>();
 
 export function setCursorLocalClientForTests(client?: CursorLocalClient): void {
@@ -73,6 +76,7 @@ export function setCursorSdkModuleForTests(sdk?: SdkModule): void {
 export function resetCursorLocalClientStateForTests(): void {
   liveAgents.clear();
   liveRuns.clear();
+  agentMcpServers.clear();
   agentLocks.clear();
 }
 
@@ -91,10 +95,14 @@ const sdkCursorLocalClient: CursorLocalClient = {
         apiKey: input.apiKey,
         cwd: input.cwd,
         model: input.model,
+        mcpServers: input.mcpServers,
       }),
       input.cwd,
     );
     const agentId = agentIdOf(agent);
+    if (input.mcpServers && Object.keys(input.mcpServers).length) {
+      agentMcpServers.set(agentId, input.mcpServers);
+    }
     const run = await withCursorAgentLock(agentId, () =>
       sendPrompt(agent, input.text, input.model, agentId, {
         apiKey: input.apiKey,
@@ -200,6 +208,7 @@ async function openLocalAgent(input: {
   apiKey: string;
   cwd: string;
   model?: string;
+  mcpServers?: CursorLocalCreateInput["mcpServers"];
 }): Promise<Record<string, unknown>> {
   const { Agent } = await loadSdk();
   return asObject(
@@ -207,8 +216,21 @@ async function openLocalAgent(input: {
       apiKey: input.apiKey,
       model: cursorModelSelection(input.model),
       local: { cwd: input.cwd },
+      ...sdkMcpServers(input.mcpServers),
     }),
   );
+}
+
+function sdkMcpServers(servers: CursorLocalCreateInput["mcpServers"]) {
+  if (!servers || !Object.keys(servers).length) return {};
+  return {
+    mcpServers: Object.fromEntries(
+      Object.entries(servers).map(([name, server]) => [
+        name,
+        { type: "http", url: server.url, ...(server.headers ? { headers: server.headers } : {}) },
+      ]),
+    ),
+  };
 }
 
 async function resumeLocalAgent(
@@ -223,6 +245,7 @@ async function resumeLocalAgent(
       apiKey,
       model: cursorModelSelection(model),
       local: { cwd },
+      ...sdkMcpServers(agentMcpServers.get(agentId)),
     }),
   );
 }

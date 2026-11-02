@@ -90,6 +90,7 @@ export const cursorAgentDriver: ChannelDriver = {
       await_reply: true,
       list_title: "prompt",
       create_with_task: true,
+      create_mcp: true,
       hold_while_working: true,
     };
   },
@@ -111,6 +112,7 @@ export const cursorAgentDriver: ChannelDriver = {
           || process.cwd(),
         model: cursorModel(installation.config),
         text,
+        ...(options?.mcp_servers ? { mcpServers: options.mcp_servers } : {}),
       });
       return { source: CURSOR_SOURCE, target: created.agentId };
     } catch (error) {

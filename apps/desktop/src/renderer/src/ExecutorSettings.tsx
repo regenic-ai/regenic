@@ -143,6 +143,11 @@ function ExecutorRow({
           {[
             installationStatusLabel(installation.status),
             executorDetail(installation.detail, t),
+            installation.kind === "local_connector"
+              ? t(installation.context_self_serve
+                ? "executor.contextSelfServe"
+                : "executor.contextPushOnly")
+              : null,
           ]
             .filter(Boolean)
             .join(" · ")}

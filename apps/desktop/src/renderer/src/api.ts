@@ -1,4 +1,5 @@
 import type {
+  AgentContextRead,
   ConversationPrefView,
   CreatedConversation,
   CustomerServiceTaskView,
@@ -1261,6 +1262,14 @@ export async function runWorkItem(id: string): Promise<void> {
     const body = (await response.json()) as { error?: { message?: string } };
     throw new Error(body.error?.message ?? `work run ${response.status}`);
   }
+}
+
+export async function fetchWorkRunReads(runId: string): Promise<AgentContextRead[]> {
+  const response = await fetch(`${origin()}/v1/me/work-runs/${encodeURIComponent(runId)}/reads`);
+  if (!response.ok) {
+    throw new Error(`work run reads ${response.status}`);
+  }
+  return ((await response.json()) as { reads?: AgentContextRead[] }).reads ?? [];
 }
 
 export async function dismissWorkItem(id: string): Promise<void> {

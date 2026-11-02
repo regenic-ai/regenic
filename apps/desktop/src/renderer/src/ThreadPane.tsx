@@ -21,6 +21,7 @@ import { nextMessageSelection, selectedInOrder } from "./message-selection";
 import type { CreateTarget } from "./inbox-drafts";
 import { WorkContextStrip } from "./WorkContextStrip";
 import { WorkResultCard } from "./WorkResultCard";
+import { AgentReadsCard } from "./AgentReadsCard";
 import { ThreadContextPanel } from "./ThreadContextPanel";
 import { PromptHandoffDock } from "./PromptHandoffDock";
 import { FollowUpNudge, ReplyProposalPanel } from "./ReplyProposalPanel";
@@ -641,6 +642,9 @@ export const ThreadPane = memo(function ThreadPane({
             ) : null}
           </div>
           {workHint ? <p className="work-hint">{workHint}</p> : null}
+          {thread.work?.run_id ? (
+            <AgentReadsCard runId={thread.work.run_id} revision={thread.work.updated_at} />
+          ) : null}
           {/* When a prompt is up, fold the result into the dock — avoid two dense cards. */}
           {!conversationClosed && !awaitingPrompt ? workResult : null}
           <ThreadContextPanel

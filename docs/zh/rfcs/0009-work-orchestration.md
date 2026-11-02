@@ -185,7 +185,16 @@ Pull 协议：独立于连接器 pull。`next_run_at` 持久化，休眠醒来�
 
 没有 `can_write_back` 不得 egress（Pull 默认开）。蒸馏或看过 Digest ≠ 发送权。
 
-`include_context` 为真或 `trigger.kind=pull` 时，开跑只取来源会话最近一页可见历史写入 evidence（条数和字数封顶，多出来的标 omitted），禁止把几千上万条整段拉进内核或执行器。同时检索全部会话（与桌面搜索、Context Search MCP 同一索引和授权），最多三路查询按排名融合：触发/头消息、它加上前 3 条消息、其中的标识（订单号、邮箱、电话、链接、工单号）。已在历史页里的消息按事件 ID 去重，本会话更早的部分保留并标注，最多 3 个会话、约 6000 字符，作为 `<related>` 段放进 evidence（本地工作区执行器写到 `related.md`）；检索失败或超时（5 秒）不阻塞开跑。Push 默认只带触发/头消息。这是内核证据策略，不是 `executor_config` 的 key。
+`include_context` 为真或 `trigger.kind=pull` 时，开跑只取来源会话最近一页可见历史写入 evidence（条数和字数封顶，多出来的标 omitted），禁止把几千上万条整段拉进内核或执行器。Push 默认只带触发/头消息。这是内核证据策略，不是 `executor_config` 的 key。
+
+每次开跑还会带上同一 WorkItem 的**以往处理结果**（最近三次已结束的运行：时间、状态、执行器、结果摘要）。只能推送的执行器在 `<earlier_runs>` 里内联收到；本地工作区写成 `history.md`。即使 `include_context` 关闭也会带，重试时能知道上次哪里失败。
+
+上下文打开时，本地执行器有两种模式：
+
+- **自行查阅（模式一）**：执行器能挂 MCP（驱动能力 `create_mcp`，或本机运行的 DSH）。内核为本次运行签发只读凭据，访问 `POST /v1/agent/context/mcp`，并在 `AGENTS.md` 写入任务定位（`thread_id`、`event_id`）和工具顺序：先 `read_task_conversation`，再 `read_conversation_window`，必要时 `search_conversations`。不再推送会话记录，Agent 按任务需要自己读，必要时跨会话检索。
+- **推送（模式二）**：其余情况把上面那一页最近记录写成 `conversation.md`（或内联），被截断时提示有省略。
+
+`TaskExecutor.contextSelfServe(ctx)` 说明适用哪种模式，桌面端在执行器卡片上显示。模式一的每次调用都按运行记录（`GET /v1/me/work-runs/:id/reads`），用户能看到 Agent 查了什么。内核不把任务改写成检索词，也不推送跨会话命中；判断相关性是 Agent 的事。
 
 `max_concurrent` 限制**自动开跑**，不限制采集。范围内工单仍入库并开 WorkItem；自动 `start` 只统计该规则上 `running` + `waiting_human`。省略表示不限制。连接器不得另做处理窗口。手动「立即处理」不受此帽。
 

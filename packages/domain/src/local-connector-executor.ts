@@ -45,5 +45,9 @@ export function createLocalConnectorExecutor(input: {
     status(run, ctx) {
       return input.plugin.status(run, ctx);
     },
+
+    async contextSelfServe(ctx) {
+      return (await input.plugin.contextSelfServe?.(ctx)) === true;
+    },
   };
 }

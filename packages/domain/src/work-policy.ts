@@ -305,6 +305,7 @@ export function workFaceOf(
     recipe_id: item.recipe_id,
     executor_type: run?.executor_type ?? recipe?.executor_type,
     ...(run?.start_state ? { start_state: run.start_state } : {}),
+    ...(run ? { run_id: run.id } : {}),
     agent_thread_id: run?.agent_thread_id,
     head_event_id: item.head_event_id,
     can_write_back: recipe ? recipeWantsWriteBack(recipe) : undefined,

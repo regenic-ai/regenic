@@ -1,10 +1,5 @@
 import { executorLocaleTables } from "./executor-copy";
-import {
-  composeWorkspaceTaskEvidence,
-  formatWorkEvidence,
-  handleFromWait,
-  stageConversationWorkspace,
-} from "./executor";
+import { handleFromWait, prepareLocalAgentStart } from "./executor";
 import type {
   ExecutorContext,
   ExecutorResumeInput,
@@ -49,6 +44,10 @@ export function createSessionTaskExecutor(meta?: {
       };
     },
 
+    async contextSelfServe(ctx) {
+      return Boolean(ctx.writeWorkFiles) && (await ctx.sysoutSupportsMcp?.()) === true;
+    },
+
     locales() {
       return executorLocaleTables;
     },
@@ -76,28 +75,16 @@ export function createSessionTaskExecutor(meta?: {
     },
 
     async start(input: ExecutorStartInput, ctx: ExecutorContext) {
-      const staged = await stageConversationWorkspace(
-        ctx,
-        input.conversation,
-        input.work_item.id,
+      const prepared = await prepareLocalAgentStart(input, ctx);
+      const thread = await ctx.spawnSysout(
+        Object.keys(prepared.spawn).length ? prepared.spawn : undefined,
       );
-      const thread = await ctx.spawnSysout(staged?.cwd ? { cwd: staged.cwd } : undefined);
       const sysoutId = `${thread.source}:${thread.target}`;
       const prompt =
         typeof input.recipe.executor_config.prompt === "string"
           ? input.recipe.executor_config.prompt
           : "";
-      const evidence_text = staged?.cwd
-        ? formatWorkEvidence({
-            thread_id: input.work_item.thread_id,
-            record_class: input.work_item.record_class,
-            thread_facet: input.work_item.thread_facet,
-            source: input.work_item.thread_id.split(":")[0] ?? "",
-            text: composeWorkspaceTaskEvidence({
-              current_line: input.conversation?.current_line,
-            }),
-          })
-        : input.evidence_text;
+      const evidence_text = prepared.evidence_text;
       await ctx.writeStdin(
         thread,
         composeSessionStdin({

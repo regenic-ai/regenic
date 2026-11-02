@@ -16,6 +16,8 @@ import { PersonalConnectorService } from "./personal-connector.service";
 import { PersonalApiGuard } from "./personal-api.guard";
 import { PersonalPairingService } from "./personal-pairing.service";
 import { PersonalContextController } from "./personal-context.controller";
+import { PersonalAgentContextController } from "./personal-agent-context.controller";
+import { PersonalAgentContextAccessService } from "./personal-agent-context-access.service";
 import { PersonalContextService } from "./personal-context.service";
 import { PersonalSearchAnswerService } from "./personal-search-answer.service";
 import { PersonalConversationLabelsService } from "./personal-conversation-labels.service";
@@ -43,6 +45,7 @@ import { PersonalCustomerService } from "./personal-customer-service";
     DshApiController,
     PersonalController,
     PersonalContextController,
+    PersonalAgentContextController,
   ],
   providers: [
     DshApiService,
@@ -51,6 +54,7 @@ import { PersonalCustomerService } from "./personal-customer-service";
     KernelRuntimeService,
     PersonalRuntimeService,
     PersonalContextService,
+    PersonalAgentContextAccessService,
     PersonalSearchAnswerService,
     PersonalConversationLabelsService,
     PersonalConversationContextService,

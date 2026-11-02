@@ -99,6 +99,30 @@ For a `before` or `after` continuation, pass that boundary and its direction. Fo
 
 If the underlying conversation changed, Regenic rejects the stale `read_epoch`; run `search_conversations` again instead of combining old and new evidence.
 
+## Agent run endpoint
+
+Work runs do not need the stdio server. When a recipe includes context and the local executor can mount MCP, Regenic exposes a streamable HTTP endpoint on the Personal API:
+
+```text
+POST http://127.0.0.1:4370/v1/agent/context/mcp
+Authorization: Bearer <credential>
+```
+
+- **Run token** (`rgc1.…`): scoped to one run. Cursor and other executors that accept MCP servers at session creation get it automatically as the `regenic-context` server.
+- **Agent key** (`rgk1.…`): for DSH, which loads MCP servers from config. Regenic adds a `regenic-context` entry (between `# BEGIN regenic-context` / `# END regenic-context` markers) to `$DSH_HOME/cordis.patch.yml` (default `~/.dsh`). With this key every tool call must pass the `run_id` written in `AGENTS.md`. Regenic leaves files it cannot edit safely untouched and falls back to pushing the chat.
+
+Both credentials are read-only and work only while the run is `running` or `waiting_human` and less than 24 hours old. Requests with an `Origin` header are rejected. The endpoint needs the Personal API to be enabled.
+
+Tools:
+
+| Tool | Purpose |
+|---|---|
+| `read_task_conversation` | Read the run's own conversation around the task message (`before`, `after`, optional `event_id`). Call this first. |
+| `read_conversation_window` | Continue reading before, after or between returned boundaries, as above. |
+| `search_conversations` | Search all conversations. Hits may be about someone else; confirm before relying on them. |
+
+Each call is recorded on the run and shown in the desktop thread as "Agent looked up chat history".
+
 ## Agent guidance
 
 1. Treat search hits as anchors, not as complete answers.
@@ -108,7 +132,3 @@ If the underlying conversation changed, Regenic rejects the stale `read_epoch`; 
 5. Query the authorized business system for current status before making customer-facing claims.
 
 The server exposes read-only context tools. It does not grant new authorization, execute business queries, approve drafts, or send messages.
-
-## Automation rules
-
-Automation rules with **Include related context** already run one search before the agent starts. The kernel queries with the current message, the message plus the few before it, and the identifiers in them (order numbers, emails, links, ticket keys), fuses the results, skips messages the agent already gets as history, and passes up to 3 matched conversations as a `<related>` section (`related.md` for local-workspace agents). Configure this MCP when the agent should search again or read further from those anchors.

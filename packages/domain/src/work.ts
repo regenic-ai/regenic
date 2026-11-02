@@ -191,6 +191,7 @@ export interface WorkFace {
   start_state?: WorkRun["start_state"];
   recipe_id?: string;
   executor_type?: string;
+  run_id?: string;
   agent_thread_id?: string;
   head_event_id?: string;
   can_write_back?: boolean;

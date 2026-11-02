@@ -57,14 +57,7 @@ export class PersonalWorkChannel {
       env: process.env,
       spawnSysout: async (options) => {
         const host = this.runtime.requireHost();
-        const installations = await host
-          .get("authority")
-          .listInstallations(this.runtime.orgId());
-        const catalog = executor.catalog();
-        const pin = catalog.installation_id?.trim();
-        const found = pin
-          ? pinnedCreatable(this.drivers, installations, pin)
-          : this.drivers.findCreatable(installations, catalog.source);
+        const found = await this.creatableFor(executor);
         if (!found) {
           throw new PersonalConnectorError(
             "unsupported_channel",
@@ -72,12 +65,24 @@ export class PersonalWorkChannel {
             501,
           );
         }
+        const mcp = options?.mcp_servers &&
+          found.driver.capabilities(found.installation).create_mcp === true
+          ? options.mcp_servers
+          : undefined;
+        const createOptions = {
+          ...(options?.cwd ? { cwd: options.cwd } : {}),
+          ...(mcp ? { mcp_servers: mcp } : {}),
+        };
         return requireCreateThread(found.driver)(
           found.installation,
           asConnectorHost(host),
           process.env,
-          options?.cwd ? { cwd: options.cwd } : undefined,
+          Object.keys(createOptions).length ? createOptions : undefined,
         );
+      },
+      sysoutSupportsMcp: async () => {
+        const found = await this.creatableFor(executor);
+        return found?.driver.capabilities(found.installation).create_mcp === true;
       },
       ...(this.runtime.getOptions()?.blobRoot
         ? {
@@ -99,6 +104,17 @@ export class PersonalWorkChannel {
       },
       readTranscript: async (sysoutId) => this.readTranscript(sysoutId),
     };
+  }
+
+  private async creatableFor(executor: TaskExecutor) {
+    const installations = await this.runtime.requireHost()
+      .get("authority")
+      .listInstallations(this.runtime.orgId());
+    const catalog = executor.catalog();
+    const pin = catalog.installation_id?.trim();
+    return pin
+      ? pinnedCreatable(this.drivers, installations, pin)
+      : this.drivers.findCreatable(installations, catalog.source);
   }
 
   async writeWorkFiles(
