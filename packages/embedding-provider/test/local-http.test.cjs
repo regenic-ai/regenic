@@ -46,6 +46,26 @@ describe("local embedding provider", () => {
       (error) => error.code === "invalid_response");
   });
 
+  it("returns validated token counts and vectors from one embed request", async () => {
+    let calls = 0;
+    const subject = provider(async (url) => {
+      calls++;
+      assert.ok(url.endsWith("/embed"));
+      return response({ counts: [7], vectors: [vector()] });
+    });
+    assert.deepEqual(await subject.embedWithTokenCounts(["question"], "query"), {
+      counts: [7], vectors: [vector()],
+    });
+    assert.equal(calls, 1);
+    for (const counts of [undefined, [], [0], [1.5], [7, 8]]) {
+      await assert.rejects(
+        provider(async () => response({ counts, vectors: [vector()] }))
+          .embedWithTokenCounts(["question"], "query"),
+        (error) => error.code === "invalid_response",
+      );
+    }
+  });
+
   it("sends bounded binary attachments only to loopback and validates all extracted material", async () => {
     let called = 0;
     const subject = provider(async (url, init) => {

@@ -547,7 +547,10 @@ describe("personal context API", () => {
         response.end(JSON.stringify({ error: "private raw error never exposed" }));
       } else response.end(JSON.stringify({ descriptor: EMBEDDINGGEMMA_2,
         ...(request.url === "/tokens" ? { counts: input.texts.map(() => 10) }
-          : { vectors: input.texts.map(() => [1, ...Array(767).fill(0)]) }) }));
+          : {
+              counts: input.texts.map(() => 10),
+              vectors: input.texts.map(() => [1, ...Array(767).fill(0)]),
+            }) }));
     });
     await listenServer(server);
     servers.push(server);
@@ -587,7 +590,10 @@ describe("personal context API", () => {
       response.end(JSON.stringify({
         descriptor: EMBEDDINGGEMMA_2,
         ...(request.url === "/tokens" ? { counts: input.texts.map(() => 10) }
-          : { vectors: input.texts.map(() => [1, ...Array(767).fill(0)]) }),
+          : {
+              counts: input.texts.map(() => 10),
+              vectors: input.texts.map(() => [1, ...Array(767).fill(0)]),
+            }),
       }));
     });
     await listenServer(server);

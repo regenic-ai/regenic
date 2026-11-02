@@ -864,6 +864,22 @@ float32 Buffer，避免每个 768 维 chunk 创建数组。向量候选池按证
 重复搜索，但第一次真实模型推理仍取决于本机 CPU/GPU、模型服务排队和冷启动，
 不应把上述即时 provider 的 936.4 ms 当作包含真实 embedding 推理的端到端承诺。
 
+首次查询的 token 计数与 embedding 通过一次 `/embed` 请求完成；响应同时返回
+`counts` 与 `vectors`。本地 provider 在同一响应边界验证数量、正整数 token count、
+向量维度、有限值与 L2 norm；Context Engine 仍根据 generation 的 token 上限拒绝超长查询。
+这把新查询从两次本地 HTTP 往返和两次 tokenizer count 降为各一次，同时保留模型
+`preprocess` 与 tokenizer count 的截断一致性检查。`/tokens` 和独立 `countTokens()`
+继续用于文档切块与健康检查；第三方 provider 未实现可选的 counted-embedding 方法时，
+检索器保持原有 count 后 embed 的兼容路径。两条路径共用相同的 query-vector 缓存、
+错误分类和降级语义。
+
+2026-11-02 在同一 AMD EPYC 7763、BF16 固定模型上，以 20 组不同短查询交替测量：
+旧两请求路径 mean/p50/max 为 217.7/216.8/241.4 ms，新单请求路径为
+218.5/218.2/245.5 ms（mean 0.997 倍，无可测加速）。真实 CPU 推理主导了短查询延迟，
+因此不能把减少一次 HTTP/tokenizer count 宣称为单查询提速；确定收益是每个新查询从
+2 次请求降为 1 次、模型优先队列从 2 次占槽降为 1 次。并发索引压力下的尾延迟收益仍需
+单独压测，不从该单请求基准外推。
+
 参考 Python 服务现在最多接入 32 个处理线程、排队 16 个模型操作，超额 `429/503`。
 推理仍单执行，等待的 query 优先于等待的 document；不能抢占已经运行的推理，
 排队最多等待 30 秒。优先级、队列上限、超时释放、推理失败后释放均有确定性测试。
