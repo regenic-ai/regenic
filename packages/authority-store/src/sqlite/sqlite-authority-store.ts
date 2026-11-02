@@ -132,9 +132,11 @@ import {
   processSyncMetrics,
 } from "@regenic/domain";
 import {
+  CUSTOMER_SERVICE_TASKS_SQL,
   LATEST_SCHEMA_VERSION,
   MIGRATIONS,
   OUTBOUND_REJECTION_MIGRATION_SQL,
+  RECIPE_CLOCK_COLUMN_SQL,
 } from "./migrations";
 import {
   append,
@@ -1666,7 +1668,11 @@ export class SqliteAuthorityStore
         if (migration.version <= lockedVersion) {
           return;
         }
-        this.database.exec(migration.sql);
+        if (migration.version === 54) {
+          this.applyRecipeClockColumns();
+        } else {
+          this.database.exec(migration.sql);
+        }
         if (migration.version === 47) {
           rebuildArtifactPreviews(this.database);
         }
@@ -1753,6 +1759,8 @@ export class SqliteAuthorityStore
         this.database.exec("ALTER TABLE work_runs ADD COLUMN start_state TEXT CHECK (start_state IN ('pending', 'submitted', 'uncertain'))");
       }
       this.database.exec(OUTBOUND_REJECTION_MIGRATION_SQL);
+      this.database.exec(CUSTOMER_SERVICE_TASKS_SQL);
+      this.applyRecipeClockColumns();
       this.database.exec(`
         CREATE TABLE IF NOT EXISTS search_answers (
           id TEXT PRIMARY KEY,
@@ -1783,6 +1791,19 @@ export class SqliteAuthorityStore
   private columnExists(table: string, column: string): boolean {
     const rows = this.database.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
     return rows.some((row) => row.name === column);
+  }
+
+  private applyRecipeClockColumns(): void {
+    const columns = [
+      ["trigger_at_minute", RECIPE_CLOCK_COLUMN_SQL[0]],
+      ["trigger_weekdays", RECIPE_CLOCK_COLUMN_SQL[1]],
+      ["trigger_timezone", RECIPE_CLOCK_COLUMN_SQL[2]],
+    ] as const;
+    for (const [column, sql] of columns) {
+      if (!this.columnExists("recipes", column)) {
+        this.database.exec(sql);
+      }
+    }
   }
 
 }
