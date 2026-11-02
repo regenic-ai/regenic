@@ -721,13 +721,7 @@ export class PersonalWorkService implements OnModuleDestroy {
     if (!recipe) {
       throw new PersonalConnectorError("not_found", "Recipe not found", 404);
     }
-    if (!recipe.enabled) {
-      throw new PersonalConnectorError(
-        "invalid_config",
-        "Turn the rule on before trying it",
-        400,
-      );
-    }
+    // Disabled rules may be tried: one manual run only; auto dispatch still skips them.
     const threadId =
       input?.thread_id?.trim() || recipe.match.thread_id?.trim() || "";
     if (!threadId) {

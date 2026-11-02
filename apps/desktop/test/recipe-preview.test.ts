@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  matchingConversations,
   overlappingPriorityGroup,
   previewRecipeMatch,
   recipeMatches,
   shouldConfirmRecipeSave,
   subjectFromConversation,
-  tryOnceThreadId,
 } from "../src/renderer/src/recipe-preview.ts";
 import type { RecipeConversationOption, RecipeView } from "../src/renderer/src/types.ts";
 
@@ -168,28 +168,92 @@ describe("recipe match preview", () => {
     assert.equal(rows[1]?.is_self, true);
   });
 
-  it("resolves a single preview hit for try-once", () => {
-    assert.equal(
-      tryOnceThreadId({
-        preview: {
-          ready: true,
-          count: 1,
-          samples: ["Invoice approval"],
-          sample_ids: ["feishu:task-1"],
-        },
-      }),
-      "feishu:task-1",
+  it("lists every matching chat as a try sample", () => {
+    assert.deepEqual(
+      matchingConversations({ record_class: "task" }, [chat, task, otherChannel])?.map(
+        (item) => item.id,
+      ),
+      ["feishu:task-1", "slack:task-2"],
     );
-    assert.equal(
-      tryOnceThreadId({
-        preview: {
-          ready: true,
-          count: 2,
-          samples: ["A", "B"],
-          sample_ids: ["a", "b"],
-        },
-      }),
-      null,
+    assert.equal(matchingConversations({}, [chat]), null);
+    assert.equal(matchingConversations({ source: " " }, [chat]), null);
+  });
+
+  it("ranks like dispatch: scheduled rules never compete", () => {
+    const base: RecipeView = {
+      id: "a-push",
+      org_id: "local",
+      name: "On message",
+      match: { thread_id: "feishu:chat-1" },
+      trigger: { kind: "push", coalesce: true },
+      executor_type: "dsh",
+      executor_config: {},
+      can_write_back: false,
+      include_context: false,
+      enabled: true,
+      created_at: "",
+      updated_at: "",
+    };
+    const scheduled: RecipeView = {
+      ...base,
+      id: "0-pull",
+      name: "Scheduled",
+      trigger: { kind: "pull", interval_ms: 3_600_000 },
+    };
+    const manual: RecipeView = {
+      ...base,
+      id: "0-manual",
+      name: "Manual",
+      trigger: { kind: "manual" },
+    };
+    const preview = previewRecipeMatch({
+      match: base.match,
+      draftId: base.id,
+      triggerKind: "push",
+      conversations: [chat],
+      recipes: [base, scheduled],
+    });
+    assert.equal(preview.preempted_by, undefined);
+    assert.deepEqual(overlappingPriorityGroup(scheduled, [base, scheduled]), []);
+    const rows = overlappingPriorityGroup(manual, [base, scheduled, manual]);
+    assert.deepEqual(
+      rows.map((row) => row.id),
+      ["a-push", "0-manual"],
     );
+  });
+
+  it("ranks the unsaved draft, not the saved copy", () => {
+    const saved: RecipeView = {
+      id: "r1",
+      org_id: "local",
+      name: "Saved",
+      match: { record_class: "task" },
+      trigger: { kind: "push", coalesce: true },
+      executor_type: "dsh",
+      executor_config: {},
+      can_write_back: false,
+      include_context: false,
+      enabled: true,
+      created_at: "",
+      updated_at: "",
+    };
+    const other: RecipeView = {
+      ...saved,
+      id: "r2",
+      name: "Feishu tasks",
+      match: { record_class: "task", source: "feishu" },
+    };
+    const rows = overlappingPriorityGroup(
+      {
+        id: "r1",
+        name: "Draft",
+        match: { record_class: "task", source: "feishu", unit_kind: "approval" },
+        enabled: true,
+        trigger: { kind: "push" },
+      },
+      [saved, other],
+    );
+    assert.equal(rows[0]?.id, "r1");
+    assert.equal(rows[0]?.name, "Draft");
   });
 });

@@ -51,10 +51,10 @@ import {
 } from "./recipe-draft";
 import { configFromCatalog, invokeCopy, missingRequiredField } from "./recipe-params";
 import {
+  matchingConversations,
   overlappingPriorityGroup,
   previewRecipeMatch,
   shouldConfirmRecipeSave,
-  tryOnceThreadId,
 } from "./recipe-preview";
 import {
   buildRecipeBundle,
@@ -96,6 +96,7 @@ export function RecipesPage({
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [returnToWork, setReturnToWork] = useState(() => Boolean(seed));
+  const [trySample, setTrySample] = useState("");
   const importRef = useRef<HTMLInputElement>(null);
   const [draft, setDraft] = useState<RecipeDraft>(() =>
     seed ? applySeed(emptyDraft(), seed, "") : emptyDraft(),
@@ -116,6 +117,33 @@ export function RecipesPage({
       setError(caught instanceof Error ? caught.message : t("recipes.loadError"));
     });
   }, [locale, t]);
+
+  const hasRunningRun = recipes.some((recipe) =>
+    (recipe.recent_runs?.length
+      ? recipe.recent_runs
+      : recipe.last_run
+        ? [recipe.last_run]
+        : []
+    ).some((run) => run.status === "running"),
+  );
+
+  useEffect(() => {
+    const refresh = () => {
+      if (document.visibilityState === "visible") {
+        void reload().catch(() => undefined);
+      }
+    };
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    const timer = hasRunningRun ? window.setInterval(refresh, 15_000) : undefined;
+    return () => {
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+      if (timer !== undefined) {
+        window.clearInterval(timer);
+      }
+    };
+  }, [hasRunningRun]);
 
   useEffect(() => {
     if (!seed) {
@@ -146,6 +174,7 @@ export function RecipesPage({
       previewRecipeMatch({
         match: draftMatch(draft),
         draftId: draft.id,
+        triggerKind: draft.trigger_kind,
         conversations,
         recipes,
       }),
@@ -163,34 +192,76 @@ export function RecipesPage({
         name,
         match,
         enabled: draft.enabled,
+        trigger: { kind: draft.trigger_kind },
       },
       recipes,
     );
   }, [draft, recipes, suggestedName, t]);
-  const tryThreadId = useMemo(
-    () =>
-      tryOnceThreadId({
-        matchThreadId: draftMatch(draft).thread_id,
-        preview: matchPreview,
-      }),
-    [draft, matchPreview],
-  );
+  const tryChoices = useMemo(() => {
+    const match = draftMatch(draft);
+    const bound = match.thread_id?.trim();
+    if (bound) {
+      return [{ id: bound, label: draft.thread_title || bound }];
+    }
+    return matchingConversations(match, conversations) ?? [];
+  }, [draft, conversations]);
+  const tryThreadId = tryChoices.some((item) => item.id === trySample)
+    ? trySample
+    : (tryChoices[0]?.id ?? null);
+
+  const payloadFor = (next: RecipeDraft) => ({
+    name: (next.name.trim() || suggestedName).trim(),
+    match: draftMatch(next),
+    trigger: draftTrigger(next),
+    executor_type: next.executor_type,
+    executor_config: next.config,
+    can_write_back:
+      writeBackAvailable(next, conversations) && next.can_write_back,
+    include_context: next.include_context,
+    max_concurrent:
+      next.trigger_kind === "pull" ? null : parseMaxConcurrent(next.max_concurrent),
+    enabled: next.enabled,
+  });
+  const savedRecipe = draft.id
+    ? recipes.find((item) => item.id === draft.id)
+    : undefined;
+  const dirty =
+    !savedRecipe ||
+    JSON.stringify(payloadFor(draft)) !==
+      JSON.stringify(
+        payloadFor(
+          draftFromRecipe(
+            savedRecipe,
+            executorByType.get(savedRecipe.executor_type),
+            conversations,
+          ),
+        ),
+      );
 
   const runTryOnce = async (writeBack: boolean) => {
     if (!draft.id || !tryThreadId) {
       return;
     }
+    const confirmCopy = t(
+      writeBack ? "recipes.tryConfirmSend" : "recipes.tryConfirmKeep",
+    );
     if (
       !window.confirm(
-        t(writeBack ? "recipes.tryConfirmSend" : "recipes.tryConfirmKeep"),
+        dirty ? `${confirmCopy}\n\n${t("recipes.trySavesFirst")}` : confirmCopy,
       )
     ) {
+      return;
+    }
+    if (dirty && !readyToSave()) {
       return;
     }
     setBusy(true);
     setError(null);
     setNotice(null);
     try {
+      if (dirty) {
+        await saveRecipe(payloadFor(draft), draft.id);
+      }
       const result = await tryRecipe(draft.id, {
         thread_id: tryThreadId,
         write_back: writeBack,
@@ -294,7 +365,14 @@ export function RecipesPage({
   const editRecipe = (recipe: RecipeView) => {
     setReturnToWork(false);
     setError(null);
-    setDraft(draftFromRecipe(recipe, executorByType.get(recipe.executor_type)));
+    setTrySample("");
+    setDraft(
+      draftFromRecipe(
+        recipe,
+        executorByType.get(recipe.executor_type),
+        conversations,
+      ),
+    );
     requestAnimationFrame(() => {
       formRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
     });
@@ -318,6 +396,11 @@ export function RecipesPage({
         },
         recipe.id,
       );
+      setDraft((current) =>
+        current.id === recipe.id
+          ? { ...current, enabled: !recipe.enabled }
+          : current,
+      );
       await reload();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("recipes.saveError"));
@@ -339,19 +422,20 @@ export function RecipesPage({
     });
   };
 
-  const save = async () => {
+  /** Validate and, for broad rules, confirm coverage. False means do not save. */
+  const readyToSave = (): boolean => {
     if (!draft.executor_type) {
-      return;
+      return false;
     }
     const match = draftMatch(draft);
     if (!canAutoStart(match, draft)) {
       setError(scopeError(draft, t));
-      return;
+      return false;
     }
     const required = missingRequiredField(catalog, draft.config);
     if (required) {
       setError(t("recipes.errRequired", { field: required }));
-      return;
+      return false;
     }
     const writeBack =
       writeBackAvailable(draft, conversations) && draft.can_write_back;
@@ -374,30 +458,21 @@ export function RecipesPage({
           }),
         )
       ) {
-        return;
+        return false;
       }
+    }
+    return true;
+  };
+
+  const save = async () => {
+    if (!readyToSave()) {
+      return;
     }
     setBusy(true);
     setError(null);
     setNotice(null);
     try {
-      await saveRecipe(
-        {
-          name: (draft.name.trim() || suggestedName).trim(),
-          match,
-          trigger: draftTrigger(draft),
-          executor_type: draft.executor_type,
-          executor_config: draft.config,
-          can_write_back: writeBack,
-          include_context: draft.include_context,
-          max_concurrent:
-            draft.trigger_kind === "pull"
-              ? null
-              : parseMaxConcurrent(draft.max_concurrent),
-          enabled: draft.enabled,
-        },
-        draft.id,
-      );
+      await saveRecipe(payloadFor(draft), draft.id);
       const goBack = returnToWork && !draft.id;
       const wasEdit = Boolean(draft.id);
       resetDraft();
@@ -541,6 +616,7 @@ export function RecipesPage({
                       if (!window.confirm(t("recipes.deleteConfirm", { name: recipe.name }))) {
                         return;
                       }
+                      setBusy(true);
                       void deleteRecipe(recipe.id)
                         .then(() => {
                           if (draft.id === recipe.id) {
@@ -554,7 +630,8 @@ export function RecipesPage({
                               ? caught.message
                               : t("recipes.deleteError"),
                           );
-                        });
+                        })
+                        .finally(() => setBusy(false));
                     }}
                   >
                     {t("recipes.delete")}
@@ -859,16 +936,17 @@ export function RecipesPage({
                     </p>
                   ) : null}
                 </RecipeRow>
-                {draft.id ? (
-                  <RecipeRow label={t("recipes.enabledCheck")}>
-                    <SwitchRow
-                      checked={draft.enabled}
-                      onChange={(enabled) => setDraft((current) => ({ ...current, enabled }))}
-                    >
-                      {""}
-                    </SwitchRow>
-                  </RecipeRow>
-                ) : null}
+                <RecipeRow label={t("recipes.enabledCheck")}>
+                  <SwitchRow
+                    checked={draft.enabled}
+                    onChange={(enabled) => setDraft((current) => ({ ...current, enabled }))}
+                  >
+                    {""}
+                  </SwitchRow>
+                  {!draft.enabled ? (
+                    <p className="recipe-hint">{t("recipes.enabledOffHint")}</p>
+                  ) : null}
+                </RecipeRow>
                 </div>
               </section>
           </div>
@@ -894,40 +972,54 @@ export function RecipesPage({
                   {t("recipes.cancel")}
                 </button>
               ) : null}
-              {draft.id ? (
-                <>
-                  <button
-                    type="button"
-                    className="ghost"
-                    disabled={busy || !draft.enabled || !tryThreadId}
-                    title={
-                      !draft.enabled
-                        ? t("recipes.tryNeedEnabled")
-                        : !tryThreadId
-                          ? t("recipes.tryNeedChat")
-                          : t("recipes.tryTitle")
-                    }
-                    onClick={() => {
-                      void runTryOnce(false);
-                    }}
-                  >
-                    {t("recipes.tryOnce")}
-                  </button>
-                  {writeBackAvailable(draft, conversations) &&
-                  draft.can_write_back ? (
-                    <button
-                      type="button"
-                      className="ghost"
-                      disabled={busy || !draft.enabled || !tryThreadId}
-                      title={t("recipes.trySendTitle")}
-                      onClick={() => {
-                        void runTryOnce(true);
-                      }}
-                    >
-                      {t("recipes.tryOnceSend")}
-                    </button>
-                  ) : null}
-                </>
+              {draft.id && tryChoices.length > 1 ? (
+                <label className="recipe-try-sample">
+                  <span>{t("recipes.trySample")}</span>
+                  <MenuSelect
+                    value={tryThreadId ?? ""}
+                    options={tryChoices.map((item) => ({
+                      value: item.id,
+                      label: item.label,
+                    }))}
+                    onChange={setTrySample}
+                  />
+                </label>
+              ) : null}
+              <button
+                type="button"
+                className="ghost"
+                disabled={busy || !draft.id || !tryThreadId}
+                title={
+                  !draft.id
+                    ? t("recipes.tryNeedSave")
+                    : !tryThreadId
+                      ? t("recipes.tryNeedChat")
+                      : dirty
+                        ? `${t("recipes.tryTitle")} · ${t("recipes.trySavesFirst")}`
+                        : t("recipes.tryTitle")
+                }
+                onClick={() => {
+                  void runTryOnce(false);
+                }}
+              >
+                {t("recipes.tryOnce")}
+              </button>
+              {draft.id &&
+              draft.can_write_back &&
+              tryThreadId &&
+              conversations.find((item) => item.id === tryThreadId)?.can_send !==
+                false ? (
+                <button
+                  type="button"
+                  className="ghost"
+                  disabled={busy}
+                  title={t("recipes.trySendTitle")}
+                  onClick={() => {
+                    void runTryOnce(true);
+                  }}
+                >
+                  {t("recipes.tryOnceSend")}
+                </button>
               ) : null}
               <button
                 type="submit"
@@ -936,7 +1028,10 @@ export function RecipesPage({
                   busy ||
                   !draft.executor_type ||
                   ((draft.scope === "thread" || draft.trigger_kind === "pull") &&
-                    !draft.thread_id)
+                    !draft.thread_id) ||
+                  (draft.trigger_kind !== "pull" &&
+                    draft.scope === "source" &&
+                    !draft.source.trim())
                 }
               >
                 {busy
@@ -948,11 +1043,9 @@ export function RecipesPage({
                       : t("recipes.save")}
               </button>
             </div>
-            {draft.id && (!draft.enabled || !tryThreadId) ? (
+            {!draft.id || !tryThreadId ? (
               <p className="muted recipe-try-hint">
-                {!draft.enabled
-                  ? t("recipes.tryNeedEnabled")
-                  : t("recipes.tryNeedChat")}
+                {!draft.id ? t("recipes.tryNeedSave") : t("recipes.tryNeedChat")}
               </p>
             ) : null}
           </div>

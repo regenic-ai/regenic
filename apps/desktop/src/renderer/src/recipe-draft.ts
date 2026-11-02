@@ -1,6 +1,11 @@
-import { formatNextRunWhen, formatTime } from "./format";
-import { configFromCatalog } from "./recipe-params";
-import { previewRecipeMatch } from "./recipe-preview";
+import { formatNextRunWhen, formatTime } from "./format.ts";
+import { configFromCatalog } from "./recipe-params.ts";
+import {
+  competesForChat,
+  previewRecipeMatch,
+  recipeOutranks,
+  recipesCanShareSubject,
+} from "./recipe-preview.ts";
 import {
   DEFAULT_AT_MINUTE,
   DEFAULT_WEEKDAYS,
@@ -9,7 +14,7 @@ import {
   pullTriggerFromDraft,
   scheduleCopy,
   type ScheduleMode,
-} from "./schedule";
+} from "./schedule.ts";
 import type { MessageKey } from "../../shared/i18n.ts";
 import type {
   ExecutorCatalogEntry,
@@ -145,6 +150,10 @@ export interface RecipeDraft {
   include_context: boolean;
   max_concurrent: string;
   enabled: boolean;
+  /** Saved match when editing, so fields the form does not show survive a save. */
+  base_match?: RecipeMatch;
+  base_scope?: RecipeScope;
+  base_pull?: boolean;
 }
 
 export type StarterKind = "chat" | "channel" | "schedule";
@@ -272,6 +281,7 @@ export function applySeed(
 export function draftFromRecipe(
   recipe: RecipeView,
   catalog?: ExecutorCatalogEntry,
+  conversations: RecipeConversationOption[] = [],
 ): RecipeDraft {
   const config: Record<string, string> = {};
   for (const [key, value] of Object.entries(recipe.executor_config ?? {})) {
@@ -279,6 +289,11 @@ export function draftFromRecipe(
       config[key] = value;
     }
   }
+  const scope: RecipeScope = recipe.match.thread_id
+    ? "thread"
+    : recipe.match.source
+      ? "source"
+      : "tasks";
   return {
     id: recipe.id,
     name: recipe.name,
@@ -292,14 +307,13 @@ export function draftFromRecipe(
       : [...DEFAULT_WEEKDAYS],
     timezone: recipe.trigger?.timezone || localTimeZone(),
     coalesce: recipe.trigger?.coalesce !== false,
-    scope: recipe.match.thread_id
-      ? "thread"
-      : recipe.match.source
-        ? "source"
-        : "tasks",
+    scope,
     source: recipe.match.source ?? "",
     thread_id: recipe.match.thread_id ?? "",
-    thread_title: recipe.match.thread_id ?? "",
+    thread_title:
+      conversations.find((item) => item.id === recipe.match.thread_id)?.label ??
+      recipe.match.thread_id ??
+      "",
     thread_facet: recipe.match.thread_facet ?? "",
     unit_kind: recipe.match.unit_kind ?? "",
     executor_type: recipe.executor_type,
@@ -311,27 +325,62 @@ export function draftFromRecipe(
         ? String(recipe.max_concurrent)
         : "",
     enabled: recipe.enabled,
+    base_match: { ...recipe.match },
+    base_scope: scope,
+    base_pull: recipe.trigger?.kind === "pull",
   };
 }
 
+/** Saved match fields the form does not edit, kept while scope and trigger family stay put. */
+function hiddenMatch(draft: RecipeDraft): RecipeMatch | null {
+  const base = draft.base_match;
+  if (
+    !base ||
+    draft.scope !== draft.base_scope ||
+    (draft.trigger_kind === "pull") !== Boolean(draft.base_pull)
+  ) {
+    return null;
+  }
+  if (draft.trigger_kind === "pull" || draft.scope === "thread") {
+    return {
+      ...(base.source ? { source: base.source } : {}),
+      ...(base.record_class ? { record_class: base.record_class } : {}),
+      ...(base.unit_kind ? { unit_kind: base.unit_kind } : {}),
+    };
+  }
+  return base.record_class ? { record_class: base.record_class } : {};
+}
+
 export function draftMatch(draft: RecipeDraft): RecipeMatch {
+  const hidden = hiddenMatch(draft);
   if (draft.trigger_kind === "pull") {
     return {
+      ...hidden,
       ...(draft.thread_id.trim() ? { thread_id: draft.thread_id.trim() } : {}),
       ...(draft.thread_facet ? { thread_facet: draft.thread_facet } : {}),
     };
   }
+  if (draft.scope === "source" && !draft.source.trim()) {
+    return {};
+  }
+  if (draft.scope === "thread") {
+    return {
+      ...hidden,
+      thread_id: draft.thread_id.trim(),
+      ...(draft.thread_facet ? { thread_facet: draft.thread_facet } : {}),
+    };
+  }
+  const unitKind = draft.unit_kind.trim();
+  const recordClass = hidden
+    ? (hidden.record_class ?? (unitKind ? undefined : "task"))
+    : "task";
   return {
-    ...(draft.scope === "thread"
-      ? { thread_id: draft.thread_id.trim() }
-      : { record_class: "task" }),
+    ...(recordClass ? { record_class: recordClass } : {}),
     ...(draft.scope === "source" && draft.source.trim()
       ? { source: draft.source.trim() }
       : {}),
     ...(draft.thread_facet ? { thread_facet: draft.thread_facet } : {}),
-    ...(draft.scope !== "thread" && draft.unit_kind.trim()
-      ? { unit_kind: draft.unit_kind.trim() }
-      : {}),
+    ...(unitKind ? { unit_kind: unitKind } : {}),
   };
 }
 
@@ -488,9 +537,7 @@ export function recipeCardLine(
 ): string {
   const outcome = recipe.can_write_back
     ? t("recipes.outcomeBack")
-    : recipe.trigger?.kind === "pull"
-      ? t("recipes.outcomeKeep")
-      : "";
+    : t("recipes.outcomeKeep");
   const concurrent =
     recipe.max_concurrent && recipe.max_concurrent > 0
       ? t("recipes.outcomeConcurrent", { count: String(recipe.max_concurrent) })
@@ -547,69 +594,21 @@ export function conflictCopy(
   recipes: RecipeView[],
   t: Translate,
 ): string | null {
-  if (!recipe.enabled) {
+  if (!recipe.enabled || !competesForChat(recipe.trigger?.kind ?? "push")) {
     return null;
   }
   const other = recipes.find(
     (item) =>
       item.id !== recipe.id &&
       item.enabled &&
-      recipesOverlap(recipe.match, item.match) &&
-      recipeRanksBefore(item, recipe),
+      competesForChat(item.trigger?.kind ?? "push") &&
+      recipesCanShareSubject(recipe.match, item.match) &&
+      recipeOutranks(item, recipe),
   );
   if (!other) {
     return null;
   }
   return t("recipes.losesTo", { name: other.name });
-}
-
-function recipesOverlap(
-  left: RecipeMatch,
-  right: RecipeMatch,
-): boolean {
-  if (left.thread_id && right.thread_id && left.thread_id !== right.thread_id) {
-    return false;
-  }
-  if (left.source && right.source && left.source !== right.source) {
-    return false;
-  }
-  if (left.unit_kind && right.unit_kind && left.unit_kind !== right.unit_kind) {
-    return false;
-  }
-  if (
-    left.record_class &&
-    right.record_class &&
-    left.record_class !== right.record_class
-  ) {
-    return false;
-  }
-  if (
-    left.thread_facet &&
-    right.thread_facet &&
-    left.thread_facet !== right.thread_facet
-  ) {
-    return false;
-  }
-  return true;
-}
-
-function recipeRanksBefore(left: RecipeView, right: RecipeView): boolean {
-  const leftScore = matchScore(left.match);
-  const rightScore = matchScore(right.match);
-  if (leftScore !== rightScore) {
-    return leftScore > rightScore;
-  }
-  return left.id < right.id;
-}
-
-function matchScore(match: RecipeMatch): number {
-  return (
-    (match.thread_id ? 16 : 0) +
-    (match.unit_kind ? 8 : 0) +
-    (match.source ? 4 : 0) +
-    (match.record_class ? 2 : 0) +
-    (match.thread_facet ? 1 : 0)
-  );
 }
 
 export function nextRunCopy(recipe: RecipeView, t: Translate): string | null {
