@@ -18,6 +18,10 @@ export interface ContextRetrievalTrace {
     lexical_rank?: number;
     vector_rank?: number;
     vector_score?: number;
+    thread_id?: string;
+    thread_rank?: number;
+    thread_score?: number;
+    evidence_diversity?: number;
     chunk_ordinal?: number;
     start?: number;
     end?: number;

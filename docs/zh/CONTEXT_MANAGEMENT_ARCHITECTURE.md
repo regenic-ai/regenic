@@ -54,7 +54,10 @@ Authority 读取会把来源、会话、参与者、时间和锚点条件前推�
 未声明这些能力的策略、检索器保留原有的提前加载行为，兼容现有扩展。
 
 词法索引写入和授权索引查询不再设一万条硬上限。
-混合检索 profile 更新为 `personal-hybrid-rrf-v3`，保留 v2 的评分和准入规则，
+混合检索 profile 更新为 `personal-hybrid-thread-rrf-v4`。它先保留 Event 级 lexical/vector
+RRF，再仅在授权结果内按 `thread_id` 聚合：最佳 Event、查询词覆盖和最多三份非重复证据
+形成 Thread 分；同一 Thread 内新增查询词或非重复正文获得递减的 evidence diversity 分，
+重复正文没有 Thread/diversity 加成。trace 固定记录 Thread rank/score 和 evidence diversity，
 已有 snapshot 仍使用原 profile。词法 SQL 保持分块，
 向量检索保留全体授权范围内的 top-k，而不是截取前一部分授权记录。
 trace 的授权、覆盖计数不受 bundle 条目预算限制。

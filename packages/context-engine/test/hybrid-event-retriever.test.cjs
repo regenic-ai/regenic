@@ -23,13 +23,13 @@ const request = {
   temporal: { mode: "current" }, requested_kinds: ["event"],
   budget: { profile: "test-v1", max_tokens: 1000, max_items: 10, max_raw_evidence: 10 },
 };
-function event(id, text) {
+function event(id, text, threadId = "thread") {
   return {
     event: {
       event_id: id, org_id: "org", source: "synthetic", external_id: id, operation: "create",
       occurred_at: "2026-10-16T00:00:00.000Z", ingested_at: "2026-10-16T00:00:00.000Z",
       content_hash: createHash("sha256").update(text).digest("hex"),
-    }, text, thread_id: "thread", required_scope_ids: ["visible"], status: "current",
+    }, text, thread_id: threadId, required_scope_ids: ["visible"], status: "current",
   };
 }
 const events = [event("semantic", "部署失败时恢复上一版本。"), event("literal", "rollback RG-2048")];
@@ -96,6 +96,92 @@ it("admits semantic zero-lexical evidence, deduplicates and pins replayable retr
   assert.ok(validateContextSnapshot(result.snapshot).success);
   assert.deepEqual(await f.engine.assemble(request), result);
   assert.equal(f.calls, 1);
+});
+
+it("reranks authorized threads, rewards complementary evidence and suppresses repeated text", async () => {
+  const sources = [
+    event("alpha-member", "Alice was selected for the launch.", "alpha"),
+    event("alpha-status", "Bob is still pending a reply.", "alpha"),
+    event("alpha-duplicate", "Bob is still pending a reply.", "alpha"),
+    event("beta-summary", "Alice has a pending profile review.", "beta"),
+  ];
+  const localRequest = {
+    ...request, query: "Alice Bob pending",
+    budget: { ...request.budget, max_items: 3, max_raw_evidence: 3 },
+  };
+  const scores = new Map([
+    ["alpha-member", 0.95],
+    ["alpha-status", 0.94],
+    ["beta-summary", 0.93],
+    ["alpha-duplicate", 0.9],
+  ]);
+  const retriever = new HybridEventRetriever(new DeterministicEventRetriever(), {
+    descriptor, async countTokens() { return [3]; }, async embed() { return [[1, 0]]; },
+  }, {
+    async matchAuthorized(input) {
+      return {
+        generation: generation.id,
+        covered: input.authorized,
+        matched: [...scores].map(([eventId, score], chunk_ordinal) => {
+          const source = sources.find((entry) => entry.event.event_id === eventId);
+          return {
+            event_id: eventId, content_hash: source.event.content_hash, score,
+            chunk_ordinal, start: 0, end: source.text.length,
+          };
+        }),
+      };
+    },
+  }, generation);
+  const plan = {
+    request: localRequest, events: sources, read_epoch: "authority:thread",
+    recorded_at: "2026-10-17T00:00:00.000Z", principal_policy_hash: "b".repeat(64),
+  };
+  const retrieved = await retriever.retrieve(plan);
+  const candidates = new Map(retrieved.candidates.map((entry) => [entry.candidate.resource_id, entry.candidate]));
+  assert.equal(retriever.capabilities().rerank, true);
+  assert.ok(candidates.get("alpha-member").scores.thread > candidates.get("beta-summary").scores.thread);
+  assert.ok(candidates.get("alpha-status").scores.evidence_diversity > 0);
+  assert.equal(candidates.get("alpha-duplicate").scores.thread, 0);
+  assert.equal(candidates.get("alpha-duplicate").scores.evidence_diversity, 0);
+  assert.equal(
+    retrieved.trace.routes.find((route) => route.event_id === "alpha-duplicate").evidence_diversity,
+    0,
+  );
+  assert.deepEqual(
+    retrieved.trace.routes.filter((route) => route.thread_id === "alpha")
+      .map((route) => [route.event_id, route.thread_rank]),
+    [["alpha-duplicate", 1], ["alpha-member", 1], ["alpha-status", 1]],
+  );
+  assert.equal(retrieved.trace.routes.find((route) => route.event_id === "beta-summary").thread_rank, 2);
+  assert.ok(ContextRetrievalTraceSchema.safeParse(retrieved.trace).success);
+  assert.equal(ContextRetrievalTraceSchema.safeParse({
+    ...retrieved.trace,
+    routes: [{ event_id: "invalid", thread_id: "alpha" }],
+  }).success, false);
+
+  const registry = new MemoryContextRetrieverRegistry();
+  registry.register(retriever);
+  const engine = new DeterministicContextEngine({
+    source: { async openRead() { return {
+      read_epoch: "authority:thread", recorded_at: plan.recorded_at, lifecycle_complete: true,
+      lifecycle_heads: sources.map((source) => ({
+        source: source.event.source, external_id: source.event.external_id,
+        head_event_id: source.event.event_id,
+      })),
+      events: sources,
+    }; } },
+    policy: {
+      async policyHash() { return "b".repeat(64); }, async visible() { return true; },
+      async protectedEventIds() { return []; }, async canReplay() { return true; },
+    },
+    artifacts: new MemoryContextArtifactStore(), retrievers: registry,
+    retrieval_profile: HYBRID_RETRIEVAL_PROFILE,
+  });
+  const assembled = await engine.assemble(localRequest);
+  assert.deepEqual(
+    assembled.snapshot.selected.map((entry) => entry.resource_id).sort(),
+    ["alpha-member", "alpha-status", "beta-summary"],
+  );
 });
 
 it("accepts attachment extraction spans only when bound to a verified projection length", async () => {

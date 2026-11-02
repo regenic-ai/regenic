@@ -67,8 +67,13 @@ authorized source. Policies or retrievers without these declarations retain
 eager materialization for compatibility.
 
 Lexical writes and authorized index lookups have no 10,000-key ceiling.
-The hybrid profile is `personal-hybrid-rrf-v3`; existing snapshots retain their
-original profile and v2 scoring and admission rules are unchanged.
+The hybrid profile is `personal-hybrid-thread-rrf-v4`. It preserves Event-level
+lexical/vector RRF, then groups only authorized results by `thread_id`. The best
+Event, query-term coverage, and up to three non-duplicate evidence items determine
+the Thread score. Within a Thread, newly covered query terms and non-duplicate text
+receive a diminishing evidence-diversity score; repeated text receives no Thread
+or diversity boost. The trace pins Thread rank/score and evidence diversity.
+Existing snapshots retain their original profile.
 Lexical SQL remains chunked; vector retrieval retains the global top-k rather
 than truncating the authorization set. Retrieval trace counts cover the full
 authorized universe independently of bundle item budgets. Broad, unfiltered
