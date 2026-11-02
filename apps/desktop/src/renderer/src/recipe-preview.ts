@@ -88,7 +88,38 @@ export function subjectFromConversation(
   };
 }
 
-function recipesCanShareSubject(left: RecipeMatch, right: RecipeMatch): boolean {
+type TriggerKind = "push" | "pull" | "manual";
+
+function triggerKindOf(recipe: { trigger?: { kind?: TriggerKind } | null }): TriggerKind {
+  return recipe.trigger?.kind ?? "push";
+}
+
+/**
+ * Mirrors @regenic/domain recipeAllowsBind: only push/manual rules compete for a
+ * chat. Scheduled (pull) rules run on their own clock and never preempt.
+ */
+export function competesForChat(kind: TriggerKind): boolean {
+  return kind === "push" || kind === "manual";
+}
+
+/** Same order as selectRecipeForSubject: specificity, then push before manual, then id. */
+export function recipeOutranks(
+  left: { id: string; match: RecipeMatch; trigger?: { kind?: TriggerKind } | null },
+  right: { id: string; match: RecipeMatch; trigger?: { kind?: TriggerKind } | null },
+): boolean {
+  const bySpec = recipeSpecificity(left.match) - recipeSpecificity(right.match);
+  if (bySpec !== 0) {
+    return bySpec > 0;
+  }
+  const leftPush = triggerKindOf(left) === "push" ? 1 : 0;
+  const rightPush = triggerKindOf(right) === "push" ? 1 : 0;
+  if (leftPush !== rightPush) {
+    return leftPush > rightPush;
+  }
+  return left.id < right.id;
+}
+
+export function recipesCanShareSubject(left: RecipeMatch, right: RecipeMatch): boolean {
   if (left.thread_id && right.thread_id && left.thread_id !== right.thread_id) {
     return false;
   }
@@ -115,54 +146,36 @@ function recipesCanShareSubject(left: RecipeMatch, right: RecipeMatch): boolean 
   return true;
 }
 
-function recipeRanksBefore(left: RecipeView, right: { id: string; match: RecipeMatch }): boolean {
-  const bySpec = recipeSpecificity(left.match) - recipeSpecificity(right.match);
-  if (bySpec !== 0) {
-    return bySpec > 0;
-  }
-  return left.id < right.id;
-}
-
 export function previewRecipeMatch(input: {
   match: RecipeMatch;
   draftId?: string;
+  triggerKind?: TriggerKind;
   conversations: RecipeConversationOption[];
   recipes: RecipeView[];
   sampleLimit?: number;
 }): RecipeMatchPreview {
   const sampleLimit = input.sampleLimit ?? 3;
-  if (recipeSpecificity(input.match) === 0) {
-    return { ready: false, count: 0, samples: [], sample_ids: [] };
-  }
-  if (input.match.thread_id && !input.match.thread_id.trim()) {
-    return { ready: false, count: 0, samples: [], sample_ids: [] };
-  }
-  if (input.match.source !== undefined && !input.match.source.trim()) {
+  const hits = matchingConversations(input.match, input.conversations);
+  if (!hits) {
     return { ready: false, count: 0, samples: [], sample_ids: [] };
   }
 
-  const hits: RecipeConversationOption[] = [];
-  for (const conversation of input.conversations) {
-    const subject = subjectFromConversation(conversation);
-    if (!subject) {
-      continue;
-    }
-    if (recipeMatches(input.match, subject)) {
-      hits.push(conversation);
-    }
-  }
-
+  const triggerKind = input.triggerKind ?? "push";
   const draftFace = {
     id: input.draftId ?? "~draft",
     match: input.match,
+    trigger: { kind: triggerKind },
   };
-  const preempted = input.recipes.find(
-    (other) =>
-      other.id !== input.draftId &&
-      other.enabled &&
-      recipesCanShareSubject(input.match, other.match) &&
-      recipeRanksBefore(other, draftFace),
-  );
+  const preempted = competesForChat(triggerKind)
+    ? input.recipes.find(
+        (other) =>
+          other.id !== input.draftId &&
+          other.enabled &&
+          competesForChat(triggerKindOf(other)) &&
+          recipesCanShareSubject(input.match, other.match) &&
+          recipeOutranks(other, draftFace),
+      )
+    : undefined;
 
   const limited = hits.slice(0, sampleLimit);
   return {
@@ -172,6 +185,26 @@ export function previewRecipeMatch(input: {
     sample_ids: limited.map((item) => item.id),
     ...(preempted ? { preempted_by: preempted.name } : {}),
   };
+}
+
+/** Every known chat the match covers; null when the match is not usable yet. */
+export function matchingConversations(
+  match: RecipeMatch,
+  conversations: RecipeConversationOption[],
+): RecipeConversationOption[] | null {
+  if (recipeSpecificity(match) === 0) {
+    return null;
+  }
+  if (match.thread_id !== undefined && !match.thread_id.trim()) {
+    return null;
+  }
+  if (match.source !== undefined && !match.source.trim()) {
+    return null;
+  }
+  return conversations.filter((conversation) => {
+    const subject = subjectFromConversation(conversation);
+    return subject ? recipeMatches(match, subject) : false;
+  });
 }
 
 /** Broad or high-blast saves should confirm with the match preview first. */
@@ -211,16 +244,29 @@ export interface RecipePriorityRow {
   is_self: boolean;
 }
 
-/** Overlapping recipes ordered so rank 1 wins first. Empty when alone. */
+type PriorityMember = Pick<RecipeView, "id" | "name" | "match" | "enabled"> & {
+  trigger?: { kind?: TriggerKind } | null;
+};
+
+/**
+ * Overlapping rules that compete for the same chat, ordered so rank 1 wins.
+ * Empty when alone, and for scheduled rules (they never compete).
+ */
 export function overlappingPriorityGroup(
-  focus: Pick<RecipeView, "id" | "name" | "match" | "enabled">,
+  focus: PriorityMember,
   recipes: readonly RecipeView[],
 ): RecipePriorityRow[] {
-  const members = new Map<string, Pick<RecipeView, "id" | "name" | "match" | "enabled">>();
+  if (!competesForChat(triggerKindOf(focus))) {
+    return [];
+  }
+  const members = new Map<string, PriorityMember>();
   members.set(focus.id, focus);
   for (const recipe of recipes) {
+    if (recipe.id === focus.id) {
+      continue;
+    }
     if (
-      recipe.id === focus.id ||
+      competesForChat(triggerKindOf(recipe)) &&
       recipesCanShareSubject(focus.match, recipe.match)
     ) {
       members.set(recipe.id, recipe);
@@ -238,7 +284,7 @@ export function overlappingPriorityGroup(
     if (left.enabled !== right.enabled) {
       return left.enabled ? -1 : 1;
     }
-    return left.id < right.id ? -1 : 1;
+    return recipeOutranks(left, right) ? -1 : 1;
   });
   let rank = 0;
   return sorted.map((recipe) => {
@@ -254,18 +300,4 @@ export function overlappingPriorityGroup(
       is_self: recipe.id === focus.id,
     };
   });
-}
-
-export function tryOnceThreadId(input: {
-  matchThreadId?: string;
-  preview: RecipeMatchPreview;
-}): string | null {
-  const bound = input.matchThreadId?.trim();
-  if (bound) {
-    return bound;
-  }
-  if (!input.preview.ready || input.preview.count !== 1) {
-    return null;
-  }
-  return input.preview.sample_ids[0]?.trim() || null;
 }

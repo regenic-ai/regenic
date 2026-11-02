@@ -691,6 +691,14 @@
   margin: 0;
 }
 
+.recipe-try-sample {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
 .recipe-commit {
   display: contents;
 }
