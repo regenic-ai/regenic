@@ -42,8 +42,35 @@ interface TaskExecutor {
   start(input, ctx): Promise<ExecutorRunHandle>;
   resume(input, ctx): Promise<ExecutorRunHandle>;
   status(run, ctx): Promise<ExecutorRunHandle>;
+  cancel?(run: WorkRun, ctx: ExecutorContext): Promise<void>;
 }
 ```
+
+`cancel` 为可选方法，本机连接器绑定会原样转发运行记录和上下文。
+dismiss 尽力调用它，取消失败不会撤销账本中的移除操作。
+执行器取消没有 `AbortSignal`；插件必须按运行身份精确取消，并保证重复或并发清理安全。
+
+`@regenic/connector-contract` 的 `0.3.0` 候选版新增
+`ExecutorContext.readonly installation_id?: string`。host 在固定安装的本机执行器
+start/resume/status/cancel 上一致填写该绑定；未固定安装及 HTTP 执行器省略。
+它不是 recipe 配置：`executor_config` 仍不透明、原样传递。直接执行 Agent 的插件必须
+要求此绑定，用它选择 `ctx.org_id` 内启用的安装；resume/status/cancel 前须校验持久化
+运行所属的 org 与安装，不能按 recipe 安装 key 路由或从执行器名称推断归属。
+上下文不增加配置、凭证或 activation generation；现有 DSH 式执行器仍可只使用
+`spawnSysout`，无需读取新字段。候选版本及本地包不代表已经发布到 npm。
+静态插件的 `catalog().source` 只选择插件，不选择安装；须在引擎页安装一个
+固定连接器安装的 `local_connector` 执行器，才能获得 host 绑定。
+默认未固定安装的执行器即使 source 匹配也不提供绑定。
+
+固定安装且驱动实现 `stopInstallation` 的本机执行器共用该安装的准入和排空门禁。
+`start`、`resume` 按 activation 启动一次；`status` 受门禁保护但不主动启动资源。
+被阻断后仍可通过 `cancel` 清理，且不会启动资源；旧 activation 的句柄不能调用或取消
+新 activation。删除固定连接器后，重挂载会将其执行器移出目录。
+
+`start` 必须尽快返回运行句柄，不能等待整个 Agent 任务结束；后续由 `status` 观察运行。
+安装停止先排空已准入调用，再调用 `stopInstallation`（上下文含 `reason`、`signal`）。
+不合作的启动调用可能耗尽有界排空时间；此时仍尝试清理，但停止操作会明确失败并保持门禁。
+只有安装停止 hook 接收清理 signal，执行器契约不能中断正在执行的调用。
 
 ## 要求
 
@@ -70,7 +97,7 @@ interface TaskExecutor {
 
 | `kind` | 含义 | 运行时 |
 | --- | --- | --- |
-| `local_connector` | 钉在一条能 `create` 的已装连接器上 | `spawnSysout` 走该安装。未钉时按 `catalog.source` 找第一个能建会话的连接器 |
+| `local_connector` | 固定能 `create` 或明确声明 `execute` 的已装连接器 | 会话执行器用 `spawnSysout`；直接执行器用 host context 绑定。未固定安装时按 `catalog.source` 找第一个能建会话的连接器，但不能绑定直接执行运行时 |
 | `http` | 通用 HTTP 适配器 | `POST {base}/v1/runs`、`GET /v1/runs/:id`、`POST /v1/runs/:id/resume` |
 
 凭证只存环境变量名 `auth_env`。表单不收 token。
@@ -80,6 +107,36 @@ Recipe 的 `executor_type: "dsh"` 不用改。`GET /v1/me/executors` 只列出
 **已启用**安装的调用目录。
 
 填了 `session_id` 的 DSH 安装 `create: false`，不能当本机执行器。
+
+### 创建固定的本机绑定
+
+先在引擎页安装并启用连接器，再进入「执行器 → 本机连接器 → 安装」，
+在「连接器」下拉中选择该安装，可选填写名称后安装。下拉选项来自
+`GET /v1/me/engine` 的 `executor_catalog` 中 `local_connector` 项的
+`fields[key=installation_id].options`。
+
+等价 API 为 `POST /v1/me/executors`：
+
+```json
+{
+  "kind": "local_connector",
+  "name": "My agent",
+  "config": { "installation_id": "<connector installation id>" }
+}
+```
+
+将返回的执行器 `id` 设为规则的 `executor_type`，不是静态插件 source。
+`GET /v1/me/executors` 列出已挂载调用目录，其中固定执行器的 `installation_id`
+就是上述连接器安装 ID。host 从此目录填写 context 绑定，不从 recipe 配置读取；
+直接执行插件必须拒绝缺少 host pin 的调用，不能自动选第一个安装。
+
+安装 API、下拉与重挂载使用同一准入检查；能 `create` 的会话连接器保留原路径。
+直接执行驱动则对启用且允许执行的安装声明 `ChannelCapabilities.execute: true`。
+host 还要求已注册执行器的 `catalog().source` 与安装驱动的 `source` 一致，
+且执行器 `capabilities().start` 为 true。安装缺失或禁用、驱动或执行器缺失、
+source 不匹配、关闭直接执行时均拒绝安装或从重挂载目录移除，不回落到其他插件。
+这些元数据检查不会启动 Agent；直接执行运行时不需要 `createThread` 或渠道发送能力，
+也不能为出现在下拉中虚报 `create`。
 
 ## 持久化启动与恢复
 

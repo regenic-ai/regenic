@@ -636,10 +636,13 @@ export class PersonalWorkService implements OnModuleDestroy {
     const run = await host.get("authority").getActiveWorkRun(orgId, item.id);
     if (run) {
       const executor = host.get("executors").get(run.executor_type);
-      await executor?.cancel?.(
-        run,
-        this.channel.contextFor(executor),
-      ).catch(() => undefined);
+      if (executor?.cancel) {
+        try {
+          await executor.cancel(run, this.channel.contextFor(executor));
+        } catch {
+          // Ledger cancellation still stands if the executor ignores cancel.
+        }
+      }
       await host.get("authority").putWorkRun(cancelWorkRun(run, now));
       this.waits.drop(run.id);
     }

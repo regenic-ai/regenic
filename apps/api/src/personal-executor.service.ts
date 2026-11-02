@@ -138,7 +138,7 @@ export class PersonalExecutorService {
         kind: "local_connector",
         title: "Local connector",
         description:
-          "Bind a creatable local connector. The executor starts a session on that installation.",
+          "Bind a local connector that can create sessions or execute tasks.",
         credential_hint: "Uses the connector's credentials",
         installed: installations.some((item) => item.kind === "local_connector"),
         instance_count: installations.filter((item) => item.kind === "local_connector")
@@ -206,8 +206,7 @@ export class PersonalExecutorService {
       .get("authority")
       .listInstallations(this.runtime.orgId());
     return installations.flatMap((installation) => {
-      const driver = this.drivers.get(installation.connector_type);
-      if (!driver?.capabilities(installation).create) {
+      if (!this.localBinding(installation)) {
         return [];
       }
       const view = toInstallationView(installation, null, this.drivers, locale);
@@ -325,7 +324,8 @@ export class PersonalExecutorService {
         if (row.status !== "enabled") {
           continue;
         }
-        mounted.push(await this.createRuntime(row));
+        const executor = await this.createRuntime(row);
+        if (executor) mounted.push(executor);
       }
       registry.clear();
       for (const executor of mounted) {
@@ -368,29 +368,27 @@ export class PersonalExecutorService {
       });
     }
     const pin = executorConfigText(row.config, "installation_id");
-    const source = pin ? await this.sourceOf(pin) : undefined;
+    const connector = pin
+      ? await this.runtime.requireHost().get("authority").findInstallation(pin)
+      : undefined;
+    const binding = connector ? this.localBinding(connector) : undefined;
+    if (pin && !binding) return undefined;
+    const driver = binding?.driver;
+    const source = driver?.source;
     const plugin =
-      (source ? this.localPlugins.forSource(source) : undefined) ??
+      binding?.plugin ??
       this.localPlugins.default() ??
       createSessionTaskExecutor({ source });
-    return createLocalConnectorExecutor({
+    const executor = createLocalConnectorExecutor({
       executor_type: row.id,
       label: row.name,
       source: plugin.catalog().source ?? source,
       installation_id: pin || undefined,
       plugin,
     });
-  }
-
-  private async sourceOf(installationId: string): Promise<string | undefined> {
-    const connector = await this.runtime
-      .requireHost()
-      .get("authority")
-      .findInstallation(installationId);
-    const driver = connector
-      ? this.drivers.get(connector.connector_type)
-      : undefined;
-    return driver?.source;
+    return connector && driver
+      ? this.drivers.installationLifecycle.guardExecutor(driver, connector, executor)
+      : executor;
   }
 
   private async validatedConfig(
@@ -405,12 +403,12 @@ export class PersonalExecutorService {
         if (options.requirePin && !pin) {
           throw new PersonalConnectorError(
             "invalid_config",
-            "Select a local connector that can create an executor session",
+            "Select a local connector that can create sessions or execute tasks",
             400,
           );
         }
         if (pin) {
-          await this.assertCreatableConnector(pin);
+          await this.assertBindableConnector(pin);
         }
       }
       return normalized;
@@ -426,7 +424,7 @@ export class PersonalExecutorService {
     }
   }
 
-  private async assertCreatableConnector(installationId: string): Promise<void> {
+  private async assertBindableConnector(installationId: string): Promise<void> {
     const installation = await this.runtime
       .requireHost()
       .get("authority")
@@ -438,14 +436,32 @@ export class PersonalExecutorService {
         400,
       );
     }
-    const driver = this.drivers.get(installation.connector_type);
-    if (!driver?.capabilities(installation).create) {
+    if (!this.localBinding(installation)) {
       throw new PersonalConnectorError(
         "invalid_config",
-        "That connector cannot create an executor session",
+        "That connector cannot create sessions or execute tasks",
         400,
       );
     }
+  }
+
+  private localBinding(installation: ConnectorInstallation) {
+    if (installation.org_id !== this.runtime.orgId()) return undefined;
+    const driver = this.drivers.get(installation.connector_type);
+    if (!driver) return undefined;
+    const capabilities = driver.capabilities(installation);
+    const plugin = this.localPlugins.forSource(driver.source);
+    if (capabilities.create) return { driver, plugin };
+    if (
+      installation.status !== "enabled" ||
+      capabilities.execute !== true ||
+      !plugin ||
+      plugin.catalog().source !== driver.source ||
+      !plugin.capabilities().start
+    ) {
+      return undefined;
+    }
+    return { driver, plugin };
   }
 
   private resolveName(

@@ -919,12 +919,12 @@ export const en = {
   "engine.uninstallExecutorConfirm": "Uninstall executor “{name}”? Recipes that point at it will fail until you pick another.",
   "executor.kind.local": "Local connector",
   "executor.kind.localLead":
-    "Start a session on an installed connector that can create conversations.",
+    "Bind an installed connector that can create sessions or execute tasks.",
   "executor.kind.http": "HTTP API",
   "executor.kind.httpLead":
     "Call POST /v1/runs, GET /v1/runs/:id, and POST /v1/runs/:id/resume on a remote executor.",
   "executor.needConnector":
-    "Install a connector that can create sessions first, then bind it here.",
+    "Install a connector that can create sessions or execute tasks first, then bind it here.",
   "executor.chooseConnector": "Choose a connector",
   "executor.installTitle": "Install {title}",
   "executor.edit": "Edit",
@@ -2025,11 +2025,11 @@ export const zh: Record<MessageKey, string> = {
   "engine.uninstallExecutorConfirm":
     "卸载执行器「{name}」？指向它的规则会失败，直到你改选另一个。",
   "executor.kind.local": "本机连接器",
-  "executor.kind.localLead": "在已安装、能新建会话的连接器上开一次执行会话。",
+  "executor.kind.localLead": "绑定已安装、能新建会话或执行任务的连接器。",
   "executor.kind.http": "HTTP API",
   "executor.kind.httpLead":
     "调用外部执行器的 POST /v1/runs、GET /v1/runs/:id、POST /v1/runs/:id/resume。",
-  "executor.needConnector": "先安装一个能新建会话的连接器，再在这里绑定。",
+  "executor.needConnector": "先安装一个能新建会话或执行任务的连接器，再在这里绑定。",
   "executor.chooseConnector": "选择连接器",
   "executor.installTitle": "安装 {title}",
   "executor.edit": "编辑",

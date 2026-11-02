@@ -50,8 +50,46 @@ interface TaskExecutor {
   start(input, ctx): Promise<ExecutorRunHandle>;
   resume(input, ctx): Promise<ExecutorRunHandle>;
   status(run, ctx): Promise<ExecutorRunHandle>;
+  cancel?(run: WorkRun, ctx: ExecutorContext): Promise<void>;
 }
 ```
+
+`cancel` is optional and receives the original run and context through local
+connector bindings. Dismiss requests it best-effort; cancellation errors do not
+undo the ledger dismissal. There is no executor cancellation `AbortSignal`.
+Plugins must cancel only the identified run and make repeated/concurrent cleanup
+safe.
+
+Starting with the `@regenic/connector-contract` `0.3.0` candidate,
+`ExecutorContext` includes `readonly installation_id?: string`. The host sets
+this to the pinned connector installation for local executors on every
+start/resume/status/cancel call; unpinned and HTTP executors omit it. It is not
+recipe configuration: `executor_config` stays opaque and unchanged. Direct
+agent runtimes must require the host binding, select the enabled installation
+in `ctx.org_id`, and verify stored run ownership against that org and
+installation before resume/status/cancel. They must not route using a recipe's
+installation key or infer ownership from an executor name. No configuration,
+secret, or activation generation is added to the context. Existing DSH-style
+executors can keep using `spawnSysout` and need not read the field.
+The static plugin's `catalog().source` selects the plugin, not an installation.
+Install a `local_connector` executor with its own fixed connector installation
+in Engine to obtain the host binding; a default unpinned executor does not
+provide one, even if its source matches.
+
+Pinned local executors whose driver implements `stopInstallation` share that
+installation's admission and drain fence. `start` and `resume` activate it once;
+`status` is fenced but does not itself activate resources. `cancel` can clean up
+behind the fence without activating resources. Handles from a previous activation
+cannot invoke or cancel through a new one. Deleting the pinned connector removes
+its executor from the mounted catalog on remount.
+
+`start` must return a run handle promptly, not await the whole agent task;
+`status` advances observation of that run. Installation stop drains admitted
+calls before invoking `stopInstallation(installation, host, { reason, signal })`.
+An uncooperative start
+can exhaust the bounded drain: teardown is still attempted, but the operation
+reports failure and stays fenced. Only the installation stop hook receives a
+cleanup signal; the executor contract does not interrupt an in-flight call.
 
 ## Requirements
 
@@ -111,7 +149,7 @@ form per kind.
 
 | `kind` | Meaning | Runtime |
 | --- | --- | --- |
-| `local_connector` | Pin to an installed connector that can `create` | `spawnSysout` uses that installation. An empty pin still picks the first creatable connector for `catalog.source` |
+| `local_connector` | Pin to an installed connector that can `create` or explicitly `execute` | Session executors use `spawnSysout`; direct executors use the host context binding. An empty pin still picks the first creatable connector for `catalog.source`, but cannot bind a direct runtime |
 | `http` | Generic HTTP adapter | `POST {base}/v1/runs`, `GET /v1/runs/:id`, `POST /v1/runs/:id/resume` |
 
 Credentials are the environment variable name `auth_env` only. The form
@@ -124,6 +162,42 @@ only.
 
 A DSH install with a `session_id` reports `create: false` and cannot be a
 local executor.
+
+### Creating a fixed local binding
+
+In Engine, install and enable the connector first. Under **Executors → Local
+connector → Install**, select that installation from **Connector**, optionally
+enter a name, and install. The desktop renders the connector options from
+`GET /v1/me/engine` → `executor_catalog` → the `local_connector` entry's
+`fields[key=installation_id].options`.
+
+The equivalent request is `POST /v1/me/executors` with:
+
+```json
+{
+  "kind": "local_connector",
+  "name": "My agent",
+  "config": { "installation_id": "<connector installation id>" }
+}
+```
+
+Use the returned executor `id` as the Recipe's `executor_type`, not the static
+plugin source. `GET /v1/me/executors` lists the mounted invoke catalogs; the
+fixed executor's `installation_id` is the connector ID passed in this request.
+The host fills the context binding from that catalog, not from recipe config.
+Direct runtimes must reject a missing host pin rather than auto-selecting the
+first installation.
+
+The install API, picker and remount share the same eligibility check. Existing
+`create`-capable session connectors keep their legacy path. A direct-only driver
+instead declares `ChannelCapabilities.execute: true` for its enabled,
+execution-enabled installation. The host requires a registered executor whose
+`catalog().source` matches the installed connector's `driver.source` and whose
+`capabilities().start` is true. Missing/disabled installations, missing drivers
+or executors, source mismatches, and disabled direct execution are rejected or
+omitted on remount, without falling back to another plugin. These metadata
+checks do not start an Agent. No `createThread` or channel send capability is
+required for a direct runtime; it must not falsely declare `create`.
 
 ## HTTP contract
 

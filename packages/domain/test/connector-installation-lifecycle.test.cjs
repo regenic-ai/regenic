@@ -2,6 +2,7 @@ const assert = require("node:assert/strict");
 const { test } = require("node:test");
 const {
   ChannelDriverRegistry, MemoryConnectorRegistry, MemoryEgressRegistry, asConnectorHost,
+  createLocalConnectorExecutor, createSessionTaskExecutor,
 } = require("../dist");
 
 const installation = {
@@ -325,4 +326,182 @@ test("caller poll cancellation is forwarded and listeners are released", async (
   abort.abort();
   await poll;
   assert.equal(getEventListeners(abort.signal, "abort").length, 0);
+});
+
+function executorFixture(f, overrides = {}, snapshot = installation) {
+  const plugin = {
+    ...createSessionTaskExecutor(),
+    start: async function () {
+      assert.equal(this, plugin);
+      f.calls.push("executor-start");
+      return { external_run_id: "owned-run", status: "running" };
+    },
+    resume: async function () {
+      assert.equal(this, plugin);
+      f.calls.push("executor-resume");
+      return { external_run_id: "owned-run", status: "running" };
+    },
+    status: async function () {
+      assert.equal(this, plugin);
+      f.calls.push("executor-status");
+      return { external_run_id: "owned-run", status: "running" };
+    },
+    cancel: function (run, ctx) {
+      assert.equal(this, plugin);
+      assert.equal(ctx.org_id, "org");
+      f.calls.push(`cancel:${run.external_run_id}`);
+      return Promise.resolve();
+    },
+    ...overrides,
+  };
+  const executor = createLocalConnectorExecutor({
+    executor_type: "bound", label: "Bound", installation_id: snapshot.id, plugin,
+  });
+  return f.registry.installationLifecycle.guardExecutor(f.driver, snapshot, executor);
+}
+
+test("executor metadata, status and cancel do not start an installation; legacy identity is unchanged", async () => {
+  const f = fixture();
+  const executor = executorFixture(f);
+  const ctx = { org_id: "org", env: {} };
+  executor.catalog();
+  executor.capabilities();
+  assert.deepEqual(f.calls, []);
+  await executor.status({}, ctx);
+  await executor.cancel({ external_run_id: "owned-run" }, ctx);
+  assert.deepEqual(f.calls, ["executor-status", "cancel:owned-run"]);
+  const legacy = fixture({ stopInstallation: undefined });
+  assert.equal(legacy.registry.installationLifecycle.guardExecutor(legacy.driver, installation, executor), executor);
+});
+
+for (const reason of ["disable", "delete"]) {
+  test(`executor ${reason} fences before draining, permits owned cancel, and rejects stale handles after resume`, async () => {
+    const f = fixture();
+    const entered = deferred();
+    const release = deferred();
+    const ctx = { org_id: "org", env: {} };
+    const executor = executorFixture(f, {
+      start: async () => {
+        f.calls.push("executor-start");
+        entered.resolve();
+        await release.promise;
+        f.calls.push("start-returned");
+        return { external_run_id: "old", status: "running" };
+      },
+      cancel: function (run, actualContext) {
+        assert.equal(actualContext, ctx);
+        f.calls.push(`cancel:${run.external_run_id}`);
+        release.resolve();
+        return Promise.resolve();
+      },
+    });
+    const starting = executor.start({}, ctx);
+    await entered.promise;
+    const stopping = f.registry.stopInstallation(installation, f.host, reason);
+    for (const method of ["start", "resume", "status"]) {
+      assert.throws(() => executor[method]({}, ctx), /stopped/);
+    }
+    assert.deepEqual(f.calls, ["start", "executor-start"]);
+    await executor.cancel({ external_run_id: "old" }, ctx);
+    await Promise.all([starting, stopping]);
+    assert.deepEqual(f.calls, ["start", "executor-start", "cancel:old", "start-returned", reason]);
+    f.registry.installationLifecycle.resume(installation.id, "new-revision");
+    const next = executorFixture(f, {}, { ...installation, updated_at: "new-revision" });
+    await next.start({}, ctx);
+    for (const method of ["start", "resume", "status", "cancel"]) {
+      assert.throws(() => executor[method]({}, ctx), /stale/);
+    }
+    assert.deepEqual(f.calls.slice(-2), ["start", "executor-start"]);
+  });
+}
+
+test("disabled and stale executor snapshots never activate or invoke an agent", async () => {
+  const f = fixture();
+  const ctx = { org_id: "org", env: {} };
+  const disabled = executorFixture(f, {}, { ...installation, status: "disabled" });
+  for (const method of ["start", "resume", "status"]) {
+    assert.throws(() => disabled[method]({}, ctx), /stopped/);
+  }
+  f.registry.installationLifecycle.resume(installation.id, "new-revision");
+  const stale = executorFixture(f);
+  assert.throws(() => stale.resume({}, ctx), /stopped/);
+  assert.deepEqual(f.calls, []);
+});
+
+test("executor resume starts once and keeps plugin arguments, context and errors", async () => {
+  const f = fixture();
+  const input = { run: { id: "owned" } };
+  const ctx = { org_id: "org", env: {} };
+  const error = new Error("plugin failed");
+  const executor = executorFixture(f, {
+    resume: function (actualInput, actualContext) {
+      assert.equal(actualInput, input);
+      assert.equal(actualContext, ctx);
+      throw error;
+    },
+  });
+  await assert.rejects(executor.resume(input, ctx), (actual) => actual === error);
+  await assert.rejects(executor.resume(input, ctx), (actual) => actual === error);
+  assert.deepEqual(f.calls, ["start"]);
+});
+
+test("uncooperative executor start has a bounded drain failure and remains fenced", async () => {
+  const f = fixture();
+  const entered = deferred();
+  const release = deferred();
+  const executor = executorFixture(f, {
+    start: async () => { entered.resolve(); await release.promise; return {}; },
+  });
+  const starting = executor.start({}, {});
+  await entered.promise;
+  await assert.rejects(f.registry.stopInstallation(installation, f.host, "disable", 40), {
+    code: "deadline_exceeded",
+  });
+  assert.throws(() => executor.resume({}, {}), /stopped/);
+  assert.throws(() => f.registry.installationLifecycle.resume(installation.id), /not completed/);
+  release.resolve();
+  await starting;
+  assert.throws(() => executor.status({}, {}), /stopped/);
+  await f.registry.stopInstallation(installation, f.host, "disable", 40);
+  f.registry.installationLifecycle.resume(installation.id);
+});
+
+test("a queued executor start cannot activate after stop closes admission", async () => {
+  const f = fixture();
+  const executor = executorFixture(f);
+  const starting = executor.start({}, {});
+  const rejected = assert.rejects(starting, /stopped/);
+  await f.registry.stopInstallation(installation, f.host, "delete");
+  await rejected;
+  assert.deepEqual(f.calls, ["delete"]);
+});
+
+test("cancel during stop keeps its promise and prevents a new generation until cleanup settles", async () => {
+  const entered = deferred();
+  const finishStop = deferred();
+  const finishCancel = deferred();
+  const f = fixture({
+    stopInstallation: async () => { entered.resolve(); await finishStop.promise; },
+  });
+  const error = new Error("cancel failed");
+  let fail = false;
+  const executor = executorFixture(f, {
+    cancel() {
+      if (fail) throw error;
+      return finishCancel.promise;
+    },
+  });
+  const stopping = f.registry.stopInstallation(installation, f.host, "disable");
+  await entered.promise;
+  const cancelling = executor.cancel({}, {});
+  assert.equal(cancelling, finishCancel.promise);
+  finishStop.resolve();
+  await stopping;
+  assert.throws(() => f.registry.installationLifecycle.resume(installation.id), /not completed/);
+  finishCancel.resolve();
+  await cancelling;
+  fail = true;
+  assert.throws(() => executor.cancel({}, {}), (actual) => actual === error);
+  f.registry.installationLifecycle.resume(installation.id);
+  assert.throws(() => executor.cancel({}, {}), /stale/);
 });

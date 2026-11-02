@@ -52,8 +52,13 @@ export class PersonalWorkChannel {
   ) {}
 
   contextFor(executor: TaskExecutor): ExecutorContext {
+    const catalog = executor.catalog();
+    const installationId = catalog.kind === "local_connector"
+      ? catalog.installation_id?.trim()
+      : undefined;
     return {
       org_id: this.runtime.orgId(),
+      ...(installationId ? { installation_id: installationId } : {}),
       env: process.env,
       spawnSysout: async (options) => {
         const host = this.runtime.requireHost();

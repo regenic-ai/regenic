@@ -114,6 +114,12 @@ export interface ChannelCapabilities {
   reply: boolean;
   create: boolean;
   /**
+   * This enabled installation allows direct tasks through a registered
+   * TaskExecutor with the same catalog.source as this driver. Independent of
+   * channel create/createThread; declare only when execution is enabled.
+   */
+  execute?: boolean;
+  /**
    * After an outbound, treat silence as waiting for the other side.
    * Session/agent channels set this. Chat channels leave it unset.
    */

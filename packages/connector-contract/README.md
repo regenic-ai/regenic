@@ -10,6 +10,39 @@ Install it with `@regenic/plugin-host`. The kernel, authority store, and blob st
 
 Requires Node.js 20 or newer.
 
+## 0.3.0 pinned executor context and direct execution
+
+This additive release candidate gives `ExecutorContext` a host-owned
+`readonly installation_id?: string`. The host supplies the pinned connector
+installation for local executors, consistently for `start`, `resume`, `status`,
+and `cancel`; unpinned and HTTP executors omit it. Existing executors remain
+compatible. `Recipe.executor_config` remains opaque and is forwarded unchanged:
+its keys cannot override the host binding.
+
+Direct agent runtimes must require this binding before starting, select an
+enabled activation in `ctx.org_id`, and verify stored run ownership against both
+`ctx.org_id` and `ctx.installation_id` before resume/status/cancel. The field is
+an installation identity, not an activation generation or a secret/config bag.
+Plugins retain responsibility for exact run ownership, durable recovery and
+idempotent cleanup. `cancel?(run, ctx): Promise<void>` remains optional and does
+not acquire an `AbortSignal`.
+
+`ChannelCapabilities.execute?: boolean` explicitly opts an installation into
+direct task execution independently of channel `create`/`createThread`.
+Drivers set it only for enabled installations with execution enabled. The host
+requires the installed connector's driver, a registered executor with matching
+`catalog().source === driver.source`, and `executor.capabilities().start`.
+These checks apply to the picker, installation validation and remount; a missing
+direct binding never falls back to another executor. Existing `create`-capable
+session connectors retain their legacy path without declaring `execute`.
+Capability/catalog queries must not start resources.
+
+The minor version marks the new public capability; it does not change the
+connector wire protocol or require existing session executors to read the field.
+This candidate and any local tarballs are **not a registry release**. Consumers
+must validate against the candidate declarations, then wait for a separately
+authorized publication before expecting npm to resolve `0.3.0`.
+
 ## 0.2.0 validation migration
 
 This release candidate uses Zod `^4.6.7` to address

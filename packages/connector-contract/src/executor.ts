@@ -111,7 +111,7 @@ export interface ExecutorCatalogEntry {
   params_label?: CopyRef;
   source?: string;
   attach?: AttachMode;
-  /** Local binding: pin spawnSysout to this connector installation. */
+  /** Host-owned local binding, also used to pin spawnSysout. */
   installation_id?: string;
   kind?: "local_connector" | "http";
   fields: ExecutorCatalogField[];
@@ -119,6 +119,12 @@ export interface ExecutorCatalogEntry {
 
 export interface ExecutorContext {
   org_id: string;
+  /**
+   * Host-owned pinned connector installation for a local executor, not recipe
+   * configuration. Absent for unpinned and HTTP executors. Direct runtimes must
+   * require it and verify that an existing run belongs to this org/installation.
+   */
+  readonly installation_id?: string;
   env: NodeJS.ProcessEnv;
   /** Absentee sysout. Not a Session. */
   spawnSysout(options?: {
