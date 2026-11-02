@@ -15,8 +15,12 @@ import {
   mergeSearchMessages,
   searchAnswerConversations,
   searchAnswerSegments,
+  searchElapsedSeconds,
+  searchFileType,
   searchHighlightRanges,
+  searchMentionsFiles,
   searchMessageText,
+  searchSnippetPreview,
   searchWindowRequest,
 } from "../src/renderer/src/context-search.ts";
 import { en, zh, type MessageKey } from "../src/shared/messages.ts";
@@ -94,6 +98,36 @@ test("search highlighting finds Chinese runs without whitespace and Latin terms 
   assert.deepEqual(searchHighlightRanges("这里的回复指邀约回复。", query), [[3, 5], [8, 10]]);
   assert.deepEqual(searchHighlightRanges("Alice is Creator-1", "creator alice"), [[0, 5], [9, 16]]);
   assert.deepEqual(searchHighlightRanges("无关内容", query), []);
+});
+
+test("search highlighting keeps Latin words whole next to CJK text", () => {
+  const query = "看下最近有哪些Excel文件";
+  assert.deepEqual(searchHighlightRanges("device Space excellent", query), []);
+  assert.deepEqual(searchHighlightRanges("Budget.xlsx is an Excel workbook", query), [[18, 23]]);
+  assert.deepEqual(searchHighlightRanges("这些Excel文件", query), [[2, 9]]);
+});
+
+test("search file types prefer specific metadata and fall back to the filename", () => {
+  assert.deepEqual(searchFileType("index.html", "application/octet-stream"),
+    { format: "HTML", badge: "HTML", category: "code", code: true });
+  assert.equal(searchFileType("notes.md", "application/octet-stream").format, "Markdown");
+  assert.equal(searchFileType("report.bin", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet").format, "Excel");
+  assert.equal(searchFileType("photo", "image/jpeg").format, "JPEG");
+  assert.equal(searchFileType("data.custom", "application/x-custom").format, "application/x-custom");
+  assert.deepEqual(searchFileType("blob", "application/octet-stream"),
+    { format: null, badge: "", category: "file", code: false });
+  assert.equal(searchFileType(undefined, undefined).format, null);
+});
+
+test("search snippet previews flag long excerpts and file intent is only detected", () => {
+  assert.deepEqual(searchSnippetPreview("\n\nshort\ntext  "), { text: "short\ntext", long: false });
+  assert.equal(searchSnippetPreview(Array.from({ length: 7 }, (_, i) => `line ${i}`).join("\n")).long, true);
+  assert.equal(searchSnippetPreview("x".repeat(361)).long, true);
+  assert.equal(searchMentionsFiles("看下最近有哪些Excel文件"), true);
+  assert.equal(searchMentionsFiles("send the xlsx"), true);
+  assert.equal(searchMentionsFiles("profile update"), false);
+  assert.equal(searchElapsedSeconds(583), "0.58");
+  assert.equal(searchElapsedSeconds(12_345), "12.3");
 });
 
 test("search cards load windows from their boundaries and close them when exhausted", () => {

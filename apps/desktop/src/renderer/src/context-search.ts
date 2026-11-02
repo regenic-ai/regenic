@@ -149,7 +149,9 @@ export function searchAnswerSegments(
 }
 
 const CJK = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
-const SEGMENTS = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]+|[\p{L}\p{N}_]+/gu;
+// Mirrors the domain lexical tokenizer: Latin runs stop at CJK so "Excel文件" is "excel" + "文件", never "ce".
+const SEGMENTS = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]+|(?:(?![\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}])[\p{L}\p{N}_])+/gu;
+const WORD = /(?![\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}])[\p{L}\p{N}_]/u;
 const MAX_SEGMENT_CHARACTERS = 64;
 
 /** Lexical search matches CJK by short n-grams, so highlight the longest query runs of 2+ characters found in the text. */
@@ -157,15 +159,16 @@ export function searchHighlightRanges(text: string, query: string): Array<[numbe
   const haystack = text.toLowerCase();
   if (haystack.length !== text.length) return [];
   const ranges: Array<[number, number]> = [];
-  const mark = (term: string) => {
-    for (let index = haystack.indexOf(term); index >= 0; index = haystack.indexOf(term, index + term.length)) {
+  const mark = (term: string, whole = false) => {
+    for (let index = haystack.indexOf(term); index >= 0; index = haystack.indexOf(term, index + 1)) {
+      if (whole && (WORD.test(haystack.charAt(index - 1)) || WORD.test(haystack.charAt(index + term.length)))) continue;
       ranges.push([index, index + term.length]);
     }
   };
   for (const segment of query.toLowerCase().match(SEGMENTS) ?? []) {
     const characters = [...segment].slice(0, MAX_SEGMENT_CHARACTERS);
     if (!CJK.test(segment)) {
-      if (characters.length >= 2) mark(characters.join(""));
+      if (characters.length >= 2) mark(characters.join(""), true);
       continue;
     }
     let start = 0;
@@ -188,4 +191,106 @@ export function searchHighlightRanges(text: string, query: string): Array<[numbe
     else merged.push([start, end]);
   }
   return merged;
+}
+
+export type SearchFileCategory =
+  | "spreadsheet" | "document" | "presentation" | "pdf" | "image" | "code" | "text" | "archive" | "audio" | "video" | "file";
+
+export interface SearchFileType {
+  /** Display name such as "Excel" or "HTML"; null when only the generic label applies. */
+  format: string | null;
+  /** Short icon badge, at most four characters. */
+  badge: string;
+  category: SearchFileCategory;
+  /** Source-like content whose snippet reads best in a monospace font. */
+  code: boolean;
+}
+
+const GENERIC_MEDIA_TYPES = new Set(["", "application/octet-stream", "binary/octet-stream", "application/unknown", "application/x-unknown"]);
+const CODE_EXTENSIONS = new Set([
+  "html", "htm", "xml", "json", "yaml", "yml", "toml", "css", "scss", "js", "mjs", "cjs", "ts", "tsx", "jsx",
+  "py", "rb", "go", "rs", "java", "kt", "swift", "c", "h", "cc", "cpp", "hpp", "cs", "php", "sh", "sql", "log", "csv", "tsv",
+]);
+const EXTENSION_TYPES: Record<string, [string, SearchFileCategory]> = {
+  xlsx: ["Excel", "spreadsheet"], xls: ["Excel", "spreadsheet"], xlsm: ["Excel", "spreadsheet"],
+  csv: ["CSV", "spreadsheet"], tsv: ["TSV", "spreadsheet"], numbers: ["Numbers", "spreadsheet"], ods: ["ODS", "spreadsheet"],
+  docx: ["Word", "document"], doc: ["Word", "document"], pages: ["Pages", "document"], odt: ["ODT", "document"], rtf: ["RTF", "document"],
+  pptx: ["PowerPoint", "presentation"], ppt: ["PowerPoint", "presentation"], key: ["Keynote", "presentation"], odp: ["ODP", "presentation"],
+  pdf: ["PDF", "pdf"],
+  md: ["Markdown", "text"], markdown: ["Markdown", "text"], txt: ["Text", "text"], log: ["Log", "text"],
+  html: ["HTML", "code"], htm: ["HTML", "code"],
+  png: ["PNG", "image"], jpg: ["JPEG", "image"], jpeg: ["JPEG", "image"], gif: ["GIF", "image"], webp: ["WebP", "image"],
+  heic: ["HEIC", "image"], svg: ["SVG", "image"], bmp: ["BMP", "image"], tif: ["TIFF", "image"], tiff: ["TIFF", "image"],
+  zip: ["ZIP", "archive"], rar: ["RAR", "archive"], "7z": ["7Z", "archive"], tar: ["TAR", "archive"], gz: ["GZIP", "archive"],
+  mp3: ["MP3", "audio"], wav: ["WAV", "audio"], m4a: ["M4A", "audio"], aac: ["AAC", "audio"],
+  mp4: ["MP4", "video"], mov: ["MOV", "video"], webm: ["WebM", "video"], mkv: ["MKV", "video"],
+};
+const MEDIA_TYPES: Array<[RegExp, string, SearchFileCategory, string]> = [
+  [/^text\/html$|^application\/xhtml\+xml$/, "HTML", "code", "html"],
+  [/^text\/markdown$|^text\/x-markdown$/, "Markdown", "text", "md"],
+  [/^text\/csv$/, "CSV", "spreadsheet", "csv"],
+  [/^text\/plain$/, "Text", "text", "txt"],
+  [/^application\/json$/, "JSON", "code", "json"],
+  [/^(application|text)\/xml$/, "XML", "code", "xml"],
+  [/^application\/pdf$/, "PDF", "pdf", "pdf"],
+  [/spreadsheetml|^application\/vnd\.ms-excel/, "Excel", "spreadsheet", "xlsx"],
+  [/wordprocessingml|^application\/msword$/, "Word", "document", "docx"],
+  [/presentationml|^application\/vnd\.ms-powerpoint/, "PowerPoint", "presentation", "pptx"],
+  [/^application\/(zip|x-zip-compressed|x-7z-compressed|x-rar-compressed|gzip|x-tar)$/, "Archive", "archive", "zip"],
+];
+
+/** Friendly type from the stored part metadata: a specific media type wins, else the filename extension. */
+export function searchFileType(filename: string | undefined, mediaType: string | undefined): SearchFileType {
+  const media = (mediaType ?? "").trim().toLowerCase().split(";")[0].trim();
+  const extension = /\.([a-z0-9]{1,10})$/i.exec(filename?.trim() ?? "")?.[1]?.toLowerCase();
+  const badgeOf = (value: string) => value.toUpperCase().slice(0, 4);
+  if (!GENERIC_MEDIA_TYPES.has(media)) {
+    for (const [pattern, format, category, canonical] of MEDIA_TYPES) {
+      if (!pattern.test(media)) continue;
+      const name = format === "Archive" ? badgeOf(extension ?? canonical) : format;
+      const known = extension && EXTENSION_TYPES[extension]?.[1] === category;
+      return { format: name, badge: badgeOf(known ? extension : canonical), category,
+        code: category === "code" || (known ? CODE_EXTENSIONS.has(extension) : CODE_EXTENSIONS.has(canonical)) };
+    }
+    const [top, subtype = ""] = media.split("/");
+    if (top === "image" || top === "audio" || top === "video") {
+      const short = subtype.replace(/^(x-|vnd\.)/, "").split(/[+.]/)[0];
+      return { format: short === "jpeg" ? "JPEG" : short.toUpperCase() || null, badge: badgeOf(short || top), category: top as SearchFileCategory, code: false };
+    }
+    if (top === "text" && extension && CODE_EXTENSIONS.has(extension)) {
+      return { format: EXTENSION_TYPES[extension]?.[0] ?? extension.toUpperCase(), badge: badgeOf(extension), category: "code", code: true };
+    }
+  }
+  if (extension && EXTENSION_TYPES[extension]) {
+    const [format, category] = EXTENSION_TYPES[extension];
+    return { format, badge: badgeOf(extension), category, code: CODE_EXTENSIONS.has(extension) };
+  }
+  if (extension && CODE_EXTENSIONS.has(extension)) {
+    return { format: extension.toUpperCase(), badge: badgeOf(extension), category: "code", code: true };
+  }
+  if (!GENERIC_MEDIA_TYPES.has(media)) {
+    return { format: media, badge: badgeOf(extension ?? "file"), category: "file", code: false };
+  }
+  return { format: null, badge: extension ? badgeOf(extension) : "", category: "file", code: false };
+}
+
+export const SEARCH_SNIPPET_LINES = 6;
+const SEARCH_SNIPPET_CHARACTERS = 360;
+
+/** Trims blank edges for display and reports whether the collapsed view would hide content. */
+export function searchSnippetPreview(snippet: string): { text: string; long: boolean } {
+  const text = snippet.replace(/^(?:[ \t]*\r?\n)+/, "").trimEnd();
+  return { text, long: text.split(/\r?\n/).length > SEARCH_SNIPPET_LINES || text.length > SEARCH_SNIPPET_CHARACTERS };
+}
+
+const FILE_INTENT = /(?<![a-z0-9])(excel|xlsx?|csv|pdf|docx?|word|pptx?|powerpoint|keynote|spreadsheets?|attachments?|files?|documents?)(?![a-z0-9])|表格|文件|文档|附件|幻灯片|演示稿/iu;
+
+/** True when the query names a file or file format; used only to offer the Files filter, never to apply it. */
+export function searchMentionsFiles(query: string): boolean {
+  return FILE_INTENT.test(query);
+}
+
+/** Elapsed time in seconds with enough precision for sub-second searches. */
+export function searchElapsedSeconds(ms: number): string {
+  return (ms / 1000).toFixed(ms < 10_000 ? 2 : 1);
 }

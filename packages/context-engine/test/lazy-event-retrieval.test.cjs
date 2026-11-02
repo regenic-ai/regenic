@@ -46,7 +46,7 @@ function fixture(events, options = {}) {
     async matchAuthorized(input) {
       if (options.index) return options.index(input);
       return {
-        available: true, algorithm_version: "literal-unicode-v1",
+        available: true, algorithm_version: "literal-unicode-v2",
         generation: "continuous-v1", watermark: "authority:1",
         covered: input.authorized.filter((key) => key.event_id !== "uncovered"),
         matched: input.authorized.filter((key) => key.event_id === "hit"),
@@ -163,7 +163,7 @@ describe("lazy authorized Event materialization", () => {
   it("rejects unauthorized index and materializer requests before touching their bodies", async () => {
     const f = fixture([sourceEvent("hit")], {
       index: async () => ({
-        available: true, algorithm_version: "literal-unicode-v1", generation: "v1",
+        available: true, algorithm_version: "literal-unicode-v2", generation: "v1",
         covered: [{ event_id: "hidden", content_hash: hash }], matched: [],
       }),
     });
