@@ -2,9 +2,20 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import {
+  WORK_CONTEXT_AGENT_STATUS_METHOD,
   WORK_CONTEXT_MCP_SERVER,
   type WorkContextAccess,
 } from "@regenic/connector-contract";
+
+/** DSH reloads the patch and reconnects in about a second when it is running. */
+export const DSH_CONTEXT_CONNECT_TIMEOUT_MS = 5000;
+const DSH_CONTEXT_CONNECT_POLL_MS = 250;
+
+export interface DshContextPatchOptions {
+  fetch?: typeof fetch;
+  timeout_ms?: number;
+  poll_ms?: number;
+}
 
 export const DSH_CONTEXT_PATCH_BEGIN = "# BEGIN regenic-context (managed by Regenic; do not edit)";
 export const DSH_CONTEXT_PATCH_END = "# END regenic-context";
@@ -74,13 +85,14 @@ export function upsertDshContextPatch(
 }
 
 /**
- * Makes sure DSH mounts the Regenic context MCP. DSH hot-reloads the file, but
- * reconnecting takes a moment, so a run only relies on the tools when the
- * patch was already in place before it started.
+ * Makes sure DSH mounts the Regenic context MCP. After writing the patch it
+ * waits for DSH to hot-reload and list the tools, so the run that wrote the
+ * patch can already rely on them. Not ready means push-only for this run.
  */
 export async function ensureDshContextPatch(
   access: Pick<WorkContextAccess, "url" | "agent_key">,
   env: NodeJS.ProcessEnv = process.env,
+  options: DshContextPatchOptions = {},
 ): Promise<{ ready: boolean }> {
   if (!access.agent_key) return { ready: false };
   const path = dshUserPatchPath(env);
@@ -96,6 +108,7 @@ export async function ensureDshContextPatch(
   );
   if (!next) return { ready: false };
   if (!next.changed) return { ready: true };
+  const since = Date.now();
   try {
     await mkdir(dirname(path), { recursive: true });
     const temp = `${path}.regenic-${process.pid}.tmp`;
@@ -103,6 +116,39 @@ export async function ensureDshContextPatch(
     await rename(temp, path);
   } catch {
     // Push-only still works; the next run retries.
+    return { ready: false };
   }
-  return { ready: false };
+  return { ready: await waitForDshContextConnect(access, since, options) };
+}
+
+/** True once an agent holding the agent key has listed the tools at or after `since`. */
+export async function waitForDshContextConnect(
+  access: Pick<WorkContextAccess, "url" | "agent_key">,
+  since: number,
+  options: DshContextPatchOptions = {},
+): Promise<boolean> {
+  const fetcher = options.fetch ?? fetch;
+  const deadline = Date.now() + (options.timeout_ms ?? DSH_CONTEXT_CONNECT_TIMEOUT_MS);
+  const poll = options.poll_ms ?? DSH_CONTEXT_CONNECT_POLL_MS;
+  for (;;) {
+    try {
+      const response = await fetcher(access.url, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${access.agent_key}`,
+        },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: WORK_CONTEXT_AGENT_STATUS_METHOD }),
+      });
+      if (response.ok) {
+        const body = await response.json() as { result?: { agent_connected_at?: unknown } };
+        const at = body.result?.agent_connected_at;
+        if (typeof at === "number" && at >= since) return true;
+      }
+    } catch {
+      // Kernel endpoint not reachable; keep polling until the deadline.
+    }
+    if (Date.now() + poll > deadline) return false;
+    await new Promise((resolve) => setTimeout(resolve, poll));
+  }
 }

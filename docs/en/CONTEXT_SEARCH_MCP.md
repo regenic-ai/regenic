@@ -109,7 +109,7 @@ Authorization: Bearer <credential>
 ```
 
 - **Run token** (`rgc1.…`): scoped to one run. Cursor and other executors that accept MCP servers at session creation get it automatically as the `regenic-context` server.
-- **Agent key** (`rgk1.…`): for DSH, which loads MCP servers from config. Regenic adds a `regenic-context` entry (between `# BEGIN regenic-context` / `# END regenic-context` markers) to `$DSH_HOME/cordis.patch.yml` (default `~/.dsh`). With this key every tool call must pass the `run_id` written in `AGENTS.md`. Regenic leaves files it cannot edit safely untouched and falls back to pushing the chat.
+- **Agent key** (`rgk1.…`): for DSH, which loads MCP servers from config. Regenic adds a `regenic-context` entry (between `# BEGIN regenic-context` / `# END regenic-context` markers) to `$DSH_HOME/cordis.patch.yml` (default `~/.dsh`). With this key every tool call must pass the `run_id` written in `AGENTS.md`. Regenic leaves files it cannot edit safely untouched and falls back to pushing the chat. After writing the entry, Regenic waits up to 5 seconds for DSH to reload it and list the tools; if DSH does not, that run gets the chat pushed and later runs read it. The key is derived from `.regenic-agent-context-secret` in the data directory, so it survives kernel restarts and the entry stays unchanged.
 
 Both credentials are read-only and work only while the run is `running` or `waiting_human` and less than 24 hours old. Requests with an `Origin` header are rejected. The endpoint needs the Personal API to be enabled.
 

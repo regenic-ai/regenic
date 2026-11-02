@@ -424,6 +424,44 @@ describe("agent context MCP", () => {
     assert.equal(earlier.body.result.isError, undefined, JSON.stringify(earlier.body));
     assert.ok(earlier.body.result.structuredContent.messages.length >= 1);
   });
+
+  it("reports when an agent with the agent key last listed the tools", async () => {
+    const root = await createRoot();
+    const { app, origin } = await startApi(root, { driver: "none" }, undefined, seedAgentRun);
+    const { PersonalAgentContextAccessService } = require("../dist/personal-agent-context-access.service");
+    const access = app.get(PersonalAgentContextAccessService);
+    const key = access.agentKey();
+    const before = await mcp(origin, key, "regenic/agent_status");
+    assert.equal(before.body.result.agent_connected_at, null);
+    await mcp(origin, access.runToken("run-open"), "tools/list");
+    assert.equal((await mcp(origin, key, "regenic/agent_status")).body.result.agent_connected_at, null);
+    const since = Date.now();
+    await mcp(origin, key, "tools/list");
+    const after = (await mcp(origin, key, "regenic/agent_status")).body.result.agent_connected_at;
+    assert.ok(after >= since);
+    const asRun = await mcp(origin, access.runToken("run-open"), "regenic/agent_status");
+    assert.equal(asRun.body.result.agent_connected_at, null);
+  });
+
+  it("keeps the agent key across kernel restarts even when the personal API key changes", async () => {
+    const root = await createRoot();
+    const { PersonalAgentContextAccessService } = require("../dist/personal-agent-context-access.service");
+    const previous = process.env.REGENIC_PERSONAL_API_KEY;
+    try {
+      process.env.REGENIC_PERSONAL_API_KEY = "desktop-launch-key-1";
+      const first = await startApi(root, { driver: "none" }, undefined, seedAgentRun);
+      const key = first.app.get(PersonalAgentContextAccessService).agentKey();
+      await first.app.close();
+      apps.splice(apps.indexOf(first.app), 1);
+      process.env.REGENIC_PERSONAL_API_KEY = "desktop-launch-key-2";
+      const second = await startApi(root, { driver: "none" }, undefined, null);
+      assert.equal(second.app.get(PersonalAgentContextAccessService).agentKey(), key);
+      assert.equal((await mcp(second.origin, key, "ping")).status, 200);
+    } finally {
+      if (previous === undefined) delete process.env.REGENIC_PERSONAL_API_KEY;
+      else process.env.REGENIC_PERSONAL_API_KEY = previous;
+    }
+  });
 });
 
 describe("personal context API", () => {

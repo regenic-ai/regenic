@@ -102,7 +102,7 @@ Authorization: Bearer <凭据>
 ```
 
 - **运行令牌**（`rgc1.…`）：只对一次运行有效。Cursor 等在创建会话时接受 MCP 配置的执行器会自动以 `regenic-context` 挂上。
-- **Agent 密钥**（`rgk1.…`）：给从配置文件加载 MCP 的 DSH 用。Regenic 在 `$DSH_HOME/cordis.patch.yml`（默认 `~/.dsh`）里写入 `regenic-context`（位于 `# BEGIN regenic-context` / `# END regenic-context` 标记之间）。用这个密钥时，每次调用都要带 `AGENTS.md` 里给出的 `run_id`。文件无法安全修改时 Regenic 不动它，改为推送会话记录。
+- **Agent 密钥**（`rgk1.…`）：给从配置文件加载 MCP 的 DSH 用。Regenic 在 `$DSH_HOME/cordis.patch.yml`（默认 `~/.dsh`）里写入 `regenic-context`（位于 `# BEGIN regenic-context` / `# END regenic-context` 标记之间）。用这个密钥时，每次调用都要带 `AGENTS.md` 里给出的 `run_id`。文件无法安全修改时 Regenic 不动它，改为推送会话记录。写入后 Regenic 最多等 5 秒，确认 DSH 已重新加载并列出工具；没等到的话，这次运行改为推送会话记录，之后的运行再由 Agent 自己查。密钥由数据目录里的 `.regenic-agent-context-secret` 生成，内核重启后不变，DSH 配置也不用重写。
 
 两种凭据都只读，只在运行处于 `running` 或 `waiting_human` 且不超过 24 小时时有效；带 `Origin` 头的请求一律拒绝；需要开启个人 API。
 

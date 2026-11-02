@@ -11,7 +11,7 @@ import {
 } from "@nestjs/common";
 import type { Request, Response } from "express";
 import { isPersonalApiEnabled } from "@regenic/config";
-import type { CopyLocale } from "@regenic/domain";
+import { WORK_CONTEXT_AGENT_STATUS_METHOD, type CopyLocale } from "@regenic/domain";
 import {
   PersonalAgentContextAccessService,
   type AgentContextCredential,
@@ -148,7 +148,14 @@ export class PersonalAgentContextController {
       case "ping":
         return rpcResult(id, {});
       case "tools/list":
+        if (credential.kind === "agent") this.access.markAgentConnected();
         return rpcResult(id, { tools: toolList(credential) });
+      case WORK_CONTEXT_AGENT_STATUS_METHOD:
+        return rpcResult(id, {
+          agent_connected_at: credential.kind === "agent"
+            ? this.access.agentConnectedSince() ?? null
+            : null,
+        });
       case "tools/call":
         try {
           const result = await this.call(credential, params);

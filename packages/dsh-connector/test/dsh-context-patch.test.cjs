@@ -1,4 +1,5 @@
 const assert = require("node:assert/strict");
+const { createServer } = require("node:http");
 const { mkdtemp, readFile, writeFile } = require("node:fs/promises");
 const { tmpdir } = require("node:os");
 const { join } = require("node:path");
@@ -10,6 +11,14 @@ const {
   ensureDshContextPatch,
   upsertDshContextPatch,
 } = require("../dist");
+
+/** Stands in for the kernel's agent status call; `connectedAt()` is what it reports. */
+function statusFetch(connectedAt, calls = []) {
+  return async (url, init) => {
+    calls.push({ url, auth: init.headers.authorization, body: JSON.parse(init.body) });
+    return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { agent_connected_at: connectedAt() } }));
+  };
+}
 
 const access = {
   url: "http://127.0.0.1:4370/v1/agent/context/mcp",
@@ -45,12 +54,36 @@ describe("upsertDshContextPatch", () => {
 });
 
 describe("ensureDshContextPatch", () => {
-  it("is not ready on the run that first writes the patch, then ready", async () => {
+  it("waits for DSH to reconnect after writing the patch", async () => {
     const home = await mkdtemp(join(tmpdir(), "dsh-home-"));
     const env = { DSH_HOME: home };
-    assert.deepEqual(await ensureDshContextPatch(access, env), { ready: false });
+    const calls = [];
+    let connectedAt = null;
+    let polls = 0;
+    const fetch = statusFetch(() => (++polls >= 3 ? (connectedAt ??= Date.now()) : null), calls);
+    assert.deepEqual(await ensureDshContextPatch(access, env, { fetch, poll_ms: 1 }), { ready: true });
     assert.equal(await readFile(join(home, "cordis.patch.yml"), "utf8"), `${block}\n`);
-    assert.deepEqual(await ensureDshContextPatch(access, env), { ready: true });
+    assert.equal(calls.length, 3);
+    assert.equal(calls[0].url, access.url);
+    assert.equal(calls[0].auth, `Bearer ${access.agent_key}`);
+    assert.equal(calls[0].body.method, "regenic/agent_status");
+    assert.deepEqual(await ensureDshContextPatch(access, env, { fetch }), { ready: true });
+    assert.equal(calls.length, 3);
+  });
+
+  it("is not ready when DSH does not reconnect, or only connected before the write", async () => {
+    const home = await mkdtemp(join(tmpdir(), "dsh-home-"));
+    const stale = Date.now() - 60_000;
+    const fetch = statusFetch(() => stale);
+    const result = await ensureDshContextPatch(access, { DSH_HOME: home }, { fetch, timeout_ms: 20, poll_ms: 5 });
+    assert.deepEqual(result, { ready: false });
+    const down = async () => { throw new Error("ECONNREFUSED"); };
+    const again = await ensureDshContextPatch(
+      { ...access, agent_key: "rgk1.new" },
+      { DSH_HOME: home },
+      { fetch: down, timeout_ms: 20, poll_ms: 5 },
+    );
+    assert.deepEqual(again, { ready: false });
   });
 
   it("does not touch a file it cannot edit safely", async () => {
@@ -95,13 +128,50 @@ describe("dshTaskExecutor self-serve start", () => {
     };
   }
 
-  it("pushes the chat on the first run and lets DSH read it afterwards", async () => {
+  /** A loopback kernel stub; DSH "connects" when `connected` is true. */
+  async function kernel(connected) {
+    const server = createServer((request, response) => {
+      request.resume();
+      request.on("end", () => {
+        response.setHeader("content-type", "application/json");
+        response.end(JSON.stringify({
+          jsonrpc: "2.0", id: 1, result: { agent_connected_at: connected ? Date.now() : null },
+        }));
+      });
+    });
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const url = `http://127.0.0.1:${server.address().port}/v1/agent/context/mcp`;
+    return { url, close: () => new Promise((resolve) => server.close(resolve)) };
+  }
+
+  it("lets DSH read the chat on the run that writes the patch once DSH reconnects", async () => {
     const home = await mkdtemp(join(tmpdir(), "dsh-home-"));
-    const written = [];
-    await dshTaskExecutor.start(input(), ctx({ DSH_HOME: home }, written));
-    assert.match(written[0]["AGENTS.md"], /A: earlier chat/);
-    await dshTaskExecutor.start(input(), ctx({ DSH_HOME: home }, written));
-    assert.equal(written[1]["AGENTS.md"].includes("A: earlier chat"), false);
-    assert.match(written[1]["AGENTS.md"], /Pass run_id "run-1"/);
+    const stub = await kernel(true);
+    try {
+      const written = [];
+      const run = input();
+      run.conversation.access = { ...access, url: stub.url };
+      await dshTaskExecutor.start(run, ctx({ DSH_HOME: home }, written));
+      assert.equal(written[0]["AGENTS.md"].includes("A: earlier chat"), false);
+      assert.match(written[0]["AGENTS.md"], /Pass run_id "run-1"/);
+    } finally {
+      await stub.close();
+    }
+  });
+
+  it("pushes the chat when DSH does not pick up the patch, then reads it later", async () => {
+    const home = await mkdtemp(join(tmpdir(), "dsh-home-"));
+    const stub = await kernel(false);
+    try {
+      const written = [];
+      const run = input();
+      run.conversation.access = { ...access, url: stub.url };
+      await dshTaskExecutor.start(run, ctx({ DSH_HOME: home }, written));
+      assert.match(written[0]["AGENTS.md"], /A: earlier chat/);
+      await dshTaskExecutor.start(run, ctx({ DSH_HOME: home }, written));
+      assert.match(written[1]["AGENTS.md"], /Pass run_id "run-1"/);
+    } finally {
+      await stub.close();
+    }
   });
 });
