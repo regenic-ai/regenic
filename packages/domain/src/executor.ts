@@ -35,6 +35,7 @@ export type {
   WorkTaskRef,
 } from "@regenic/connector-contract";
 export {
+  WORK_CONTEXT_AGENT_STATUS_METHOD,
   WORK_CONTEXT_MCP_SERVER,
   WORK_HISTORY_FILENAME,
   prepareLocalAgentStart,

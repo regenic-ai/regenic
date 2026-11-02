@@ -1,11 +1,12 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import { Inject, Injectable } from "@nestjs/common";
-import { loadEnv } from "@regenic/config";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { Inject, Injectable, OnModuleInit } from "@nestjs/common";
+import { isPersonalApiEnabled, loadEnv, resolveAuthorityBackend } from "@regenic/config";
 import type { WorkContextAccess, WorkItem, WorkRun } from "@regenic/domain";
-import { PersonalApiKeyService } from "./personal-api-key.service";
 import { PersonalRuntimeService } from "./personal-runtime.service";
 
-const SECRET_LABEL = "regenic-agent-context-v1";
+const SECRET_FILE = ".regenic-agent-context-secret";
 const RUN_TOKEN_PREFIX = "rgc1";
 const AGENT_KEY_PREFIX = "rgk1";
 /** A run older than this cannot read context even if it is still open. */
@@ -35,17 +36,52 @@ export interface AgentContextScope {
  * Credentials for agents that read chat context while working a run.
  * Run tokens are stateless (HMAC of the run id), so a resumed agent gets the
  * same token. The agent key spans runs and must name an open run per call.
+ * The secret is stored next to the data so the agent key, which DSH keeps in
+ * its config, survives kernel restarts.
  */
 @Injectable()
-export class PersonalAgentContextAccessService {
-  private readonly fallbackSecret = randomBytes(32);
+export class PersonalAgentContextAccessService implements OnModuleInit {
+  private secret = randomBytes(32);
+  private agentConnectedAt: number | undefined;
 
   constructor(
-    @Inject(PersonalApiKeyService)
-    private readonly keys: PersonalApiKeyService,
     @Inject(PersonalRuntimeService)
     private readonly runtime: PersonalRuntimeService,
   ) {}
+
+  async onModuleInit(): Promise<void> {
+    const env = loadEnv();
+    const backend = resolveAuthorityBackend(env);
+    if (backend.driver === "none" || !isPersonalApiEnabled(env)) return;
+    const path = join(
+      backend.driver === "sqlite" ? dirname(backend.path) : backend.blobRoot,
+      SECRET_FILE,
+    );
+    try {
+      const stored = Buffer.from((await readFile(path, "utf8")).trim(), "base64url");
+      if (stored.length >= 32) {
+        this.secret = stored;
+        return;
+      }
+    } catch {
+      // Not created yet.
+    }
+    try {
+      await mkdir(dirname(path), { recursive: true });
+      await writeFile(path, `${this.secret.toString("base64url")}\n`, { mode: 0o600 });
+    } catch {
+      // Keep the in-memory secret; agent keys then change on restart.
+    }
+  }
+
+  /** An agent holding the agent key listed the tools (DSH does this when it loads the MCP). */
+  markAgentConnected(now = Date.now()): void {
+    this.agentConnectedAt = now;
+  }
+
+  agentConnectedSince(): number | undefined {
+    return this.agentConnectedAt;
+  }
 
   url(): string {
     return `http://127.0.0.1:${loadEnv().PORT}${AGENT_CONTEXT_PATH}`;
@@ -132,11 +168,7 @@ export class PersonalAgentContextAccessService {
   }
 
   private sign(message: string): string {
-    const key = this.keys.expectedKey()?.trim();
-    const secret = key
-      ? createHmac("sha256", key).update(SECRET_LABEL).digest()
-      : this.fallbackSecret;
-    return createHmac("sha256", secret).update(message).digest("base64url");
+    return createHmac("sha256", this.secret).update(message).digest("base64url");
   }
 }
 

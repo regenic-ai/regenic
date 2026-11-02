@@ -186,6 +186,11 @@ export interface WorkContextAccess {
 }
 
 export const WORK_CONTEXT_MCP_SERVER = "regenic-context";
+/**
+ * Non-MCP method on the context endpoint. With the agent key it returns
+ * `{ agent_connected_at }`: when an agent holding that key last listed tools.
+ */
+export const WORK_CONTEXT_AGENT_STATUS_METHOD = "regenic/agent_status";
 
 export function workContextMcpServers(
   access: WorkContextAccess,
