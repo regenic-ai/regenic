@@ -111,4 +111,4 @@ The server exposes read-only context tools. It does not grant new authorization,
 
 ## Automation rules
 
-Automation rules with **Include related context** already run one search before the agent starts. The kernel uses the current message as the query, skips the source conversation, and passes up to 3 matched conversations as a `<related>` section (`related.md` for local-workspace agents). Configure this MCP when the agent should search again or read further from those anchors.
+Automation rules with **Include related context** already run one search before the agent starts. The kernel queries with the current message, the message plus the few before it, and the identifiers in them (order numbers, emails, links, ticket keys), fuses the results, skips messages the agent already gets as history, and passes up to 3 matched conversations as a `<related>` section (`related.md` for local-workspace agents). Configure this MCP when the agent should search again or read further from those anchors.

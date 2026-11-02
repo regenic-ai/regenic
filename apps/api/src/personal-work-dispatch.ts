@@ -3,6 +3,7 @@ import {
   advanceRecipePull,
   WORK_FILE_FETCH_LIMIT,
   composeWorkConversation,
+  workRelatedSeed,
   conversationId,
   deliveryErrorMessage,
   failedWorkStart,
@@ -492,8 +493,15 @@ export class PersonalWorkDispatch {
         : await this.channel.evidenceText(item.thread_id, item.head_event_id);
     const relatedText =
       includeContext && this.related
-        ? await this.related(item.thread_id, evidenceText || headText || "")
-            .catch(() => undefined)
+        ? await this.related({
+            thread_id: item.thread_id,
+            ...workRelatedSeed({
+              trigger_text: evidenceText,
+              head_text: headText,
+              current_event_id: item.head_event_id,
+              thread_lines: thread.lines,
+            }),
+          }).catch(() => undefined)
         : undefined;
     const composed = composeWorkConversation({
       include_context: includeContext,

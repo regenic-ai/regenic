@@ -141,15 +141,19 @@ describe("durable executor start", () => {
     const lookups = [];
     let stdin = "";
     f.hooks.stdin = async (_thread, text) => { stdin = text; };
-    const related = async (threadId, query) => {
-      lookups.push({ threadId, query });
+    const related = async (request) => {
+      lookups.push(request);
       return "## Slack · #billing\nAnn: refund for order 42 approved";
     };
     const dispatch = new PersonalWorkDispatch(
       f.runtime, f.channel, f.supervise(), { attach() {} }, related,
     );
     await dispatch.startItem(f.item, recipe, "where is my refund for order 42");
-    assert.deepEqual(lookups, [{ threadId: "feishu:oc_1", query: "where is my refund for order 42" }]);
+    assert.equal(lookups.length, 1);
+    assert.equal(lookups[0].thread_id, "feishu:oc_1");
+    assert.equal(lookups[0].current, "where is my refund for order 42");
+    assert.ok(Array.isArray(lookups[0].recent));
+    assert.ok(Array.isArray(lookups[0].covered_event_ids));
     assert.match(stdin, /<related>\n## Slack · #billing\nAnn: refund for order 42 approved\n<\/related>/);
     assert.ok(stdin.indexOf("<related>\n") < stdin.indexOf("<current>\n"));
   });

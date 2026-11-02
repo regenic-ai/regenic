@@ -126,3 +126,42 @@ describe("related conversations in work evidence", () => {
     assert.equal(written[WORK_AGENTS_FILENAME].includes("conversation.md"), false);
   });
 });
+
+describe("work related seed and queries", () => {
+  const d = require("../dist");
+  const line = (event_id, text) => ({ event_id, speaker: "user", text });
+
+  it("covers inline background and the current event, recent lines precede current", () => {
+    const seed = d.workRelatedSeed({
+      trigger_text: "still not here?",
+      current_event_id: "e4",
+      thread_lines: [line("e1", "hi"), line("e2", "order 20261030123?"), line("e3", "checking"), line("e4", "still not here?"), line("e5", "after")],
+    });
+    assert.equal(seed.current, "still not here?");
+    assert.deepEqual(seed.recent, ["hi", "order 20261030123?", "checking"]);
+    assert.deepEqual([...seed.covered_event_ids].sort(), ["e1", "e2", "e3", "e4", "e5"]);
+  });
+
+  it("leaves lines outside the inline window uncovered", () => {
+    const lines = Array.from({ length: d.WORK_EVIDENCE_THREAD_LIMIT + 5 }, (_, i) => line(`e${i}`, `m${i}`));
+    const seed = d.workRelatedSeed({ trigger_text: "now", thread_lines: lines });
+    assert.equal(seed.covered_event_ids.includes("e0"), false);
+    assert.equal(seed.covered_event_ids.includes(`e${lines.length - 1}`), true);
+  });
+
+  it("extracts identifiers and builds deduped queries", () => {
+    assert.deepEqual(
+      d.extractWorkIdentifiers("订单 20261030123，邮箱 a.b@x.io，工单 JIRA-1234 和 #4521，链接 https://x.io/t/9?a=1。"),
+      ["a.b@x.io", "https://x.io/t/9?a=1", "20261030123", "JIRA-1234", "#4521"],
+    );
+    assert.deepEqual(d.workRelatedQueries({ current: "refund please" }), ["refund please"]);
+    assert.deepEqual(d.workRelatedQueries({ current: " " }), []);
+    const long = d.workRelatedQueries({ current: "x".repeat(d.WORK_RELATED_QUERY_MAX + 50) });
+    assert.equal(long[0].length, d.WORK_RELATED_QUERY_MAX);
+  });
+
+  it("marks older parts of the same thread", () => {
+    const text = d.formatRelatedConversations([{ channel: "Feishu", title: "Ann", same_thread: true, lines: [{ speaker: "Ann", text: "x" }] }]);
+    assert.match(text, /^## Feishu · Ann \(earlier in this conversation\)\n/);
+  });
+});
