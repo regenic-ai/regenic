@@ -50,6 +50,7 @@ import { PersonalRuntimeService } from "./personal-runtime.service";
 import { backgroundSyncReleased } from "./personal-interactive-gate";
 import { PersonalWorkChannel } from "./personal-work-channel";
 import { PersonalWorkDispatch } from "./personal-work-dispatch";
+import { PersonalWorkRelated } from "./personal-work-related";
 import { workInboxFaces, type WorkInboxFace } from "./personal-work-faces";
 import { PersonalWorkFlush } from "./personal-work-flush";
 import { normalizeRecipe, type RecipeInput } from "./personal-work-recipe";
@@ -147,7 +148,13 @@ export class PersonalWorkService implements OnModuleDestroy {
     }, (workItemId) => this.events.workUpdated(workItemId));
     this.waits = new PersonalWorkWait(runtime, drivers, connectors, this.supervise);
     this.supervise.bindWaits(this.waits);
-    this.dispatch = new PersonalWorkDispatch(runtime, this.channel, this.supervise, this.waits);
+    this.dispatch = new PersonalWorkDispatch(
+      runtime,
+      this.channel,
+      this.supervise,
+      this.waits,
+      new PersonalWorkRelated(runtime, drivers).lookup,
+    );
     this.flush = new PersonalWorkFlush(runtime, this.channel);
   }
 

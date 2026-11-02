@@ -7,7 +7,7 @@ import {
   type Translate,
 } from "./recipe-draft";
 import { overlappingPriorityGroup, previewRecipeMatch } from "./recipe-preview";
-import type { RecipeSourceOption, ThreadFacet } from "./types";
+import type { RecipeSourceOption } from "./types";
 import { useState, type Dispatch, type SetStateAction } from "react";
 
 export function SwitchRow({
@@ -182,7 +182,6 @@ export function MoreOptions({
   t: Translate;
 }) {
   const advancedDirty =
-    Boolean(draft.thread_facet) ||
     (draft.trigger_kind === "push" && !draft.coalesce) ||
     (draft.trigger_kind !== "pull" && draft.include_context) ||
     (draft.trigger_kind !== "pull" && Boolean(draft.max_concurrent.trim()));
@@ -200,23 +199,6 @@ export function MoreOptions({
       </button>
       {open ? (
       <div className="recipe-more-body">
-        <RecipeRow label={t("recipes.facet")}>
-          <MenuSelect
-            value={draft.thread_facet}
-            options={[
-              { value: "", label: t("recipes.facetNone") },
-              { value: "ticket", label: t("recipes.facetTicket") },
-              { value: "agent", label: t("recipes.facetAgent") },
-              { value: "chat", label: t("recipes.facetChat") },
-            ]}
-            onChange={(thread_facet) =>
-              setDraft((current) => ({
-                ...current,
-                thread_facet: thread_facet as ThreadFacet | "",
-              }))
-            }
-          />
-        </RecipeRow>
         {draft.trigger_kind === "pull" ? (
           <p className="recipe-hint">{t("recipes.includeContextHintPull")}</p>
         ) : (

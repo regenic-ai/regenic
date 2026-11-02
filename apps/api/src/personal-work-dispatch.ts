@@ -3,6 +3,7 @@ import {
   advanceRecipePull,
   WORK_FILE_FETCH_LIMIT,
   composeWorkConversation,
+  workRelatedSeed,
   conversationId,
   deliveryErrorMessage,
   failedWorkStart,
@@ -39,6 +40,7 @@ import { resolveInboxBodies, type InboxBody } from "./inbox-body";
 import { PersonalConnectorError } from "./personal-errors";
 import { PersonalWorkChannel } from "./personal-work-channel";
 import { PersonalWorkWait } from "./personal-work-wait";
+import type { WorkRelatedLookup } from "./personal-work-related";
 import { PersonalWorkSupervise } from "./personal-work-supervise";
 import { PersonalRuntimeService } from "./personal-runtime.service";
 import { shouldDeferWorkForThread } from "./personal-sync-phase";
@@ -54,6 +56,7 @@ export class PersonalWorkDispatch {
     private readonly channel: PersonalWorkChannel,
     private readonly supervise: PersonalWorkSupervise,
     private readonly waits: PersonalWorkWait,
+    private readonly related?: WorkRelatedLookup,
   ) {}
 
   async reconcileInbox(): Promise<void> {
@@ -484,16 +487,30 @@ export class PersonalWorkDispatch {
           anchorEventId: item.head_event_id,
         })
       : { lines: [], overflow: false };
+    const headText =
+      evidenceText || !item.head_event_id
+        ? undefined
+        : await this.channel.evidenceText(item.thread_id, item.head_event_id);
+    const relatedText =
+      includeContext && this.related
+        ? await this.related({
+            thread_id: item.thread_id,
+            ...workRelatedSeed({
+              trigger_text: evidenceText,
+              head_text: headText,
+              current_event_id: item.head_event_id,
+              thread_lines: thread.lines,
+            }),
+          }).catch(() => undefined)
+        : undefined;
     const composed = composeWorkConversation({
       include_context: includeContext,
       trigger_text: evidenceText,
       current_event_id: item.head_event_id,
-      head_text:
-        evidenceText || !item.head_event_id
-          ? undefined
-          : await this.channel.evidenceText(item.thread_id, item.head_event_id),
+      head_text: headText,
       thread_lines: thread.lines,
       thread_overflow: thread.overflow,
+      related_text: relatedText,
     });
     const authority = host.get("authority");
     const run: WorkRun & { status: "running"; start_state: "pending" } = {
@@ -538,6 +555,7 @@ export class PersonalWorkDispatch {
                 current_line: composed.current_line,
                 background: composed.background,
                 omitted: composed.omitted,
+                related: composed.related,
               }
             : undefined,
         },

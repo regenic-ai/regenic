@@ -6,6 +6,9 @@ import {
   WORK_EVIDENCE_CURRENT_OPEN,
   WORK_EVIDENCE_GAP,
   WORK_EVIDENCE_OMITTED,
+  WORK_EVIDENCE_RELATED_CLOSE,
+  WORK_EVIDENCE_RELATED_HINT,
+  WORK_EVIDENCE_RELATED_OPEN,
   WORK_EVIDENCE_SPLIT_HINT,
   wrapEvidenceSection,
 } from "@regenic/connector-contract";
@@ -40,7 +43,11 @@ export {
   WORK_EVIDENCE_CURRENT_CLOSE,
   WORK_EVIDENCE_CURRENT_OPEN,
   WORK_EVIDENCE_OMITTED,
+  WORK_EVIDENCE_RELATED_CLOSE,
+  WORK_EVIDENCE_RELATED_HINT,
+  WORK_EVIDENCE_RELATED_OPEN,
   WORK_EVIDENCE_SPLIT_HINT,
+  WORK_RELATED_FILENAME,
   WORK_WORKSPACE_PULL_HINT,
   composeWorkspaceInstructionFiles,
   composeWorkspacePointerEvidence,
@@ -167,6 +174,144 @@ export const WORK_FILE_THREAD_LIMIT = 200;
 export const WORK_FILE_FETCH_LIMIT = 400;
 /** File conversation budget. Oldest lines drop first. */
 export const WORK_FILE_CHAR_LIMIT = 80_000;
+/** Other conversations search may add next to the work item's own thread. */
+export const WORK_RELATED_THREAD_LIMIT = 3;
+/** Related-conversation budget. Lower-ranked conversations drop first. */
+export const WORK_RELATED_CHAR_LIMIT = 6_000;
+
+export interface WorkRelatedConversation {
+  title?: string;
+  channel?: string;
+  /** Older part of the work item's own thread, outside the packed window. */
+  same_thread?: boolean;
+  lines: WorkEvidenceLine[];
+}
+
+/** Query text sent to search. A long ticket body only adds noise. */
+export const WORK_RELATED_QUERY_MAX = 1_000;
+/** Messages before the current one that enrich a short query. */
+export const WORK_RELATED_RECENT_LINES = 3;
+
+/**
+ * What related search needs from the work item's own thread: the messages the
+ * inline background already carries (skipped, not the whole thread) and the
+ * few messages just before the current one (query context).
+ */
+export function workRelatedSeed(input: {
+  trigger_text?: string;
+  head_text?: string;
+  current_event_id?: string;
+  thread_lines?: WorkEvidenceLine[];
+}): { current?: string; recent: string[]; covered_event_ids: string[] } {
+  const current = input.trigger_text?.trim() || input.head_text?.trim() || undefined;
+  const split = splitCurrentFromHistory(
+    input.thread_lines ?? [],
+    current,
+    input.current_event_id,
+  );
+  const { kept } = keepRankedEvidence(
+    split.history,
+    WORK_EVIDENCE_THREAD_LIMIT,
+    WORK_EVIDENCE_CHAR_LIMIT,
+  );
+  const covered = new Set<string>();
+  for (const { line } of kept) {
+    if (line.event_id) covered.add(line.event_id);
+  }
+  if (split.currentLine?.event_id) covered.add(split.currentLine.event_id);
+  if (input.current_event_id) covered.add(input.current_event_id);
+  const recent = split.history
+    .filter((line) => !line.after_current && line.text.trim())
+    .slice(-WORK_RELATED_RECENT_LINES)
+    .map((line) => line.text.trim());
+  return { current, recent, covered_event_ids: [...covered] };
+}
+
+const IDENTIFIER_PATTERNS = [
+  /[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g,
+  /https?:\/\/[^\s<>"'()\u3000-\u303f\u4e00-\u9fff\uff00-\uffef]+/g,
+  /\+?\d[\d -]{6,}\d/g,
+  /#?[A-Za-z][A-Za-z_-]*-?\d[\w-]{2,}/g,
+  /#\d{3,}/g,
+  /\b\d{5,}\b/g,
+];
+
+/** Order numbers, emails, phones, links and ticket keys found in text. */
+export function extractWorkIdentifiers(text: string): string[] {
+  const found = new Set<string>();
+  for (const pattern of IDENTIFIER_PATTERNS) {
+    for (const match of text.matchAll(pattern)) {
+      const value = match[0].trim().replace(/[.,;:!?。，；：！？]+$/, "");
+      if (value.length >= 4) found.add(value);
+    }
+  }
+  return [...found];
+}
+
+function boundedQuery(text: string): string {
+  return text.replace(/\s+/g, " ").trim().slice(0, WORK_RELATED_QUERY_MAX);
+}
+
+/**
+ * Up to three searches for one work item: the current message, the message
+ * with the turns just before it (short follow-ups like "still not here?"
+ * carry no topic alone), and the identifiers in both. Results are fused.
+ */
+export function workRelatedQueries(input: {
+  current?: string;
+  recent?: readonly string[];
+}): string[] {
+  const current = boundedQuery(input.current ?? "");
+  const recent = (input.recent ?? []).map(boundedQuery).filter(Boolean);
+  const queries: string[] = [];
+  const add = (query: string) => {
+    if (query.length >= 2 && !queries.includes(query)) queries.push(query);
+  };
+  add(current);
+  if (recent.length) {
+    add(boundedQuery([...recent, current].join(" ")));
+  }
+  add(boundedQuery(extractWorkIdentifiers([...recent, current].join("\n")).join(" ")));
+  return queries;
+}
+
+/**
+ * Formats search hits from other conversations. Callers pass conversations
+ * best match first; whole lines are kept until the budget runs out.
+ */
+export function formatRelatedConversations(
+  conversations: readonly WorkRelatedConversation[],
+  charLimit = WORK_RELATED_CHAR_LIMIT,
+): string {
+  const sections: string[] = [];
+  let budget = charLimit;
+  for (const conversation of conversations.slice(0, WORK_RELATED_THREAD_LIMIT)) {
+    const label = [conversation.channel, conversation.title]
+      .map((part) => part?.trim())
+      .filter(Boolean)
+      .join(" · ") || "Conversation";
+    const heading = `## ${label}${conversation.same_thread ? " (earlier in this conversation)" : ""}`;
+    const lines: string[] = [];
+    let cost = heading.length + 1;
+    for (const line of conversation.lines) {
+      if (!line.text.trim()) {
+        continue;
+      }
+      const formatted = formatEvidenceLine(line);
+      if (cost + formatted.length + 1 > budget) {
+        break;
+      }
+      cost += formatted.length + 1;
+      lines.push(formatted);
+    }
+    if (!lines.length) {
+      break;
+    }
+    budget -= cost + 1;
+    sections.push([heading, ...lines].join("\n"));
+  }
+  return sections.join("\n\n");
+}
 
 export function formatEvidenceLine(line: WorkEvidenceLine): string {
   const text = line.text.trim();
@@ -409,6 +554,8 @@ export function composeWorkConversation(input: {
   thread_overflow?: boolean;
   file_line_limit?: number;
   file_char_limit?: number;
+  /** Formatted hits from other conversations (formatRelatedConversations). */
+  related_text?: string;
 }): WorkConversationEvidence & { inline_text?: string } {
   const current = input.trigger_text?.trim() || input.head_text?.trim() || undefined;
   if (!input.include_context) {
@@ -444,31 +591,61 @@ export function composeWorkConversation(input: {
         reply_to: split.currentLine?.reply_to,
       })
     : undefined;
+  const related = input.related_text?.trim() || undefined;
+  const relatedSection = related
+    ? wrapEvidenceSection(
+        WORK_EVIDENCE_RELATED_OPEN,
+        WORK_EVIDENCE_RELATED_CLOSE,
+        related,
+      )
+    : undefined;
   let inline_text: string | undefined;
   if (!current) {
-    inline_text = packed.text || undefined;
-  } else if (!packed.text) {
+    inline_text = relatedSection
+      ? [
+          WORK_EVIDENCE_RELATED_HINT,
+          packed.text
+            ? wrapEvidenceSection(
+                WORK_EVIDENCE_BACKGROUND_OPEN,
+                WORK_EVIDENCE_BACKGROUND_CLOSE,
+                packed.text,
+              )
+            : undefined,
+          relatedSection,
+        ]
+          .filter(Boolean)
+          .join("\n\n")
+      : packed.text || undefined;
+  } else if (!packed.text && !relatedSection) {
     inline_text = currentLine || current;
   } else {
     inline_text = [
-      WORK_EVIDENCE_SPLIT_HINT,
-      wrapEvidenceSection(
-        WORK_EVIDENCE_BACKGROUND_OPEN,
-        WORK_EVIDENCE_BACKGROUND_CLOSE,
-        packed.text,
-      ),
+      relatedSection
+        ? `${WORK_EVIDENCE_SPLIT_HINT} ${WORK_EVIDENCE_RELATED_HINT}`
+        : WORK_EVIDENCE_SPLIT_HINT,
+      packed.text
+        ? wrapEvidenceSection(
+            WORK_EVIDENCE_BACKGROUND_OPEN,
+            WORK_EVIDENCE_BACKGROUND_CLOSE,
+            packed.text,
+          )
+        : undefined,
+      relatedSection,
       wrapEvidenceSection(
         WORK_EVIDENCE_CURRENT_OPEN,
         WORK_EVIDENCE_CURRENT_CLOSE,
         currentLine ?? current,
       ),
-    ].join("\n\n");
+    ]
+      .filter(Boolean)
+      .join("\n\n");
   }
   return {
     current,
     current_line: currentLine,
     background: filePacked.text || undefined,
     omitted: filePacked.omitted,
+    ...(related ? { related } : {}),
     inline_text,
   };
 }
