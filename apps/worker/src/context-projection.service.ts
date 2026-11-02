@@ -115,7 +115,7 @@ export class ContextProjectionService implements OnModuleDestroy {
       }
     } catch (error) {
       if (!this.stopping) {
-        console.error("context projection worker failed", safeErrorCode(error));
+        console.error("context projection worker failed", describeProjectionFailure(error));
       }
     } finally {
       this.running = false;
@@ -198,9 +198,13 @@ function retryDelay(attempts: number): number {
   return Math.min(MAX_RETRY_MS, 1_000 * 2 ** Math.min(Math.max(attempts - 1, 0), 8));
 }
 
-function safeErrorCode(error: unknown): string {
-  if (error instanceof Error && error.name) {
-    return error.name;
+function describeProjectionFailure(error: unknown): string {
+  if (!(error instanceof Error)) {
+    return "Error";
   }
-  return "Error";
+  const message = error.message.trim();
+  if (!message || message === error.name) {
+    return error.name || "Error";
+  }
+  return `${error.name}: ${message}`;
 }
