@@ -145,7 +145,7 @@ describe("ContextProjectionCoordinator", () => {
       async getStatus() {
         return {
           available: true,
-          algorithm_version: "literal-unicode-v1",
+          algorithm_version: "literal-unicode-v2",
           ...(generation ? { generation, watermark: "authority:1" } : {}),
         };
       },

@@ -1,4 +1,4 @@
-export const CONTEXT_LEXICAL_ALGORITHM_VERSION = "literal-unicode-v1";
+export const CONTEXT_LEXICAL_ALGORITHM_VERSION = "literal-unicode-v2";
 
 export interface ContextLexicalKey {
   event_id: string;
@@ -58,7 +58,8 @@ export interface ContextLexicalScore {
 }
 
 const CJK_SEGMENT = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]+/u;
-const LEXICAL_SEGMENTS = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]+|[\p{L}\p{N}_]+/gu;
+// Non-CJK runs stop at CJK characters so "Excel文件" yields "excel" plus CJK n-grams, not Latin letter n-grams.
+const LEXICAL_SEGMENTS = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]+|(?:(?![\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}])[\p{L}\p{N}_])+/gu;
 const MAX_QUERY_TERMS = 256;
 
 export function normalizeContextLexicalText(value: string | undefined): string {

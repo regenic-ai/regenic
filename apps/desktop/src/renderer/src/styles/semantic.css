@@ -68,11 +68,108 @@
 }
 .search-recent-chip:hover { background: var(--wash-6); }
 .search-recent-chip[aria-pressed="true"] { background: var(--wash-6); border-color: var(--text); font-weight: 600; }
-.search-file { overflow-wrap: anywhere; }
-.search-file h3 { margin: 0; font-size: 15px; }
-.search-file p { white-space: pre-wrap; }
-.search-file dl { user-select: text; }
-.search-file dd { margin: 0 0 6px; }
+.search-file {
+  display: grid;
+  gap: 10px;
+  padding: 14px 16px;
+  overflow-wrap: anywhere;
+}
+.search-file-head { display: flex; align-items: flex-start; gap: 12px; min-width: 0; }
+.search-file-icon {
+  display: grid;
+  flex-shrink: 0;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border-radius: 9px;
+  background: var(--wash-6);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+.search-file-icon svg { width: 18px; height: 18px; }
+.search-file-icon.is-spreadsheet { background: #10ab611f; color: #0b7c47; }
+.search-file-icon.is-document, .search-file-icon.is-text { background: var(--blue-soft); color: var(--blue-text); }
+.search-file-icon.is-presentation, .search-file-icon.is-pdf { background: var(--danger-soft); color: #b84a06; }
+.search-file-icon.is-code { background: #8351e41a; color: #6436c4; }
+.search-file-icon.is-image, .search-file-icon.is-video, .search-file-icon.is-audio { background: #10a6931a; color: #0b7a6c; }
+.search-file-title { flex: 1; min-width: 0; display: grid; gap: 3px; }
+.search-file-title h3 {
+  margin: 0;
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.search-file-meta { display: flex; flex-wrap: wrap; gap: 2px 0; margin: 0; color: var(--muted); font-size: 12px; }
+.search-file-meta > * + *::before { content: "·"; margin: 0 6px; color: var(--subtle); }
+.search-file-meta time { font-variant-numeric: tabular-nums; }
+.search-file-open { flex-shrink: 0; display: inline-flex; align-items: center; gap: 4px; }
+.search-file-open svg { width: 12px; height: 12px; }
+.search-file-via { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0 0 0 50px; list-style: none; }
+.search-file-via li {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--wash-6);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 18px;
+}
+.search-file-via li.is-filename, .search-file-via li.is-media_type { background: var(--blue-soft); color: var(--blue-text); }
+.search-file-via li.is-semantic, .search-file-via li.is-visual { background: #10a6931a; color: #0b7a6c; }
+.search-file-excerpt, .search-file-whole, .search-file-details { margin-left: 50px; }
+.search-file-excerpt { display: grid; justify-items: start; gap: 4px; min-width: 0; }
+.search-file-snippet {
+  display: -webkit-box;
+  -webkit-line-clamp: 6;
+  -webkit-box-orient: vertical;
+  width: 100%;
+  box-sizing: border-box;
+  margin: 0;
+  overflow: hidden;
+  padding: 0 10px;
+  /* Vertical spacing sits in the border so the line clamp does not reveal a partial extra line. */
+  border-block: 8px solid transparent;
+  border-radius: var(--radius-control);
+  background: var(--wash-6);
+  font-size: 13px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+.search-file-snippet.is-code { font-family: var(--mono); font-size: 12px; }
+.search-file-snippet.is-expanded { display: block; max-height: 360px; overflow: auto; }
+.search-file-snippet mark,
+.search-file-title mark { padding: 0 1px; border-radius: 3px; background: #f5931238; color: var(--text); }
+.search-file-more { font-size: 12px; }
+.search-file-whole { margin-top: 0; margin-bottom: 0; color: var(--muted); font-size: 12px; }
+.search-file-details { font-size: 12px; color: var(--muted); }
+.search-file-details summary { width: fit-content; cursor: pointer; }
+.search-file-details[open] { padding: 8px 10px; border-radius: var(--radius-control); background: var(--wash-6); }
+.search-file-details p { margin: 6px 0 0; }
+.search-file-details-title { color: var(--text); font-weight: 500; }
+.search-file-details dl {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 2px 12px;
+  margin: 4px 0 0;
+  font-family: var(--mono);
+  font-size: 11px;
+  user-select: text;
+}
+.search-file-details dt { color: var(--subtle); }
+.search-file-details dd { margin: 0; color: var(--text); overflow-wrap: anywhere; }
+@media (max-width: 720px) {
+  .search-file-head { flex-wrap: wrap; }
+  .search-file-open { margin-left: 50px; }
+  .search-file-via, .search-file-excerpt, .search-file-whole, .search-file-details { margin-left: 0; padding-left: 0; }
+}
 
 .semantic-search-meta {
   display: flex;
@@ -95,18 +192,33 @@
 .search-trace dd { margin: 0; overflow-wrap: anywhere; }
 .search-trace ul { margin: 10px 0 0; padding-left: 18px; color: var(--muted); }
 
-.search-warning {
+.search-warning, .search-suggestion {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 10px 12px;
-  border-radius: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  padding: 8px 12px;
+  border-radius: 10px;
   background: var(--warning-soft);
   font-size: 13px;
+  line-height: 1.5;
 }
-.search-warning ul { margin: 0; padding-left: 18px; }
-.search-warning .link { flex-shrink: 0; }
+.search-suggestion { background: var(--blue-soft); }
+.search-warning p, .search-suggestion p { flex: 1 1 260px; margin: 0; }
+.search-warning ul { flex: 1 1 260px; margin: 0; padding-left: 18px; }
+.search-notice-icon { flex-shrink: 0; width: 16px; height: 16px; color: var(--warning, var(--teal)); }
+.search-notice-action { flex-shrink: 0; height: 26px; padding: 0 12px; font-size: 12px; }
+.search-summary { font-weight: 600; }
+.search-mode {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--wash-6);
+  color: var(--muted);
+  font-size: 12px;
+  cursor: help;
+}
+.search-mode.is-hybrid { background: var(--blue-soft); color: var(--blue-text); }
+.search-footnote { margin: 4px 0 0; color: var(--muted); font-size: 12px; text-align: center; }
 
 .semantic-results { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
 .semantic-result {

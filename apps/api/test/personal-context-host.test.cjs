@@ -97,7 +97,7 @@ describe("personal context host", () => {
     host = await createKernelHost(options);
     assert.deepEqual(await host.get("context-lexical-index").getStatus("local-owner"), {
       available: true,
-      algorithm_version: "literal-unicode-v1",
+      algorithm_version: "literal-unicode-v2",
       generation: "continuous-v1",
       watermark: (await host.get("context-authority").openContextRead("local-owner")).read_epoch,
     });
