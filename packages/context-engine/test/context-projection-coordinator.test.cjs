@@ -191,6 +191,35 @@ describe("ContextProjectionCoordinator", () => {
     );
   });
 
+  it("bootstraps the lexical index when an Event blob is missing", async () => {
+    const calls = [];
+    const index = {
+      async getStatus() {
+        return { available: true, algorithm_version: "literal-unicode-v1" };
+      },
+      async replaceOrganization(input) {
+        calls.push(structuredClone(input));
+      },
+      async upsertDocuments() {
+        throw new Error("Incremental upsert should not run during bootstrap");
+      },
+    };
+    const coordinator = new ContextProjectionCoordinator(
+      authority({
+        events: [{ ...event, content_media_type: "text/plain" }],
+      }),
+      new MemoryContextArtifactStore(),
+      new MemoryContextProjectorRegistry(),
+      { async getMany() { return new Map(); } },
+      index,
+    );
+
+    await coordinator.syncLexicalIndex("example-org", "continuous-v1");
+
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0].documents, []);
+  });
+
   it("rejects proposals that do not preserve authority evidence scopes", async () => {
     const artifacts = new MemoryContextArtifactStore();
     const registry = new MemoryContextProjectorRegistry();

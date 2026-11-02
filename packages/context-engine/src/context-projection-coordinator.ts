@@ -83,7 +83,9 @@ export class ContextProjectionCoordinator implements ContextProjectionRunner {
         : await this.authority.openContextRead(orgId),
     );
     validateProjectionRead(read, orgId);
-    const sourceEvents = await toSourceEvents(read.events, this.blobs);
+    const sourceEvents = await toSourceEvents(read.events, this.blobs, {
+      missingBlobs: "skip",
+    });
     await synchronizeLexicalIndex(
       this.lexicalIndex,
       orgId,
@@ -236,12 +238,17 @@ function validateProposal(
 async function toSourceEvents(
   events: AuthorityEvent[],
   blobs?: BlobStore,
+  options: { missingBlobs?: "error" | "skip" } = {},
 ): Promise<ContextSourceEvent[]> {
   const hashes = [...new Set(events.flatMap((event) =>
     event.operation !== "tombstone" && event.content_hash ? [event.content_hash] : [],
   ))];
   const bodies = blobs ? await blobs.getMany(hashes) : new Map<string, Uint8Array>();
-  if (blobs && hashes.some((hash) => !bodies.has(hash))) {
+  if (
+    blobs &&
+    options.missingBlobs !== "skip" &&
+    hashes.some((hash) => !bodies.has(hash))
+  ) {
     throw new Error("Context projection authority Event references a missing Blob");
   }
   return events.map((event) => {
