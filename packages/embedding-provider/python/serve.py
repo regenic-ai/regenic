@@ -348,10 +348,13 @@ def validate_request(value):
 
 
 class TextEncoder:
-    def __init__(self, device):
+    def __init__(self, device, precision="bfloat16"):
         from sentence_transformers import SentenceTransformer
         from transformers import AutoTokenizer
 
+        if precision not in ("bfloat16", "float32"):
+            raise ValueError("unsupported precision")
+        self.precision = precision
         self.tokenizer = AutoTokenizer.from_pretrained(
             MODEL_ID, revision=REVISION, trust_remote_code=False
         )
@@ -361,7 +364,7 @@ class TextEncoder:
             device=device,
             trust_remote_code=False,
             config_kwargs={"audio_config": None},
-            model_kwargs={"dtype": "float32"} if device == "cpu" else None,
+            model_kwargs={"dtype": precision} if device == "cpu" else None,
         )
         self.model.max_seq_length = DESCRIPTOR["max_input_tokens"]
 
@@ -591,6 +594,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--device", default="cpu")
+    parser.add_argument("--precision", choices=("bfloat16", "float32"), default="bfloat16")
     parser.add_argument("--download-only", action="store_true")
     args = parser.parse_args()
     if not 1 <= args.port <= 65535:
@@ -599,12 +603,18 @@ def main():
     import warnings
     Image.MAX_IMAGE_PIXELS = MAX_PIXELS
     warnings.simplefilter("error", Image.DecompressionBombWarning)
-    encoder = PriorityEncoder(TextEncoder(args.device))
+    encoder = PriorityEncoder(TextEncoder(args.device, args.precision))
     if args.download_only:
-        logging.warning("embedding_download_verified model_revision=%s", REVISION)
+        logging.warning(
+            "embedding_download_verified model_revision=%s precision=%s",
+            REVISION, args.precision
+        )
         return
     server = BoundedHTTPServer(("127.0.0.1", args.port), handler_for(encoder))
-    logging.warning("embedding_ready model_revision=%s port=%d", REVISION, args.port)
+    logging.warning(
+        "embedding_ready model_revision=%s precision=%s port=%d",
+        REVISION, args.precision, args.port
+    )
     try:
         server.serve_forever()
     except KeyboardInterrupt:

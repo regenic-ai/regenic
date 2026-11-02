@@ -28,7 +28,12 @@
 | 维数 / 输入窗口 | 768 / 8192 token |
 | 查询前缀 | `task: search result \| query: ` |
 | 文档前缀 | `title: none \| text: ` |
-| 输出 | float32，L2 归一化，cosine 相似度 |
+| CPU 权重 / 输出 | 默认 BF16 权重；float32 输出，L2 归一化，cosine 相似度 |
+
+桌面托管服务默认以 BF16 加载 CPU 权重，保留文本和视觉编码器；返回向量仍转换为
+float32 并再次归一化，因此向量协议和 generation 身份不变。BF16 显著降低常驻内存，
+但不具备原生 BF16 指令的 CPU 会增加推理时间，主要影响后台图片、PDF 和视频索引。
+手动服务可用 `--precision float32` 回退到较快但更占内存的模式。
 
 依赖以 [requirements.txt](../../packages/embedding-provider/python/requirements.txt) 为准：
 `sentence-transformers[image]==6.1.0`、`transformers==5.19.0`、`torch==2.14.1`、
@@ -92,11 +97,11 @@ Remove-Item Env:HF_HUB_OFFLINE -ErrorAction SilentlyContinue
 
 & $python -m pip install --disable-pip-version-check -r (Join-Path $repo 'packages\embedding-provider\python\requirements.txt')
 if ($LASTEXITCODE -ne 0) { throw 'Dependency installation failed' }
-& $python -B (Join-Path $repo 'packages\embedding-provider\python\serve.py') --download-only --device cpu
+& $python -B (Join-Path $repo 'packages\embedding-provider\python\serve.py') --download-only --device cpu --precision bfloat16
 if ($LASTEXITCODE -ne 0) { throw 'Model download/load verification failed' }
 
 $env:HF_HUB_OFFLINE = '1'
-& $python -B (Join-Path $repo 'packages\embedding-provider\python\serve.py') --port 8765 --device cpu
+& $python -B (Join-Path $repo 'packages\embedding-provider\python\serve.py') --port 8765 --device cpu --precision bfloat16
 ```
 
 下载步骤会实际加载模型，不只是建立 pipeline。启动日志出现 `embedding_ready` 后再继续，
