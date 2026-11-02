@@ -7,6 +7,9 @@ import {
   type ConnectorInstallation,
   type ConnectorPollOptions,
   type ConnectorStopReason,
+  type ExecutorContext,
+  type TaskExecutor,
+  type WorkRun,
 } from "@regenic/connector-contract";
 import { withDeadline } from "./deadline";
 
@@ -117,6 +120,47 @@ export class ConnectorInstallationLifecycle {
 
   runInstallation<T>(installation: ConnectorInstallation, work: () => Promise<T>): Promise<T> {
     return this.run(this.activation(installation.id), installation, work);
+  }
+
+  guardExecutor(
+    driver: ChannelDriver,
+    installation: ConnectorInstallation,
+    executor: TaskExecutor,
+  ): TaskExecutor {
+    if (!driver.stopInstallation) return executor;
+    const activation = this.activation(installation.id);
+    const assertCurrent = () => {
+      if (this.activations.get(installation.id) !== activation) {
+        throw new ChannelDriverError("sync_failed", "Connector activation is stale", "disabled");
+      }
+    };
+    return new Proxy(executor, {
+      get: (target, key) => {
+        const method = Reflect.get(target, key);
+        if (typeof method !== "function") return method;
+        if (key === "cancel" && target.cancel) {
+          const cancel = target.cancel;
+          return (run: WorkRun, ctx: ExecutorContext) => {
+            assertCurrent();
+            // Cleanup remains available behind the fence, but never starts resources.
+            return this.track(activation, cancel.call(target, run, ctx));
+          };
+        }
+        if (key !== "start" && key !== "resume" && key !== "status") {
+          return method.bind(target);
+        }
+        return (...args: unknown[]) => {
+          assertCurrent();
+          return this.run(activation, installation, async () => {
+            if (key !== "status") {
+              await (activation.starting ?? this.start(driver, installation, activation));
+            }
+            this.assertOpen(activation, installation);
+            return Reflect.apply(method, target, args);
+          });
+        };
+      },
+    });
   }
 
   async stop(
@@ -232,6 +276,10 @@ export class ConnectorInstallationLifecycle {
       this.assertOpen(activation, installation);
       return work();
     });
+    return this.track(activation, pending);
+  }
+
+  private track<T>(activation: Activation, pending: Promise<T>): Promise<T> {
     activation.active.add(pending);
     void pending.then(
       () => activation.active.delete(pending),

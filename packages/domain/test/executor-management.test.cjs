@@ -76,6 +76,55 @@ describe("default local executor", () => {
 });
 
 describe("local connector executor", () => {
+  for (const method of ["start", "resume", "status", "cancel"]) {
+    it(`forwards ${method} arguments, receiver, promise and errors unchanged`, async () => {
+      const input = { id: "run", external_run_id: "owned-run" };
+      const ctx = { org_id: "org", env: {} };
+      const result = method === "cancel" ? undefined : { status: "running" };
+      const pending = Promise.resolve(result);
+      let failure;
+      const plugin = {
+        ...createSessionTaskExecutor(),
+        [method](actualInput, actualContext) {
+          assert.equal(this, plugin);
+          assert.equal(actualInput, input);
+          assert.equal(actualContext, ctx);
+          if (failure) throw failure;
+          return pending;
+        },
+      };
+      const executor = createLocalConnectorExecutor({
+        executor_type: "bound", label: "Bound", plugin,
+      });
+      assert.equal(executor[method](input, ctx), pending);
+      assert.equal(await executor[method](input, ctx), result);
+      failure = new Error("synchronous plugin failure");
+      assert.throws(() => executor[method](input, ctx), (error) => error === failure);
+      failure = undefined;
+      const rejected = Promise.reject(new Error("asynchronous plugin failure"));
+      plugin[method] = function (actualInput, actualContext) {
+        assert.equal(this, plugin);
+        assert.equal(actualInput, input);
+        assert.equal(actualContext, ctx);
+        return rejected;
+      };
+      // cancel is bound when mounted; exercise rejection on a fresh binding too.
+      const rebound = createLocalConnectorExecutor({
+        executor_type: "bound", label: "Bound", plugin,
+      });
+      assert.equal(rebound[method](input, ctx), rejected);
+      await assert.rejects(rejected, /asynchronous plugin failure/);
+    });
+  }
+
+  it("does not advertise cancel for a plugin without the hook", () => {
+    const executor = createLocalConnectorExecutor({
+      executor_type: "bound", label: "Bound", plugin: createSessionTaskExecutor(),
+    });
+    assert.equal(executor.cancel, undefined);
+    assert.equal(Object.hasOwn(executor, "cancel"), false);
+  });
+
   it("overrides catalog identity and delegates start", async () => {
     const plugin = createSessionTaskExecutor({ executor_type: "session" });
     const executor = createLocalConnectorExecutor({
