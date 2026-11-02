@@ -382,3 +382,105 @@
   line-height: 1.45;
 }
 
+
+/* Agent-drafted reply docked in the source conversation. */
+.proposal-question {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.proposal-draft {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--wash-6);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.55;
+}
+
+.proposal-risks {
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: var(--danger-soft);
+  color: var(--orange);
+  font-size: 13px;
+}
+
+.proposal-risks ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+
+.proposal-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 16px;
+  margin: 0 0 10px;
+}
+
+.proposal-facts dt {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.proposal-facts dd {
+  margin: 0;
+}
+
+.proposal-members {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.proposal-members li {
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.proposal-miss {
+  color: var(--orange);
+}
+
+.proposal-decline {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.proposal-footnote {
+  margin: 0;
+  font-size: 12px;
+}
+
+.follow-up-nudge {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 8px;
+  padding: 6px 10px;
+  border-radius: 10px;
+  background: var(--wash-6);
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.follow-up-nudge > span:first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.kind-tag.is-follow-up {
+  color: var(--accent);
+  background: var(--accent-soft);
+}

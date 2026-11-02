@@ -26,6 +26,17 @@ export function ThreadFaceTags({ tags }: { tags: ThreadFaceTag[] }) {
             </span>
           );
         }
+        if (tag.key === "proposal" || tag.key === "follow_up") {
+          return (
+            <span
+              key={tag.key}
+              className={`kind-tag ${tag.key === "proposal" ? "work-waiting_human" : "is-follow-up"}`}
+              title={tag.label}
+            >
+              {tag.label}
+            </span>
+          );
+        }
         return (
           <span key={tag.key} className="kind-tag" title={tag.label}>
             {tag.label}

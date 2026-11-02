@@ -1420,9 +1420,15 @@ export async function fetchSemanticIndexStatus(signal?: AbortSignal): Promise<Se
 }
 
 export async function fetchCustomerServiceTasks(
-  signal?: AbortSignal,
+  options: { statuses?: string[]; signal?: AbortSignal } = {},
 ): Promise<CustomerServiceTaskView[]> {
-  const response = await kernelFetch("/v1/me/context/customer-tasks?limit=100", { signal });
+  const params = new URLSearchParams({ limit: "100" });
+  if (options.statuses?.length) {
+    params.set("statuses", options.statuses.join(","));
+  }
+  const response = await kernelFetch(`/v1/me/context/customer-tasks?${params.toString()}`, {
+    signal: options.signal,
+  });
   const body = await response.json();
   if (!response.ok) throwKernelError(body, `customer tasks ${response.status}`);
   return Array.isArray(body) ? body as CustomerServiceTaskView[] : [];
@@ -1431,13 +1437,14 @@ export async function fetchCustomerServiceTasks(
 export async function reviewCustomerServiceTask(
   taskId: string,
   result: "approved" | "rejected",
+  note?: string,
 ): Promise<CustomerServiceTaskView> {
   const response = await kernelFetch(
     `/v1/me/context/customer-tasks/${encodeURIComponent(taskId)}/review`,
     {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ result }),
+      body: JSON.stringify(note?.trim() ? { result, note: note.trim() } : { result }),
     },
   );
   const body = await response.json();

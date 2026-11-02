@@ -13,6 +13,7 @@ import {
 } from "./api";
 import { isMessageKey, type MessageKey } from "../../shared/messages.ts";
 import { ContextRecordsDialog } from "./ContextRecordsDialog";
+import { FollowUpPolicySettings } from "./FollowUpPolicySettings";
 import { SemanticSettings } from "./SemanticSettings";
 import { useLocale } from "./LocaleContext";
 import type {
@@ -398,6 +399,7 @@ export function SettingsPage({
   const sections = [
     ["settings-general", t("settings.language")],
     ["settings-dispatch", t("settings.dispatch")],
+    ["settings-follow-up", t("followUps.policy")],
     ["settings-semantic", t("semantic.title")],
     ["settings-kernel", t("settings.kernel")],
     ["settings-data", t("settings.store")],
@@ -486,6 +488,8 @@ export function SettingsPage({
               </span>
             </div>
           </section>
+
+          <FollowUpPolicySettings />
 
           <div id="settings-semantic">
             <SemanticSettings />

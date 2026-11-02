@@ -271,7 +271,9 @@ export type ThreadFaceTag =
   | { key: "unit"; label: string }
   | { key: "conversation"; label: string }
   | { key: "facet"; label: string }
-  | { key: "work"; label: string; status: string };
+  | { key: "work"; label: string; status: string }
+  | { key: "proposal"; label: string }
+  | { key: "follow_up"; label: string };
 
 /**
  * Compact face chips for list + thread header.
@@ -291,6 +293,8 @@ export function threadFaceTags(thread: {
         delivery?: { status?: string; write_back?: string };
       }
     | null;
+  proposal?: unknown;
+  follow_up?: unknown;
 }): ThreadFaceTag[] {
   const tags: ThreadFaceTag[] = [
     {
@@ -321,6 +325,11 @@ export function threadFaceTags(thread: {
         ? thread.work
         : (thread.work?.status ?? "");
     tags.push({ key: "work", label: work, status });
+  }
+  if (thread.proposal) {
+    tags.push({ key: "proposal", label: t("proposal.tag") });
+  } else if (thread.follow_up) {
+    tags.push({ key: "follow_up", label: t("followUp.tag") });
   }
   return tags;
 }

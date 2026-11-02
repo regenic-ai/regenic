@@ -1,4 +1,4 @@
-export type NavId = "inbox" | "search" | "customer-tasks" | "follow-ups" | "recipes" | "engine" | "settings";
+export type NavId = "inbox" | "search" | "follow-ups" | "recipes" | "engine" | "settings";
 
 export interface CustomerServiceTaskView {
   id: string;
@@ -8,6 +8,10 @@ export interface CustomerServiceTaskView {
   brief: {
     version: number;
     question: string;
+    source: {
+      event_id: string;
+      thread_id: string;
+    };
     customer: { status: string; value?: string };
     project: { status: string; value?: string };
     batch: { status: string; value?: string };
@@ -46,6 +50,7 @@ export interface CustomerServiceTaskView {
     review?: {
       result: string;
       reviewed_at: string;
+      note?: string;
     };
     sent?: {
       event_id: string;

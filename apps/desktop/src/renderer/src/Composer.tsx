@@ -26,6 +26,7 @@ export interface ComposerDraft {
 export function Composer({
   disabled,
   hint,
+  initialText,
   quote,
   sending,
   error,
@@ -34,6 +35,8 @@ export function Composer({
 }: {
   disabled?: boolean;
   hint?: string;
+  /** Seeds the editor once on mount, e.g. an Agent draft the human wants to rewrite. */
+  initialText?: string;
   quote?: InboxViewItem | null;
   sending?: boolean;
   error?: string | null;
@@ -55,6 +58,23 @@ export function Composer({
   const blocked = Boolean(disabled || sending);
   const canSend = !blocked && (hasText || attachments.length > 0);
   const shortcut = isApple() ? "⌘" : "Ctrl+";
+
+  useEffect(() => {
+    const editor = editorRef.current;
+    if (!editor || !initialText?.trim()) {
+      return;
+    }
+    editor.innerText = initialText;
+    setHasText(!editorIsEmpty(editor));
+    editor.focus();
+    const range = document.createRange();
+    range.selectNodeContents(editor);
+    range.collapse(false);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    // Seed once per mount; callers remount via key to reseed.
+  }, []);
 
   useEffect(() => {
     return () => {

@@ -19,6 +19,8 @@ import {
   runWorkItem,
   saveUiPrefs,
   updateConversationPrefs,
+  fetchCustomerServiceTasks,
+  fetchFollowUps,
 } from "./api";
 import { fetchRuntimePulse } from "./runtime-pulse-fetch.ts";
 import {
@@ -59,7 +61,14 @@ import { connectPersonalEvents } from "./personal-events";
 import { EngineIcon, FollowUpIcon, InboxIcon, RecipesIcon, SettingsIcon, SearchIcon } from "./Icons";
 import { SearchPage } from "./SearchPage";
 import { FollowUpsPage } from "./FollowUpsPage";
-import { CustomerTasksPage } from "./CustomerTasksPage";
+import {
+  EMPTY_OVERLAYS,
+  PROPOSAL_STATUSES,
+  indexFollowUps,
+  indexProposals,
+  withThreadOverlays,
+  type ThreadOverlays,
+} from "./reply-proposals";
 import { threadTitle } from "./message-view";
 import { RecipesPage } from "./RecipesPage";
 import { SettingsPage } from "./SettingsPage";
@@ -114,6 +123,7 @@ const POLL_MS = 2000;
 const IDLE_POLL_MS = 8000;
 const SSE_FALLBACK_POLL_MS = 60_000;
 const HOST_POLL_MS = 5000;
+const OVERLAY_POLL_MS = 30_000;
 const OPEN_RETRY_MS = 350;
 const OPEN_RETRIES = 5;
 const OPEN_FETCH_MS = 5_000;
@@ -125,6 +135,27 @@ const RECEIPT_REFRESH_MS = 15_000;
 export function ConsoleApp() {
   const { t, locale } = useLocale();
   const [nav, setNav] = useState<NavId>("inbox");
+  const [overlays, setOverlays] = useState<ThreadOverlays>(EMPTY_OVERLAYS);
+  const reloadOverlays = useCallback(async () => {
+    // Customer service and follow-ups are optional kernel features; absence is quiet.
+    const [tasks, followUps] = await Promise.all([
+      fetchCustomerServiceTasks({ statuses: [...PROPOSAL_STATUSES] }).catch(() => null),
+      fetchFollowUps().catch(() => null),
+    ]);
+    setOverlays((current) => ({
+      proposals: tasks ? indexProposals(tasks) : current.proposals,
+      followUps: followUps ? indexFollowUps(followUps) : current.followUps,
+    }));
+  }, []);
+  useEffect(() => {
+    void reloadOverlays();
+    const timer = window.setInterval(() => {
+      if (document.visibilityState !== "hidden") {
+        void reloadOverlays();
+      }
+    }, OVERLAY_POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [reloadOverlays]);
   const [inbox, setInbox] = useState<InboxViewItem[]>([]);
   const [messagesByThread, setMessagesByThread] = useState<
     Record<string, InboxViewItem[]>
@@ -1234,10 +1265,12 @@ export function ConsoleApp() {
     groupedRef.current = grouped;
     groupedInboxRef.current = inbox;
     return sortInboxThreads(
-      applyOpenedAt(mergeDraftThreads(grouped, drafts), openedAtRef.current),
+      applyOpenedAt(mergeDraftThreads(grouped, drafts), openedAtRef.current).map(
+        (thread) => withThreadOverlays(thread, overlays),
+      ),
       sortMode,
     );
-  }, [inbox, drafts, sortMode]);
+  }, [inbox, drafts, sortMode, overlays]);
   const listThreads = useMemo(
     () =>
       catalogThreads.filter((thread) =>
@@ -1269,8 +1302,8 @@ export function ConsoleApp() {
       messagesByThread[thread.id],
     );
     selectedThreadRef.current = opened;
-    return opened;
-  }, [catalogThreads, selectedId, messagesByThread]);
+    return withThreadOverlays(opened, overlays);
+  }, [catalogThreads, selectedId, messagesByThread, overlays]);
   const chip = engineChip(engine, reachability);
   const alerts = connectorAlerts(engine);
   const alert = alerts[0];
@@ -1639,13 +1672,6 @@ export function ConsoleApp() {
             <RecipesIcon />
           </RailButton>
           <RailButton
-            label={t("nav.customerTasks")}
-            active={nav === "customer-tasks"}
-            onClick={() => setNav("customer-tasks")}
-          >
-            <FollowUpIcon />
-          </RailButton>
-          <RailButton
             label={t("nav.followUps")}
             active={nav === "follow-ups"}
             onClick={() => setNav("follow-ups")}
@@ -1757,6 +1783,7 @@ export function ConsoleApp() {
             onDismissWork={dismissSelectedWork}
             onBindRecipe={bindSelectedRecipe}
             onForwardCreated={openForwardedConversation}
+            onOverlaysChanged={reloadOverlays}
           />
         ) : null}
         {nav === "recipes" ? (
@@ -1800,8 +1827,21 @@ export function ConsoleApp() {
           setLocatedEvent({ thread_id: thread.id, event_id: item.event.id });
           setNav("inbox");
         }} /> : null}
-        {nav === "follow-ups" ? <FollowUpsPage onChanged={refresh} /> : null}
-        {nav === "customer-tasks" ? <CustomerTasksPage /> : null}
+        {nav === "follow-ups" ? (
+          <FollowUpsPage
+            onChanged={async () => {
+              await Promise.all([refresh(), reloadOverlays()]);
+            }}
+            threadLabel={(threadId) => {
+              const thread = catalogThreads.find((item) => item.id === threadId);
+              return thread ? threadTitle(thread) : null;
+            }}
+            onOpenThread={(threadId) => {
+              setSelectedId(threadId);
+              setNav("inbox");
+            }}
+          />
+        ) : null}
         {nav === "settings" ? (
           <SettingsPage onChanged={refresh} onStoreCleared={resetWorkspace} />
         ) : null}
