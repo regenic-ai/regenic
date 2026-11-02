@@ -23,6 +23,7 @@ import { WorkContextStrip } from "./WorkContextStrip";
 import { WorkResultCard } from "./WorkResultCard";
 import { ThreadContextPanel } from "./ThreadContextPanel";
 import { PromptHandoffDock } from "./PromptHandoffDock";
+import { FollowUpNudge, ReplyProposalPanel } from "./ReplyProposalPanel";
 import { ThreadPromptPanel } from "./ThreadPromptPanel";
 import { threadSyncLabel, threadSyncTone } from "./format";
 import { inboxListNavDelta, isTypingShortcutTarget, latestMessage, type InboxThread } from "./inbox";
@@ -90,6 +91,7 @@ export const ThreadPane = memo(function ThreadPane({
   forwardTargets = [],
   createTargets = [],
   onForwardCreated,
+  onOverlaysChanged,
 }: {
   thread: InboxThread;
   locateEventId?: string;
@@ -122,8 +124,10 @@ export const ThreadPane = memo(function ThreadPane({
   forwardTargets?: InboxThread[];
   createTargets?: CreateTarget[];
   onForwardCreated?: (result: ForwardView) => Promise<void>;
+  onOverlaysChanged?: () => Promise<void>;
 }) {
   const { t } = useLocale();
+  const [composerSeed, setComposerSeed] = useState<{ text: string; nonce: number } | null>(null);
   const [quote, setQuote] = useState<InboxViewItem | null>(null);
   const [pending, setPending] = useState<InboxViewItem[]>([]);
   const [sending, setSending] = useState(false);
@@ -178,7 +182,8 @@ export const ThreadPane = memo(function ThreadPane({
     });
     return () => cancelAnimationFrame(frame);
   }, [thread.id, locateEventId, merged, opening]);
-  const canReply = thread.can_send && prompts.length === 0;
+  const proposal = prompts.length === 0 ? thread.proposal : undefined;
+  const canReply = thread.can_send && prompts.length === 0 && !proposal;
   const syncNote = threadSyncLabel(thread.id, pull);
   const syncTone = threadSyncTone(thread.id, pull);
   const quoteMessage = useCallback((item: InboxViewItem) => {
@@ -268,6 +273,7 @@ export const ThreadPane = memo(function ThreadPane({
 
   useEffect(() => {
     setQuote(null);
+    setComposerSeed(null);
     setSendError(null);
     setPending([]);
     setForward(null);
@@ -416,7 +422,11 @@ export const ThreadPane = memo(function ThreadPane({
   };
   const resultSummary = thread.work?.result_summary?.trim();
   const awaitingPrompt = prompts.length > 0;
-  const conversationClosed = !awaitingPrompt && !thread.can_send;
+  const conversationClosed = !awaitingPrompt && !proposal && !thread.can_send;
+  const refreshOverlays = async () => {
+    await onOverlaysChanged?.();
+    await (onRefreshThread ?? onRefresh)();
+  };
   const needsDeliveryRetry = deliveryNeedsYou(thread.work?.delivery);
   const startNeedsConfirmation = thread.work?.start_state === "pending" ||
     thread.work?.start_state === "uncertain";
@@ -439,6 +449,7 @@ export const ThreadPane = memo(function ThreadPane({
     Boolean(forward) ||
     Boolean(activityNote && prompts.length === 0) ||
     prompts.length > 0 ||
+    Boolean(proposal) ||
     canReply ||
     conversationClosed;
   const subLabel = thread.conversation_label || thread.label;
@@ -730,16 +741,43 @@ export const ThreadPane = memo(function ThreadPane({
                 onAnswer={answerPrompt}
               />
             </PromptHandoffDock>
+          ) : proposal ? (
+            <PromptHandoffDock>
+              <ReplyProposalPanel
+                key={`${proposal.id}:${proposal.revision}`}
+                task={proposal}
+                onChanged={refreshOverlays}
+                onRewrite={(text) =>
+                  setComposerSeed({ text, nonce: Date.now() })
+                }
+              />
+            </PromptHandoffDock>
           ) : canReply ? (
+            <>
+            {thread.follow_up ? (
+              <FollowUpNudge
+                key={`${thread.id}:${thread.follow_up.candidate.due_at}`}
+                item={thread.follow_up}
+                onChanged={refreshOverlays}
+              />
+            ) : null}
             <Composer
-              key={thread.id}
+              key={`${thread.id}:${composerSeed?.nonce ?? 0}`}
+              initialText={composerSeed?.text}
               hint={t("composer.sendTo", { name: heading })}
               quote={quote}
               sending={sending}
               error={sendError}
               onCancelQuote={() => setQuote(null)}
-              onSend={send}
+              onSend={async (draft) => {
+                await send(draft);
+                setComposerSeed(null);
+                if (thread.follow_up) {
+                  void onOverlaysChanged?.();
+                }
+              }}
             />
+            </>
           ) : conversationClosed && resultSummary && !forward ? (
             workResult
           ) : conversationClosed && !forward && !activityNote ? (

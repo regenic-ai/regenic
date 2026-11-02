@@ -107,7 +107,7 @@ It intentionally does **not** expose review or send tools. Conversation evidence
 4. Submit the brief. Every verified scope value requires a task-owned context citation, and every verified member requires both `evidence` and `identity_evidence`. The server enters `ready_for_query` only when the scoped IDs, closed member set, stable business IDs, requested fields, and remaining gaps are valid.
 5. Query business data. Pagination must finish before a complete reply.
 6. Create a draft with claim-to-business-evidence mappings and explicit member coverage.
-7. A human reviews the task in **Customer tasks** in the desktop rail.
+7. The draft docks as a **Suggested reply** in the source conversation, which is flagged **Draft to confirm**. A human can **Send**, **Edit myself** (the draft moves into the composer and is sent as their own reply), or **Don't use** it with a reason the Agent can redraft from. Unverified items stay expanded; sources are folded.
 8. Regenic re-queries the business source before send. Changed facts invalidate approval and require a new draft/review. Existing reply idempotency prevents duplicate sends.
 
 `include_related: true` can search other authorized conversations only after customer and project scope are verified. Returned matches remain evidence candidates; they do not change authorization by themselves.

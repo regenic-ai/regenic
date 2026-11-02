@@ -17,6 +17,7 @@ const GROUP_PREVIEW = 3;
 const GROUP_PAGE = 8;
 const CONCURRENCY = 4;
 const BATCH_CONFIRM_THRESHOLD = 10;
+const POLL_MS = 15_000;
 
 function groupItems(items: InboxViewItem[]): TriageGroup[] {
   const groups = new Map<string, TriageGroup>();
@@ -102,6 +103,21 @@ export function PendingTriage({ onChanged }: { onChanged: () => Promise<void> })
     return () => operation.current?.abort();
   }, [load]);
 
+  // New messages keep arriving while this page is open; pick them up without a remount.
+  useEffect(() => {
+    const refresh = () => {
+      if (document.visibilityState === "visible" && operation.current === null) void load();
+    };
+    const timer = window.setInterval(refresh, POLL_MS);
+    document.addEventListener("visibilitychange", refresh);
+    window.addEventListener("focus", refresh);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", refresh);
+      window.removeEventListener("focus", refresh);
+    };
+  }, [load]);
+
   const groups = useMemo(() => groupItems(items), [items]);
   const busy = progress !== null;
   const time = (value: string) => new Date(value).toLocaleString(locale, {
@@ -133,14 +149,10 @@ export function PendingTriage({ onChanged }: { onChanged: () => Promise<void> })
     if (operation.current === controller) operation.current = null;
     setProgress(null);
     let completed = succeeded;
-    if (disposition === "pending") {
-      await load();
-    } else if (cancelled) {
-      const pending = await load();
-      if (pending) {
-        const pendingIds = new Set(pending.map((item) => item.event.id));
-        completed = ids.filter((id) => !pendingIds.has(id));
-      }
+    const pending = await load();
+    if (disposition !== "pending" && cancelled && pending) {
+      const pendingIds = new Set(pending.map((item) => item.event.id));
+      completed = ids.filter((id) => !pendingIds.has(id));
     }
     const succeededIds = new Set(completed);
     setSelected((current) => new Set([...current].filter((id) => !succeededIds.has(id))));

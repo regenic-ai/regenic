@@ -13,101 +13,6 @@
   min-width: 0;
 }
 
-.customer-tasks-grid {
-  display: grid;
-  grid-template-columns: minmax(240px, 0.8fr) minmax(0, 2fr);
-  gap: 16px;
-  align-items: start;
-}
-
-.customer-task-list {
-  display: grid;
-  gap: 8px;
-}
-
-.customer-task-list-item {
-  display: grid;
-  gap: 4px;
-  width: 100%;
-  padding: 10px 12px;
-  border-radius: var(--radius-row);
-  background: transparent;
-  color: inherit;
-  text-align: left;
-}
-
-.customer-task-list-item:hover {
-  background: var(--wash-6);
-}
-
-.customer-task-list-item.is-active {
-  background: var(--wash-8);
-}
-
-.customer-task-list-item span,
-.customer-task-list-item small {
-  color: var(--muted);
-}
-
-.customer-task-detail {
-  display: grid;
-  gap: 16px;
-}
-
-.customer-task-facts {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.customer-task-facts div {
-  display: grid;
-  gap: 4px;
-}
-
-.customer-task-facts dt {
-  color: var(--muted);
-}
-
-.customer-task-facts dd {
-  margin: 0;
-}
-
-.customer-task-members {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  gap: 8px;
-}
-
-.customer-task-members li {
-  display: grid;
-  grid-template-columns: minmax(100px, 1fr) minmax(120px, 1fr) minmax(100px, 0.7fr) minmax(180px, 2fr);
-  gap: 10px;
-  align-items: center;
-  padding: 10px 0;
-  border-top: 1px solid var(--line-8);
-}
-
-.customer-task-actions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-top: 16px;
-}
-
-@media (max-width: 900px) {
-  .customer-tasks-grid,
-  .customer-task-facts {
-    grid-template-columns: 1fr;
-  }
-
-  .customer-task-members li {
-    grid-template-columns: 1fr;
-  }
-}
-
 .page-wide > .card,
 .page-wide .recipe-editor,
 .page-wide .recipe-saved {
@@ -163,6 +68,28 @@
 
 .follow-ups-row > button {
   flex: 0 0 auto;
+}
+
+.follow-ups-row > .follow-ups-open {
+  flex: 1 1 auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.follow-ups-open:hover strong {
+  text-decoration: underline;
+}
+
+.follow-ups-preview {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  color: var(--ink-68);
 }
 
 .follow-ups-policy {

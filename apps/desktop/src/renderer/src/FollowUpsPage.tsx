@@ -1,21 +1,26 @@
 import { useEffect, useState } from "react";
 import {
-  fetchFollowUpPolicy,
   fetchFollowUpSnoozes,
   fetchFollowUps,
-  saveFollowUpPolicy,
   snoozeFollowUp,
   unsnoozeFollowUp,
 } from "./api";
 import { useLocale } from "./LocaleContext";
 import { PendingTriage } from "./PendingTriage";
-import type { PersonalFollowUpPolicy, PersonalFollowUpView } from "./types";
+import type { PersonalFollowUpView } from "./types";
 
-export function FollowUpsPage({ onChanged }: { onChanged: () => Promise<void> }) {
+export function FollowUpsPage({
+  onChanged,
+  threadLabel,
+  onOpenThread,
+}: {
+  onChanged: () => Promise<void>;
+  threadLabel: (threadId: string) => string | null;
+  onOpenThread: (threadId: string) => void;
+}) {
   const { t, locale } = useLocale();
   const [items, setItems] = useState<PersonalFollowUpView[]>([]);
   const [snoozes, setSnoozes] = useState<Record<string, string>>({});
-  const [policy, setPolicy] = useState<PersonalFollowUpPolicy | null>(null);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -32,10 +37,9 @@ export function FollowUpsPage({ onChanged }: { onChanged: () => Promise<void> })
 
   useEffect(() => {
     let current = true;
-    void Promise.all([fetchFollowUpPolicy(), fetchFollowUps(), fetchFollowUpSnoozes()])
-      .then(([nextPolicy, nextItems, nextSnoozes]) => {
+    void Promise.all([fetchFollowUps(), fetchFollowUpSnoozes()])
+      .then(([nextItems, nextSnoozes]) => {
         if (!current) return;
-        setPolicy(nextPolicy);
         setItems(nextItems);
         setSnoozes(nextSnoozes);
       })
@@ -55,6 +59,7 @@ export function FollowUpsPage({ onChanged }: { onChanged: () => Promise<void> })
     try {
       await action();
       await refresh();
+      await onChanged();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t("followUps.failed"));
     } finally {
@@ -70,10 +75,10 @@ export function FollowUpsPage({ onChanged }: { onChanged: () => Promise<void> })
         <div>
           <p className="page-eyebrow">{t("followUps.eyebrow")}</p>
           <h1>{t("followUps.title")}</h1>
+          <p className="muted">{t("followUps.lead")}</p>
         </div>
         <button type="button" className="ghost" disabled={busy || loading} onClick={() => void run(async () => {
           setTriageKey((value) => value + 1);
-          if (!policy) setPolicy(await fetchFollowUpPolicy());
         })}>
           {t("followUps.refresh")}
         </button>
@@ -90,11 +95,11 @@ export function FollowUpsPage({ onChanged }: { onChanged: () => Promise<void> })
         <ul className="follow-ups-list">
           {items.map((item) => (
             <li className="follow-ups-row" key={item.event.id}>
-              <div className="follow-ups-row-body">
-                <strong>{item.body_text || item.candidate.thread_id}</strong>
-                <span className="muted">{item.event.source} · {t("followUps.sentAt", { date: new Date(item.candidate.outbound_at).toLocaleString(locale) })}</span>
-                <span className="muted">{t("followUps.dueAt", { date: new Date(item.candidate.due_at).toLocaleString(locale) })}</span>
-              </div>
+              <button type="button" className="follow-ups-row-body follow-ups-open" onClick={() => onOpenThread(item.candidate.thread_id)}>
+                <strong>{threadLabel(item.candidate.thread_id) ?? item.event.source}</strong>
+                {item.body_text ? <span className="follow-ups-preview">{item.body_text}</span> : null}
+                <span className="muted">{t("followUps.sentAt", { date: new Date(item.candidate.outbound_at).toLocaleString(locale) })}</span>
+              </button>
               <button type="button" className="ghost" disabled={busy} onClick={() => void run(() => snoozeFollowUp(item.candidate.thread_id, new Date(Date.now() + 24 * 60 * 60_000).toISOString()))}>
                 {t("followUps.snooze")}
               </button>
@@ -102,19 +107,19 @@ export function FollowUpsPage({ onChanged }: { onChanged: () => Promise<void> })
           ))}
         </ul>
       </section>
+      {activeSnoozes.length ? (
       <section className="follow-ups-section" aria-label={t("followUps.paused")}>
         <div className="follow-ups-section-head">
           <h2>{t("followUps.paused")}</h2>
           <span className="chip">{activeSnoozes.length}</span>
         </div>
-        {!loading && !error && activeSnoozes.length === 0 ? <p className="muted">{t("followUps.nonePaused")}</p> : null}
         <ul className="follow-ups-list">
           {activeSnoozes.map(([threadId, until]) => (
             <li className="follow-ups-row" key={threadId}>
-              <div className="follow-ups-row-body">
-                <strong>{threadId}</strong>
+              <button type="button" className="follow-ups-row-body follow-ups-open" onClick={() => onOpenThread(threadId)}>
+                <strong>{threadLabel(threadId) ?? t("followUps.unknownThread")}</strong>
                 <span className="muted">{t("followUps.until", { date: new Date(until).toLocaleString(locale) })}</span>
-              </div>
+              </button>
               <button type="button" className="ghost" disabled={busy} onClick={() => void run(() => unsnoozeFollowUp(threadId))}>
                 {t("followUps.resume")}
               </button>
@@ -122,25 +127,7 @@ export function FollowUpsPage({ onChanged }: { onChanged: () => Promise<void> })
           ))}
         </ul>
       </section>
-      <section className="follow-ups-section" aria-label={t("followUps.policy")}>
-        <div className="follow-ups-section-head"><h2>{t("followUps.policy")}</h2></div>
-        {policy ? (
-          <form className="follow-ups-policy" onSubmit={(event) => {
-            event.preventDefault();
-            void run(async () => { setPolicy(await saveFollowUpPolicy(policy)); });
-          }}>
-            <label className="field">
-              {t("followUps.wait")}
-              <input type="number" min={15} max={43200} step={1} required value={policy.wait_minutes} onChange={(event) => setPolicy({ ...policy, wait_minutes: Number(event.target.value) })} />
-            </label>
-            <label className="follow-ups-check">
-              <input type="checkbox" checked={policy.include_initial_outbound} onChange={(event) => setPolicy({ ...policy, include_initial_outbound: event.target.checked })} />
-              {t("followUps.initial")}
-            </label>
-            <button type="submit" className="primary" disabled={busy}>{t("followUps.save")}</button>
-          </form>
-        ) : null}
-      </section>
+      ) : null}
     </div>
   );
 }
