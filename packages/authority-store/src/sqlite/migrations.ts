@@ -1,4 +1,25 @@
-export const LATEST_SCHEMA_VERSION = 54;
+export const LATEST_SCHEMA_VERSION = 55;
+
+export const CUSTOMER_SERVICE_TASKS_SQL = `
+  CREATE TABLE IF NOT EXISTS customer_service_tasks (
+    id TEXT NOT NULL,
+    org_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    revision INTEGER NOT NULL CHECK (revision >= 1),
+    payload_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (org_id, id)
+  );
+  CREATE INDEX IF NOT EXISTS customer_service_tasks_status_idx
+    ON customer_service_tasks (org_id, status, updated_at DESC, id DESC);
+`;
+
+export const RECIPE_CLOCK_COLUMN_SQL = [
+  "ALTER TABLE recipes ADD COLUMN trigger_at_minute INTEGER",
+  "ALTER TABLE recipes ADD COLUMN trigger_weekdays TEXT",
+  "ALTER TABLE recipes ADD COLUMN trigger_timezone TEXT",
+] as const;
 
 export const OUTBOUND_REJECTION_MIGRATION_SQL = `
   CREATE TABLE outbound_attempts_next (
@@ -1035,20 +1056,7 @@ export const MIGRATIONS = [
   },
   {
     version: 48,
-    sql: `
-      CREATE TABLE IF NOT EXISTS customer_service_tasks (
-        id TEXT NOT NULL,
-        org_id TEXT NOT NULL,
-        status TEXT NOT NULL,
-        revision INTEGER NOT NULL CHECK (revision >= 1),
-        payload_json TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        PRIMARY KEY (org_id, id)
-      );
-      CREATE INDEX IF NOT EXISTS customer_service_tasks_status_idx
-        ON customer_service_tasks (org_id, status, updated_at DESC, id DESC);
-    `,
+    sql: CUSTOMER_SERVICE_TASKS_SQL,
   },
   {
     version: 49,
@@ -1093,11 +1101,14 @@ export const MIGRATIONS = [
     `,
   },
   {
+    // The schedule branch already shipped these columns as version 48.
+    // Apply each statement only when that column is still missing.
     version: 54,
-    sql: `
-      ALTER TABLE recipes ADD COLUMN trigger_at_minute INTEGER;
-      ALTER TABLE recipes ADD COLUMN trigger_weekdays TEXT;
-      ALTER TABLE recipes ADD COLUMN trigger_timezone TEXT;
-    `,
+    sql: `${RECIPE_CLOCK_COLUMN_SQL.join(";\n")};`,
+  },
+  {
+    // Those same databases skipped this table, because version 48 was taken.
+    version: 55,
+    sql: CUSTOMER_SERVICE_TASKS_SQL,
   },
 ] as const;

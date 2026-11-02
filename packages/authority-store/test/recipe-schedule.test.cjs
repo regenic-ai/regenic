@@ -47,6 +47,57 @@ ALTER TABLE recipes ADD COLUMN trigger_timezone TEXT;
     ]);
   });
 
+  it("opens a schedule-branch database that already has the clock columns", async () => {
+    const root = await mkdtemp(join(tmpdir(), "regenic-recipe-branch-"));
+    roots.push(root);
+    const path = join(root, "authority.db");
+    const legacy = new Database(path);
+    try {
+      legacy.function("conversation_id", (source, externalId, fallbackId) =>
+        conversationId(source, externalId, fallbackId));
+      for (const migration of MIGRATIONS.filter(({ version }) => version <= 53 && version !== 48)) {
+        legacy.exec(migration.sql);
+      }
+      legacy.exec(`
+        ALTER TABLE recipes ADD COLUMN trigger_at_minute INTEGER;
+        ALTER TABLE recipes ADD COLUMN trigger_weekdays TEXT;
+        ALTER TABLE recipes ADD COLUMN trigger_timezone TEXT;
+      `);
+      legacy.pragma("user_version = 53");
+      legacy.prepare(`
+        INSERT INTO recipes (
+          id, org_id, name, match_json, executor_type, executor_config_json,
+          trigger_kind, trigger_interval_ms, trigger_at_minute, trigger_timezone,
+          created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run("weekly", "local-owner", "Morning", "{}", "dsh", "{}",
+        "pull", 30 * 60_000, 540, "Asia/Shanghai",
+        "2026-08-27T00:00:00.000Z", "2026-08-27T00:00:00.000Z");
+    } finally {
+      legacy.close();
+    }
+
+    const store = new SqliteAuthorityStore(path);
+    try {
+      assert.equal(store.schemaVersion, LATEST_SCHEMA_VERSION);
+      const saved = await store.getRecipe("local-owner", "weekly");
+      assert.equal(saved.trigger.at_minute, 540);
+      assert.equal(saved.trigger.timezone, "Asia/Shanghai");
+      assert.equal(saved.trigger.interval_ms, 30 * 60_000);
+    } finally {
+      store.close();
+    }
+    const inspect = new Database(path);
+    try {
+      assert.ok(inspect.prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'customer_service_tasks'",
+      ).get());
+      assert.deepEqual(inspect.pragma("foreign_key_check"), []);
+    } finally {
+      inspect.close();
+    }
+  });
+
   it("upgrades main's SQLite schema without losing existing recipes or tables", async () => {
     const root = await mkdtemp(join(tmpdir(), "regenic-recipe-upgrade-"));
     roots.push(root);
