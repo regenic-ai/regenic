@@ -116,6 +116,22 @@ describe("SQLite Context lexical index", () => {
     index.close();
   });
 
+  it("splits Latin words adjacent to CJK into whole words instead of letter n-grams", async () => {
+    const dir = await root();
+    const index = new SqliteContextLexicalIndex(join(dir, "context.lexical.db"));
+    await index.replaceOrganization(replacement([
+      { ...key("event-excel", HASH_A), text: "Q3 budget Excel workbook" },
+      { ...key("event-html", HASH_B), text: "width=device-width family=Space+Grotesk" },
+      { ...key("event-cjk", HASH_C), text: "季度文件汇总" },
+    ]));
+    const authorized = [key("event-excel", HASH_A), key("event-html", HASH_B), key("event-cjk", HASH_C)];
+    const mixed = await index.matchAuthorized({ org_id: "example-org", query: "看下最近有哪些Excel文件", authorized });
+    assert.deepEqual(mixed.matched, [key("event-cjk", HASH_C), key("event-excel", HASH_A)]);
+    const mixedDocument = await index.matchAuthorized({ org_id: "example-org", query: "excel", authorized });
+    assert.deepEqual(mixedDocument.matched, [key("event-excel", HASH_A)]);
+    index.close();
+  });
+
   it("reports stale hashes as uncovered and replaces documents idempotently across restart", async () => {
     const dir = await root();
     const path = join(dir, "context.lexical.db");
@@ -140,7 +156,7 @@ describe("SQLite Context lexical index", () => {
     index = new SqliteContextLexicalIndex(path);
     assert.deepEqual(await index.getStatus("example-org"), {
       available: true,
-      algorithm_version: "literal-unicode-v1",
+      algorithm_version: "literal-unicode-v2",
       generation: "continuous-v1",
       watermark: "authority:2",
     });
@@ -175,7 +191,7 @@ describe("SQLite Context lexical index", () => {
     await index.clearOrganization("example-org");
     assert.deepEqual(await index.getStatus("example-org"), {
       available: true,
-      algorithm_version: "literal-unicode-v1",
+      algorithm_version: "literal-unicode-v2",
     });
     index.close();
   });
@@ -213,7 +229,7 @@ describe("SQLite Context lexical index", () => {
       authorized: [key("event-a", HASH_A)],
     }), {
       available: false,
-      algorithm_version: "literal-unicode-v1",
+      algorithm_version: "literal-unicode-v2",
       matched: [],
       covered: [],
     });

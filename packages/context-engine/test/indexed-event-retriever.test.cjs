@@ -97,7 +97,7 @@ function engineFixture(indexOverrides = {}, sourceOverrides = {}) {
       indexInputs.push(structuredClone(input));
       return {
         available: true,
-        algorithm_version: "literal-unicode-v1",
+        algorithm_version: "literal-unicode-v2",
         generation: "continuous-v1",
         watermark: "authority:2",
         covered: structuredClone(input.authorized),
@@ -142,7 +142,7 @@ describe("indexed Event retrieval", () => {
       async matchAuthorized() {
         return {
           available: true,
-          algorithm_version: "literal-unicode-v1",
+          algorithm_version: "literal-unicode-v2",
           generation: "continuous-v1",
           watermark: "authority:1",
           covered: [],
@@ -164,7 +164,7 @@ describe("indexed Event retrieval", () => {
       async matchAuthorized(input) {
         return {
           available: true,
-          algorithm_version: "literal-unicode-v1",
+          algorithm_version: "literal-unicode-v2",
           generation: "continuous-v1",
           watermark: "authority:2",
           covered: [...input.authorized, { event_id: "event-hidden", content_hash: HASH_B }],
