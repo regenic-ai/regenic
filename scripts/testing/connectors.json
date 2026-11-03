@@ -4,7 +4,7 @@
     "stable": "0.2.0",
     "candidate": "0.3.0"
   },
-  "automatic_mode": "source-build-offline-fakes-packed-consumer",
+  "automatic_mode": "source-build-registry-and-packed-candidate-core-loader",
   "manual_live_mode": "excluded; requires explicit credentials, account ownership and human approval",
   "connectors": [
     {
@@ -93,8 +93,8 @@
       "contract_range": "^0.3.0",
       "stable_sdk": null,
       "candidate_sdk": "0.3.0",
-      "consumer_mode": "clone-root-absolute",
-      "deployment_note": "Copilot connector source-root validation uses frozen install/build/typecheck/test with root-level Zod 4.6.7 override verification and absolute plugin loading; bare tarball consumers must carry their own override/runtime compatibility."
+      "consumer_mode": "clone-root-core-loader",
+      "deployment_note": "Copilot source validation uses frozen install/build/typecheck/test and verifies the SDK entry's runtime Zod 4.6.7; the built plugin is loaded without activation by the compiled core loader using packed candidate SDK packages. Bare tarball consumers must carry their own Zod compatibility."
     }
   ]
 }

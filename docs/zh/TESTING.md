@@ -25,14 +25,14 @@ pnpm test:compatibility -- --connector dingtalk --sdk candidate
 
 真实宿主执行器测试使用实际 API、Nest host、SQLite authority store、driver/executor registry 和 installation lifecycle；只有外部执行器边界由临时子进程 JSON-RPC 服务代替。测试用显式 barrier 确定并发顺序，不依靠 sleep。每个测试使用隔离的临时 HOME/config/data/database/blob 目录和系统分配的本地端口，并关闭自有服务及子进程、确认端口已关闭后删除夹具。覆盖仅读取元数据不激活、多个组织/安装绑定、阻止 recipe 覆盖 pin、启用/禁用/重配置/删除、持久化重启后不复活旧代、跨安装/跨组织拒绝、排空已准入任务以及子进程清理。现有持久回复恢复测试覆盖结果未知时不自动重放。
 
-`scripts/testing/connectors.json` 记录 Slack、WhatsApp、DingTalk、WeCom、Telegram、Discord、Claude Code、GitHub Copilot 的默认分支精确 SHA 与真实契约范围。支持的 `stable` 模式使用已发布 contract 0.2.0；仅对声明范围支持的包，`candidate` 模式才使用当前 0.3.0 core SDK。每轮测试会在验证前后记录源码侧解析到的 `@regenic/connector-contract` 身份（路径 + realpath + 版本），避免只看最终消费者版本。
+`scripts/testing/connectors.json` 记录 Slack、WhatsApp、DingTalk、WeCom、Telegram、Discord、Claude Code、GitHub Copilot 的默认分支精确 SHA 与真实契约范围。源仓按锁文件冻结安装、构建、类型检查和测试；stable lane 若仓库显式提供 link 脚本，则使用已发布 stable SDK 包，并单独记录其来源。candidate lane 刻意保留 registry-backed 的源码测试阶段，然后将当前 core SDK 打成 `.tgz` 安装到隔离消费者，校验 package-lock 中本地 tarball 的解析路径和 SHA-512 完整性，并断言插件加载实际解析到候选 contract 的真实路径和版本；同版本 registry 包无法通过身份断言。
 
 每个连接器显式声明消费者兼容模式：
 
-- `packed-npm`：连接器打包后安装到隔离生产消费者，断言 host/plugin 解析到同一 contract 实例并加载声明贡献项。
-- `clone-root-absolute`（GitHub Copilot）：在连接器源码根执行 frozen install/build/typecheck/test，并记录 root audit 证据；随后用源码绝对路径加载插件，断言 host/plugin 解析同一 contract 实例。
+- `packed-npm`：连接器打包后与 stable SDK 包或 candidate SDK `.tgz` 一起安装到隔离消费者；由实际编译后的 API 插件 loader 加载连接器，并按 core protocol 边界校验贡献项。core 和插件不要求共享物理 contract 实例。
+- `clone-root-core-loader`（GitHub Copilot）：保留源码根 frozen install/build/typecheck/test 和 audit；从 Copilot SDK 入口实际解析并验证 Zod 4.6.7；再由编译后的 API loader 加载构建产物但不激活。candidate 模式通过隔离的模块解析 overlay 提供已打包的 candidate SDK。core 与克隆连接器刻意使用独立依赖根。
 
-对 Copilot 而言，Zod 4.6.7 override 的验证点是 **Copilot 连接器源仓库根目录**（`clone-root-absolute` 模式），并不声称任意下游 tarball 消费者会自动继承该 override。不会通过覆盖不兼容声明范围来“强行通过”测试。
+对 Copilot 而言，Zod 4.6.7 override 不仅检查源码根配置，还会验证 **Copilot SDK 入口实际解析到的 Zod 包版本**。这不代表任意下游 tarball 消费者会自动继承该 override。不会通过覆盖不兼容声明范围来“强行通过”测试。
 
 桌面测试 lane 运行现有隔离单元测试、Electron 生产构建和真实 Electron semantic smoke，使用合成的本地 embedding HTTP 服务及临时数据库/配置目录。它不登录账号、不调用外部模型、不发送消息，也不启动真实 Agent。Linux 在 Xvfb 中运行；CI macOS lane 提供原生 macOS 验证。
 
