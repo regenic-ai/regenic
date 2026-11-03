@@ -14,7 +14,7 @@
     "start:api": "pnpm --filter @regenic/api start",
     "start:worker": "pnpm --filter @regenic/worker start",
     "check:boundaries": "node scripts/check-dependency-boundaries.mjs",
-    "test": "pnpm -r --if-present run test",
+    "test": "pnpm -r --workspace-concurrency=1 --if-present run test",
     "typecheck": "pnpm -r run typecheck",
     "test:ci": "node scripts/testing/run.mjs pr",
     "test:host": "node scripts/testing/run.mjs host",
