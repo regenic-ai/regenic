@@ -26,7 +26,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "pnpm --filter @regenic/plugin-host build && pnpm --filter @regenic/connector-contract build && pnpm --filter @regenic/connector-test-utils build && pnpm run build && node --test test/*.test.cjs",
+    "test": "pnpm --filter @regenic/plugin-host build && pnpm --filter @regenic/connector-contract build && pnpm --filter @regenic/connector-test-utils build && pnpm run build && node --experimental-sqlite --test test/*.test.cjs",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
