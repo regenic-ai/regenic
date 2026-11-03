@@ -1,4 +1,5 @@
 import { createRequire } from "node:module";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   evidence, hash, isolatedEnvironment, npm, pnpm, provenance,
@@ -24,12 +25,67 @@ try {
   }
   run(npm, ["install", "--ignore-scripts", "--omit=dev", "--no-audit", "--no-fund",
     "--prefix", consumerDir, ...packed.map((entry) => entry.path)], { env });
+  run(npm, ["install", "--ignore-scripts", "--no-audit", "--no-fund",
+    "--prefix", consumerDir, "--save-dev", "typescript@5.9.3", "@types/node@22.20.5"], { env });
+  const typeProbe = join(consumerDir, "sdk-contract-smoke.ts");
+  const tsconfig = join(consumerDir, "tsconfig.consumer-smoke.json");
+  writeFileSync(typeProbe, `
+import type {
+  ExecutorContext,
+  ExecutorStartInput,
+  ExecutorResumeInput,
+  ExecutorRunHandle,
+  TaskExecutor,
+  WorkRun,
+} from "@regenic/connector-contract";
+
+const assertCtx = (ctx: ExecutorContext): string | undefined => ctx.installation_id;
+
+const executor: TaskExecutor = {
+  executor_type: "packed-sdk-consumer-smoke",
+  capabilities() {
+    return { start: true, resume: true, status: true };
+  },
+  catalog() {
+    return { executor_type: "packed-sdk-consumer-smoke", label: "smoke", fields: [] };
+  },
+  async start(_input: ExecutorStartInput, _ctx: ExecutorContext): Promise<ExecutorRunHandle> {
+    throw new Error("smoke");
+  },
+  async resume(_input: ExecutorResumeInput, _ctx: ExecutorContext): Promise<ExecutorRunHandle> {
+    throw new Error("smoke");
+  },
+  async status(_run: WorkRun, _ctx: ExecutorContext): Promise<ExecutorRunHandle> {
+    throw new Error("smoke");
+  },
+  async cancel(_run: WorkRun, _ctx: ExecutorContext): Promise<void> {},
+};
+void assertCtx;
+void executor;
+`, "utf8");
+  writeFileSync(tsconfig, JSON.stringify({
+    compilerOptions: {
+      target: "ES2022",
+      module: "NodeNext",
+      moduleResolution: "NodeNext",
+      strict: true,
+      noEmit: true,
+      skipLibCheck: true,
+      esModuleInterop: true,
+      types: ["node"],
+    },
+    files: ["sdk-contract-smoke.ts"],
+  }, null, 2), "utf8");
+  run(npm, ["exec", "--prefix", consumerDir, "tsc", "--", "-p", "tsconfig.consumer-smoke.json"], {
+    cwd: consumerDir, env,
+  });
   run(process.execPath, [join(repo, "scripts/testing/consumer-probe.cjs")], { env });
   evidence("packed-consumer", {
     ...provenance(), status: "passed", contract_protocol: CONNECTOR_PROTOCOL,
     packages: packed.map(({ name, sha512 }) => ({ name, sha512 })),
     install_mode: "npm install --ignore-scripts --omit=dev",
-    zod_note: "This exercises the packed host SDK/plugin contract, not downstream inheritance of root-only overrides.",
+    typescript_contract_smoke: "strict --noEmit sdk-contract-smoke.ts",
+    zod_note: "This verifies packed SDK identity only; source-root override behavior is validated in connector-specific clone-root lanes.",
   });
 } finally {
   removeRoot(root);

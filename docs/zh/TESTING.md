@@ -25,7 +25,14 @@ pnpm test:compatibility -- --connector dingtalk --sdk candidate
 
 真实宿主执行器测试使用实际 API、Nest host、SQLite authority store、driver/executor registry 和 installation lifecycle；只有外部执行器边界由临时子进程 JSON-RPC 服务代替。测试用显式 barrier 确定并发顺序，不依靠 sleep。每个测试使用隔离的临时 HOME/config/data/database/blob 目录和系统分配的本地端口，并关闭自有服务及子进程、确认端口已关闭后删除夹具。覆盖仅读取元数据不激活、多个组织/安装绑定、阻止 recipe 覆盖 pin、启用/禁用/重配置/删除、持久化重启后不复活旧代、跨安装/跨组织拒绝、排空已准入任务以及子进程清理。现有持久回复恢复测试覆盖结果未知时不自动重放。
 
-`scripts/testing/connectors.json` 记录 Slack、WhatsApp、DingTalk、WeCom、Telegram、Discord、Claude Code、GitHub Copilot 的默认分支精确 SHA 及真实契约范围。支持的 `stable` 模式使用已发布 contract 0.2.0；仅对声明范围支持的包，`candidate` 模式才链接并构建当前工作区 0.3.0。每轮测试固定源码 SHA，构建并测试选定连接器，打包后按对应 SDK 安装生产消费者并加载声明的贡献项，同时记录 tarball 完整性。Copilot connector 使用的 Zod 4.6.7 override 只存在于 core 根配置；本消费者测试不会声称任意下游 tarball 会继承该 override。不会通过覆盖不兼容的声明范围来让测试“通过”。
+`scripts/testing/connectors.json` 记录 Slack、WhatsApp、DingTalk、WeCom、Telegram、Discord、Claude Code、GitHub Copilot 的默认分支精确 SHA 与真实契约范围。支持的 `stable` 模式使用已发布 contract 0.2.0；仅对声明范围支持的包，`candidate` 模式才使用当前 0.3.0 core SDK。每轮测试会在验证前后记录源码侧解析到的 `@regenic/connector-contract` 身份（路径 + realpath + 版本），避免只看最终消费者版本。
+
+每个连接器显式声明消费者兼容模式：
+
+- `packed-npm`：连接器打包后安装到隔离生产消费者，断言 host/plugin 解析到同一 contract 实例并加载声明贡献项。
+- `clone-root-absolute`（GitHub Copilot）：在连接器源码根执行 frozen install/build/typecheck/test，并记录 root audit 证据；随后用源码绝对路径加载插件，断言 host/plugin 解析同一 contract 实例。
+
+对 Copilot 而言，Zod 4.6.7 override 的验证点是 **Copilot 连接器源仓库根目录**（`clone-root-absolute` 模式），并不声称任意下游 tarball 消费者会自动继承该 override。不会通过覆盖不兼容声明范围来“强行通过”测试。
 
 桌面测试 lane 运行现有隔离单元测试、Electron 生产构建和真实 Electron semantic smoke，使用合成的本地 embedding HTTP 服务及临时数据库/配置目录。它不登录账号、不调用外部模型、不发送消息，也不启动真实 Agent。Linux 在 Xvfb 中运行；CI macOS lane 提供原生 macOS 验证。
 

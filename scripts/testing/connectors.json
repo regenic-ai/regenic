@@ -15,7 +15,8 @@
       "package_name": "@regenic/slack-connector",
       "contract_range": "^0.2.0",
       "stable_sdk": "0.2.0",
-      "candidate_sdk": null
+      "candidate_sdk": null,
+      "consumer_mode": "packed-npm"
     },
     {
       "id": "whatsapp",
@@ -25,7 +26,8 @@
       "package_name": "@regenic/whatsapp-personal",
       "contract_range": "^0.2.0",
       "stable_sdk": "0.2.0",
-      "candidate_sdk": null
+      "candidate_sdk": null,
+      "consumer_mode": "packed-npm"
     },
     {
       "id": "dingtalk",
@@ -35,7 +37,8 @@
       "package_name": "@regenic/dingtalk-connector",
       "contract_range": ">=0.2.0",
       "stable_sdk": "0.2.0",
-      "candidate_sdk": "0.3.0"
+      "candidate_sdk": "0.3.0",
+      "consumer_mode": "packed-npm"
     },
     {
       "id": "wecom",
@@ -45,7 +48,8 @@
       "package_name": "@regenic/wecom-connector",
       "contract_range": ">=0.2.0",
       "stable_sdk": "0.2.0",
-      "candidate_sdk": "0.3.0"
+      "candidate_sdk": "0.3.0",
+      "consumer_mode": "packed-npm"
     },
     {
       "id": "telegram",
@@ -55,7 +59,8 @@
       "package_name": "@regenic/telegram-connector",
       "contract_range": "0.2.0",
       "stable_sdk": "0.2.0",
-      "candidate_sdk": null
+      "candidate_sdk": null,
+      "consumer_mode": "packed-npm"
     },
     {
       "id": "discord",
@@ -65,7 +70,8 @@
       "package_name": "@regenic/discord-connector",
       "contract_range": "0.2.0",
       "stable_sdk": "0.2.0",
-      "candidate_sdk": null
+      "candidate_sdk": null,
+      "consumer_mode": "packed-npm"
     },
     {
       "id": "claude-code",
@@ -75,7 +81,8 @@
       "package_name": "@regenic/connector-claude-code",
       "contract_range": "^0.3.0",
       "stable_sdk": null,
-      "candidate_sdk": "0.3.0"
+      "candidate_sdk": "0.3.0",
+      "consumer_mode": "packed-npm"
     },
     {
       "id": "github-copilot",
@@ -86,7 +93,8 @@
       "contract_range": "^0.3.0",
       "stable_sdk": null,
       "candidate_sdk": "0.3.0",
-      "deployment_note": "Core release currently applies a root-only Zod 4.6.7 override for Copilot SDK 1.0.28; tarball consumers must declare/runtime-resolve their own override."
+      "consumer_mode": "clone-root-absolute",
+      "deployment_note": "Copilot connector source-root validation uses frozen install/build/typecheck/test with root-level Zod 4.6.7 override verification and absolute plugin loading; bare tarball consumers must carry their own override/runtime compatibility."
     }
   ]
 }
