@@ -190,7 +190,7 @@ describe("reading messages", () => {
 
 describe("thread pane empty copy", () => {
   it("says syncing while the local page is still settling", () => {
-    assert.equal(threadPaneEmptyCopy(true), "Syncing messages…");
+    assert.equal(threadPaneEmptyCopy(true), "Syncing this conversation…");
     assert.equal(
       threadPaneEmptyCopy(false),
       "This conversation has no displayable messages.",

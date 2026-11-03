@@ -393,7 +393,9 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
     const blobRoot = join(root, "blobs");
     await ingestActionable(database, blobRoot);
     const dsh = await startDshWebStub();
-    const { app, origin } = await startPersonalApi(database, blobRoot);
+    const { app, origin } = await startPersonalApi(database, blobRoot, {
+      REGENIC_CONNECTOR_PULL_MS: "1000",
+    });
     let installation;
     try {
       const created = await fetch(`${origin}/v1/me/connectors`, {

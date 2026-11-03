@@ -5,6 +5,7 @@
 - [消息编排](MESSAGE_ORCHESTRATION.md)
 - [连接器目录](CONNECTOR_CATALOG.md)
 - [开发连接器](CONNECTOR.md)
+- [自动化测试](TESTING.md)
 - [内置连接器](CONNECTOR_DRIVERS.md)
 - [技术栈](TECH_STACK.md)
 - [桌面端](DESKTOP.md)

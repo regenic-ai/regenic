@@ -5,6 +5,7 @@
 - [Message orchestration](MESSAGE_ORCHESTRATION.md)
 - [Connector catalog](CONNECTOR_CATALOG.md)
 - [Build a connector](CONNECTOR.md)
+- [Automated testing](TESTING.md)
 - [Built-in connectors](CONNECTOR_DRIVERS.md)
 - [Technology stack](TECH_STACK.md)
 - [Local model service setup](LOCAL_MODEL_SERVICE.md)

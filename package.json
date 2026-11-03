@@ -15,6 +15,14 @@
     "start:worker": "pnpm --filter @regenic/worker start",
     "check:boundaries": "node scripts/check-dependency-boundaries.mjs",
     "test": "pnpm -r --if-present run test",
-    "typecheck": "pnpm -r run typecheck"
+    "typecheck": "pnpm -r run typecheck",
+    "test:ci": "node scripts/testing/run.mjs pr",
+    "test:host": "node scripts/testing/run.mjs host",
+    "test:soak": "node scripts/testing/run.mjs soak",
+    "test:consumer": "node scripts/testing/consumer.mjs",
+    "test:compatibility": "node scripts/testing/compatibility.mjs",
+    "test:desktop": "node scripts/testing/run.mjs desktop",
+    "test:report": "node scripts/testing/report.mjs",
+    "test:tooling": "node --test scripts/testing/test/*.test.mjs"
   }
 }

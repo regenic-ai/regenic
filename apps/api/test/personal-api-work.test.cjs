@@ -8,6 +8,7 @@ const {
   createRoot,
   ingestActionable,
   seedHostedWork,
+  startDshWebStub,
   startPersonalApi,
   waitUntil,
 } = require("./personal-api-harness.cjs");
@@ -175,8 +176,18 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
     const recipe = await authority.getRecipe("local-owner", "recipe-leftover");
     await authority.putRecipe({ ...recipe, enabled: false });
     authority.close();
+    const dsh = await startDshWebStub({ dropCreateResponse: true });
     const { app, origin } = await startPersonalApi(database, blobRoot);
     try {
+      const connector = await fetch(`${origin}/v1/me/connectors`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          connector_type: "dsh-session",
+          config: { transport: "web", base_url: dsh.origin },
+        }),
+      });
+      assert.equal(connector.status, 201);
       const started = await fetch(`${origin}/v1/me/work-items/work-leftover-1/run`, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -186,6 +197,7 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
       assert.match(await started.text(), /execution_start_uncertain/);
     } finally {
       await app.close();
+      await dsh.close();
     }
     const store = new SqliteAuthorityStore(database);
     try {

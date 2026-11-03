@@ -3,6 +3,7 @@ const { spawn } = require("node:child_process");
 const { existsSync, mkdtempSync, mkdirSync, rmSync } = require("node:fs");
 const { createServer } = require("node:http");
 const { createRequire } = require("node:module");
+const { once } = require("node:events");
 const { tmpdir } = require("node:os");
 const { join, resolve } = require("node:path");
 
@@ -14,6 +15,9 @@ const { IngestionService } = apiRequire("@regenic/domain");
 const { FsBlobStore } = apiRequire("@regenic/blob-store");
 const { EMBEDDINGGEMMA_2 } = apiRequire("@regenic/embedding-provider");
 const root = mkdtempSync(join(tmpdir(), "regenic-semantic-electron-"));
+let ownedModel;
+let ownedElectron;
+let ownedSocket;
 const profile = join(root, "profile");
 const data = join(root, "data");
 const database = join(data, "authority.db");
@@ -66,6 +70,7 @@ async function main() {
         : { vectors: input.texts.map(() => [1, ...Array(767).fill(0)]) }),
     }));
   });
+  ownedModel = model;
   await new Promise((resolve) => model.listen(0, "127.0.0.1", resolve));
   const portPicker = createServer();
   await new Promise((resolve) => portPicker.listen(0, "127.0.0.1", resolve));
@@ -82,6 +87,7 @@ async function main() {
   delete env.ELECTRON_RENDERER_URL;
   const child = spawn(require("electron"), [".", `--user-data-dir=${profile}`,
     `--remote-debugging-port=${debugPort}`], { cwd: desktop, env, stdio: ["ignore", "ignore", "pipe"] });
+  ownedElectron = child;
   let stderr = "";
   child.stderr.on("data", (chunk) => { stderr = (stderr + chunk).slice(-6000); });
   const exited = new Promise((resolve) => child.once("exit", (code, signal) => resolve({ code, signal })));
@@ -144,6 +150,7 @@ async function main() {
       }
     }, "Electron console", 60_000);
     ws = new WebSocket(target.webSocketDebuggerUrl);
+    ownedSocket = ws;
     await new Promise((resolve, reject) => {
       ws.addEventListener("open", resolve, { once: true });
       ws.addEventListener("error", reject, { once: true });
@@ -163,15 +170,24 @@ async function main() {
     assert.equal((await evaluate("window.regenic.getSemanticRuntime()")).installed, false);
     await api(`/v1/me/inbox/${encodeURIComponent(eventId)}/fold`, {});
     await search();
-    await click(".semantic-results > li button");
-    await waitFor(() => evaluate('Boolean(document.querySelector("dialog .search-source-text"))'), "authorized source");
-    assert.equal(await evaluate('document.querySelectorAll("dialog .search-source-text img").length'), 0);
-    await click("dialog button.primary");
+    await waitFor(() => evaluate('Boolean(document.querySelector(".search-message-main"))'), "search source result");
+    assert.ok((await evaluate('document.querySelector(".search-message-main").textContent')).includes("<img src=x onerror=alert(1)>"));
+    assert.equal(await evaluate('document.querySelectorAll(".semantic-results img").length'), 0);
+    await click(".search-message-main");
     await waitFor(() => evaluate('Boolean(document.querySelector(".thread-window-item.is-context-evidence"))'), "original message highlight");
     assert.ok((await evaluate('document.querySelector(".thread-window-item.is-context-evidence").textContent')).includes("RG-SMOKE"));
+    assert.equal(await evaluate('document.querySelectorAll(".thread-window-item.is-context-evidence img").length'), 0);
     assert.equal((await api(`/v1/me/inbox/${encodeURIComponent(eventId)}`)).hidden, true);
 
-    assert.equal((await api("/v1/me/context/embedding/index", {})).failed, 1);
+    await api("/v1/me/context/embedding/index", {});
+    const failedGeneration = await waitFor(async () => {
+      const status = await api("/v1/me/context/embedding/status");
+      const generation = status.generations[0];
+      return generation && generation.jobs.failed + generation.jobs.quarantined === 1
+        ? generation
+        : null;
+    }, "synthetic embedding failure");
+    assert.equal(failedGeneration.jobs.failed + failedGeneration.jobs.quarantined, 1);
     await click('nav button[aria-label="Settings"]');
     await waitFor(() => evaluate('Boolean(document.querySelector(".semantic-generation"))'), "generation diagnostics");
     await waitFor(() => evaluate('document.querySelector(".semantic-generation").textContent.includes("Model revision/descriptor mismatch")'), "localized failure explanation");
@@ -185,13 +201,11 @@ async function main() {
 
     await search();
     await ingest("revise", "Updated RG-SMOKE source.");
-    await click(".semantic-results > li button");
-    await waitFor(() => evaluate('document.querySelector("dialog")?.textContent.includes("This result is no longer current")'), "stale source rejection");
-    assert.equal(await evaluate('document.querySelectorAll("dialog .search-source-text").length'), 0);
-    await click("dialog header button");
+    await click(".search-message-main");
+    await waitFor(() => evaluate('document.querySelector("[role=alert]")?.textContent.includes("This result is no longer current")'), "stale source rejection");
     await evaluate('window.regenic.setKernelSettings({ mode: "local" })');
     await waitFor(() => evaluate('document.querySelectorAll(".semantic-results > li").length === 0'), "origin reset");
-    console.log("PASS: actual Electron source preview/navigation/highlight, bounded recovery, stale-source rejection and origin reset (synthetic inference)");
+    console.log("PASS: actual Electron search source navigation/highlight, bounded recovery, stale-source rejection and origin reset (synthetic inference)");
   } catch (error) {
     console.error(stderr);
     throw error;
@@ -206,13 +220,30 @@ async function main() {
     ws?.close();
     model.closeAllConnections();
     await new Promise((resolve) => model.close(resolve));
-    if (!result) child.kill("SIGKILL");
+    if (!result) {
+      child.kill("SIGKILL");
+      await exited;
+    }
     cleanExit = result?.code === 0 && !existsSync(join(data, "regenic.store.lock"));
-    if (cleanExit) rmSync(root, { recursive: true, force: true });
-    else throw new Error(`Electron did not quit cleanly; inspect isolated fixture: ${root}`);
+    rmSync(root, { recursive: true, force: true });
+    if (!cleanExit) throw new Error("Electron did not quit cleanly; the isolated fixture was removed");
   }
   assert.ok(cleanExit);
   console.log("PASS: clean Electron quit and store-lock release; isolated fixture removed");
 }
 
-main().catch((error) => { console.error(error); process.exitCode = 1; });
+main().catch(async (error) => {
+  ownedSocket?.close();
+  if (ownedElectron?.exitCode === null) {
+    const exited = once(ownedElectron, "exit");
+    ownedElectron.kill("SIGKILL");
+    await exited;
+  }
+  if (ownedModel?.listening) {
+    ownedModel.closeAllConnections();
+    await new Promise((resolve) => ownedModel.close(resolve));
+  }
+  rmSync(root, { recursive: true, force: true });
+  console.error(error);
+  process.exitCode = 1;
+});

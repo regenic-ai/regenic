@@ -990,7 +990,7 @@ describe("regenic-local", () => {
     assert.equal(first.batches[0].records[0].status, "accepted");
     assert.equal(replay.batches[0].records[0].status, "duplicate");
     assert.deepEqual(first.errors, [{
-      line: 3, code: "invalid_row", message: "Invalid datetime",
+      line: 3, code: "invalid_row", message: "Invalid ISO datetime",
     }]);
   });
 

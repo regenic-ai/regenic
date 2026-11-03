@@ -88,7 +88,7 @@ describe("connector catalog hints", () => {
     const catalog = catalogOf({ env: {}, locale: "zh" });
     const feishu = catalog.find((item) => item.connector_type === "feishu-chat");
     assert.equal(feishu.title, "飞书");
-    assert.equal(feishu.fields[0].label, "同步模式");
+    assert.equal(feishu.fields[0].label, "检查频率");
     assert.equal(feishu.fields[1].label, "同步范围");
   });
 
