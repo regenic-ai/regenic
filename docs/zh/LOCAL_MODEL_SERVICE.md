@@ -160,7 +160,7 @@ API 启动入口读取进程环境，不会自动加载仓库的 `.env.example`�
 | `REGENIC_EMBEDDING_DRIVER` | `none`；手动启用使用 `local_http` |
 | `REGENIC_EMBEDDING_BASE_URL` | 启用时必须指定；示例 `http://127.0.0.1:8765` |
 | `REGENIC_EMBEDDING_TIMEOUT_MS` | 30000；整数范围 1–300000 ms |
-| `REGENIC_EMBEDDING_CHUNK_TOKENS` | 256；整数范围 32–8192 |
+| `REGENIC_EMBEDDING_CHUNK_TOKENS` | 128；整数范围 32–8192。已有显式配置仍受支持；修改后会生成新的 generation，需要重新索引 |
 | `REGENIC_EMBEDDING_MAX_CHUNKS` | 1024；每 Event 的上限，整数范围 1–1024 |
 | `HF_HOME` | Python 服务的模型缓存；重启时保持相同目录 |
 | `HF_HUB_OFFLINE` | 下载完成后设为 `1`，从缓存离线加载 |

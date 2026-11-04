@@ -627,7 +627,7 @@ python -m venv .venv-embedding
 $env:REGENIC_EMBEDDING_DRIVER = "local_http"
 $env:REGENIC_EMBEDDING_BASE_URL = "http://127.0.0.1:8765"
 $env:REGENIC_EMBEDDING_TIMEOUT_MS = "30000"
-$env:REGENIC_EMBEDDING_CHUNK_TOKENS = "256"
+$env:REGENIC_EMBEDDING_CHUNK_TOKENS = "128"
 $env:REGENIC_EMBEDDING_MAX_CHUNKS = "1024"
 pnpm --filter @regenic/local-cli... build
 pnpm --filter @regenic/local-cli start context-embedding-index --database C:\data\regenic.db --blob-root C:\data\blobs --org local-owner
@@ -890,15 +890,26 @@ query 直接 `429`。query 与 document 各自按 FIFO 调度；有 document 等
 文档切块先按原规则确定边界，再最多 8 段合成一次 `/embed`。
 
 2026-11-04 在 AMD EPYC 7763、固定 BF16 模型上，以 12 个持续 document worker 和
-20 个不同 query 交替压测：空载 query mean/p50/p95 为 182.9/183.0/197.9 ms；
-持续 document 负载下为 1017.1/1005.3/1167.9 ms，20/20 query 成功，同时完成
+20 个不同 query 交替压测：空载 query mean/p50/p95 为 196.7/194.9/211.7 ms；
+持续 document 负载下为 1067.1/1069.4/1150.1 ms，20/20 query 成功，同时完成
 32 个 document 且无拒绝。16 个 document 同时进入的饱和测试中，15 个被接纳、1 个
 按 document 预算返回 `429`，随后进入的 query 仍以 `200` 完成。修改前的确定性饱和
 基线会让 document 占满全部等待槽，并使同一 query 直接返回 `429`。
 
-加载下约 1.17 秒的 p95 主要来自已经开始的约 80 词 document inference；PyTorch
+加载下约 1.15 秒的 p95 主要来自已经开始的约 80 词 document inference；PyTorch
 计算仍不可抢占，因此本次保证的是“最多等待当前工作单元且不会排在 document 队列后”，
 不是把加载延迟压到空载水平。上述数字是短时合成压力证据，不是生产 SLO。
+
+默认 document chunk 从 256 tokens 降为 128 tokens，缩短不可抢占的后台推理单元。
+同机实测 265-token document 为 2531.4 ms，137-token document 为 1336.9 ms。
+128-token generation 的 49 条真实 BF16 门禁与 256-token 基线完全一致：
+development Recall/MRR/nDCG 均为 0.92，holdout、confirmation 均为 1.0。
+三组索引时间分别从 9101.2/3967.9/3347.0 ms 变为
+8528.8/3709.3/3340.8 ms；development sidecar 从 807336 增至 881496 bytes
+（约 9.2%），其余两组基本不变。这些小型合成集合只证明本次没有观察到质量或索引时间
+回退，不代表所有语料的存储增幅。显式 `REGENIC_EMBEDDING_CHUNK_TOKENS=256` 仍受支持；
+chunk budget 属于 generation identity，默认值升级后安全回填新 generation，不修改旧索引。
+
 优先级、FIFO、query 槽位、query burst、队列上限、超时释放、推理失败后释放均有
 确定性测试。
 HTTP 断连/超时无法中止已开始的 PyTorch 计算，因此大批量文档仍可影响单次查询尾延迟。
@@ -913,6 +924,8 @@ pnpm --filter @regenic/local-cli bench:semantic --split development --scale --ou
 pnpm --filter @regenic/local-cli bench:semantic --split holdout --output regression.json
 pnpm --filter @regenic/local-cli bench:semantic --split confirmation --output confirmation.json
 pnpm --filter @regenic/local-cli bench:semantic --split pipeline --output pipeline.json
+pnpm --filter @regenic/local-cli bench:semantic --split development --chunk-tokens 128 --output chunk128.json
+pnpm --filter @regenic/embedding-provider bench:latency -- --samples 20 --document-workers 12 --document-words 80 --output latency.json
 ```
 
 development 的阈值矩阵只在开发集运行；其它集合不调参。报告保存模型 manifest、profile、

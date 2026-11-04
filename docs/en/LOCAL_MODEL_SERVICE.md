@@ -185,7 +185,7 @@ API authentication for this setup. Direct `/v1/me/*` calls require a valid
 | `REGENIC_EMBEDDING_DRIVER` | `none`; use `local_http` for manual enablement |
 | `REGENIC_EMBEDDING_BASE_URL` | Required when enabled; example `http://127.0.0.1:8765` |
 | `REGENIC_EMBEDDING_TIMEOUT_MS` | 30000; integer 1-300000 ms |
-| `REGENIC_EMBEDDING_CHUNK_TOKENS` | 256; integer 32-8192 |
+| `REGENIC_EMBEDDING_CHUNK_TOKENS` | 128; integer 32-8192. Existing explicit values remain supported; changing it creates a new generation and requires reindexing. |
 | `REGENIC_EMBEDDING_MAX_CHUNKS` | 1024; per-Event limit, integer 1-1024 |
 | `HF_HOME` | Python model cache; keep the same path on restart |
 | `HF_HUB_OFFLINE` | Set to `1` after downloading to load from cache offline |

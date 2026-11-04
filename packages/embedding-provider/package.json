@@ -7,6 +7,7 @@
   "exports": { ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" } },
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "bench:latency": "pnpm --filter @regenic/embedding-provider... build && node test/interactive-latency.bench.cjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "pnpm --filter @regenic/embedding-provider... build && node --test test/*.test.cjs"
   },
