@@ -47,6 +47,7 @@ interface JobRow {
   id: number; org_id: string; generation: string; source: string; external_id: string;
   event_id: string; content_hash: string | null; operation: EmbeddingJob["operation"];
   lineage_json: string; fence: number; attempts: number; status: EmbeddingJob["status"]; error_code: string | null;
+  started_at: string | null; completed_at: string | null; processing_ms: number; lease_until: string | null;
 }
 
 interface AuthorizedChunkRow {
@@ -73,7 +74,7 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
       this.db.pragma("secure_delete = ON");
       this.db.pragma("busy_timeout = 5000");
       const version = this.db.pragma("user_version", { simple: true });
-      if (version !== 0 && version !== 1 && version !== 2 && version !== 3 && version !== 4 && version !== 5) throw new VectorIndexSchemaError("Unsupported vector index schema");
+      if (version !== 0 && version !== 1 && version !== 2 && version !== 3 && version !== 4 && version !== 5 && version !== 6) throw new VectorIndexSchemaError("Unsupported vector index schema");
       this.db.transaction(() => {
         this.db.exec(`
           CREATE TABLE IF NOT EXISTS generations (
@@ -91,6 +92,7 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
             operation TEXT NOT NULL, lineage_json TEXT NOT NULL, fence INTEGER NOT NULL,
             status TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
             owner TEXT, lease_until TEXT, retry_at TEXT, error_code TEXT,
+            started_at TEXT, completed_at TEXT, processing_ms INTEGER NOT NULL DEFAULT 0,
             UNIQUE (org_id, generation, event_id),
             FOREIGN KEY (org_id, generation) REFERENCES generations(org_id, generation) ON DELETE CASCADE
           );
@@ -140,7 +142,20 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
             }
           }
         }
-        this.db.pragma("user_version = 5");
+        if (version < 6) {
+          const columns = this.db.pragma("table_info(jobs)") as Array<{ name: string }>;
+          if (!columns.some((column) => column.name === "started_at")) {
+            this.db.exec("ALTER TABLE jobs ADD COLUMN started_at TEXT;");
+          }
+          if (!columns.some((column) => column.name === "completed_at")) {
+            this.db.exec("ALTER TABLE jobs ADD COLUMN completed_at TEXT;");
+          }
+          if (!columns.some((column) => column.name === "processing_ms")) {
+            this.db.exec("ALTER TABLE jobs ADD COLUMN processing_ms INTEGER NOT NULL DEFAULT 0;");
+          }
+          this.db.exec("UPDATE jobs SET started_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE status='running' AND started_at IS NULL;");
+        }
+        this.db.pragma("user_version = 6");
       }).immediate();
     } catch (error) {
       this.db.close();
@@ -278,18 +293,22 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
         if (previous?.event_id !== head.event_id) {
           this.db.prepare("DELETE FROM coverage WHERE org_id=? AND source=? AND external_id=?")
             .run(input.org_id, head.source, head.external_id);
-          this.db.prepare(`UPDATE jobs SET status='superseded',owner=NULL,lease_until=NULL
+          this.db.prepare(`UPDATE jobs SET status='superseded',owner=NULL,lease_until=NULL,
+            processing_ms=processing_ms+CASE WHEN started_at IS NULL THEN 0
+              ELSE MAX(0,CAST((julianday(?) - julianday(started_at))*86400000 AS INTEGER)) END,
+            started_at=NULL,completed_at=?
             WHERE org_id=? AND source=? AND external_id=? AND event_id<>?`)
-            .run(input.org_id, head.source, head.external_id, head.event_id);
+            .run(input.now, input.now, input.org_id, head.source, head.external_id, head.event_id);
           this.db.prepare(`DELETE FROM staged_chunks WHERE job_id IN (
             SELECT id FROM jobs WHERE org_id=? AND source=? AND external_id=? AND status='superseded'
           )`).run(input.org_id, head.source, head.external_id);
         }
         this.db.prepare(`INSERT OR IGNORE INTO jobs (
-          org_id,generation,source,external_id,event_id,content_hash,operation,lineage_json,fence,status
-        ) VALUES (?,?,?,?,?,?,?,?,?,?)`).run(
+          org_id,generation,source,external_id,event_id,content_hash,operation,lineage_json,fence,status,completed_at
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(
           input.org_id, input.generation, head.source, head.external_id, head.event_id, head.content_hash ?? null,
           head.operation, canonicalContextJson(head.lineage), fence, head.operation === "tombstone" ? "succeeded" : "pending",
+          head.operation === "tombstone" ? input.now : null,
         );
       }
       this.db.prepare("UPDATE generations SET reconciled_epoch=? WHERE org_id=? AND generation=?")
@@ -306,9 +325,21 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
       ) ORDER BY id LIMIT ?`).all(input.org_id, input.generation, input.now, input.now, input.limit) as JobRow[];
       const until = new Date(Date.parse(input.now) + input.lease_ms).toISOString();
       for (const row of rows) {
-        this.db.prepare("UPDATE jobs SET status='running',owner=?,lease_until=?,attempts=attempts+1,error_code=NULL WHERE id=?")
-          .run(input.owner, until, row.id);
-        row.status = "running"; row.attempts += 1; row.error_code = null;
+        const staleAttemptMs = row.started_at
+          ? Math.max(0, Math.min(
+              Date.parse(row.lease_until ?? input.now),
+              Date.parse(input.now),
+            ) - Date.parse(row.started_at))
+          : 0;
+        this.db.prepare(`UPDATE jobs SET status='running',owner=?,lease_until=?,attempts=attempts+1,error_code=NULL,
+          processing_ms=processing_ms+?,started_at=?,completed_at=NULL WHERE id=?`)
+          .run(input.owner, until, staleAttemptMs, input.now, row.id);
+        row.status = "running";
+        row.attempts += 1;
+        row.error_code = null;
+        row.started_at = input.now;
+        row.completed_at = null;
+        row.processing_ms += staleAttemptMs;
       }
       return rows.map(jobFromRow);
     }).immediate();
@@ -379,11 +410,12 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
   }
 
   async yieldJob(job: EmbeddingJob, owner: string, now: string): Promise<boolean> {
+    const processingMs = Math.max(0, Date.parse(now) - Date.parse(job.started_at ?? now));
     return this.db.transaction(() => {
       if (!this.ownsJob(job, owner, now)) return false;
       this.db.prepare(`UPDATE jobs SET status='pending',owner=NULL,lease_until=NULL,retry_at=NULL,
-        attempts=MAX(attempts-1,0) WHERE id=?`)
-        .run(job.id);
+        attempts=MAX(attempts-1,0),processing_ms=processing_ms+?,started_at=NULL,completed_at=NULL WHERE id=?`)
+        .run(processingMs, job.id);
       return true;
     }).immediate();
   }
@@ -421,8 +453,10 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
           .run(job.org_id, job.generation, job.event_id, chunk.ordinal, chunk.start, chunk.end, chunk.text_hash, bytes,
             chunk.origin ? JSON.stringify(chunk.origin) : null);
       }
-      this.db.prepare("UPDATE jobs SET status=?,owner=NULL,lease_until=NULL,retry_at=NULL,error_code=NULL WHERE id=?")
-        .run(noContent ? "skipped" : "succeeded", job.id);
+      const processingMs = Math.max(0, Date.parse(now) - Date.parse(job.started_at ?? now));
+      this.db.prepare(`UPDATE jobs SET status=?,owner=NULL,lease_until=NULL,retry_at=NULL,error_code=NULL,
+        processing_ms=processing_ms+?,started_at=NULL,completed_at=? WHERE id=?`)
+        .run(noContent ? "skipped" : "succeeded", processingMs, now, job.id);
       this.db.prepare("DELETE FROM staged_chunks WHERE job_id=?").run(job.id);
       return true;
     }).immediate();
@@ -432,10 +466,12 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
     const { job, owner, now } = input;
     required(owner); timestamp(now); timestamp(input.retry_at);
     if (!/^[a-z_]{1,64}$/.test(input.error_code)) throw new Error("Invalid embedding error code");
-    return this.db.prepare(`UPDATE jobs SET status=?,retry_at=?,error_code=?,owner=NULL,lease_until=NULL
+    const processingMs = Math.max(0, Date.parse(now) - Date.parse(input.job.started_at ?? now));
+    return this.db.prepare(`UPDATE jobs SET status=?,retry_at=?,error_code=?,owner=NULL,lease_until=NULL,
+      processing_ms=processing_ms+?,started_at=NULL,completed_at=?
       WHERE id=? AND org_id=? AND generation=? AND status='running' AND owner=? AND lease_until>? AND fence=?`)
       .run(input.retryable ? "failed" : "quarantined", input.retry_at, input.error_code,
-        job.id, job.org_id, job.generation, owner, now, job.fence).changes === 1;
+        processingMs, now, job.id, job.org_id, job.generation, owner, now, job.fence).changes === 1;
   }
 
   async listJobs(orgId: string, generation: string): Promise<EmbeddingJob[]> {
@@ -444,8 +480,8 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
       .all(orgId, generation) as JobRow[]).map(jobFromRow);
   }
 
-  async summarizeJobs(orgId: string, generation: string): Promise<EmbeddingJobSummary> {
-    required(orgId); required(generation);
+  async summarizeJobs(orgId: string, generation: string, now = new Date().toISOString()): Promise<EmbeddingJobSummary> {
+    required(orgId); required(generation); timestamp(now);
     const counts: EmbeddingJobSummary["counts"] = {
       pending: 0, running: 0, succeeded: 0, skipped: 0,
       failed: 0, quarantined: 0, superseded: 0,
@@ -455,6 +491,23 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
       status: EmbeddingJob["status"]; count: number;
     }>;
     for (const row of statuses) counts[row.status] = row.count;
+
+    const running = this.db.prepare(`SELECT started_at,processing_ms FROM jobs
+      WHERE org_id=? AND generation=? AND status='running' AND started_at IS NOT NULL`).all(orgId, generation) as Array<{
+      started_at: string; processing_ms: number;
+    }>;
+    const nowMs = Date.parse(now);
+    const runningElapsedMs = running.reduce((longest, job) => {
+      const startedAt = Date.parse(job.started_at);
+      return Number.isFinite(startedAt)
+        ? Math.max(longest, job.processing_ms + Math.max(0, nowMs - startedAt))
+        : longest;
+    }, 0);
+    const recent = this.db.prepare(`SELECT AVG(processing_ms) AS recent_processing_ms FROM (
+      SELECT processing_ms FROM jobs WHERE org_id=? AND generation=?
+        AND status IN ('succeeded','skipped') AND operation<>'tombstone' AND completed_at IS NOT NULL
+      ORDER BY completed_at DESC,id DESC LIMIT 20
+    )`).get(orgId, generation) as { recent_processing_ms: number | null };
 
     const failures = this.db.prepare(`SELECT error_code,status,COUNT(*) AS count FROM jobs
       WHERE org_id=? AND generation=? AND status IN ('failed','quarantined')
@@ -473,6 +526,13 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
     return {
       counts,
       failures: [...byCode.values()].sort((a, b) => a.error_code.localeCompare(b.error_code)),
+      timing: {
+        as_of: now,
+        ...(running.length ? { running_elapsed_ms: runningElapsedMs } : {}),
+        ...(recent.recent_processing_ms !== null
+          ? { recent_processing_ms: Math.round(recent.recent_processing_ms) }
+          : {}),
+      },
     };
   }
 
@@ -767,6 +827,9 @@ function jobFromRow(row: JobRow): EmbeddingJob {
     id: row.id, org_id: row.org_id, generation: row.generation, source: row.source, external_id: row.external_id,
     event_id: row.event_id, operation: row.operation, lineage: JSON.parse(row.lineage_json),
     fence: row.fence, attempts: row.attempts, status: row.status,
+    ...(row.started_at ? { started_at: row.started_at } : {}),
+    ...(row.completed_at ? { completed_at: row.completed_at } : {}),
+    processing_ms: row.processing_ms,
     ...(row.content_hash ? { content_hash: row.content_hash } : {}),
     ...(row.error_code ? { error_code: row.error_code } : {}),
   };

@@ -99,12 +99,20 @@ export interface EmbeddingJob extends EmbeddingSourceHead {
   fence: number;
   attempts: number;
   status: "pending" | "running" | "succeeded" | "skipped" | "failed" | "quarantined" | "superseded";
+  started_at?: string;
+  completed_at?: string;
+  processing_ms: number;
   error_code?: string;
 }
 
 export interface EmbeddingJobSummary {
   counts: Record<EmbeddingJob["status"], number>;
   failures: Array<{ error_code: string; failed: number; quarantined: number }>;
+  timing: {
+    as_of: string;
+    running_elapsed_ms?: number;
+    recent_processing_ms?: number;
+  };
 }
 
 export interface EmbeddingJobStore {
@@ -140,7 +148,7 @@ export interface EmbeddingJobStore {
     retryable: boolean;
   }): Promise<boolean>;
   listJobs(orgId: string, generation: string): Promise<EmbeddingJob[]>;
-  summarizeJobs(orgId: string, generation: string): Promise<EmbeddingJobSummary>;
+  summarizeJobs(orgId: string, generation: string, now?: string): Promise<EmbeddingJobSummary>;
   loadStagedChunks(job: EmbeddingJob, owner: string, now: string): Promise<ContextVectorChunk[]>;
   stageChunk(input: { job: EmbeddingJob; owner: string; now: string; chunk: ContextVectorChunk }): Promise<boolean>;
   yieldJob(job: EmbeddingJob, owner: string, now: string): Promise<boolean>;

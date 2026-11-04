@@ -555,9 +555,13 @@ describe("personal context API", () => {
     await listenServer(server);
     servers.push(server);
     const { origin } = await startApi(await createRoot(), { driver: "none" }, `http://127.0.0.1:${server.address().port}`);
-    assert.equal(JSON.parse((await postJson(`${origin}/v1/me/context/embedding/index`, {})).text).failed, 1);
+    const failedRun = JSON.parse((await postJson(`${origin}/v1/me/context/embedding/index`, {})).text);
+    assert.equal(failedRun.failed, 1);
+    assert.ok(Number.isFinite(failedRun.processing_ms));
     const status = JSON.parse((await getJson(`${origin}/v1/me/context/embedding/status`)).text);
     const generation = status.generations[0];
+    assert.ok(Number.isFinite(Date.parse(status.server_now)));
+    assert.equal(typeof generation.timing.recent_processing_ms, "undefined");
     assert.deepEqual(generation.failures, [{ code: "model_mismatch", failed: 0, quarantined: 1 }]);
     assert.ok(!JSON.stringify(status).includes("private raw"));
     for (const body of [{}, { generation: generation.id, limit: 0 }, { generation: generation.id, limit: 21 },
@@ -574,9 +578,12 @@ describe("personal context API", () => {
     assert.equal(retried.response.status, 200, retried.text);
     assert.deepEqual(JSON.parse(retried.text), { retried: 1 });
     assert.equal(JSON.parse((await postJson(`${origin}/v1/me/context/embedding/retry`, { generation: generation.id })).text).retried, 0);
-    assert.equal(JSON.parse((await postJson(`${origin}/v1/me/context/embedding/index`, {})).text).processed, 1);
+    const processed = JSON.parse((await postJson(`${origin}/v1/me/context/embedding/index`, {})).text);
+    assert.equal(processed.processed, 1);
+    assert.ok(Number.isFinite(processed.processing_ms));
     const repaired = JSON.parse((await getJson(`${origin}/v1/me/context/embedding/status`)).text).generations[0];
     assert.equal(repaired.jobs.succeeded, 1);
+    assert.ok(Number.isFinite(repaired.timing.recent_processing_ms));
     assert.deepEqual(repaired.failures, []);
   });
 
@@ -603,14 +610,17 @@ describe("personal context API", () => {
     const indexed = await postJson(`${origin}/v1/me/context/embedding/index`, {});
     assert.equal(indexed.response.status, 200, indexed.text);
     assert.equal(JSON.parse(indexed.text).processed, 1);
+    assert.ok(Number.isFinite(JSON.parse(indexed.text).processing_ms));
     const status = await getJson(`${origin}/v1/me/context/embedding/status`);
     assert.equal(status.response.status, 200, status.text);
     const value = JSON.parse(status.text);
     assert.equal(value.configured, true);
     assert.equal(value.healthy, true);
     assert.equal(value.vector_status, "ready");
+    assert.ok(Number.isFinite(Date.parse(value.server_now)));
     assert.equal(value.generations.filter((generation) => generation.active).length, 1);
     assert.equal(value.generations.find((generation) => generation.active).jobs.succeeded, 1);
+    assert.ok(Number.isFinite(value.generations.find((generation) => generation.active).timing.recent_processing_ms));
     assert.ok(!status.text.includes("http://") && !status.text.includes("release is approved"));
     const search = await postJson(`${origin}/v1/me/context/search`, { query: "release" });
     assert.equal(search.response.status, 200, search.text);

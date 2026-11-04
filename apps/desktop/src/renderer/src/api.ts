@@ -1489,13 +1489,13 @@ export async function fetchSearchSource(
   return response.json() as Promise<PersonalSearchSource>;
 }
 
-export async function indexSemanticOnce(signal?: AbortSignal): Promise<{ processed: number; failed: number; superseded: number }> {
+export async function indexSemanticOnce(signal?: AbortSignal): Promise<{ processed: number; failed: number; superseded: number; processing_ms: number }> {
   const response = await kernelFetch("/v1/me/context/embedding/index", {
     method: "POST", headers: { "content-type": "application/json" }, body: "{}",
     signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(120_000)]) : undefined,
   });
   if (!response.ok) throwKernelError(await response.json(), `embedding index ${response.status}`);
-  return response.json() as Promise<{ processed: number; failed: number; superseded: number }>;
+  return response.json() as Promise<{ processed: number; failed: number; superseded: number; processing_ms: number }>;
 }
 
 export async function retrySemanticJobs(generation: string, signal: AbortSignal): Promise<{ retried: number }> {

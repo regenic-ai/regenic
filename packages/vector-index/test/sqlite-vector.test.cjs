@@ -180,7 +180,12 @@ describe("SQLite vector projection and independent durable jobs", () => {
     await f.index.stageChunk({ job: jobs[1], owner: "owner", now: at, chunk: chunk() });
     f.index.close();
     const database = new Database(f.path);
-    database.exec("ALTER TABLE chunks DROP COLUMN origin_json; ALTER TABLE staged_chunks DROP COLUMN origin_json; PRAGMA user_version=4;");
+    database.exec(`ALTER TABLE chunks DROP COLUMN origin_json;
+      ALTER TABLE staged_chunks DROP COLUMN origin_json;
+      ALTER TABLE jobs DROP COLUMN started_at;
+      ALTER TABLE jobs DROP COLUMN completed_at;
+      ALTER TABLE jobs DROP COLUMN processing_ms;
+      PRAGMA user_version=4;`);
     database.close();
     f.reopen();
     assert.equal((await query(f.index, [{ event_id: jobs[0].event_id, content_hash: hash }])).covered.length, 1);
@@ -267,13 +272,14 @@ describe("SQLite vector projection and independent durable jobs", () => {
     await index.complete({
       job: claimed[2], owner: "owner", now: at, chunks: [chunk()],
     });
-    assert.deepEqual(await index.summarizeJobs("org", generation.id), {
+    assert.deepEqual(await index.summarizeJobs("org", generation.id, at), {
       counts: { pending: 1, running: 0, succeeded: 1, skipped: 0,
         failed: 1, quarantined: 1, superseded: 0 },
       failures: [
         { error_code: "timeout", failed: 1, quarantined: 0 },
         { error_code: "unsupported_attachment", failed: 0, quarantined: 1 },
       ],
+      timing: { as_of: at, recent_processing_ms: 0 },
     });
     const database = new Database(path);
     try {
@@ -286,6 +292,39 @@ describe("SQLite vector projection and independent durable jobs", () => {
       { error_code: "unsupported_attachment", failed: 0, quarantined: 1 },
     ]);
     assert.equal((await index.summarizeJobs("other-org", generation.id)).counts.succeeded, 0);
+  });
+
+  it("persists active and completed processing times across status reads and reopens", async (t) => {
+    const f = await fixture(t);
+    await reconcile(f.index, [head("running"), head("completed")]);
+    const claimed = await f.index.claim({
+      org_id: "org", generation: generation.id, owner: "owner", now: at, lease_ms: 5000, limit: 2,
+    });
+    const liveJob = claimed.find((job) => job.event_id === "running");
+    const completedJob = claimed.find((job) => job.event_id === "completed");
+    assert.equal(liveJob.started_at, at);
+    assert.equal(liveJob.processing_ms, 0);
+    assert.equal(await f.index.complete({
+      job: completedJob, owner: "owner", now: later, chunks: [chunk()],
+    }), true);
+
+    let summary = await f.index.summarizeJobs("org", generation.id, later);
+    assert.equal(summary.timing.as_of, later);
+    assert.equal(summary.timing.running_elapsed_ms, 2000);
+    assert.equal(summary.timing.recent_processing_ms, 2000);
+    f.reopen();
+    summary = await f.index.summarizeJobs("org", generation.id, later);
+    assert.equal(summary.timing.running_elapsed_ms, 2000);
+    assert.equal(summary.timing.recent_processing_ms, 2000);
+
+    assert.equal(await f.index.yieldJob(liveJob, "owner", later), true);
+    const [yielded] = (await f.index.listJobs("org", generation.id)).filter((job) => job.event_id === "running");
+    assert.equal(yielded.status, "pending");
+    assert.equal(yielded.started_at, undefined);
+    assert.equal(yielded.processing_ms, 2000);
+    summary = await f.index.summarizeJobs("org", generation.id, later);
+    assert.equal(summary.timing.running_elapsed_ms, undefined);
+    assert.equal(summary.timing.recent_processing_ms, 2000);
   });
 
   it("matches 4000 fully covered 768-dimensional authorized vectors within the scale budget", async (t) => {
