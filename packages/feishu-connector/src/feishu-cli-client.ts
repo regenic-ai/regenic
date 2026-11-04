@@ -306,21 +306,15 @@ function withLocalDeadline<T>(
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
     return work;
   }
-  const signal = AbortSignal.timeout(timeoutMs);
   return new Promise((resolve, reject) => {
-    const onAbort = () => reject(new LarkDeadlineError(label));
-    if (signal.aborted) {
-      onAbort();
-      return;
-    }
-    signal.addEventListener("abort", onAbort, { once: true });
+    const timer = setTimeout(() => reject(new LarkDeadlineError(label)), timeoutMs);
     work.then(
       (value) => {
-        signal.removeEventListener("abort", onAbort);
+        clearTimeout(timer);
         resolve(value);
       },
       (error: unknown) => {
-        signal.removeEventListener("abort", onAbort);
+        clearTimeout(timer);
         reject(error);
       },
     );

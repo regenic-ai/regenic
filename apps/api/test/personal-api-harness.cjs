@@ -119,7 +119,7 @@ async function ingestActionable(database, blobRoot) {
   return result.records[0].event_id;
 }
 
-async function startDshWebStub() {
+async function startDshWebStub(options = {}) {
   const prompts = [];
   const responds = [];
   const echoes = new Map();
@@ -164,6 +164,10 @@ async function startDshWebStub() {
         createdCount += 1;
         const sessionId = `created-${createdCount}`;
         created.push(sessionId);
+        if (options.dropCreateResponse) {
+          response.destroy();
+          return;
+        }
         response.end(
           JSON.stringify({
             type: "server-response",

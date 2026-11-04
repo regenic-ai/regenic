@@ -1,0 +1,108 @@
+{
+  "schema_version": 1,
+  "core_sdk": {
+    "stable": "0.2.0",
+    "candidate": "0.3.0"
+  },
+  "automatic_mode": "source-build-registry-and-packed-candidate-core-loader",
+  "manual_live_mode": "excluded; requires explicit credentials, account ownership and human approval",
+  "connectors": [
+    {
+      "id": "slack",
+      "frozen_source_sdk": "0.2.0",
+      "repository": "regenic-ai/regenic-connector-slack",
+      "source_sha": "989b1ed66577d68afaa549687776ab7b3ca4dbc2",
+      "package_dir": ".",
+      "package_name": "@regenic/slack-connector",
+      "contract_range": "^0.2.0",
+      "stable_sdk": "0.2.0",
+      "candidate_sdk": null,
+      "consumer_mode": "packed-npm"
+    },
+    {
+      "id": "whatsapp",
+      "frozen_source_sdk": "0.2.0",
+      "repository": "regenic-ai/regenic-connector-whatsapp",
+      "source_sha": "d0d7a3799bab4ede3f3ea5f70ed4dabe127ad252",
+      "package_dir": "packages/whatsapp-personal",
+      "package_name": "@regenic/whatsapp-personal",
+      "contract_range": "^0.2.0",
+      "stable_sdk": "0.2.0",
+      "candidate_sdk": null,
+      "consumer_mode": "packed-npm"
+    },
+    {
+      "id": "dingtalk",
+      "frozen_source_sdk": "0.2.0",
+      "repository": "regenic-ai/dingtalk-connector",
+      "source_sha": "3f5148186968713059574a2b7c7eaf794baa582a",
+      "package_dir": ".",
+      "package_name": "@regenic/dingtalk-connector",
+      "contract_range": ">=0.2.0",
+      "stable_sdk": "0.2.0",
+      "candidate_sdk": "0.3.0",
+      "consumer_mode": "packed-npm"
+    },
+    {
+      "id": "wecom",
+      "frozen_source_sdk": "0.2.0",
+      "repository": "regenic-ai/wecom-connector",
+      "source_sha": "01a45421a7b7ec97d2dd7a8279fb6641c77193c6",
+      "package_dir": ".",
+      "package_name": "@regenic/wecom-connector",
+      "contract_range": ">=0.2.0",
+      "stable_sdk": "0.2.0",
+      "candidate_sdk": "0.3.0",
+      "consumer_mode": "packed-npm"
+    },
+    {
+      "id": "telegram",
+      "frozen_source_sdk": "0.2.0",
+      "repository": "regenic-ai/regenic-connector-telegram",
+      "source_sha": "4dae221b1d913185a288448c142ebd12dcb05f70",
+      "package_dir": ".",
+      "package_name": "@regenic/telegram-connector",
+      "contract_range": "0.2.0",
+      "stable_sdk": "0.2.0",
+      "candidate_sdk": null,
+      "consumer_mode": "packed-npm"
+    },
+    {
+      "id": "discord",
+      "frozen_source_sdk": "0.2.0",
+      "repository": "regenic-ai/regenic-connector-discord",
+      "source_sha": "73b793f3c4fc25d1ca74d9cb1b826c3bb90afa15",
+      "package_dir": ".",
+      "package_name": "@regenic/discord-connector",
+      "contract_range": "0.2.0",
+      "stable_sdk": "0.2.0",
+      "candidate_sdk": null,
+      "consumer_mode": "packed-npm"
+    },
+    {
+      "id": "claude-code",
+      "frozen_source_sdk": "0.3.0",
+      "repository": "regenic-ai/regenic-connector-claude-code",
+      "source_sha": "35926efff0e6415afdf4c3cda10c03f0614d6cee",
+      "package_dir": ".",
+      "package_name": "@regenic/connector-claude-code",
+      "contract_range": "^0.3.0",
+      "stable_sdk": null,
+      "candidate_sdk": "0.3.0",
+      "consumer_mode": "packed-npm"
+    },
+    {
+      "id": "github-copilot",
+      "frozen_source_sdk": "0.3.0",
+      "repository": "regenic-ai/regenic-connector-github-copilot",
+      "source_sha": "300777b6a18c1d653ade3cefd4a6b6153f04d266",
+      "package_dir": ".",
+      "package_name": "@regenic/connector-github-copilot",
+      "contract_range": "^0.3.0",
+      "stable_sdk": null,
+      "candidate_sdk": "0.3.0",
+      "consumer_mode": "clone-root-core-loader",
+      "deployment_note": "Copilot source validation uses frozen install/build/typecheck/test and verifies the SDK entry's runtime Zod 4.6.7; the built plugin is loaded without activation by the compiled core loader using packed candidate SDK packages. Bare tarball consumers must carry their own Zod compatibility."
+    }
+  ]
+}

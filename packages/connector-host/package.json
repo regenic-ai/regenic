@@ -13,7 +13,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "pnpm --filter @regenic/domain build && pnpm --filter @regenic/feishu-connector build && pnpm --filter @regenic/cursor-connector build && pnpm --filter @regenic/dsh-connector build && pnpm run build && node --test test/*.test.cjs"
+    "test": "pnpm --filter @regenic/domain build && pnpm --filter @regenic/feishu-connector build && pnpm --filter @regenic/cursor-connector build && pnpm --filter @regenic/dsh-connector build && pnpm run build && node --experimental-sqlite --test test/*.test.cjs"
   },
   "dependencies": {
     "@regenic/cursor-connector": "workspace:*",

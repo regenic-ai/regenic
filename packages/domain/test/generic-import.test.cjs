@@ -39,7 +39,7 @@ describe("createGenericImport", () => {
     assert.equal(result.batches[0].records[0].external_id, "one");
     assert.equal(result.batches[0].records[0].content[0].text, "Hello, world");
     assert.deepEqual(result.errors, [
-      { line: 3, code: "invalid_row", message: "Invalid datetime" },
+      { line: 3, code: "invalid_row", message: "Invalid ISO datetime" },
     ]);
   });
 

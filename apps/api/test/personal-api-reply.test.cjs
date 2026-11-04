@@ -19,7 +19,9 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
     const blobRoot = join(root, "blobs");
     await ingestActionable(database, blobRoot);
     const dsh = await startDshWebStub();
-    const { app, origin } = await startPersonalApi(database, blobRoot);
+    const { app, origin } = await startPersonalApi(database, blobRoot, {
+      REGENIC_CONNECTOR_PULL_MS: "1000",
+    });
     try {
       const created = await fetch(`${origin}/v1/me/connectors`, {
         method: "POST",
@@ -119,7 +121,7 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
           text: "Please take a look",
         }),
       });
-      assert.equal(slack.status, 501);
+      assert.equal(slack.status, 404);
 
       const replied = await fetch(`${origin}/v1/me/replies`, {
         method: "POST",
@@ -216,7 +218,9 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
     const blobRoot = join(root, "blobs");
     await ingestActionable(database, blobRoot);
     const dsh = await startDshWebStub();
-    const { app, origin } = await startPersonalApi(database, blobRoot);
+    const { app, origin } = await startPersonalApi(database, blobRoot, {
+      REGENIC_CONNECTOR_PULL_MS: "1000",
+    });
     try {
       const created = await fetch(`${origin}/v1/me/connectors`, {
         method: "POST",

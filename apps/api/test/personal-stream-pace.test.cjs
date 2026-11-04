@@ -227,7 +227,7 @@ describe("syncExecutionBudget", () => {
         pages: 1,
         catchUpPages: 5,
       }),
-      { pages: 1, concurrency: 2 },
+      { pages: 1, concurrency: 4 },
     );
     assert.deepEqual(
       syncExecutionBudget({
@@ -237,7 +237,7 @@ describe("syncExecutionBudget", () => {
         pages: 1,
         catchUpPages: 5,
       }),
-      { pages: 1, concurrency: 1 },
+      { pages: 1, concurrency: 4 },
     );
     assert.deepEqual(
       syncExecutionBudget({
@@ -246,7 +246,7 @@ describe("syncExecutionBudget", () => {
         lane: "live",
         pages: 1,
       }),
-      { pages: 1, concurrency: 2 },
+      { pages: 1, concurrency: 8 },
     );
   });
 
