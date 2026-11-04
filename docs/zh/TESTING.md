@@ -25,7 +25,7 @@ pnpm test:compatibility -- --connector dingtalk --sdk candidate
 
 真实宿主执行器测试使用实际 API、Nest host、SQLite authority store、driver/executor registry 和 installation lifecycle；只有外部执行器边界由临时子进程 JSON-RPC 服务代替。测试用显式 barrier 确定并发顺序，不依靠 sleep。每个测试使用隔离的临时 HOME/config/data/database/blob 目录和系统分配的本地端口，并关闭自有服务及子进程、确认端口已关闭后删除夹具。覆盖仅读取元数据不激活、多个组织/安装绑定、阻止 recipe 覆盖 pin、启用/禁用/重配置/删除、持久化重启后不复活旧代、跨安装/跨组织拒绝、排空已准入任务以及子进程清理。现有持久回复恢复测试覆盖结果未知时不自动重放。
 
-`scripts/testing/connectors.json` 记录 Slack、WhatsApp、DingTalk、WeCom、Telegram、Discord、Claude Code、GitHub Copilot 的默认分支精确 SHA 与真实契约范围。源仓按锁文件冻结安装、构建、类型检查和测试；stable lane 若仓库显式提供 link 脚本，则使用已发布 stable SDK 包，并单独记录其来源。candidate lane 刻意保留 registry-backed 的源码测试阶段，然后将当前 core SDK 打成 `.tgz` 安装到隔离消费者，校验 package-lock 中本地 tarball 的解析路径和 SHA-512 完整性，并断言插件加载实际解析到候选 contract 的真实路径和版本；同版本 registry 包无法通过身份断言。
+`scripts/testing/connectors.json` 记录 Slack、WhatsApp、DingTalk、WeCom、Telegram、Discord、Claude Code、GitHub Copilot 的默认分支精确 SHA、冻结源码 SDK 预期版本与真实契约范围。两种模式都按源码锁文件冻结安装、构建、类型检查和测试；必需的 link 脚本使用指向同一批冻结安装包的 SDK 目录布局，不指向候选 core。因此 DingTalk/WeCom 即使在 candidate 模式，源码阶段仍使用 contract 0.2.0；Claude/Copilot 源码阶段使用 registry contract 0.3.0。candidate lane 随后将当前 core SDK 打成 `.tgz`，安装到拥有独立 manifest 且路径已规范化的消费者，校验 npm lock 精确顶层条目中的本地 tarball 解析路径和 SHA-512 完整性，并断言插件加载实际解析到候选 contract 的真实路径和版本；同版本 registry 包无法通过身份断言。不宣称验证了候选 SDK 下的源码编译。
 
 每个连接器显式声明消费者兼容模式：
 
@@ -35,5 +35,7 @@ pnpm test:compatibility -- --connector dingtalk --sdk candidate
 对 Copilot 而言，Zod 4.6.7 override 不仅检查源码根配置，还会验证 **Copilot SDK 入口实际解析到的 Zod 包版本**。这不代表任意下游 tarball 消费者会自动继承该 override。不会通过覆盖不兼容声明范围来“强行通过”测试。
 
 桌面测试 lane 运行现有隔离单元测试、Electron 生产构建和真实 Electron semantic smoke，使用合成的本地 embedding HTTP 服务及临时数据库/配置目录。它不登录账号、不调用外部模型、不发送消息，也不启动真实 Agent。Linux 在 Xvfb 中运行；CI macOS lane 提供原生 macOS 验证。
+
+`pnpm test:tooling` 还运行离线 npm pack/install/lock 回归，以及信号杀死、已经退出、失败退出三种独立子进程测试。冒烟测试在异步清理前设置非零退出码；清理复用最初注册的退出 promise，并限制 kill 等待时间。
 
 真实账号/线上验证必须人工选择并确认专用测试账号或租户的所有权，使用正常秘密存储取得最小权限凭据，明确测试是否会创建或发送真实内容，并显式批准操作。凭据不得放入 workflow 变量、夹具、日志或测试产物。CI 不提供线上测试开关，也不会执行这些行为。

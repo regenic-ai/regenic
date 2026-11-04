@@ -1,8 +1,8 @@
 import {
-  cpSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync,
+  cpSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync,
 } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import compatibilityEvidence from "./compatibility-evidence.cjs";
 import {
@@ -11,7 +11,7 @@ import {
 } from "./lib.mjs";
 
 const {
-  assertCandidatePackage,
+  assertInstalledTarball,
   assertPackageVersion,
   assertRuntimeOverride,
   parseAuditResult,
@@ -96,37 +96,13 @@ function candidateSdkArtifacts(directory, env) {
   return packages;
 }
 
-function assertInstalledTarball(prefix, name, artifact, actual) {
-  const lock = JSON.parse(readFileSync(join(prefix, "package-lock.json"), "utf8"));
-  const lockEntry = Object.entries(lock.packages ?? {})
-    .find(([key]) => key.replaceAll("\\", "/").endsWith(`/node_modules/@regenic/${name}`))?.[1];
-  if (!lockEntry?.resolved || !lockEntry?.integrity) {
-    throw new Error(`Candidate SDK lock entry is missing file resolution or integrity: ${name}`);
-  }
-  const lockTarball = realpathSync(resolve(prefix, lockEntry.resolved.replace(/^file:/, "")));
-  if (lockTarball !== realpathSync(artifact.path)) {
-    throw new Error(`Candidate SDK ${name} did not resolve from its packed tarball`);
-  }
-  const expectedIntegrity = `sha512-${Buffer.from(artifact.sha512, "hex").toString("base64")}`;
-  if (lockEntry.integrity !== expectedIntegrity) {
-    throw new Error(`Candidate SDK ${name} lock integrity does not match packed tarball`);
-  }
-  const expectedManifest = realpathSync(join(prefix, "node_modules", "@regenic", name, "package.json"));
-  assertCandidatePackage(actual, { manifest_realpath: expectedManifest, version: artifact.version }, artifact.version);
-  return {
-    ...actual,
-    tarball_sha512: artifact.sha512,
-    lock_resolved: lockEntry.resolved,
-    lock_integrity: lockEntry.integrity,
-  };
-}
-
 function installCandidateSdk(packages, prefix, env) {
   mkdirSync(prefix);
+  writeFileSync(join(prefix, "package.json"), JSON.stringify({ name: "candidate-sdk-consumer", private: true }));
   run("npm", [
     "install", "--ignore-scripts", "--no-audit", "--no-fund", "--prefix", prefix,
     ...Object.values(packages).map((item) => item.path),
-  ], { env });
+  ], { cwd: prefix, env });
   const consumerRequire = createRequire(join(prefix, "entry.cjs"));
   const resolved = {};
   for (const name of ["plugin-host", "connector-contract", "connector-test-utils"]) {
@@ -158,7 +134,7 @@ function runCoreLoader(pluginDir, env, candidateContract, copilotZodOverride) {
   ], { env: childEnv, capture: true }));
 }
 
-const root = temporaryRoot(`c-${id.slice(0, 6)}-${sdk[0]}`);
+const root = realpathSync(temporaryRoot(`c-${id.slice(0, 6)}-${sdk[0]}`));
 const source = join(root, "source");
 const shortTmp = join("/tmp", `rgc-${id.slice(0, 6)}-${sdk[0]}-${process.pid}`);
 mkdirSync(shortTmp, { recursive: true });
@@ -172,6 +148,7 @@ const env = {
 
 const record = {
   ...provenance(),
+  npm: run("npm", ["--version"], { capture: true }),
   core_source_sha: run("git", ["rev-parse", "HEAD"], { capture: true }),
   connector: id,
   repository: connector.repository,
@@ -201,24 +178,6 @@ try {
     throw new Error(`Package mismatch: expected ${connector.package_name}, got ${packageJson.name}`);
   }
 
-  const sdkRoot = join(root, "sdk");
-  if (sdk === "stable") {
-    mkdirSync(sdkRoot);
-    const sdkPrefix = join(sdkRoot, "consumer");
-    mkdirSync(sdkPrefix);
-    run("npm", ["install", "--ignore-scripts", "--no-audit", "--no-fund", "--prefix", sdkPrefix,
-      "@regenic/plugin-host@0.1.0", "@regenic/connector-contract@0.2.0",
-      "@regenic/connector-test-utils@0.1.0"], { env });
-    mkdirSync(join(sdkRoot, "packages"));
-    for (const name of ["plugin-host", "connector-contract", "connector-test-utils"]) {
-      const link = join(sdkRoot, "packages", name);
-      const target = join(sdkPrefix, "node_modules", "@regenic", name);
-      if (!existsSync(target)) throw new Error(`Missing stable SDK package ${name}`);
-      await import("node:fs/promises").then(({ symlink }) => symlink(target, link, "dir"));
-    }
-    env.REGENIC_ROOT = sdkRoot;
-  }
-
   stage = "frozen-install";
   if (existsSync(join(source, "pnpm-lock.yaml"))) {
     run(pnpm, ["install", "--frozen-lockfile"], { cwd: source, env });
@@ -228,18 +187,26 @@ try {
     throw new Error("Source repository has no supported lock file for frozen install (pnpm-lock.yaml or package-lock.json)");
   }
   const linkScript = join(source, "scripts", "link-regenic.mjs");
-  let linkedStableSdk = false;
-  if (existsSync(linkScript) && sdk === "stable") {
+  const sourceRequire = createRequire(join(packageDir, "package.json"));
+  const frozenContract = packageInfo(sourceRequire, "@regenic/connector-contract");
+  assertPackageVersion(frozenContract, connector.frozen_source_sdk, "Connector frozen source dependency");
+  if (existsSync(linkScript)) {
+    const sdkRoot = join(root, "frozen-sdk");
+    mkdirSync(join(sdkRoot, "packages"), { recursive: true });
+    for (const name of ["plugin-host", "connector-contract", "connector-test-utils"]) {
+      const info = packageInfo(sourceRequire, `@regenic/${name}`);
+      symlinkSync(dirname(info.manifest_realpath), join(sdkRoot, "packages", name), "dir");
+    }
+    env.REGENIC_ROOT = sdkRoot;
     stage = "link-regenic";
     run(process.execPath, [linkScript, "--required"], { cwd: source, env });
-    linkedStableSdk = true;
   }
 
-  const sourceRequire = createRequire(join(packageDir, "package.json"));
   const sourceContract = packageInfo(sourceRequire, "@regenic/connector-contract");
-  assertPackageVersion(sourceContract, expectedSdk, "Connector frozen source dependency");
+  assertPackageVersion(sourceContract, connector.frozen_source_sdk, "Connector frozen source dependency");
   record.source_build_sdk = {
-    origin: linkedStableSdk ? "stable-published-sdk-link" : "connector-lockfile-registry-resolution",
+    origin: "connector-lockfile-registry-resolution",
+    expected_contract: connector.frozen_source_sdk,
     contract: sourceContract,
     lock_sha512: existsSync(join(source, "pnpm-lock.yaml"))
       ? hash(join(source, "pnpm-lock.yaml"))
@@ -252,6 +219,11 @@ try {
   run(pnpm, ["-r", "--if-present", "run", "typecheck"], { cwd: source, env });
   stage = "connector-tests";
   run(pnpm, ["-r", "--if-present", "run", "test"], { cwd: source, env });
+  const after = packageInfo(sourceRequire, "@regenic/connector-contract");
+  assertPackageVersion(after, connector.frozen_source_sdk, "Connector source after tests");
+  if (after.manifest_realpath !== frozenContract.manifest_realpath) {
+    throw new Error("Source SDK identity changed during build/typecheck/test");
+  }
 
   stage = "core-loader-build";
   run(pnpm, ["--filter", "@regenic/api...", "run", "build"], { env });
@@ -270,6 +242,7 @@ try {
           version: info.version,
           manifest_realpath: info.manifest_realpath,
           tarball_sha512: info.tarball_sha512,
+          lock_key: info.lock_key,
           lock_resolved: info.lock_resolved,
           lock_integrity: info.lock_integrity,
         },
@@ -330,6 +303,8 @@ try {
     const tarball = join(packDir, packedJson[0].filename);
     const tarballSha512 = hash(tarball);
     const prefix = join(root, "consumer");
+    mkdirSync(prefix);
+    writeFileSync(join(prefix, "package.json"), JSON.stringify({ name: "connector-consumer", private: true }));
     const sdkPackages = sdk === "candidate"
       ? Object.values(candidatePackages).map((item) => item.path)
       : [
@@ -338,7 +313,7 @@ try {
           "@regenic/connector-test-utils@0.1.0",
         ];
     run("npm", ["install", "--ignore-scripts", "--omit=dev", "--no-audit", "--no-fund",
-      "--prefix", prefix, ...sdkPackages, tarball], { env });
+      "--prefix", prefix, ...sdkPackages, tarball], { cwd: prefix, env });
     stage = "core-loader-packed-consumer";
     const consumerRequire = createRequire(join(prefix, "entry.cjs"));
     const installedRoot = packageRoot(dirname(consumerRequire.resolve(connector.package_name)));

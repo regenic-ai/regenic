@@ -1,3 +1,6 @@
+const { readFileSync, realpathSync } = require("node:fs");
+const { join, resolve } = require("node:path");
+
 function assertCandidatePackage(actual, candidate, expectedVersion) {
   const actualPath = actual.manifest_realpath;
   const candidatePath = candidate.manifest_realpath;
@@ -57,7 +60,34 @@ function parseAuditResult(result) {
   return parsed;
 }
 
+function assertInstalledTarball(prefix, name, artifact, actual) {
+  const lock = JSON.parse(readFileSync(join(prefix, "package-lock.json"), "utf8"));
+  const lockKey = `node_modules/@regenic/${name}`;
+  const lockEntry = lock.packages?.[lockKey];
+  if (!lockEntry?.resolved || !lockEntry?.integrity) {
+    throw new Error(`Candidate SDK lock entry is missing file resolution or integrity: ${name}`);
+  }
+  const lockTarball = realpathSync(resolve(prefix, lockEntry.resolved.replace(/^file:/, "")));
+  if (lockTarball !== realpathSync(artifact.path)) {
+    throw new Error(`Candidate SDK ${name} did not resolve from its packed tarball`);
+  }
+  const expectedIntegrity = `sha512-${Buffer.from(artifact.sha512, "hex").toString("base64")}`;
+  if (lockEntry.integrity !== expectedIntegrity) {
+    throw new Error(`Candidate SDK ${name} lock integrity does not match packed tarball`);
+  }
+  const expectedManifest = realpathSync(join(prefix, "node_modules", "@regenic", name, "package.json"));
+  assertCandidatePackage(actual, { manifest_realpath: expectedManifest, version: artifact.version }, artifact.version);
+  return {
+    ...actual,
+    tarball_sha512: artifact.sha512,
+    lock_key: lockKey,
+    lock_resolved: lockEntry.resolved,
+    lock_integrity: lockEntry.integrity,
+  };
+}
+
 module.exports = {
+  assertInstalledTarball,
   assertCandidatePackage,
   assertPackageVersion,
   assertRuntimeOverride,

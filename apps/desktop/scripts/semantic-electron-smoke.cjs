@@ -3,7 +3,7 @@ const { spawn } = require("node:child_process");
 const { existsSync, mkdtempSync, mkdirSync, rmSync } = require("node:fs");
 const { createServer } = require("node:http");
 const { createRequire } = require("node:module");
-const { once } = require("node:events");
+const { observeChild, runWithFailureCleanup } = require("./smoke-process.cjs");
 const { tmpdir } = require("node:os");
 const { join, resolve } = require("node:path");
 
@@ -87,10 +87,10 @@ async function main() {
   delete env.ELECTRON_RENDERER_URL;
   const child = spawn(require("electron"), [".", `--user-data-dir=${profile}`,
     `--remote-debugging-port=${debugPort}`], { cwd: desktop, env, stdio: ["ignore", "ignore", "pipe"] });
-  ownedElectron = child;
+  ownedElectron = observeChild(child);
   let stderr = "";
   child.stderr.on("data", (chunk) => { stderr = (stderr + chunk).slice(-6000); });
-  const exited = new Promise((resolve) => child.once("exit", (code, signal) => resolve({ code, signal })));
+  const exited = ownedElectron.exited;
   let ws;
   let sequence = 0;
   const pending = new Map();
@@ -207,22 +207,22 @@ async function main() {
     await waitFor(() => evaluate('document.querySelectorAll(".semantic-results > li").length === 0'), "origin reset");
     console.log("PASS: actual Electron search source navigation/highlight, bounded recovery, stale-source rejection and origin reset (synthetic inference)");
   } catch (error) {
+    process.exitCode = 1;
     console.error(stderr);
     throw error;
   } finally {
     if (ws?.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ id: ++sequence, method: "Runtime.evaluate", params: { expression: "window.regenic.quitApp()" } }));
     }
+    let exitTimer;
     const result = await Promise.race([exited, new Promise((resolve) => {
-      const timer = setTimeout(() => resolve(null), 10_000);
-      timer.unref();
-    })]);
+      exitTimer = setTimeout(() => resolve(null), 10_000);
+    })]).finally(() => clearTimeout(exitTimer));
     ws?.close();
     model.closeAllConnections();
     await new Promise((resolve) => model.close(resolve));
     if (!result) {
-      child.kill("SIGKILL");
-      await exited;
+      await ownedElectron.stop();
     }
     cleanExit = result?.code === 0 && !existsSync(join(data, "regenic.store.lock"));
     rmSync(root, { recursive: true, force: true });
@@ -232,18 +232,12 @@ async function main() {
   console.log("PASS: clean Electron quit and store-lock release; isolated fixture removed");
 }
 
-main().catch(async (error) => {
+void runWithFailureCleanup(main, async () => {
   ownedSocket?.close();
-  if (ownedElectron?.exitCode === null) {
-    const exited = once(ownedElectron, "exit");
-    ownedElectron.kill("SIGKILL");
-    await exited;
-  }
+  await ownedElectron?.stop();
   if (ownedModel?.listening) {
     ownedModel.closeAllConnections();
     await new Promise((resolve) => ownedModel.close(resolve));
   }
   rmSync(root, { recursive: true, force: true });
-  console.error(error);
-  process.exitCode = 1;
 });
