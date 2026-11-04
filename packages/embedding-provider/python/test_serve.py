@@ -54,13 +54,17 @@ class ProtocolTests(unittest.TestCase):
                 order.append(texts[0])
                 return super().embed_with_counts(texts, mode)
 
-        encoder = PriorityEncoder(Encoder(), max_pending=2)
+        encoder = PriorityEncoder(Encoder(), max_pending=2, reserved_queries=1)
         threads = [threading.Thread(target=encoder.embed_with_counts, args=(texts, mode)) for texts, mode in (
             (["first"], "document"), (["background"], "document"), (["interactive"], "query"),
         )]
         threads[0].start()
         self.assertTrue(started.wait(5))
         threads[1].start()
+        with encoder.condition:
+            self.assertTrue(encoder.condition.wait_for(
+                lambda: encoder.waiting_documents == 1, timeout=5,
+            ))
         threads[2].start()
         try:
             with encoder.condition:
@@ -75,6 +79,88 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(order, ["first", "interactive", "background"])
         self.assertFalse(any(thread.is_alive() for thread in threads))
 
+    def test_query_burst_is_bounded_when_documents_are_waiting(self):
+        started = threading.Event()
+        release = threading.Event()
+        order = []
+
+        class Encoder(FakeEncoder):
+            def embed(self, texts, mode):
+                if texts == ["active"]:
+                    started.set()
+                    if not release.wait(5):
+                        raise RuntimeError("test_timeout")
+                order.append(mode)
+                return super().embed(texts, mode)
+
+        encoder = PriorityEncoder(
+            Encoder(), max_pending=5, reserved_queries=1, max_query_burst=2,
+        )
+        work = [
+            (["active"], "document"),
+            (["background"], "document"),
+            (["query-1"], "query"),
+            (["query-2"], "query"),
+            (["query-3"], "query"),
+        ]
+        threads = [
+            threading.Thread(target=encoder.embed, args=item)
+            for item in work
+        ]
+        threads[0].start()
+        self.assertTrue(started.wait(5))
+        for thread in threads[1:]:
+            thread.start()
+        try:
+            with encoder.condition:
+                self.assertTrue(encoder.condition.wait_for(
+                    lambda: encoder.pending == 4, timeout=5,
+                ))
+        finally:
+            release.set()
+            for thread in threads:
+                thread.join(5)
+        self.assertEqual(order, ["document", "query", "query", "document", "query"])
+        self.assertFalse(any(thread.is_alive() for thread in threads))
+
+    def test_same_priority_requests_are_fifo(self):
+        started = threading.Event()
+        release = threading.Event()
+        order = []
+
+        class Encoder(FakeEncoder):
+            def embed(self, texts, mode):
+                if texts == ["active"]:
+                    started.set()
+                    if not release.wait(5):
+                        raise RuntimeError("test_timeout")
+                order.append(texts[0])
+                return super().embed(texts, mode)
+
+        encoder = PriorityEncoder(Encoder())
+        active = threading.Thread(target=encoder.embed, args=(["active"], "document"))
+        active.start()
+        self.assertTrue(started.wait(5))
+        queued = []
+        for index in range(3):
+            thread = threading.Thread(
+                target=encoder.embed, args=([f"document-{index}"], "document"),
+            )
+            queued.append(thread)
+            thread.start()
+            with encoder.condition:
+                self.assertTrue(encoder.condition.wait_for(
+                    lambda: encoder.waiting_documents == index + 1, timeout=5,
+                ))
+        release.set()
+        active.join(5)
+        for thread in queued:
+            thread.join(5)
+        self.assertEqual(order, [
+            "active", "document-0", "document-1", "document-2",
+        ])
+        self.assertFalse(active.is_alive() or any(thread.is_alive() for thread in queued))
+
     def test_queue_timeout_and_inference_failure_release_the_slot(self):
         encoder = PriorityEncoder(FakeEncoder(), wait_seconds=0)
         encoder.busy = True
@@ -83,6 +169,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(failed.exception.status, 503)
         self.assertEqual(encoder.pending, 0)
         self.assertEqual(encoder.waiting_queries, 0)
+        self.assertEqual(encoder.waiting_documents, 0)
         encoder.busy = False
         self.assertEqual(len(encoder.embed(["ready"], "query")), 1)
 
@@ -136,6 +223,7 @@ class ProtocolTests(unittest.TestCase):
             server.server_close()
 
     def test_http_capacity_rejects_explicitly_without_starting_another_thread(self):
+        self.assertGreaterEqual(BoundedHTTPServer.request_queue_size, 32)
         server = BoundedHTTPServer.__new__(BoundedHTTPServer)
         server.slots = threading.BoundedSemaphore(0)
         written = []

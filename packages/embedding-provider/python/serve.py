@@ -446,33 +446,62 @@ class TextEncoder:
 
 
 class PriorityEncoder:
-    def __init__(self, encoder, max_pending=16, wait_seconds=30):
+    def __init__(
+        self, encoder, max_pending=16, wait_seconds=30,
+        reserved_queries=2, max_query_burst=8,
+    ):
         self.encoder = encoder
         self.max_pending = max_pending
         self.wait_seconds = wait_seconds
+        self.reserved_queries = max(0, min(reserved_queries, max(0, max_pending - 1)))
+        self.max_query_burst = max(1, max_query_burst)
         self.condition = threading.Condition()
         self.busy = False
         self.pending = 0
         self.waiting_queries = 0
+        self.waiting_documents = 0
+        self.query_burst = 0
+        self.query_queue = []
+        self.document_queue = []
 
     def call(self, method, texts, mode):
+        query = mode == "query"
+        token = object()
         with self.condition:
-            if self.pending >= self.max_pending:
+            limit = self.max_pending if query else self.max_pending - self.reserved_queries
+            if self.pending >= limit:
                 raise InputError(429)
+            queue = self.query_queue if query else self.document_queue
+            queue.append(token)
             self.pending += 1
-            self.waiting_queries += int(mode == "query")
+            self.waiting_queries += int(query)
+            self.waiting_documents += int(not query)
             self.condition.notify_all()
+            acquired = False
             try:
                 ready = self.condition.wait_for(
-                    lambda: not self.busy and (mode == "query" or self.waiting_queries == 0),
+                    lambda: not self.busy and queue[0] is token and (
+                        (query and (not self.document_queue or self.query_burst < self.max_query_burst)) or
+                        (not query and (not self.query_queue or self.query_burst >= self.max_query_burst))
+                    ),
                     timeout=self.wait_seconds,
                 )
                 if not ready:
                     raise InputError(503)
-                self.busy = True
-            finally:
+                queue.pop(0)
                 self.pending -= 1
-                self.waiting_queries -= int(mode == "query")
+                self.waiting_queries -= int(query)
+                self.waiting_documents -= int(not query)
+                self.busy = True
+                self.query_burst = self.query_burst + 1 if query else 0
+                acquired = True
+            finally:
+                if not acquired:
+                    queue.remove(token)
+                    self.pending -= 1
+                    self.waiting_queries -= int(query)
+                    self.waiting_documents -= int(not query)
+                    self.condition.notify_all()
         try:
             return getattr(self.encoder, method)(texts, mode)
         finally:
@@ -500,6 +529,8 @@ class PriorityEncoder:
 
 
 class BoundedHTTPServer(ThreadingHTTPServer):
+    request_queue_size = 32
+
     def __init__(self, address, handler):
         self.slots = threading.BoundedSemaphore(32)
         self.attachment_slots = threading.BoundedSemaphore(1)
