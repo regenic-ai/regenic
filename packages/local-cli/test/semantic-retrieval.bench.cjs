@@ -34,11 +34,11 @@ function engine(fixture, retriever, hybrid = false, profile = HYBRID_RETRIEVAL_P
   });
 }
 
-async function evaluateSplit(fixture, root, provider, tune) {
+async function evaluateSplit(fixture, root, provider, tune, chunkTokens) {
   const path = join(root, `${fixture.dataset.id}.vector.db`);
   const vector = new SqliteContextVectorIndex(path);
   const lexical = new SqliteContextLexicalIndex(join(root, `${fixture.dataset.id}.lexical.db`));
-  const generation = embeddingGeneration(provider.descriptor, 256);
+  const generation = embeddingGeneration(provider.descriptor, chunkTokens);
   const worker = new ContextEmbeddingWorker("example-org", fixture.source, provider, vector, vector, generation, vector);
   const inference = [];
   try {
@@ -232,8 +232,13 @@ async function durablePipeline(root) {
 async function main() {
   const { values } = parseArgs({ options: {
     split: { type: "string", default: "development" }, output: { type: "string" }, scale: { type: "boolean" },
+    "chunk-tokens": { type: "string", default: "256" },
   } });
   if (!["development", "holdout", "confirmation", "pipeline"].includes(values.split)) throw new Error("--split must be development, holdout, confirmation or pipeline");
+  const chunkTokens = Number(values["chunk-tokens"]);
+  if (!Number.isSafeInteger(chunkTokens) || chunkTokens < 32 || chunkTokens > 8192) {
+    throw new Error("--chunk-tokens must be an integer from 32 to 8192");
+  }
   if (!process.env.REGENIC_EMBEDDING_BASE_URL) throw new Error("Start the pinned model service and set REGENIC_EMBEDDING_BASE_URL");
   const provider = new LocalHttpEmbeddingProvider({
     base_url: process.env.REGENIC_EMBEDDING_BASE_URL, timeout_ms: 300000,
@@ -247,7 +252,7 @@ async function main() {
       environment: { platform: platform(), node: process.version, cpu: cpus()[0].model,
         logical_cpus: cpus().length, total_memory_bytes: totalmem() },
       ...(values.split === "pipeline" ? { pipeline: await durablePipeline(root) }
-        : await evaluateSplit(fixture, root, provider, values.split === "development")),
+        : await evaluateSplit(fixture, root, provider, values.split === "development", chunkTokens)),
       ...(values.scale ? { scale: await scanPerformance(root, provider) } : {}),
     };
     const output = `${JSON.stringify(report, null, 2)}\n`;
