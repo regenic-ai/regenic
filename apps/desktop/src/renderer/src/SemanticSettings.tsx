@@ -31,6 +31,11 @@ function formatDuration(ms: number, t: ReturnType<typeof useLocale>["t"]): strin
   });
 }
 
+function serverClockOffset(serverNow?: string): number {
+  const parsed = serverNow ? Date.parse(serverNow) : Number.NaN;
+  return Number.isFinite(parsed) ? parsed - Date.now() : 0;
+}
+
 function GenerationProgress({ generation, disabled, canRetry, onRetry, now }: {
   generation: Generation;
   disabled: boolean;
@@ -133,6 +138,7 @@ export function SemanticSettings() {
   const [pollError, setPollError] = useState<string | null>(null);
   const [indexResult, setIndexResult] = useState<string | null>(null);
   const [clockNow, setClockNow] = useState(Date.now());
+  const [serverOffset, setServerOffset] = useState(0);
   const operation = useRef<AbortController | null>(null);
 
   useEffect(() => {
@@ -154,7 +160,12 @@ export function SemanticSettings() {
           window.regenic?.getSemanticRuntime?.() ?? Promise.resolve(null),
           fetchSemanticIndexStatus(AbortSignal.any([current.signal, AbortSignal.timeout(10_000)])),
         ]);
-        if (!cancelled && !current.signal.aborted) { setRuntime(local); setIndex(next); setPollError(null); }
+        if (!cancelled && !current.signal.aborted) {
+          setRuntime(local);
+          setIndex(next);
+          setServerOffset(serverClockOffset(next.server_now));
+          setPollError(null);
+        }
       } catch (caught) {
         if (!cancelled && !current.signal.aborted) setPollError(caught instanceof Error ? caught.message : t("semantic.failed"));
       } finally {
@@ -163,7 +174,7 @@ export function SemanticSettings() {
     };
     const unsubscribe = window.regenic?.onApiOriginChanged(() => {
       operation.current?.abort(); operation.current = null; setBusy(false);
-      setRuntime(null); setIndex(null); setPollError(null); setError(null); setIndexResult(null);
+      setRuntime(null); setIndex(null); setServerOffset(0); setPollError(null); setError(null); setIndexResult(null);
       void refresh();
     });
     void refresh();
@@ -205,7 +216,10 @@ export function SemanticSettings() {
       }
       if (controller.signal.aborted) return;
       const next = await fetchSemanticIndexStatus(AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)]));
-      if (!controller.signal.aborted) setIndex(next);
+      if (!controller.signal.aborted) {
+        setIndex(next);
+        setServerOffset(serverClockOffset(next.server_now));
+      }
     } catch (caught) {
       if (!controller.signal.aborted) setError(caught instanceof Error ? message(caught.message) : t("semantic.failed"));
     } finally {
@@ -225,8 +239,6 @@ export function SemanticSettings() {
     : runtime?.enabled ? null : t("semantic.lexical");
   const vectorsReady = index?.vector_status === "ready";
   const canRetry = Boolean(index?.healthy) && vectorsReady;
-  const parsedServerNow = index?.server_now ? Date.parse(index.server_now) : Number.NaN;
-  const serverOffset = Number.isFinite(parsedServerNow) ? parsedServerNow - Date.now() : 0;
   const serverNow = clockNow + serverOffset;
 
   const consentBox = (
