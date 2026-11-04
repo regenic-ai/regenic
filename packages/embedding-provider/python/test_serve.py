@@ -161,6 +161,30 @@ class ProtocolTests(unittest.TestCase):
         ])
         self.assertFalse(active.is_alive() or any(thread.is_alive() for thread in queued))
 
+    def test_token_counts_do_not_wait_on_the_inference_lock(self):
+        started = threading.Event()
+        release = threading.Event()
+
+        class Encoder(FakeEncoder):
+            def embed(self, texts, mode):
+                started.set()
+                if not release.wait(5):
+                    raise RuntimeError("test_timeout")
+                return super().embed(texts, mode)
+
+        encoder = PriorityEncoder(Encoder())
+        thread = threading.Thread(target=encoder.embed, args=(["active"], "document"))
+        thread.start()
+        self.assertTrue(started.wait(5))
+        try:
+            self.assertTrue(encoder.busy)
+            self.assertEqual(encoder.count(["hello"], "document"), [10])
+            self.assertEqual(encoder.pending, 0)
+        finally:
+            release.set()
+            thread.join(5)
+        self.assertFalse(thread.is_alive())
+
     def test_queue_timeout_and_inference_failure_release_the_slot(self):
         encoder = PriorityEncoder(FakeEncoder(), wait_seconds=0)
         encoder.busy = True

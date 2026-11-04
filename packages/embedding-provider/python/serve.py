@@ -367,16 +367,21 @@ class TextEncoder:
             model_kwargs={"dtype": precision} if device == "cpu" else None,
         )
         self.model.max_seq_length = DESCRIPTOR["max_input_tokens"]
+        self.token_lock = threading.Lock()
 
     def count(self, texts, mode):
-        prefix = DESCRIPTOR[f"{mode}_template"]
-        encoded = self.tokenizer(
-            [prefix + text for text in texts],
-            add_special_tokens=True,
-            truncation=False,
-            padding=False,
-        )
-        return [len(tokens) for tokens in encoded["input_ids"]]
+        lock = getattr(self, "token_lock", None)
+        if lock is None:
+            lock = self.token_lock = threading.Lock()
+        with lock:
+            prefix = DESCRIPTOR[f"{mode}_template"]
+            encoded = self.tokenizer(
+                [prefix + text for text in texts],
+                add_special_tokens=True,
+                truncation=False,
+                padding=False,
+            )
+            return [len(tokens) for tokens in encoded["input_ids"]]
 
     def embed(self, texts, mode):
         return self.embed_with_counts(texts, mode)[1]
@@ -510,7 +515,9 @@ class PriorityEncoder:
                 self.condition.notify_all()
 
     def count(self, texts, mode):
-        return self.call("count", texts, mode)
+        # Token counts do not run the model. Keep them off the inference lock so
+        # chunking can overlap a forward and cannot fill the document queue.
+        return self.encoder.count(texts, mode)
 
     def embed(self, texts, mode):
         return self.call("embed", texts, mode)

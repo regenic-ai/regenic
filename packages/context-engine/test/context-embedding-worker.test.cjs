@@ -141,7 +141,7 @@ describe("independent embedding indexing worker", () => {
     const body = "x".repeat(27 * 18);
     const f = await fixture(t, provider({
       async embed(values) {
-        if (++calls === 10) throw new EmbeddingError("timeout", true);
+        if (++calls === 2) throw new EmbeddingError("timeout", true);
         return values.map(() => [1, 0]);
       },
     }));
@@ -156,7 +156,7 @@ describe("independent embedding indexing worker", () => {
       assert.ok(runs++ < 4);
       assert.equal((await f.worker.runOnce()).failed, 0);
     } while ((await f.index.listJobs("org", generation.id))[0].status !== "succeeded");
-    assert.equal(calls, 19);
+    assert.equal(calls, 4);
     assert.equal((await f.index.listJobs("org", generation.id))[0].attempts, 2);
   });
 
@@ -483,6 +483,24 @@ describe("independent embedding indexing worker", () => {
     const second = await f.worker.runOnce({ max_jobs: 2, time_budget_ms: 30_000 });
     assert.deepEqual(second, { processed: 2, failed: 0, superseded: 0 });
     assert.equal(reads, 5);
+  });
+
+  it("embeds several fitting chunks in one forward", async () => {
+    const text = "第一句😀，中文内容必须保留。\n第二句，不能按字节截断。\n".repeat(5);
+    let embedCalls = 0;
+    let largest = 0;
+    const embedding = provider({
+      async embed(texts) {
+        embedCalls += 1;
+        largest = Math.max(largest, texts.length);
+        return texts.map(() => [1, 0]);
+      },
+    });
+    const chunks = await chunkEmbeddingText(text, embedding, generation);
+    assert.ok(chunks.length > 1);
+    assert.ok(embedCalls < chunks.length);
+    assert.ok(largest > 1);
+    assert.equal(chunks.map((chunk) => text.slice(chunk.start, chunk.end)).join(""), text);
   });
 
   it("uses one token-count request for fitting text", async () => {

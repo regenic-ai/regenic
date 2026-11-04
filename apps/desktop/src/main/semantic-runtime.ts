@@ -3,6 +3,14 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { join } from "node:path";
+import {
+  applyEmbeddingPriority,
+  currentEmbeddingHardware,
+  embeddingLaunchPlan,
+  embeddingThreadEnv,
+  type EmbeddingHardware,
+  type EmbeddingLaunchPlan,
+} from "./embedding-launch.ts";
 import type { SemanticRuntimeView, SemanticStage } from "../shared/semantic-runtime.ts";
 
 const REVISION = "914f7f89142e33e77833254d9c9b90c3cef7303b";
@@ -13,6 +21,7 @@ interface RuntimeOptions {
   spawn?: (command: string, args: string[], options: SpawnOptions) => ChildProcess;
   fetch?: typeof fetch;
   startupMs?: number;
+  hardware?: () => EmbeddingHardware;
 }
 
 export class SemanticRuntime {
@@ -73,9 +82,28 @@ export class SemanticRuntime {
 
   endpoint(): string | undefined { return this.healthy ? this.origin : undefined; }
 
+  private hardware(): EmbeddingHardware {
+    return this.options.hardware?.() ?? currentEmbeddingHardware();
+  }
+
+  private plan(): EmbeddingLaunchPlan {
+    return embeddingLaunchPlan(this.hardware());
+  }
+
   private environment(): NodeJS.ProcessEnv {
-    return { ...process.env, HF_HOME: join(this.options.root, "cache"),
-      HF_HUB_DISABLE_PROGRESS_BARS: "1", PYTHONUNBUFFERED: "1" };
+    const plan = this.plan();
+    return {
+      ...process.env,
+      HF_HOME: join(this.options.root, "cache"),
+      HF_HUB_DISABLE_PROGRESS_BARS: "1",
+      PYTHONUNBUFFERED: "1",
+      ...embeddingThreadEnv(plan.threads),
+    };
+  }
+
+  private modelArgs(prefix: string[]): string[] {
+    const plan = this.plan();
+    return [...prefix, "--device", plan.device, "--precision", plan.precision];
   }
 
   private async exclusive(run: () => Promise<void>): Promise<void> {
@@ -95,6 +123,7 @@ export class SemanticRuntime {
     return new Promise((resolve, reject) => {
       const child = this.launch(binary, args, { env: this.environment(), stdio: "ignore", windowsHide: true });
       this.command = child;
+      if (args.includes("serve.py")) applyEmbeddingPriority(child, this.plan().nice);
       let settled = false;
       let timedOut = false;
       let drainTimer: ReturnType<typeof setTimeout> | undefined;
@@ -132,8 +161,7 @@ export class SemanticRuntime {
       await this.run(this.python(), ["-m", "pip", "install", "--disable-pip-version-check", "-r",
         join(this.options.assets, "requirements.txt")], "semantic.installFailed", 30 * 60_000);
       this.stage = "downloading";
-      await this.run(this.python(), ["-B", join(this.options.assets, "serve.py"), "--download-only",
-        "--device", "cpu", "--precision", "bfloat16"],
+      await this.run(this.python(), this.modelArgs(["-B", join(this.options.assets, "serve.py"), "--download-only"]),
         "semantic.downloadFailed", 60 * 60_000);
       writeFileSync(join(this.options.root, "installed.json"), JSON.stringify({ revision: REVISION, fingerprint: this.fingerprint() }));
       this.stage = "stopped";
@@ -163,10 +191,12 @@ export class SemanticRuntime {
       await this.stopChild();
       this.stage = "starting";
       const port = await freePort();
-      const child = this.launch(this.python(), ["-B", join(this.options.assets, "serve.py"), "--port", String(port),
-        "--device", "cpu", "--precision", "bfloat16"],
+      const plan = this.plan();
+      const child = this.launch(this.python(), this.modelArgs(["-B", join(this.options.assets, "serve.py"), "--port", String(port)]),
         { env: { ...this.environment(), HF_HUB_OFFLINE: "1" }, stdio: "ignore", windowsHide: true });
       this.child = child;
+      applyEmbeddingPriority(child, plan.nice);
+      console.error(`[semantic] launch device=${plan.device} precision=${plan.precision} threads=${plan.threads}`);
       let exited = false;
       child.once("error", () => { exited = true; this.failedChild(child); });
       child.once("exit", () => { exited = true; this.failedChild(child); });
