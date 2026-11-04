@@ -4,6 +4,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { embeddingLaunchPlan } from "../src/main/embedding-launch.ts";
 import { SemanticRuntime } from "../src/main/semantic-runtime.ts";
 import { semanticAction } from "../src/shared/semantic-runtime.ts";
 import { loadDesktopPreference, saveDesktopPreference, saveKernelPreference, saveLocalePreference } from "../src/main/kernel-settings.ts";
@@ -43,6 +44,7 @@ function fixture() {
   let server: ReturnType<typeof spawn> | undefined;
   const runtime = new SemanticRuntime({
     root, assets, startupMs: 30,
+    hardware: () => ({ cpus: 8, totalMemoryBytes: 8 * 1024 ** 3 }),
     spawn(binary, args, options) {
       calls.push({ binary, args, options });
       if (args.includes("venv")) {
@@ -205,6 +207,22 @@ test("search and model messages preserve English/Chinese interpolation variables
   }
 });
 
+test("embedding launch reserves cores on small machines and widens large ones", () => {
+  const gib = 1024 ** 3;
+  assert.deepEqual(embeddingLaunchPlan({ cpus: 8, totalMemoryBytes: 8 * gib }), {
+    device: "cpu", precision: "bfloat16", threads: 2, nice: 5,
+  });
+  assert.deepEqual(embeddingLaunchPlan({ cpus: 10, totalMemoryBytes: 16 * gib }), {
+    device: "cpu", precision: "float32", threads: 8, nice: 0,
+  });
+  assert.deepEqual(embeddingLaunchPlan({ cpus: 2, totalMemoryBytes: 16 * gib }), {
+    device: "cpu", precision: "float32", threads: 1, nice: 0,
+  });
+  assert.deepEqual(embeddingLaunchPlan({ cpus: Number.NaN, totalMemoryBytes: Number.NaN }), {
+    device: "cpu", precision: "bfloat16", threads: 1, nice: 5,
+  });
+});
+
 test("semantic preference is optional and survives locale and kernel changes", () => {
   const f = fixture();
   try {
@@ -232,6 +250,9 @@ test("install uses isolated fixed assets, actual verification before marker and 
     assert.ok(f.calls[3].args.includes("--download-only"));
     assert.deepEqual(f.calls[3].args.slice(-4), ["--device", "cpu", "--precision", "bfloat16"]);
     assert.equal(f.calls[3].options.env?.HF_HOME, join(f.root, "cache"));
+    assert.equal(f.calls[3].options.env?.OMP_NUM_THREADS, "2");
+    assert.equal(f.calls[3].options.env?.VECLIB_MAXIMUM_THREADS, "2");
+    assert.equal(f.calls[3].options.env?.OMP_WAIT_POLICY, "PASSIVE");
     await f.runtime.start();
     assert.equal(f.runtime.view(true, true).stage, "running");
     assert.match(f.runtime.endpoint()!, /^http:\/\/127\.0\.0\.1:\d+$/);

@@ -24,6 +24,7 @@ const DEFAULT_RUN_BUDGET_MS = 1_500;
 const MAX_RUN_JOBS = 100;
 const MAX_RUN_BUDGET_MS = 30_000;
 const CHECKPOINT_BATCH_CHUNKS = 8;
+const EMBED_BATCH = CHECKPOINT_BATCH_CHUNKS;
 
 class EmbeddingBatchYield extends Error {}
 
@@ -235,6 +236,7 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
           }, this.abort.signal, {
             chunks: textChunks,
             save: (chunk) => saveChunk(bind(chunk)),
+            room: () => Math.max(0, CHECKPOINT_BATCH_CHUNKS - freshChunks),
           });
           chunks.push(...extracted.map(bind));
         };
@@ -398,7 +400,11 @@ export async function chunkEmbeddingText(
   provider: EmbeddingProvider,
   generation: EmbeddingGeneration,
   signal?: AbortSignal,
-  checkpoint?: { chunks: ContextVectorChunk[]; save(chunk: ContextVectorChunk): Promise<void> },
+  checkpoint?: {
+    chunks: ContextVectorChunk[];
+    save(chunk: ContextVectorChunk): Promise<void>;
+    room?(): number;
+  },
 ): Promise<ContextVectorChunk[]> {
   const chunks: ContextVectorChunk[] = checkpoint?.chunks.map((chunk) => ({ ...chunk })) ?? [];
   let start = 0;
@@ -413,15 +419,30 @@ export async function chunkEmbeddingText(
   if (chunks.length > generation.max_chunks_per_event) throw new EmbeddingError("input_too_large", false);
   if (start === text.length) return chunks;
   const characters = Array.from(text.slice(start));
-  const encode = async (slice: string): Promise<ContextVectorChunk> => {
-    const vectors = await provider.embed([slice], "document", signal);
-    if (vectors.length !== 1) throw new EmbeddingError("invalid_response", true);
-    const chunk = {
-      ordinal: chunks.length, start, end: start + slice.length,
-      text_hash: createHash("sha256").update(slice).digest("hex"), vector: vectors[0],
-    };
-    await checkpoint?.save(chunk);
-    return chunk;
+  const pending: Array<{ slice: string; start: number; end: number }> = [];
+  const flush = async (): Promise<void> => {
+    if (pending.length === 0) return;
+    if (signal?.aborted) throw new EmbeddingError("cancelled", true);
+    const batch = pending.splice(0, pending.length);
+    const vectors = await provider.embed(batch.map((item) => item.slice), "document", signal);
+    if (vectors.length !== batch.length) throw new EmbeddingError("invalid_response", true);
+    for (let index = 0; index < batch.length; index += 1) {
+      const item = batch[index];
+      const chunk = {
+        ordinal: chunks.length, start: item.start, end: item.end,
+        text_hash: createHash("sha256").update(item.slice).digest("hex"), vector: vectors[index],
+      };
+      await checkpoint?.save(chunk);
+      chunks.push(chunk);
+    }
+  };
+  const batchSize = (): number => {
+    const room = checkpoint?.room?.() ?? EMBED_BATCH;
+    return Math.max(1, Math.min(EMBED_BATCH, room));
+  };
+  const queue = async (slice: string, sliceStart: number): Promise<void> => {
+    pending.push({ slice, start: sliceStart, end: sliceStart + slice.length });
+    if (pending.length >= batchSize()) await flush();
   };
   if (chunks.length === 0) {
     const [wholeTokens] = await provider.countTokens([text], "document", signal);
@@ -430,13 +451,15 @@ export async function chunkEmbeddingText(
     }
     if (wholeTokens <= generation.chunk_tokens) {
       if (generation.max_chunks_per_event < 1) throw new EmbeddingError("input_too_large", false);
-      return [await encode(text)];
+      await queue(text, 0);
+      await flush();
+      return chunks;
     }
   }
   let offset = 0;
   while (offset < characters.length) {
     if (signal?.aborted) throw new EmbeddingError("cancelled", true);
-    if (chunks.length >= generation.max_chunks_per_event) throw new EmbeddingError("input_too_large", false);
+    if (chunks.length + pending.length >= generation.max_chunks_per_event) throw new EmbeddingError("input_too_large", false);
     let low = 1;
     let high = characters.length - offset;
     let length = 0;
@@ -466,10 +489,11 @@ export async function chunkEmbeddingText(
       [tokens] = await provider.countTokens([slice], "document", signal);
     }
     if (!Number.isSafeInteger(tokens) || tokens < 1 || tokens > generation.chunk_tokens) throw new EmbeddingError("invalid_response", true);
-    chunks.push(await encode(slice));
+    await queue(slice, start);
     offset += length;
     start += slice.length;
   }
+  await flush();
   return chunks;
 }
 

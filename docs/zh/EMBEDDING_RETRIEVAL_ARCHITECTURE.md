@@ -885,7 +885,9 @@ float32 Buffer，避免每个 768 维 chunk 创建数组。向量候选池按证
 其中为 query 保留 2 个槽位；document 只能占用 14 个等待槽，不能再通过填满队列使新
 query 直接 `429`。query 与 document 各自按 FIFO 调度；有 document 等待时，连续执行
 8 个 query 后至少放行一个 document，防止后台索引永久饥饿。超额或等待超过 30 秒仍
-显式返回 `429/503`。
+显式返回 `429/503`。`/tokens` 只跑 tokenizer，不进入这把推理锁，因此切块计数可以和
+正在进行的前向重叠，也不会把 document 队列占满。同一次 tokenizer 计数仍然串行。
+文档切块先按原规则确定边界，再最多 8 段合成一次 `/embed`。
 
 2026-11-04 在 AMD EPYC 7763、固定 BF16 模型上，以 12 个持续 document worker 和
 20 个不同 query 交替压测：空载 query mean/p50/p95 为 182.9/183.0/197.9 ms；
