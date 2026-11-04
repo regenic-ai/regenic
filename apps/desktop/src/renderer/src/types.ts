@@ -64,10 +64,12 @@ export interface SemanticIndexStatus {
   healthy: boolean;
   vector_status: string;
   provider_issue?: string;
+  server_now?: string;
   generations: Array<{
     id: string;
     active: boolean;
     jobs: { pending: number; running: number; succeeded: number; skipped?: number; failed: number; quarantined: number; superseded: number };
+    timing?: { as_of: string; running_elapsed_ms?: number; recent_processing_ms?: number };
     failures?: Array<{ code: string; failed: number; quarantined: number }>;
   }>;
 }

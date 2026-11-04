@@ -20,11 +20,23 @@ function stageTone(runtime: SemanticRuntimeView | null, index: SemanticIndexStat
   return index.healthy ? "running" : "error";
 }
 
-function GenerationProgress({ generation, disabled, canRetry, onRetry }: {
+function formatDuration(ms: number, t: ReturnType<typeof useLocale>["t"]): string {
+  const duration = Math.max(0, Math.round(ms));
+  if (duration < 1000) return t("semantic.duration.ms", { value: duration });
+  const seconds = Math.floor(duration / 1000);
+  if (seconds < 10) return t("semantic.duration.seconds", { value: (duration / 1000).toFixed(1) });
+  return t("semantic.duration.clock", {
+    minutes: String(Math.floor(seconds / 60)).padStart(2, "0"),
+    seconds: String(seconds % 60).padStart(2, "0"),
+  });
+}
+
+function GenerationProgress({ generation, disabled, canRetry, onRetry, now }: {
   generation: Generation;
   disabled: boolean;
   canRetry: boolean;
   onRetry: () => void;
+  now: number;
 }) {
   const { t } = useLocale();
   const { pending, running, succeeded, failed, quarantined, superseded } = generation.jobs;
@@ -61,6 +73,25 @@ function GenerationProgress({ generation, disabled, canRetry, onRetry }: {
           </div>
         ))}
       </dl>
+      {running > 0 && generation.timing?.running_elapsed_ms !== undefined ? (
+        <p className="muted semantic-note" role="status">
+          {t("semantic.processingNow", {
+            count: running,
+            duration: formatDuration(
+              generation.timing.running_elapsed_ms + Math.max(0, now - Date.parse(generation.timing.as_of)),
+              t,
+            ),
+          })}
+        </p>
+      ) : null}
+      {running === 0 && pending > 0 ? (
+        <p className="muted semantic-note">{t("semantic.waitingForIdle")}</p>
+      ) : null}
+      {running === 0 && pending === 0 && generation.timing?.recent_processing_ms !== undefined ? (
+        <p className="muted semantic-note">
+          {t("semantic.recentAverage", { duration: formatDuration(generation.timing.recent_processing_ms, t) })}
+        </p>
+      ) : null}
       {superseded > 0 ? <p className="muted semantic-note">{t("semantic.supersededNote", { superseded })}</p> : null}
       {skipped > 0 ? <p className="muted semantic-note">{t("semantic.skippedNote", { skipped })}</p> : null}
       {needsAttention > 0 ? (
@@ -101,7 +132,13 @@ export function SemanticSettings() {
   const [error, setError] = useState<string | null>(null);
   const [pollError, setPollError] = useState<string | null>(null);
   const [indexResult, setIndexResult] = useState<string | null>(null);
+  const [clockNow, setClockNow] = useState(Date.now());
   const operation = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    const timer = setInterval(() => setClockNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -154,13 +191,19 @@ export function SemanticSettings() {
     const controller = new AbortController();
     operation.current = controller;
     setBusy(true); setError(null); setIndexResult(null);
-    const started = performance.now();
     try {
-      const result = generation
-        ? t("semantic.retryResult", await retrySemanticJobs(generation, controller.signal))
-        : t("semantic.indexResult", await indexSemanticOnce(controller.signal));
+      if (generation) {
+        const result = await retrySemanticJobs(generation, controller.signal);
+        if (controller.signal.aborted) return;
+        setIndexResult(t("semantic.retryResult", result));
+      } else {
+        const result = await indexSemanticOnce(controller.signal);
+        if (controller.signal.aborted) return;
+        setIndexResult(`${t("semantic.indexResult", result)} ${t("semantic.batchElapsed", {
+          duration: formatDuration(result.processing_ms, t),
+        })}`);
+      }
       if (controller.signal.aborted) return;
-      setIndexResult(`${result} ${t("semantic.actionElapsed", { ms: Math.round(performance.now() - started) })}`);
       const next = await fetchSemanticIndexStatus(AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)]));
       if (!controller.signal.aborted) setIndex(next);
     } catch (caught) {
@@ -182,6 +225,9 @@ export function SemanticSettings() {
     : runtime?.enabled ? null : t("semantic.lexical");
   const vectorsReady = index?.vector_status === "ready";
   const canRetry = Boolean(index?.healthy) && vectorsReady;
+  const parsedServerNow = index?.server_now ? Date.parse(index.server_now) : Number.NaN;
+  const serverOffset = Number.isFinite(parsedServerNow) ? parsedServerNow - Date.now() : 0;
+  const serverNow = clockNow + serverOffset;
 
   const consentBox = (
     <label className="semantic-consent">
@@ -255,6 +301,7 @@ export function SemanticSettings() {
           {index.generations.map((generation) => (
             <GenerationProgress key={generation.id} generation={generation}
               disabled={disabled} canRetry={canRetry}
+              now={serverNow}
               onRetry={() => void indexAction(generation.id)} />
           ))}
         </div>

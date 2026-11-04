@@ -158,10 +158,11 @@ export class PersonalRuntimeService implements OnModuleInit, OnModuleDestroy {
   async semanticStatus() {
     const host = this.requireHost();
     if (!this.embeddingEnabled) return { configured: false, healthy: false, vector_status: "disabled", generations: [] };
+    const serverNow = new Date().toISOString();
     const health = await host.get("embedding").health();
     const vector = host.get("context-vector-status");
     if (vector.status !== "ready") return {
-      configured: true, healthy: health.status === "ok", vector_status: vector.status, generations: [],
+      configured: true, healthy: health.status === "ok", vector_status: vector.status, generations: [], server_now: serverNow,
       ...("error_code" in health ? { provider_issue: semanticIssue(health.error_code) } : {}),
     };
     const generations = await host.get("context-vector-generations").listGenerations(this.orgId());
@@ -169,7 +170,7 @@ export class PersonalRuntimeService implements OnModuleInit, OnModuleDestroy {
       configured: true, healthy: health.status === "ok", vector_status: vector.status,
       ...("error_code" in health ? { provider_issue: semanticIssue(health.error_code) } : {}),
       generations: await Promise.all(generations.map(async ({ manifest, active }) => {
-        const summary = await host.get("context-embedding-jobs").summarizeJobs(this.orgId(), manifest.id);
+        const summary = await host.get("context-embedding-jobs").summarizeJobs(this.orgId(), manifest.id, serverNow);
         const failures = new Map<ReturnType<typeof semanticIssue>, { code: ReturnType<typeof semanticIssue>; failed: number; quarantined: number }>();
         for (const failure of summary.failures) {
           const code = semanticIssue(failure.error_code);
@@ -180,9 +181,11 @@ export class PersonalRuntimeService implements OnModuleInit, OnModuleDestroy {
         }
         return { id: manifest.id, active,
           jobs: summary.counts,
+          timing: summary.timing,
           failures: [...failures.values()].sort((a, b) => a.code.localeCompare(b.code)),
         };
       })),
+      server_now: serverNow,
     };
   }
 
@@ -192,7 +195,9 @@ export class PersonalRuntimeService implements OnModuleInit, OnModuleDestroy {
       throw new Error("Semantic indexing is not configured or the vector store is unavailable");
     }
 
-    return host.get("context-embedding-worker").runOnce();
+    const started = Date.now();
+    const result = await host.get("context-embedding-worker").runOnce();
+    return { ...result, processing_ms: Date.now() - started };
   }
 
   async retrySemantic(generation: string, limit: number) {
