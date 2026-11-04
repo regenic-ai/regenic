@@ -161,6 +161,91 @@ class ProtocolTests(unittest.TestCase):
         ])
         self.assertFalse(active.is_alive() or any(thread.is_alive() for thread in queued))
 
+    def test_query_preempts_a_document_batch_between_forwards(self):
+        started = threading.Event()
+        release = threading.Event()
+        order = []
+
+        class Encoder(FakeEncoder):
+            def embed_with_counts(self, texts, mode):
+                order.append((mode, list(texts)))
+                if texts == ["document-0"]:
+                    started.set()
+                    if not release.wait(5):
+                        raise RuntimeError("test_timeout")
+                return (
+                    [len(text) + 5 for text in texts],
+                    [[float(index), 0.0] for index, _text in enumerate(texts)],
+                )
+
+        encoder = PriorityEncoder(
+            Encoder(), max_pending=2, reserved_queries=1, max_document_batch=1,
+        )
+        document_result = []
+        background_result = []
+        query_result = []
+        document = threading.Thread(target=lambda: document_result.append(
+            encoder.embed_with_counts(
+                ["document-0", "document-1", "document-2"], "document",
+            ),
+        ))
+        query = threading.Thread(target=lambda: query_result.append(
+            encoder.embed_with_counts(["interactive"], "query"),
+        ))
+        background = threading.Thread(target=lambda: background_result.append(
+            encoder.embed_with_counts(["background"], "document"),
+        ))
+        document.start()
+        self.assertTrue(started.wait(5))
+        background.start()
+        with encoder.condition:
+            self.assertTrue(encoder.condition.wait_for(
+                lambda: encoder.waiting_documents == 1, timeout=5,
+            ))
+        query.start()
+        try:
+            with encoder.condition:
+                self.assertTrue(encoder.condition.wait_for(
+                    lambda: encoder.waiting_queries == 1, timeout=5,
+                ))
+        finally:
+            release.set()
+            document.join(5)
+            background.join(5)
+            query.join(5)
+        self.assertEqual(order, [
+            ("document", ["document-0"]),
+            ("query", ["interactive"]),
+            ("document", ["background"]),
+            ("document", ["document-1"]),
+            ("document", ["document-2"]),
+        ])
+        self.assertEqual(document_result[0][0], [15, 15, 15])
+        self.assertEqual(len(document_result[0][1]), 3)
+        self.assertEqual(background_result[0][0], [15])
+        self.assertEqual(query_result[0][0], [16])
+        self.assertFalse(document.is_alive() or background.is_alive() or query.is_alive())
+
+    def test_query_batches_stay_atomic_and_document_failures_return_no_partial_result(self):
+        calls = []
+
+        class Encoder(FakeEncoder):
+            def embed(self, texts, mode):
+                calls.append((mode, list(texts)))
+                if texts == ["document-1"]:
+                    raise RuntimeError("test_failure")
+                return super().embed(texts, mode)
+
+        encoder = PriorityEncoder(Encoder(), max_document_batch=1)
+        self.assertEqual(len(encoder.embed(["query-0", "query-1"], "query")), 2)
+        with self.assertRaisesRegex(RuntimeError, "test_failure"):
+            encoder.embed(["document-0", "document-1", "document-2"], "document")
+        self.assertEqual(calls, [
+            ("query", ["query-0", "query-1"]),
+            ("document", ["document-0"]),
+            ("document", ["document-1"]),
+        ])
+
     def test_token_counts_do_not_wait_on_the_inference_lock(self):
         started = threading.Event()
         release = threading.Event()
