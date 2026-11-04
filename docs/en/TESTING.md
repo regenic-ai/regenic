@@ -34,7 +34,7 @@ Consumer compatibility mode is explicit per connector:
 
 For Copilot specifically, the Zod 4.6.7 override is validated both as source-root configuration and by the **actual Zod package resolved from the Copilot SDK entry point**. This does not claim arbitrary downstream tarball consumers inherit that override. No connector is tested by silently overriding its declared contract range.
 
-The desktop lane runs existing isolated unit tests, the Electron production build, and the real Electron semantic smoke with a synthetic local embedding HTTP server and a disposable database/profile. It does not log in to any account, call an external model, send messages, or start a real agent. Linux runs under Xvfb; the CI macOS lane provides the native macOS run.
+The desktop lane runs existing isolated unit tests, the Electron production build, and the real Electron semantic smoke with a synthetic local embedding HTTP server and a disposable database/profile. It does not log in to any account, call an external model, send messages, or start a real agent. Linux runs under Xvfb; its ephemeral CI runner configures Electron's `chrome-sandbox` helper as root-owned mode 4755 before launching, rather than disabling the Chromium sandbox. Local Linux runs require the corresponding Electron sandbox setup. The CI macOS lane provides the native macOS run.
 
 `pnpm test:tooling` also runs offline npm pack/install/lock regressions and independent subprocess tests for signal-killed, already-exited and failed-exit smoke children. Smoke failure is marked nonzero before asynchronous cleanup; shutdown reuses the originally registered exit promise with a bounded kill wait.
 

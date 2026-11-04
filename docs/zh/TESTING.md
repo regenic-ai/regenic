@@ -34,7 +34,7 @@ pnpm test:compatibility -- --connector dingtalk --sdk candidate
 
 对 Copilot 而言，Zod 4.6.7 override 不仅检查源码根配置，还会验证 **Copilot SDK 入口实际解析到的 Zod 包版本**。这不代表任意下游 tarball 消费者会自动继承该 override。不会通过覆盖不兼容声明范围来“强行通过”测试。
 
-桌面测试 lane 运行现有隔离单元测试、Electron 生产构建和真实 Electron semantic smoke，使用合成的本地 embedding HTTP 服务及临时数据库/配置目录。它不登录账号、不调用外部模型、不发送消息，也不启动真实 Agent。Linux 在 Xvfb 中运行；CI macOS lane 提供原生 macOS 验证。
+桌面测试 lane 运行现有隔离单元测试、Electron 生产构建和真实 Electron semantic smoke，使用合成的本地 embedding HTTP 服务及临时数据库/配置目录。它不登录账号、不调用外部模型、不发送消息，也不启动真实 Agent。Linux 在 Xvfb 中运行；临时 CI runner 在启动前将 Electron 的 `chrome-sandbox` helper 配置为 root 所有、权限 4755，不禁用 Chromium sandbox。本地 Linux 运行也需要对应的 Electron sandbox 配置。CI macOS lane 提供原生 macOS 验证。
 
 `pnpm test:tooling` 还运行离线 npm pack/install/lock 回归，以及信号杀死、已经退出、失败退出三种独立子进程测试。冒烟测试在异步清理前设置非零退出码；清理复用最初注册的退出 promise，并限制 kill 等待时间。
 
