@@ -116,6 +116,30 @@ describe("DshWebRpcClient", () => {
     );
   });
 
+  it("explains how to resolve an unauthorized DSH web response", async () => {
+    const client = new DshWebRpcClient({
+      base_url: "http://127.0.0.1:3080",
+      async fetch() {
+        return {
+          ok: false,
+          status: 401,
+          async json() {
+            return {};
+          },
+        };
+      },
+    });
+    await assert.rejects(
+      () => client.sessionList(),
+      (error) => {
+        assert.equal(error.name, "DshApiError");
+        assert.match(error.message, /authentication failed \(HTTP 401\)/);
+        assert.match(error.message, /REGENIC_DSH_TOKEN/);
+        return true;
+      },
+    );
+  });
+
   it("sends image and file parts on session.prompt", async () => {
     const calls = [];
     const client = new DshWebRpcClient({

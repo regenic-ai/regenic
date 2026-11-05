@@ -28,6 +28,7 @@ export const DSH_CLI_READY_HINT = "dsh is on PATH.";
 export interface DshWebProbe {
   hosted: boolean;
   up: boolean;
+  auth_required?: boolean;
   command_present: boolean;
   network_kind?: LocalNetworkKind;
 }
@@ -35,6 +36,11 @@ export interface DshWebProbe {
 let cache: { at: number; probe: DshWebProbe } | null = null;
 
 export function dshWebCatalogHint(input: DshWebProbe): CopyRef {
+  if (input.auth_required) {
+    return input.hosted
+      ? "probe.clusterUnauthorized"
+      : "probe.webUnauthorized";
+  }
   if (input.up) {
     return input.hosted ? "probe.clusterReady" : "probe.webReady";
   }
@@ -68,7 +74,7 @@ export async function probeDshCatalog(options: {
   return {
     services: {
       "dsh-web": {
-        ready: probe.up,
+        ready: probe.up && !probe.auth_required,
         hint: dshWebCatalogHint(probe),
       },
       "dsh-cli": {
@@ -109,7 +115,7 @@ async function runDshWebProbe(options: {
   const env = options.env ?? process.env;
   const hosted = Boolean(env.REGENIC_DSH_BASE_URL?.trim());
   const url = dshProbeUrl(env);
-  const reached = await probeLocalService(url, options.fetch ?? fetch);
+  const reached = await probeLocalService(url, options.fetch ?? fetch, env);
   const networkKind = reached.up
     ? "ok"
     : (
@@ -127,6 +133,7 @@ async function runDshWebProbe(options: {
   return {
     hosted,
     up: reached.up,
+    auth_required: reached.auth_required,
     command_present: commandPresent,
     network_kind: networkKind,
   };
@@ -151,11 +158,19 @@ function dshProbeUrl(env: NodeJS.ProcessEnv): string {
 async function probeLocalService(
   url: string,
   fetchImpl: typeof fetch,
-): Promise<{ up: boolean; error?: unknown }> {
+  env: NodeJS.ProcessEnv,
+): Promise<{ up: boolean; auth_required?: boolean; error?: unknown }> {
   try {
-    await fetchImpl(dshWebProbeUrl(url), {
+    const token = env.REGENIC_DSH_TOKEN?.trim();
+    const headers: Record<string, string> = {
+      "content-type": "application/json",
+    };
+    if (token) {
+      headers.authorization = "Bearer ".concat(token);
+    }
+    const response = await fetchImpl(dshWebProbeUrl(url), {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers,
       body: JSON.stringify({
         type: "client-request",
         rpcId: "catalog-probe",
@@ -164,7 +179,7 @@ async function probeLocalService(
       }),
       signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
     });
-    return { up: true };
+    return { up: true, auth_required: response.status === 401 };
   } catch (error) {
     return { up: false, error };
   }

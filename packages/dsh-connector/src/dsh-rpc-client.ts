@@ -164,7 +164,7 @@ export class DshWebRpcClient {
       );
     }
     if (!response.ok) {
-      throw new DshApiError(`DSH HTTP ${response.status}`, "internal");
+      throw httpStatusError(response.status);
     }
     return parseRespondReceipt(await response.json());
   }
@@ -210,10 +210,20 @@ export class DshWebRpcClient {
       );
     }
     if (!response.ok) {
-      throw new DshApiError(`DSH HTTP ${response.status}`, "internal");
+      throw httpStatusError(response.status);
     }
     return parseServerResponse(await response.json(), rpcId);
   }
+}
+
+function httpStatusError(status: number): DshApiError {
+  if (status === 401) {
+    return new DshApiError(
+      "DSH authentication failed (HTTP 401). Set REGENIC_DSH_TOKEN to the token printed by dsh web (not the full browser URL), then restart the desktop.",
+      "unauthorized",
+    );
+  }
+  return new DshApiError(`DSH HTTP ${status}`, "internal");
 }
 
 function parseSessionListPage(value: unknown): DshSessionListPage {
