@@ -219,7 +219,7 @@ export class DshWebRpcClient {
 function httpStatusError(status: number): DshApiError {
   if (status === 401) {
     return new DshApiError(
-      "DSH authentication failed (HTTP 401). Set REGENIC_DSH_TOKEN to the token printed by dsh web (not the full browser URL), then restart the desktop.",
+      "DSH authentication failed (HTTP 401). Enter the token printed by dsh web in the installation's DSH web token field (not the full browser URL). REGENIC_DSH_TOKEN remains available as an environment fallback.",
       "unauthorized",
     );
   }
