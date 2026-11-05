@@ -33,12 +33,14 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@regenic/connector-contract": "workspace:*",
     "@regenic/plugin-host": "workspace:*",
-    "@regenic/connector-contract": "workspace:*"
+    "ws": "^8.22.1"
   },
   "devDependencies": {
+    "@regenic/connector-test-utils": "workspace:*",
     "@types/node": "^22.10.2",
-    "typescript": "^5.7.2",
-    "@regenic/connector-test-utils": "workspace:*"
+    "@types/ws": "^8.18.2",
+    "typescript": "^5.7.2"
   }
 }

@@ -16,7 +16,7 @@ contract.
 
 | Driver | `source` | Sync | Reply | Create | Credentials |
 | --- | --- | --- | --- | --- | --- |
-| `dsh-session` web, no `session_id` | `dsh` | every session | yes | yes | `REGENIC_DSH_TOKEN` if the host asks |
+| `dsh-session` web, no `session_id` | `dsh` | every session | yes | yes | Per-install token in OS credential store, or `REGENIC_DSH_TOKEN` fallback |
 | `dsh-session` web, with `session_id` | `dsh` | that session | yes | no | same |
 | `dsh-session` cli | `dsh` | one mailbox | yes | no | local `dsh` |
 | `feishu-chat` | `feishu` | selected conversations, or all visible groups and/or p2p chats | yes | no | local `lark-cli` user login |
@@ -31,8 +31,9 @@ outbound and does not await the first poll. A pasted Cursor API key is stored in
 machine keychain (or `~/.regenic/credentials/cursor`), never in install
 config.
 
-Credential refs: DSH web uses
-`env:REGENIC_DSH_TOKEN` (optional); Feishu uses `keychain:lark-cli`;
+Credential refs: DSH web accepts a per-install secret stored through the
+connector secret store, with `env:REGENIC_DSH_TOKEN` as an optional fallback;
+Feishu uses `keychain:lark-cli`;
 Cursor uses `keychain:regenic-cursor:<install id>` or
 `env:CURSOR_API_KEY`. `oauth:HANDLE` / `app:HANDLE` are reserved;
 built-in drivers do not use them in this phase.

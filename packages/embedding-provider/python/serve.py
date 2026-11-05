@@ -3,10 +3,12 @@
 import argparse
 import base64
 import binascii
+import gc
 import io
 import json
 import logging
 import re
+import signal
 import stat
 import threading
 import zipfile
@@ -364,7 +366,7 @@ class TextEncoder:
             device=device,
             trust_remote_code=False,
             config_kwargs={"audio_config": None},
-            model_kwargs={"dtype": precision} if device == "cpu" else None,
+            model_kwargs={"dtype": precision} if device in ("cpu", "mps") else None,
         )
         self.model.max_seq_length = DESCRIPTOR["max_input_tokens"]
         self.token_lock = threading.Lock()
@@ -563,7 +565,39 @@ class BoundedHTTPServer(ThreadingHTTPServer):
             self.slots.release()
 
 
-def handler_for(encoder):
+def initialize_encoder(device, precision):
+    if device != "auto-mps":
+        return TextEncoder(device, precision), {"device": device, "precision": precision}
+
+    import torch
+
+    fallback_reason = "mps_unavailable"
+    if torch.backends.mps.is_available():
+        candidate = None
+        try:
+            candidate = TextEncoder("mps", "float32")
+            candidate.embed(["Readiness check"], "query")
+            candidate.embed(["Readiness check"], "document")
+            from PIL import Image
+            with Image.new("RGB", (32, 32), "white") as image:
+                candidate.image(image)
+                candidate.video([image, image])
+        except (RuntimeError, NotImplementedError):
+            logging.exception("embedding_mps_verification_failed; retrying on CPU")
+            fallback_reason = "mps_failed"
+            candidate = None
+        else:
+            return candidate, {"device": "mps", "precision": "float32"}
+        gc.collect()
+        torch.mps.empty_cache()
+
+    logging.warning("embedding_cpu_fallback reason=%s", fallback_reason)
+    return TextEncoder("cpu", precision), {
+        "device": "cpu", "precision": precision, "fallback_reason": fallback_reason,
+    }
+
+
+def handler_for(encoder, runtime=None):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, _format, *args):
             pass
@@ -574,7 +608,8 @@ def handler_for(encoder):
             elif self.headers.get("Origin") is not None:
                 self.reply(403, {"error": "origin_rejected"})
             else:
-                self.reply(200, {"status": "ready", "descriptor": DESCRIPTOR})
+                self.reply(200, {"status": "ready", "descriptor": DESCRIPTOR,
+                                 **({"runtime": runtime} if runtime is not None else {})})
 
         def do_POST(self):
             self.connection.settimeout(10)
@@ -639,6 +674,10 @@ def handler_for(encoder):
 
 
 def main():
+    def stop_requested(_signum, _frame):
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGTERM, stop_requested)
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--device", default="cpu")
@@ -651,17 +690,22 @@ def main():
     import warnings
     Image.MAX_IMAGE_PIXELS = MAX_PIXELS
     warnings.simplefilter("error", Image.DecompressionBombWarning)
-    encoder = PriorityEncoder(TextEncoder(args.device, args.precision))
+    # Installation verifies the portable CPU path; acceleration is checked offline at startup.
+    device = "cpu" if args.download_only and args.device == "auto-mps" else args.device
+    model, runtime = initialize_encoder(device, args.precision)
+    import torch
+    runtime["threads"] = torch.get_num_threads()
+    encoder = PriorityEncoder(model)
     if args.download_only:
         logging.warning(
             "embedding_download_verified model_revision=%s precision=%s",
             REVISION, args.precision
         )
         return
-    server = BoundedHTTPServer(("127.0.0.1", args.port), handler_for(encoder))
+    server = BoundedHTTPServer(("127.0.0.1", args.port), handler_for(encoder, runtime))
     logging.warning(
-        "embedding_ready model_revision=%s precision=%s port=%d",
-        REVISION, args.precision, args.port
+        "embedding_ready model_revision=%s device=%s precision=%s port=%d",
+        REVISION, runtime["device"], runtime["precision"], args.port
     )
     try:
         server.serve_forever()

@@ -23,6 +23,15 @@ describe("DSH catalog probe", () => {
       dshWebCatalogHint({ up: true, command_present: true, hosted: false }),
       "probe.webReady",
     );
+    assert.equal(
+      dshWebCatalogHint({
+        up: true,
+        auth_required: true,
+        command_present: true,
+        hosted: false,
+      }),
+      "probe.webUnauthorized",
+    );
     assert.deepEqual(
       dshWebCatalogHint({
         up: false,
@@ -54,7 +63,7 @@ describe("DSH catalog probe", () => {
       },
     });
     assert.deepEqual(fetches, [
-      { url: "http://127.0.0.1:3080/api/session.list", method: "POST" },
+      { url: "http://127.0.0.1:3080/api/session/list", method: "POST" },
     ]);
     assert.equal(probe.services["dsh-web"].ready, false);
     assert.equal(probe.services["dsh-web"].hint, "probe.webMissing");
@@ -90,7 +99,11 @@ describe("DSH catalog probe", () => {
       env: {},
       now: () => 1,
       async fetch() {
-        return new Response("ok");
+        return Response.json({
+          type: "server-response",
+          rpcId: "catalog-probe",
+          result: { ok: true, value: { items: [], hasMore: false } },
+        });
       },
       async probeCommand() {
         lookedUp += 1;
@@ -104,16 +117,47 @@ describe("DSH catalog probe", () => {
     resetDshProbeCache();
   });
 
-  it("treats an HTTP error from dsh web as reachable", async () => {
+  it("reports authentication requirements while keeping the reachable service ready", async () => {
     resetDshProbeCache();
+    const fetches = [];
     const probe = await probeDshCatalog({
-      env: {},
+      env: { REGENIC_DSH_TOKEN: "test-token" },
       now: () => 1,
-      async fetch() {
+      async fetch(url, init) {
+        fetches.push({ url: String(url), headers: init.headers });
         return new Response("no", { status: 401 });
       },
     });
     assert.equal(probe.services["dsh-web"].ready, true);
+    assert.equal(
+      probe.services["dsh-web"].hint,
+      "probe.webUnauthorized",
+    );
+    assert.match(fetches[0].url, /\/connect\?token=test-token&interactions=none/u);
+    assert.equal(fetches[0].headers.authorization, undefined);
+    resetDshProbeCache();
+  });
+
+  it("reports an incompatible DSH API route instead of ready", async () => {
+    resetDshProbeCache();
+    const probe = await probeDshCatalog({
+      env: { REGENIC_DSH_TOKEN: "test-token" },
+      now: () => 1,
+      async fetch(url) {
+        if (String(url).includes("/connect?")) {
+          return new Response(null, {
+            status: 302,
+            headers: {
+              location: "./api/remote.mux",
+              "set-cookie": "dsh-auth-test=api-cookie; Path=/",
+            },
+          });
+        }
+        return new Response("not found", { status: 404 });
+      },
+    });
+    assert.equal(probe.services["dsh-web"].ready, false);
+    assert.equal(probe.services["dsh-web"].hint, "probe.webIncompatible");
     resetDshProbeCache();
   });
 });

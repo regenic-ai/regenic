@@ -100,7 +100,15 @@ describe("DSH thread prompts", () => {
   it("feeds mux text frames into the live store", () => {
     const store = new DshPromptStore();
     const mux = new DshMuxSubscriber(
-      { muxUrl: () => "ws://127.0.0.1:3080/api/events.mux", accessToken: () => undefined },
+      {
+        async muxConnection() {
+          return {
+            url: "ws://127.0.0.1:3080/api/remote.mux",
+            cookie: "dsh-auth-test=api-cookie",
+          };
+        },
+        invalidateConnection() {},
+      },
       store,
       async () => ({ close() {} }),
     );

@@ -246,6 +246,30 @@ class ProtocolTests(unittest.TestCase):
             thread.join()
             server.server_close()
 
+    def test_health_reports_execution_without_changing_model_identity(self):
+        runtime = {"device": "cpu", "precision": "float32", "threads": 7,
+                   "fallback_reason": "mps_failed"}
+        server = BoundedHTTPServer(("127.0.0.1", 0), handler_for(FakeEncoder(), runtime))
+        thread = threading.Thread(target=server.serve_forever)
+        thread.start()
+        try:
+            connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+            connection.request("GET", "/health")
+            response = connection.getresponse()
+            self.assertEqual(response.status, 200)
+            self.assertEqual(json.loads(response.read()), {
+                "status": "ready", "descriptor": DESCRIPTOR, "runtime": runtime,
+            })
+            connection.close()
+            connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+            connection.request("GET", "/health", headers={"Origin": "https://example.com"})
+            self.assertEqual(connection.getresponse().status, 403)
+            connection.close()
+        finally:
+            server.shutdown()
+            thread.join()
+            server.server_close()
+
     def test_http_capacity_rejects_explicitly_without_starting_another_thread(self):
         self.assertGreaterEqual(BoundedHTTPServer.request_queue_size, 32)
         server = BoundedHTTPServer.__new__(BoundedHTTPServer)

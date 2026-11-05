@@ -17,7 +17,7 @@
 
 飞书不实现 `createThread`。未声明的方法不存在。DSH web 新建立刻 `session.create` 空会话，第一条用户文本走普通回复（`session.prompt` queue）；内核会等首次 poll。Cursor 声明 `create_with_task`：桌面先开本地草稿，第一条才 `Agent.create` + `send`；内核种出站、不等首次 poll。Cursor 密钥可在安装表单粘贴，只进本机钥匙串（或 `~/.regenic/credentials/cursor`），不进安装 config。
 
-凭证引用：DSH web 为 `env:REGENIC_DSH_TOKEN`（可空）；飞书为 `keychain:lark-cli`；Cursor 为 `keychain:regenic-cursor:<安装 id>` 或 `env:CURSOR_API_KEY`。`oauth:HANDLE` / `app:HANDLE` 已预留，本阶段内置驱动不用。
+DSH Web token 可在安装表单按安装配置，并保存在系统凭证存储中；`REGENIC_DSH_TOKEN` 仍可作为环境变量回退。飞书为 `keychain:lark-cli`；Cursor 为 `keychain:regenic-cursor:<安装 id>` 或 `env:CURSOR_API_KEY`。`oauth:HANDLE` / `app:HANDLE` 已预留，本阶段内置驱动不用。
 
 其他连接器不内置，作为独立插件包发布，从 `REGENIC_PLUGIN_DIR`（默认
 `~/.regenic/plugins`）或单个 `REGENIC_CHANNEL_PLUGIN` 路径加载，使用同样的

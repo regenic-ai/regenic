@@ -97,6 +97,7 @@ import type {
   ExecutorStore,
   ClaimSyncWork,
   CommandSyncRun,
+  DeleteSyncRun,
   CommitSyncPage,
   CommitSyncPageResult,
   EnqueueSyncWork,
@@ -601,6 +602,10 @@ export class SqliteSplitAuthorityStore
 
   async commandSyncRun(input: CommandSyncRun): Promise<SyncRun | null> {
     return this.writer.call("commandSyncRun", [input]);
+  }
+
+  async deleteSyncRun(input: DeleteSyncRun): Promise<boolean> {
+    return this.writer.call("deleteSyncRun", [input]);
   }
 
   async enqueueSyncWork(input: EnqueueSyncWork): Promise<SyncWorkRecord> {

@@ -147,12 +147,12 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
       assert.equal(body.item.direction, "outbound");
       assert.equal(body.item.can_send, true);
       assert.equal(body.item.attachments[0].filename, "shot.png");
-      const replyPrompt = dsh.prompts.find((item) => item.payload?.sessionId === "sess-a");
-      assert.equal(replyPrompt?.method, "session.prompt");
-      assert.equal(replyPrompt?.payload.sessionId, "sess-a");
-      const image = replyPrompt.payload.content.find((part) => part.type === "image");
-      assert.equal(image.mimeType, "image/png");
+      const replyPrompt = dsh.prompts.find((item) => item.payload?.args?.request?.sessionId === "sess-a");
+      assert.equal(replyPrompt?.method, "session/prompt");
+      assert.equal(replyPrompt?.payload.args.request.sessionId, "sess-a");
+      const image = replyPrompt.payload.args.request.content.find((part) => part.type === "image");
       assert.equal(image.mediaType, "image/png");
+      assert.equal(image.mimeType, undefined);
       assert.equal(image.name, "shot.png");
       assert.equal(
         image.data,
@@ -308,13 +308,13 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
       assert.ok(sourceHead);
       assert.notEqual(sourceHead.record_class, "status");
       assert.equal(sourceHead.forwarded_to, undefined);
-      const targetPrompt = dsh.prompts.find((item) => item.payload?.sessionId === "sess-b");
-      assert.equal(targetPrompt?.method, "session.prompt");
+      const targetPrompt = dsh.prompts.find((item) => item.payload?.args?.request?.sessionId === "sess-b");
+      assert.equal(targetPrompt?.method, "session/prompt");
       assert.match(
-        JSON.stringify(targetPrompt.payload.content),
+        JSON.stringify(targetPrompt.payload.args.request.content),
         /Please review \*\*this\*\* screenshot/,
       );
-      const image = targetPrompt.payload.content.find((part) => part.type === "image");
+      const image = targetPrompt.payload.args.request.content.find((part) => part.type === "image");
       assert.equal(image?.name, "shot.png");
 
       const same = await fetch(`${origin}/v1/me/forwards`, {
@@ -379,11 +379,11 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
       assert.equal(dsh.created.length, createdBefore + 1);
       assert.deepEqual(dsh.created, ["created-1"]);
       const createdPrompt = dsh.prompts.find(
-        (item) => item.payload?.sessionId === "created-1",
+        (item) => item.payload?.args?.request?.sessionId === "created-1",
       );
-      assert.equal(createdPrompt?.method, "session.prompt");
+      assert.equal(createdPrompt?.method, "session/prompt");
       assert.match(
-        JSON.stringify(createdPrompt.payload.content),
+        JSON.stringify(createdPrompt.payload.args.request.content),
         /Need a decision from session A/,
       );
 
@@ -491,9 +491,9 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
       });
       const body = await replied.json();
       assert.equal(replied.status, 201, JSON.stringify(body));
-      assert.equal(dsh.prompts[0].payload.sessionId, "session-hosted");
+      assert.equal(dsh.prompts[0].payload.args.request.sessionId, "session-hosted");
       assert.equal(body.client_request_id, "hosted-reply-1");
-      assert.equal(dsh.prompts[0].payload.content.find((part) => part.type === "image").name, "proof.png");
+      assert.equal(dsh.prompts[0].payload.args.request.content.find((part) => part.type === "image").name, "proof.png");
       const retried = await fetch(`${origin}/v1/me/replies`, {
         method: "POST",
         headers: { "content-type": "application/json" },

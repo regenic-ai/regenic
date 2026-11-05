@@ -1,4 +1,5 @@
 const { createServer } = require("node:http");
+const { WebSocketServer } = require("ws");
 const { mkdtemp, rm } = require("node:fs/promises");
 const { tmpdir } = require("node:os");
 const { join } = require("node:path");
@@ -134,16 +135,17 @@ async function startDshWebStub(options = {}) {
     request.on("end", () => {
       const body = raw ? JSON.parse(raw) : {};
       const url = String(request.url ?? "");
-      const sessionId = body.payload?.sessionId;
+      const args = body.payload?.args ?? {};
+      const sessionId = args.request?.sessionId ?? args.request?.address?.sessionId;
       response.setHeader("content-type", "application/json");
       if (url.includes("/api/respond") || /\/respond(?:\?|$)/.test(url)) {
         responds.push(body);
         response.end(JSON.stringify({ accepted: true }));
         return;
       }
-      if (url.includes("session.prompt")) {
+      if (url.includes("/api/session/prompt")) {
         prompts.push(body);
-        const text = (body.payload?.content ?? [])
+        const text = (args.request?.content ?? [])
           .filter((part) => part.type === "text")
           .map((part) => part.text)
           .join("");
@@ -160,7 +162,7 @@ async function startDshWebStub(options = {}) {
         );
         return;
       }
-      if (url.includes("session.create")) {
+      if (url.includes("/api/session/create")) {
         createdCount += 1;
         const sessionId = `created-${createdCount}`;
         created.push(sessionId);
@@ -177,7 +179,7 @@ async function startDshWebStub(options = {}) {
         );
         return;
       }
-      if (url.includes("session.list")) {
+      if (url.includes("/api/session/list")) {
         response.end(
           JSON.stringify({
             type: "server-response",
@@ -197,63 +199,84 @@ async function startDshWebStub(options = {}) {
         );
         return;
       }
-      const echo = echoes.get(sessionId);
-      const events = [
-        {
-          type: "user/message",
-          seq: 1,
-          time: Date.parse("2026-08-21T00:00:00.000Z"),
-          data: {
-            content: [
-              {
-                type: "text",
-                text:
-                  sessionId === "sess-a"
-                    ? "Need a decision from session A."
-                    : "Need a decision from session B.",
-              },
-            ],
-            source: { kind: "user" },
-          },
-        },
-      ];
-      if (echo) {
-        events.push(
-          {
-            type: "user/message",
-            seq: 2,
-            time: echo.time,
-            data: {
-              content: [{ type: "text", text: echo.text }],
-              source: { kind: "user" },
-            },
-          },
-          {
-            type: "assistant/message",
-            seq: 3,
-            time: echo.time + 1,
-            data: {
-              message: { content: [{ type: "text", text: "pong" }] },
-            },
-          },
-        );
-      }
-      events.push(...(extras.get(sessionId) ?? []));
       response.end(
         JSON.stringify({
           type: "server-response",
           rpcId: body.rpcId,
           result: {
             ok: true,
-            value: {
-              hasMore: false,
-              events,
-            },
+            value: { hasMore: false, records: sessionRecords(sessionId) },
           },
         }),
       );
     });
   });
+  // `/api/remote.mux` serves the `session/follow` opening snapshot.
+  const mux = new WebSocketServer({ server, path: "/api/remote.mux" });
+  mux.on("connection", (socket) => {
+    socket.on("message", (data) => {
+      const frame = JSON.parse(String(data));
+      if (frame.type !== "open" || frame.endpoint !== "session/follow") {
+        return;
+      }
+      const records = sessionRecords(frame.payload.args.request.address.sessionId);
+      socket.send(JSON.stringify({
+        type: "item",
+        streamId: frame.streamId,
+        value: {
+          type: "snapshot",
+          cursor: records.reduce((max, record) => Math.max(max, record.event.seq), 0),
+          hasMore: false,
+          records,
+        },
+      }));
+    });
+  });
+  function sessionRecords(sessionId) {
+    const echo = echoes.get(sessionId);
+    const events = [
+      {
+        type: "user/message",
+        seq: 1,
+        time: Date.parse("2026-08-21T00:00:00.000Z"),
+        data: {
+          content: [
+            {
+              type: "text",
+              text:
+                sessionId === "sess-a"
+                  ? "Need a decision from session A."
+                  : "Need a decision from session B.",
+            },
+          ],
+          source: { kind: "user" },
+        },
+      },
+    ];
+    if (echo) {
+      events.push(
+        {
+          type: "user/message",
+          seq: 2,
+          time: echo.time,
+          data: {
+            content: [{ type: "text", text: echo.text }],
+            source: { kind: "user" },
+          },
+        },
+        {
+          type: "assistant/message",
+          seq: 3,
+          time: echo.time + 1,
+          data: {
+            message: { content: [{ type: "text", text: "pong" }] },
+          },
+        },
+      );
+    }
+    events.push(...(extras.get(sessionId) ?? []));
+    return events.map((event) => ({ type: "event", event }));
+  }
   await new Promise((resolve) => {
     server.listen(0, "127.0.0.1", resolve);
   });
@@ -270,6 +293,10 @@ async function startDshWebStub(options = {}) {
     },
     close: () =>
       new Promise((resolve, reject) => {
+        for (const client of mux.clients) {
+          client.terminate();
+        }
+        mux.close();
         server.close((error) => (error ? reject(error) : resolve()));
       }),
   };

@@ -67,7 +67,7 @@ DSH: confirm `dsh` works in the terminal, then `dsh web --port 3080`.
 dsh web --port 3080
 ```
 
-In the app: **Engine** → **DSH** → **Install**. Transport: **Web**. Leave Session ID empty to follow every session, or fill one. Base URL defaults to `http://127.0.0.1:3080` (localhost only). If `dsh web` wants a token, set `REGENIC_DSH_TOKEN` before you start the desktop app.
+In the app: **Engine** → **DSH** → **Install**. Transport: **Web**. Leave Session ID empty to follow every session, or fill one. Base URL defaults to `http://127.0.0.1:3080` (localhost only). If `dsh web` requires a token, enter the token value in the form's **DSH web token** field (not the full browser URL); it is stored securely for that installation. `REGENIC_DSH_TOKEN` remains available as an environment fallback.
 
 ### Feishu
 
@@ -110,10 +110,10 @@ The core repository ships only the DSH, Feishu, and Cursor connectors. Slack, Wh
 
 | | How you sign in | Install form |
 | --- | --- | --- |
-| DSH | Local `dsh`; `REGENIC_DSH_TOKEN` if the web host asks | no token |
+| DSH | Local `dsh`; optional per-install DSH web token | no token needed for CLI |
 | Feishu | `lark-cli auth login`; login stays in the OS keychain | no token |
 
-The form only takes non-secret fields (group selection, session). Tokens are not written to the database and do not appear on `/v1/me`.
+The DSH token is stored in the OS credential store, not in the installation database or `/v1/me`.
 
 ## Local development
 

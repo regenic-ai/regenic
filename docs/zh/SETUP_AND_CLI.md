@@ -67,7 +67,7 @@ DSH：先确认终端能跑 `dsh`，再执行 `dsh web --port 3080`。
 dsh web --port 3080
 ```
 
-打开应用：**Engine** → **DSH** → **Install**。Transport 选 **Web**。Session ID 空着跟全部会话，填了只跟一条。Base URL 默认 `http://127.0.0.1:3080`，只接受本机。`dsh web` 要 token 的话，启动桌面应用前设好 `REGENIC_DSH_TOKEN`。
+打开应用：**Engine** → **DSH** → **Install**。Transport 选 **Web**。Session ID 空着跟全部会话，填了只跟一条。Base URL 默认 `http://127.0.0.1:3080`，只接受本机。`dsh web` 要 token 时，在表单的 **DSH Web token** 栏填写 token 值（不要粘贴完整浏览器 URL）；它会按安装安全保存。`REGENIC_DSH_TOKEN` 仍可作为环境变量回退配置。
 
 ### 飞书
 
@@ -110,10 +110,10 @@ lark-cli auth status
 
 | | 怎么登录 | 安装表单 |
 | --- | --- | --- |
-| DSH | 本机 `dsh`；web 要 token 时用 `REGENIC_DSH_TOKEN` | 不收 token |
+| DSH | 本机 `dsh`；可在安装表单按安装配置 DSH Web token | CLI 不需要 token |
 | 飞书 | `lark-cli auth login`，登录信息在系统钥匙串 | 不收 token |
 
-表单只收群选择、session 这类非密钥项。token 不会写入数据库，也不会出现在 `/v1/me`。
+DSH token 保存在系统凭证存储中，不写入安装数据库，也不会出现在 `/v1/me`。
 
 ## 本地开发
 

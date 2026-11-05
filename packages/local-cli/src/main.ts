@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { DshFetch, DshSpawn } from "@regenic/dsh-connector";
+import type { DshFetch, DshMuxOpen, DshSpawn } from "@regenic/dsh-connector";
 import { parseOptions, type CliOutput } from "./cli-runtime";
 import { embeddingCommand } from "./commands/embedding";
 import {
@@ -112,6 +112,7 @@ export interface LocalCliOptions {
   env?: NodeJS.ProcessEnv;
   stdout?: CliOutput;
   fetch?: DshFetch;
+  mux_open?: DshMuxOpen;
   spawn?: DshSpawn;
   now?: () => string;
   createId?: () => string;
@@ -148,10 +149,10 @@ export async function runLocalCli(
       await installDsh(commandOptions, stdout, now, createId);
       return;
     case "dsh-sync":
-      await syncDsh(commandOptions, env, stdout, now, createId, options.spawn, options.fetch as DshFetch | undefined);
+      await syncDsh(commandOptions, env, stdout, now, createId, options.spawn, options.fetch as DshFetch | undefined, options.mux_open);
       return;
     case "dsh-send":
-      await sendDsh(commandOptions, env, stdout, now, createId, options.spawn, options.fetch as DshFetch | undefined);
+      await sendDsh(commandOptions, env, stdout, now, createId, options.spawn, options.fetch as DshFetch | undefined, options.mux_open);
       return;
     case "status":
       await showStatus(commandOptions, stdout);

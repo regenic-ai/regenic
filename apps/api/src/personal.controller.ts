@@ -749,6 +749,11 @@ export class PersonalController {
     return this.guard(() => this.connectors.commandSyncRun(id, "cancel"));
   }
 
+  @Delete("sync-runs/:id")
+  deleteSyncRun(@Param("id") id: string) {
+    return this.guard(() => this.connectors.deleteSyncRun(id));
+  }
+
   @Get("connectors/:id/quarantines")
   listConnectorQuarantines(@Param("id") id: string) {
     return this.guard(() => this.connectors.listQuarantines(id));

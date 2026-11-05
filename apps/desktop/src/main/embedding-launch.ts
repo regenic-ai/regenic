@@ -8,10 +8,12 @@ const RESERVED_CORES = 2;
 export interface EmbeddingHardware {
   cpus: number;
   totalMemoryBytes: number;
+  platform?: NodeJS.Platform;
+  arch?: string;
 }
 
 export interface EmbeddingLaunchPlan {
-  device: "cpu";
+  device: "cpu" | "auto-mps";
   precision: "bfloat16" | "float32";
   threads: number;
   nice: number;
@@ -21,16 +23,18 @@ export function embeddingLaunchPlan(hardware: EmbeddingHardware): EmbeddingLaunc
   const cpus = Number.isFinite(hardware.cpus) ? Math.max(1, Math.floor(hardware.cpus)) : 1;
   const memory = Number.isFinite(hardware.totalMemoryBytes) ? Math.max(0, hardware.totalMemoryBytes) : 0;
   const tight = memory < TIGHT_MEMORY_BYTES;
+  const mac = hardware.platform === "darwin";
+  const appleSilicon = mac && hardware.arch === "arm64";
   return {
-    device: "cpu",
+    device: appleSilicon && !tight ? "auto-mps" : "cpu",
     precision: tight ? "bfloat16" : "float32",
-    threads: tight ? Math.min(2, cpus) : Math.max(1, cpus - RESERVED_CORES),
-    nice: tight ? 5 : 0,
+    threads: tight ? Math.min(2, cpus) : mac ? Math.max(1, Math.min(8, Math.floor(cpus / 2))) : Math.max(1, cpus - RESERVED_CORES),
+    nice: tight || mac ? 5 : 0,
   };
 }
 
 export function currentEmbeddingHardware(): EmbeddingHardware {
-  return { cpus: availableParallelism(), totalMemoryBytes: totalmem() };
+  return { cpus: availableParallelism(), totalMemoryBytes: totalmem(), platform: process.platform, arch: process.arch };
 }
 
 export function applyEmbeddingPriority(child: ChildProcess, nice: number): void {

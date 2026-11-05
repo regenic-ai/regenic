@@ -17,6 +17,7 @@ import {
   type SyncSource,
 } from "@regenic/connector-contract";
 import { DshWebRpcClient, type DshFetch } from "./dsh-rpc-client";
+import type { DshMuxOpen } from "./dsh-mux-socket";
 import {
   dshPromptStoreFor,
   dshRespondValue,
@@ -115,8 +116,14 @@ export const dshSessionDriver: ChannelDriver = {
     };
   },
 
-  async createThread(installation, _host, env, options) {
-    return createDshConversation(installation, env, { cwd: options?.cwd });
+  async createThread(installation, host, env, options) {
+    const access_token = await dshAccessToken(installation, env, {
+      secrets: host.secrets,
+    });
+    return createDshConversation(installation, env, {
+      cwd: options?.cwd,
+      access_token,
+    });
   },
 
   async resolveStreams(installation, host, env, options) {
@@ -144,11 +151,18 @@ export const dshSessionDriver: ChannelDriver = {
     if (!options?.discover) {
       return [];
     }
-    const listed = await dshWebRpcClient(installation, env).listAllSessionIds();
-    return mountDshSessions(host, installation, env, listed);
+    const access_token = await dshAccessToken(installation, env, {
+      secrets: host.secrets,
+    });
+    const listed = await dshWebRpcClient(installation, env, {
+      access_token,
+    }).listAllSessionIds();
+    return mountDshSessions(host, installation, env, listed, {
+      access_token,
+    });
   },
 
-  async bindSyncSource(installation, _host, env): Promise<SyncSource> {
+  async bindSyncSource(installation, host, env): Promise<SyncSource> {
     const transport = resolveEffectiveDshTransport(installation.config, env);
     if (transport === "cli") {
       return createDshSessionSyncSource(
@@ -159,7 +173,12 @@ export const dshSessionDriver: ChannelDriver = {
     if (pinned) {
       return createDshSessionSyncSource(pinned);
     }
-    return createDshWebSyncSource(dshWebRpcClient(installation, env));
+    const access_token = await dshAccessToken(installation, env, {
+      secrets: host.secrets,
+    });
+    return createDshWebSyncSource(
+      dshWebRpcClient(installation, env, { access_token }),
+    );
   },
 
   async resolveThreadStream(installation, thread, host, env) {
@@ -220,6 +239,13 @@ export const dshSessionDriver: ChannelDriver = {
             required: false,
             placeholder: "field.sessionId.placeholder",
           },
+          {
+            key: "token",
+            label: "field.token",
+            required: false,
+            secret: true,
+            placeholder: "field.token.placeholder",
+          },
         ],
         prerequisites: [
           {
@@ -228,13 +254,6 @@ export const dshSessionDriver: ChannelDriver = {
             label: "prereq.cluster",
             required: false,
             hint: "prereq.cluster.hint",
-          },
-          {
-            kind: "env" as const,
-            key: "REGENIC_DSH_TOKEN",
-            label: "prereq.token",
-            required: false,
-            hint: "prereq.token.hint",
           },
         ],
         setup_steps: [
@@ -276,6 +295,13 @@ export const dshSessionDriver: ChannelDriver = {
           visible_when: { field: "transport", value: "web" },
         },
         {
+          key: "token",
+          label: "field.token",
+          required: false,
+          secret: true,
+          placeholder: "field.token.placeholder",
+        },
+        {
           key: "base_url",
           label: "field.baseUrl",
           required: false,
@@ -307,14 +333,6 @@ export const dshSessionDriver: ChannelDriver = {
           required: true,
           hint: "prereq.dshCli.hint",
           visible_when: { field: "transport", value: "cli" },
-        },
-        {
-          kind: "env" as const,
-          key: "REGENIC_DSH_TOKEN",
-          label: "prereq.token",
-          required: false,
-          hint: "prereq.token.hint",
-          visible_when: { field: "transport", value: "web" },
         },
       ],
       setup_steps: [
@@ -376,8 +394,13 @@ export const dshSessionDriver: ChannelDriver = {
     return dshPromptStoreFor(installation.id).list(thread.target);
   },
 
-  async answerPrompt(installation, thread, answer, _host, env) {
-    return answerDshPrompt(installation, thread, answer, env);
+  async answerPrompt(installation, thread, answer, host, env) {
+    const access_token = await dshAccessToken(installation, env, {
+      secrets: host.secrets,
+    });
+    return answerDshPrompt(installation, thread, answer, env, {
+      access_token,
+    });
   },
 
   surfaceGeneration(installation) {
@@ -388,12 +411,19 @@ export const dshSessionDriver: ChannelDriver = {
   },
 };
 
+/** Test and host overrides for the DSH web transport. */
+export interface DshClientExtras {
+  fetch?: DshFetch;
+  mux_open?: DshMuxOpen;
+  access_token?: string;
+}
+
 export async function answerDshPrompt(
   installation: { id: string; config: Record<string, unknown> },
   thread: ConversationThread,
   answer: PromptAnswer,
   env: NodeJS.ProcessEnv,
-  extras: { fetch?: DshFetch; access_token?: string } = {},
+  extras: DshClientExtras = {},
 ): Promise<{ accepted: boolean }> {
   const parsed = parseDshPromptId(answer.prompt_id);
   if (!parsed) {
@@ -415,14 +445,19 @@ export async function answerDshPrompt(
 }
 
 function dshAccessToken(
-  installation: { credentials_ref?: string },
+  installation: { id: string; credentials_ref?: string },
   env: NodeJS.ProcessEnv,
-  extras: { access_token?: string } = {},
-): string | undefined {
-  return (
-    extras.access_token ??
-    readEnvCredential(installation.credentials_ref, env, "REGENIC_DSH_TOKEN")
-  );
+  extras: {
+    access_token?: string;
+    secrets?: ConnectorHost["secrets"];
+  } = {},
+): Promise<string | undefined> {
+  if (extras.access_token) {
+    return Promise.resolve(extras.access_token);
+  }
+  return (async () =>
+    (await extras.secrets?.read("dsh-session", installation.id, "token")) ??
+    readEnvCredential(installation.credentials_ref, env, "REGENIC_DSH_TOKEN"))();
 }
 
 export async function mountDshSessions(
@@ -435,7 +470,7 @@ export async function mountDshSessions(
   },
   env: NodeJS.ProcessEnv,
   sessionIds: string[],
-  extras: { fetch?: DshFetch; access_token?: string } = {},
+  extras: DshClientExtras = {},
 ): Promise<ConnectorStream[]> {
   if (sessionIds.length === 0) {
     return [];
@@ -450,8 +485,12 @@ export async function mountDshSessions(
   if (missing.length > 0) {
     const pluginConfig = dshSessionPluginConfigFromInstallation(installation, {
       env,
-      access_token: dshAccessToken(installation, env, extras),
+      access_token: await dshAccessToken(installation, env, {
+        ...extras,
+        secrets: host.secrets,
+      }),
       fetch: extras.fetch,
+      mux_open: extras.mux_open,
     });
     if (pluginConfig.transport === "web" && !pluginConfig.base_url) {
       pluginConfig.base_url = resolveDshWebBaseUrl(installation, env);
@@ -487,7 +526,7 @@ async function mountInstalled(
 export async function createDshConversation(
   installation: ConnectorInstallation,
   env: NodeJS.ProcessEnv,
-  extras: { fetch?: DshFetch; access_token?: string; cwd?: string } = {},
+  extras: DshClientExtras & { cwd?: string } = {},
 ): Promise<ConversationThread> {
   if (!dshSessionDriver.capabilities(installation).create) {
     throw new ChannelDriverError(
@@ -504,12 +543,19 @@ export async function createDshConversation(
 export function dshWebRpcClient(
   installation: { config: Record<string, unknown>; credentials_ref?: string },
   env: NodeJS.ProcessEnv,
-  extras: { fetch?: DshFetch; access_token?: string } = {},
+  extras: DshClientExtras = {},
 ): DshWebRpcClient {
   return new DshWebRpcClient({
     base_url: resolveDshWebBaseUrl(installation, env),
-    access_token: dshAccessToken(installation, env, extras),
+    access_token:
+      extras.access_token ??
+      readEnvCredential(
+        installation.credentials_ref,
+        env,
+        "REGENIC_DSH_TOKEN",
+      ),
     fetch: extras.fetch,
+    openSocket: extras.mux_open,
   });
 }
 
@@ -540,6 +586,10 @@ function dshInstallConfig(
     if (sessionId) {
       config.session_id = sessionId;
     }
+    const token = configString(input, "token");
+    if (token) {
+      config.token = token;
+    }
     return config;
   }
   if (requested === "web") {
@@ -552,6 +602,10 @@ function dshInstallConfig(
     const sessionId = configString(input, "session_id");
     if (sessionId) {
       config.session_id = sessionId;
+    }
+    const token = configString(input, "token");
+    if (token) {
+      config.token = token;
     }
     return config;
   }

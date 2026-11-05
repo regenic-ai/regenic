@@ -182,15 +182,34 @@ describe("dshSessionPlugin", () => {
         config: {
           transport: "web",
           base_url: "https://regenic-dsh.sealosbja.site",
+          token: "cluster-token",
         },
         now: "2026-08-21T00:00:00.000Z",
       });
       assert.equal(installed.config.transport, "web");
       assert.equal(installed.config.base_url, undefined);
+      assert.equal(installed.config.token, "cluster-token");
       assert.equal(installed.credentials_ref, "env:REGENIC_DSH_TOKEN");
+      assert.equal(
+        dshSessionDriver
+          .installCatalog({ env: { REGENIC_DSH_BASE_URL: "http://regenic-dsh:3080" } })
+          .fields.find((field) => field.key === "token").secret,
+        true,
+      );
       assert.equal(dshSessionDriver.connector_protocol, "1.0");
     });
     withEnv({ REGENIC_DSH_BASE_URL: undefined }, () => {
+      const local = dshSessionDriver.install({
+        id: "dsh-local",
+        org_id: "local-owner",
+        config: {
+          transport: "web",
+          base_url: "http://127.0.0.1:3080",
+          token: "local-token",
+        },
+        now: "2026-08-21T00:00:00.000Z",
+      });
+      assert.equal(local.config.token, "local-token");
       assert.throws(() =>
         dshSessionDriver.install({
           id: "dsh-1",
@@ -318,7 +337,7 @@ describe("dshSessionPlugin", () => {
     const previous = globalThis.fetch;
     globalThis.fetch = async (_url, init) => {
       const body = JSON.parse(String(init?.body ?? "{}"));
-      if (body.method === "session.list") {
+      if (body.method === "session/list") {
         listed += 1;
       }
       return {
@@ -383,10 +402,27 @@ describe("dshSessionPlugin", () => {
       created_at: "2026-08-21T00:00:00.000Z",
     };
     let listed = 0;
+    const authorizations = [];
+    const cookies = [];
     const previous = globalThis.fetch;
     globalThis.fetch = async (_url, init) => {
+      authorizations.push(init.headers.authorization);
+      cookies.push(init.headers.cookie);
+      if (String(_url).includes("/connect?")) {
+        return {
+          ok: false,
+          status: 302,
+          headers: new Headers({
+            location: "./api/remote.mux",
+            "set-cookie": "dsh-auth-test=api-cookie; Path=/",
+          }),
+          async json() {
+            return {};
+          },
+        };
+      }
       const body = JSON.parse(String(init?.body ?? "{}"));
-      if (body.method === "session.list") {
+      if (body.method === "session/list") {
         listed += 1;
       }
       return {
@@ -417,8 +453,25 @@ describe("dshSessionPlugin", () => {
         ctx.provide("egress", egress);
       },
     }));
+    const connectorHost = {
+      get: host.get.bind(host),
+      plugin: host.plugin.bind(host),
+      now: () => "2026-08-21T00:00:00.000Z",
+      secrets: {
+        async read(connectorType, installationId, field) {
+          assert.equal(connectorType, "dsh-session");
+          assert.equal(installationId, "dsh-1");
+          assert.equal(field, "token");
+          return "installation-token";
+        },
+      },
+    };
     try {
-      const source = await dshSessionDriver.bindSyncSource(installation, host, {});
+      const source = await dshSessionDriver.bindSyncSource(
+        installation,
+        connectorHost,
+        {},
+      );
       const page = await source.listDirectory(null);
       assert.deepEqual(
         page.members.map((member) => member.thread_id),
@@ -426,6 +479,8 @@ describe("dshSessionPlugin", () => {
       );
       assert.equal(page.complete, true);
       assert.equal(listed, 1);
+      assert.deepEqual(authorizations, [undefined, undefined]);
+      assert.deepEqual(cookies, [undefined, "dsh-auth-test=api-cookie"]);
       const streams = await dshSessionDriver.resolveStreams(installation, host, {});
       assert.deepEqual(streams, []);
       assert.equal(listed, 1);
@@ -466,11 +521,11 @@ describe("dshSessionPlugin", () => {
     });
     assert.deepEqual(created, { source: "dsh", target: "sess-new" });
     assert.equal(
-      methods.some((method) => String(method).includes("session.create")),
+      methods.some((method) => String(method).includes("session/create")),
       true,
     );
     assert.equal(
-      methods.some((method) => String(method).includes("session.prompt")),
+      methods.some((method) => String(method).includes("session/prompt")),
       false,
     );
 
@@ -494,6 +549,7 @@ describe("dshSessionPlugin", () => {
     const local = dshSessionDriver.installCatalog({ env: {} });
     assert.equal(local.setup_steps[1].command, "dsh web --port 3080");
     assert.equal(local.setup_steps.at(-1).visible_when.value, "cli");
+    assert.equal(local.fields.find((field) => field.key === "token").secret, true);
     const hosted = dshSessionDriver.installCatalog({
       env: { REGENIC_DSH_BASE_URL: "http://dsh.cluster" },
     });
@@ -502,5 +558,8 @@ describe("dshSessionPlugin", () => {
       hosted.fields.some((field) => field.key === "transport"),
       false,
     );
+    const hostedToken = hosted.fields.find((field) => field.key === "token");
+    assert.equal(hostedToken.secret, true);
+    assert.equal(hostedToken.visible_when, undefined);
   });
 });
