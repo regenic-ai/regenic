@@ -199,11 +199,23 @@ export class DshWebRpcClient {
     return this.url("api/remote.mux").replace(/^http/i, "ws");
   }
 
+  /**
+   * DSH binds each `/connect` cookie to at most one Mux socket (a second
+   * upgrade gets 409) and disposes that cookie when its socket closes, so
+   * every socket gets its own cookie; the cached one is HTTP-only.
+   */
   async muxConnection(): Promise<DshMuxConnection> {
-    return this.connection();
+    if (!this.options.access_token?.trim()) {
+      return { url: this.muxUrl(), cookie: "" };
+    }
+    return this.openConnection();
   }
 
   invalidateConnection(): void {
+    const shared = this.sharedConnections();
+    if (shared.get(this.connectionKey()) === this.connectionPromise) {
+      shared.delete(this.connectionKey());
+    }
     this.connectionPromise = null;
   }
 
@@ -258,7 +270,6 @@ export class DshWebRpcClient {
       if (!isUpgradeUnauthorized(error)) {
         throw this.unavailable(error);
       }
-      this.invalidateConnection();
       try {
         return await this.streamFirstOnce(endpoint, args);
       } catch (retryError) {
@@ -273,9 +284,7 @@ export class DshWebRpcClient {
     endpoint: string,
     args: Record<string, unknown>,
   ): Promise<unknown> {
-    const connection = this.options.access_token?.trim()
-      ? await this.connection()
-      : { url: this.muxUrl(), cookie: "" };
+    const connection = await this.muxConnection();
     const streamId = this.createId();
     return new Promise<unknown>((resolve, reject) => {
       let socket: DshMuxSocket | undefined;
@@ -383,14 +392,41 @@ export class DshWebRpcClient {
     });
   }
 
+  /**
+   * DSH never reaps a `/connect` peer that does not own a socket, so the
+   * HTTP-only cookie is shared by every client of the same DSH, token, and
+   * fetch instead of minting (and leaking) one peer per client.
+   */
   private connection(): Promise<DshMuxConnection> {
     if (!this.connectionPromise) {
-      this.connectionPromise = this.openConnection().catch((error: unknown) => {
-        this.connectionPromise = null;
-        throw error;
-      });
+      const shared = this.sharedConnections();
+      const key = this.connectionKey();
+      let promise = shared.get(key);
+      if (!promise) {
+        promise = this.openConnection();
+        shared.set(key, promise);
+        const created = promise;
+        promise.catch(() => {
+          if (shared.get(key) === created) shared.delete(key);
+          if (this.connectionPromise === created) this.connectionPromise = null;
+        });
+      }
+      this.connectionPromise = promise;
     }
     return this.connectionPromise;
+  }
+
+  private sharedConnections(): Map<string, Promise<DshMuxConnection>> {
+    let shared = httpConnections.get(this.fetch);
+    if (!shared) {
+      shared = new Map();
+      httpConnections.set(this.fetch, shared);
+    }
+    return shared;
+  }
+
+  private connectionKey(): string {
+    return `${this.baseUrl}\n${this.options.access_token?.trim() ?? ""}`;
   }
 
   private async openConnection(): Promise<DshMuxConnection> {
@@ -430,6 +466,11 @@ export class DshWebRpcClient {
     return new URL(path, `${this.baseUrl}/`).href;
   }
 }
+
+const httpConnections = new WeakMap<
+  DshFetch,
+  Map<string, Promise<DshMuxConnection>>
+>();
 
 function httpStatusError(
   status: number,
@@ -494,6 +535,10 @@ function sessionIdFromListItem(item: unknown): string | undefined {
     return item.trim();
   }
   if (!isObject(item)) {
+    return undefined;
+  }
+  // DSH lists never-prompted "New Session" placeholders as blank and hides them.
+  if (item.blank === true) {
     return undefined;
   }
   return (

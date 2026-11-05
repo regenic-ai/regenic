@@ -104,7 +104,6 @@ export class DshMuxSubscriber {
         cookie: connection.cookie,
         onMessage: (data) => this.acceptMessage(data),
         onClose: () => {
-          this.client.invalidateConnection();
           this.scheduleReconnect();
         },
       });
@@ -112,7 +111,6 @@ export class DshMuxSubscriber {
       this.delayMs = 1_000;
       this.live?.notifyReconnect();
     } catch {
-      this.client.invalidateConnection();
       this.scheduleReconnect();
     }
   }
