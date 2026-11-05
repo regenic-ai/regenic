@@ -85,11 +85,14 @@ export function createDshHostRpcServices(
         if (installation.status !== "enabled") {
           continue;
         }
-        const sessionIds = await dshWebRpcClient(
-          installation,
-          env,
-          clientExtras,
-        ).listAllSessionIds();
+        const sessionIds = await dshWebRpcClient(installation, env, {
+          ...clientExtras,
+          access_token: await installationAccessToken(
+            driverHost,
+            installation,
+            options,
+          ),
+        }).listAllSessionIds();
         for (const sessionId of sessionIds) {
           listed.push({
             sessionId,
@@ -168,7 +171,14 @@ export function createDshHostRpcServices(
           "unsupported_channel",
         );
       }
-      const thread = await createDshConversation(creatable, env, clientExtras);
+      const thread = await createDshConversation(creatable, env, {
+        ...clientExtras,
+        access_token: await installationAccessToken(
+          driverHost,
+          creatable,
+          options,
+        ),
+      });
       return { sessionId: thread.target };
     },
   };
@@ -221,7 +231,11 @@ async function connectorForSession(
     [sessionId],
     {
       fetch: options.fetch,
-      access_token: options.access_token,
+      access_token: await installationAccessToken(
+        driverHost,
+        installation,
+        options,
+      ),
     },
   );
   const connector = streams[0]?.connector ?? host.get("connectors").get(
@@ -248,7 +262,11 @@ async function mountedSessionEgress(
     [sessionId],
     {
       fetch: options.fetch,
-      access_token: options.access_token,
+      access_token: await installationAccessToken(
+        driverHost,
+        installation,
+        options,
+      ),
     },
   );
   const egress = host.get("egress").get(installation.id, dshStreamKey(sessionId));
@@ -256,6 +274,17 @@ async function mountedSessionEgress(
     throw new DshApiError("DSH egress adapter failed to mount", "internal");
   }
   return egress;
+}
+
+async function installationAccessToken(
+  driverHost: ReturnType<typeof asConnectorHost>,
+  installation: Pick<ConnectorInstallation, "id">,
+  options: DshHostServiceOptions,
+): Promise<string | undefined> {
+  return (
+    (await driverHost.secrets.read("dsh-session", installation.id, "token")) ??
+    options.access_token
+  );
 }
 
 function configString(

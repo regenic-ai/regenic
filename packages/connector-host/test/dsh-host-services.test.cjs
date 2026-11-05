@@ -5,6 +5,7 @@ const {
   MemoryBlobStore,
   MemoryConnectorRuntimeStore,
   ingestPlugin,
+  setKeychainStoreForTests,
 } = require("@regenic/domain");
 const { createHost, definePlugin } = require("@regenic/plugin-host");
 const { DshApiError } = require("@regenic/dsh-connector");
@@ -26,6 +27,49 @@ const HISTORY_EVENTS = [
 ];
 
 describe("createDshHostRpcServices", () => {
+  it("uses an installation token when listing DSH web sessions", async () => {
+    setKeychainStoreForTests({
+      async read(service, account) {
+        assert.equal(service, "regenic-dsh-session");
+        assert.equal(account, "dsh-1:token");
+        return "installation-token";
+      },
+    });
+    try {
+      await withMemoryHost(async (host) => {
+        await host.get("authority").createInstallation({
+          id: "dsh-1",
+          org_id: "local-owner",
+          connector_type: "dsh-session",
+          status: "enabled",
+          config: { transport: "web", base_url: "http://127.0.0.1:3080" },
+          created_at: "2026-08-21T00:00:00.000Z",
+        });
+        const services = createDshHostRpcServices(host, {
+          org_id: "local-owner",
+          fetch: async (_url, init) => {
+            assert.equal(init.headers.authorization, "Bearer installation-token");
+            const body = JSON.parse(init.body);
+            return {
+              ok: true,
+              status: 200,
+              async json() {
+                return {
+                  type: "server-response",
+                  rpcId: body.rpcId,
+                  result: { ok: true, value: { items: [], hasMore: false } },
+                };
+              },
+            };
+          },
+        });
+        assert.deepEqual(await services.listSessions(), []);
+      });
+    } finally {
+      setKeychainStoreForTests();
+    }
+  });
+
   it("returns the requested history page on repeat receive calls", async () => {
     await withMemoryHost(async (host) => {
       await host.get("authority").createInstallation({

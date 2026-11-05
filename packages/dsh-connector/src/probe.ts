@@ -74,7 +74,7 @@ export async function probeDshCatalog(options: {
   return {
     services: {
       "dsh-web": {
-        ready: probe.up && !probe.auth_required,
+        ready: probe.up,
         hint: dshWebCatalogHint(probe),
       },
       "dsh-cli": {

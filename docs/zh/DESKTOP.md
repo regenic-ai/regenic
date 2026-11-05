@@ -178,7 +178,7 @@ sidecar **就绪**只表示进程在、端口已听、`/health` 的 `mode=person
 | DSH CLI | mailbox 可选 | 本机 `dsh` 命令 | 该 mailbox 一条流 |
 | 飞书 | 弹窗里默认选「最近活跃」；也可自选会话，或改成全部群和单聊（需二次确认）。安装后随时点「编辑范围」 | 没装则 `npx @larksuite/cli@latest install`；装了未登录则 `lark-cli config init` 和 `lark-cli auth login --recommend`。内核不代装 | 默认只跟最近活跃会话和当前工作；全量同步需明确确认。入站同步文本、图片和文件；回写同样支持。图片走 `im images create`（`image_type=message`）再发 `msg_type=image`，和正文同一用户身份；不把图塞进富文本 post |
 
-DSH 安装不接收 token / `command` / `workdir`。本机 `base_url` 必须是回环；托管内核忽略表单里的公网 URL，一律用 `REGENIC_DSH_BASE_URL`。
+DSH Web 的 token 可在安装表单按安装配置，并保存在系统凭证存储中；`REGENIC_DSH_TOKEN` 仍可回退使用。安装不接收 `command` / `workdir`。本机 `base_url` 必须是回环；托管内核忽略表单里的公网 URL，一律用 `REGENIC_DSH_BASE_URL`。
 
 ## 执行器：本机连接器与 HTTP
 
