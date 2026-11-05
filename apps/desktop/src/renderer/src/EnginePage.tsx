@@ -700,11 +700,15 @@ function ConnectorMarketplace({
             refreshed = false;
           }
           const marketRefreshed = await loadMarket(true, true);
+          const registeredFeatures = [
+            ...(job.result?.driver_types ?? []),
+            ...(job.result?.executor_sources ?? []).map((source) => `executor:${source}`),
+          ].join(", ");
           const notice = isUpdate
             ? t("market.updateStaged", { version: job.version })
             : registered
               ? t("market.installRegistered", {
-                types: job.result?.driver_types.join(", ") ?? "",
+                types: registeredFeatures,
               })
               : t("market.installRegistrationFailed");
           const refreshNote = refreshed && marketRefreshed
@@ -879,6 +883,13 @@ function ConnectorMarketplace({
                   ) : null}
                   {plugin?.drivers.length ? (
                     <span>{t("market.driverTypes", { types: plugin.drivers.join(", ") })}</span>
+                  ) : null}
+                  {plugin?.executors.length ? (
+                    <span>{t("market.executorSources", { sources: plugin.executors.join(", ") })}</span>
+                  ) : latest?.executor_exports.length ? (
+                    <span>{t("market.executorExports", {
+                      exports: latest.executor_exports.join(", "),
+                    })}</span>
                   ) : null}
                   {plugin?.version && installRelease && plugin.version !== installRelease.version ? (
                     <span>{t("market.availableVersion", { version: installRelease.version })}</span>
@@ -1181,7 +1192,12 @@ function ConnectorMarketplace({
                                 } catch {
                                   refreshed = false;
                                 }
-                                const registeredTypes = result.registered_driver_types.join(", ");
+                                const registeredTypes = [
+                                  ...result.registered_driver_types,
+                                  ...result.registered_executor_sources.map(
+                                    (source) => `executor:${source}`,
+                                  ),
+                                ].join(", ");
                                 setInstallNotice((current) => ({
                                   ...current,
                                   [item.name]: result.registered
@@ -1194,9 +1210,15 @@ function ConnectorMarketplace({
                                       }
                                     : {
                                         message: t("market.registrationRetryFailed", {
-                                          types: result.driver_types
-                                            .filter((type) => !result.registered_driver_types.includes(type))
-                                            .join(", ") || result.driver_types.join(", "),
+                                          types: [
+                                            ...result.driver_types.filter(
+                                              (type) => !result.registered_driver_types.includes(type),
+                                            ),
+                                            ...result.executor_sources
+                                              .filter((source) =>
+                                                !result.registered_executor_sources.includes(source))
+                                              .map((source) => `executor:${source}`),
+                                          ].join(", ") || item.name,
                                         }),
                                         error: true,
                                         retryRegistration: true,

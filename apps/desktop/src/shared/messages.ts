@@ -943,16 +943,16 @@ export const en = {
     "Install or uninstall connectors here. Credentials are read from local environment variables only.",
   "market.title": "Connector marketplace",
   "market.lead":
-    "Discover connector packages published to npm and curated in the configured market index.",
+    "Discover connector packages published to npm and curated in the official or deployment market index.",
   "market.readOnly":
     "Installing runs the package inside the kernel process. Review the source and verify the exact version before proceeding.",
   "market.loading": "Loading the connector market…",
   "market.unavailable":
-    "A market URL is configured, but its index could not be loaded. Ask the deployment administrator to verify the API environment, HTTPS URL, and index response.",
+    "The connector market index could not be loaded. Ask the deployment administrator to verify API network access and any custom market URL.",
   "market.notConfigured":
-    "No shared default market is enabled. This deployment uses an operator-curated connector index.",
+    "Connector market discovery is disabled for this deployment.",
   "market.setupSteps":
-    "An administrator must publish the approved HTTPS JSON index, set REGENIC_CONNECTOR_MARKET_INDEX_URL in the API service environment, restart the API, then refresh this page. This setting is not managed from the desktop.",
+    "Remove REGENIC_CONNECTOR_MARKET_INDEX_URL=off or configure an approved HTTPS index, restart the API, then refresh this page.",
   "market.empty": "No connectors are listed in this market yet.",
   "market.search": "Search connectors",
   "market.searchPlaceholder": "Name, package, or keyword",
@@ -997,6 +997,8 @@ export const en = {
   "market.phase.staging_update": "Staging the update for {name}@{version}; it will take effect after an API restart…",
   "market.localVersion": "Local plugin version {version}",
   "market.driverTypes": "Connector types: {types}",
+  "market.executorSources": "Executor sources: {sources}",
+  "market.executorExports": "Executor exports: {exports}",
   "market.availableVersion": "Market version {version}",
   "market.homepage": "Project page",
   "market.repository": "Source repository",
@@ -1029,12 +1031,12 @@ export const en = {
   "market.installAlreadyRunning": "Another installation for this connector is already running. Refresh the market after it finishes.",
   "market.installRegistered": "Installed and registered: {types}",
   "market.installRegistrationFailed":
-    "The package was installed, but one or more connector types could not be registered. Check plugin status and logs.",
+    "The package was installed, but one or more connector types or executor sources could not be registered. Check plugin status and logs.",
   "market.retryRegistration": "Retry registration",
   "market.registrationRetrying": "Retrying registration…",
-  "market.registrationRetrySucceeded": "Registered connector types: {types}.",
+  "market.registrationRetrySucceeded": "Registered plugin features: {types}.",
   "market.registrationRetryFailed":
-    "Could not register connector types: {types}. Check the plugin error and kernel logs, resolve the reported issue, then retry.",
+    "Could not register plugin features: {types}. Check the plugin error and kernel logs, resolve the reported issue, then retry.",
   "market.uninstallBlockedInstances": "Connector instances preventing uninstall:",
   "engine.unsignedPlugins":
     "{count} extra plugin(s) loaded without a signature. They run in-process with the kernel.",
@@ -2178,15 +2180,15 @@ export const zh: Record<MessageKey, string> = {
   "engine.connectors": "连接器",
   "engine.connectorsLead": "在这里安装或卸载连接器。凭证只从本机环境变量读取。",
   "market.title": "连接器市场",
-  "market.lead": "发现已发布到 npm 并收录于当前市场索引的连接器。",
+  "market.lead": "发现已发布到 npm 并收录于官方或部署方市场索引的连接器。",
   "market.readOnly": "安装会在内核进程中运行连接器代码；请先核验包来源和精确版本。",
   "market.loading": "正在加载连接器市场…",
   "market.unavailable":
-    "已配置市场地址，但无法读取索引。请联系部署管理员检查 API 环境变量、HTTPS 地址和索引响应。",
+    "无法读取连接器市场索引。请联系部署管理员检查 API 网络访问和自定义市场地址。",
   "market.notConfigured":
-    "当前部署未启用共享默认市场；连接器列表由部署管理员维护。",
+    "当前部署已禁用连接器市场发现。",
   "market.setupSteps":
-    "请管理员发布经过审核的 HTTPS JSON 索引，在 API 服务环境中设置 REGENIC_CONNECTOR_MARKET_INDEX_URL，重启 API 后刷新此页面。此配置不能在桌面端修改。",
+    "请移除 REGENIC_CONNECTOR_MARKET_INDEX_URL=off，或配置经过审核的 HTTPS 索引，重启 API 后刷新此页面。",
   "market.empty": "此市场暂时没有收录连接器。",
   "market.search": "搜索连接器",
   "market.searchPlaceholder": "名称、包名或关键词",
@@ -2231,6 +2233,8 @@ export const zh: Record<MessageKey, string> = {
   "market.phase.staging_update": "正在暂存 {name}@{version} 更新，重启 API 后生效…",
   "market.localVersion": "本机插件版本 {version}",
   "market.driverTypes": "连接器类型：{types}",
+  "market.executorSources": "执行器来源：{sources}",
+  "market.executorExports": "执行器导出：{exports}",
   "market.availableVersion": "市场版本 {version}",
   "market.homepage": "项目主页",
   "market.repository": "源代码仓库",
@@ -2263,12 +2267,12 @@ export const zh: Record<MessageKey, string> = {
   "market.installAlreadyRunning": "此连接器已有其他安装任务正在运行。任务完成后刷新市场。",
   "market.installRegistered": "已安装并注册：{types}",
   "market.installRegistrationFailed":
-    "包已安装，但部分连接器类型未能注册。请查看插件状态和日志。",
+    "包已安装，但部分连接器类型或执行器来源未能注册。请查看插件状态和日志。",
   "market.retryRegistration": "重试注册",
   "market.registrationRetrying": "正在重试注册…",
-  "market.registrationRetrySucceeded": "已注册连接器类型：{types}。",
+  "market.registrationRetrySucceeded": "已注册插件能力：{types}。",
   "market.registrationRetryFailed":
-    "无法注册连接器类型：{types}。请查看插件错误和内核日志，解决问题后重试。",
+    "无法注册插件能力：{types}。请查看插件错误和内核日志，解决问题后重试。",
   "market.uninstallBlockedInstances": "以下连接实例阻止卸载：",
   "engine.unsignedPlugins":
     "已加载 {count} 个未签名的额外插件。它们与内核同进程运行。",

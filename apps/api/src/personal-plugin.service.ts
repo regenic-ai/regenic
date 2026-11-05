@@ -76,10 +76,13 @@ export class PersonalPluginService implements OnModuleDestroy {
     );
     const driverTypes = result?.driverTypes ?? [];
     const registeredDriverTypes = result?.registeredDriverTypes ?? [];
+    const executorSources = result?.executorSources ?? [];
+    const registeredExecutorSources = result?.registeredExecutorSources ?? [];
     const registered = plugin?.status === "loaded" &&
       !plugin.error &&
       driverTypes.length > 0 &&
-      registeredDriverTypes.length === driverTypes.length;
+      registeredDriverTypes.length === driverTypes.length &&
+      registeredExecutorSources.length === executorSources.length;
 
     return {
       package_name: packageName,
@@ -87,7 +90,12 @@ export class PersonalPluginService implements OnModuleDestroy {
       plugin_status: plugin?.status ?? "failed",
       driver_types: driverTypes,
       registered_driver_types: registeredDriverTypes,
-      error: registered ? null : plugin?.error ?? "One or more connector types are already registered by another plugin.",
+      executor_sources: executorSources,
+      registered_executor_sources: registeredExecutorSources,
+      error: registered
+        ? null
+        : plugin?.error ??
+          "One or more connector types or executor sources are already registered by another plugin.",
     };
   }
 
@@ -140,6 +148,7 @@ export class PersonalPluginService implements OnModuleDestroy {
       loaded_drivers: loaded.drivers,
       registered_drivers: loaded.registeredDrivers,
       loaded_executors: loaded.executors,
+      registered_executors: loaded.registeredExecutors,
     };
   }
 

@@ -953,6 +953,7 @@ export interface ConnectorMarketRelease {
   compatible: boolean;
   integrity: string;
   driver_exports: string[];
+  executor_exports: string[];
 }
 
 export interface ConnectorMarketItem {
@@ -998,6 +999,9 @@ export interface ConnectorInstallJob {
     registered: boolean;
     pending_restart?: boolean;
     driver_types: string[];
+    registered_driver_types: string[];
+    executor_sources: string[];
+    registered_executor_sources: string[];
     message: string | null;
   };
   error?: string;
