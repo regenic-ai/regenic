@@ -35,7 +35,7 @@ export const dshLocaleTables = defineLocaleTables({
     "setup.web.title": "Start the local web server",
     "setup.token.title": "Set a token if the server requires one",
     "setup.token.body":
-      "Set REGENIC_DSH_TOKEN, then fully quit and reopen the desktop.",
+      "Set REGENIC_DSH_TOKEN to the token printed by dsh web (not the full browser URL), then fully quit and reopen the desktop.",
     "setup.allSessions.title": "Leave Session ID empty to follow every session",
     "setup.mailbox.title": "Use a mailbox if you do not want the install id",
     "setup.mailbox.body": "CLI mode follows one mailbox.",
@@ -46,9 +46,13 @@ export const dshLocaleTables = defineLocaleTables({
     "probe.webMissing":
       "dsh must work in your terminal first. Then start dsh web --port 3080.",
     "probe.webDown": "Start dsh web --port 3080 first.",
+    "probe.webUnauthorized":
+      "dsh web rejected the token (HTTP 401). Set REGENIC_DSH_TOKEN to the token printed by dsh web (not the full browser URL), then restart the desktop.",
     "probe.webReady": "dsh web is reachable.",
     "probe.clusterDown":
       "Uses REGENIC_DSH_BASE_URL (cluster DNS, not a public URL)",
+    "probe.clusterUnauthorized":
+      "Cluster DSH rejected the token (HTTP 401). Verify REGENIC_DSH_TOKEN matches the configured DSH token, then restart the desktop.",
     "probe.clusterReady": "Cluster DSH is reachable.",
     "probe.cliMissing": "dsh must work in your terminal.",
     "probe.cliReady": "dsh is on PATH.",
@@ -92,7 +96,8 @@ export const dshLocaleTables = defineLocaleTables({
     "setup.install.body": "终端里的二进制必须先能用，web 或 CLI 传输才能工作。",
     "setup.web.title": "启动本机 web 服务",
     "setup.token.title": "如果服务器要求，设置 token",
-    "setup.token.body": "设置 REGENIC_DSH_TOKEN，然后完全退出并重新打开桌面。",
+    "setup.token.body":
+      "将 REGENIC_DSH_TOKEN 设为 dsh web 输出的 token（不要填完整浏览器 URL），然后完全退出并重新打开桌面。",
     "setup.allSessions.title": "Session ID 留空则跟全部会话",
     "setup.mailbox.title": "不想用安装 id 就填 mailbox",
     "setup.mailbox.body": "CLI 模式只跟一个 mailbox。",
@@ -103,9 +108,13 @@ export const dshLocaleTables = defineLocaleTables({
     "probe.webMissing":
       "先让终端里的 dsh 能用。然后运行 dsh web --port 3080。",
     "probe.webDown": "先启动 dsh web --port 3080。",
+    "probe.webUnauthorized":
+      "dsh web 拒绝了 token（HTTP 401）。请将 REGENIC_DSH_TOKEN 设为 dsh web 输出的 token（不要填完整浏览器 URL），然后重启桌面端。",
     "probe.webReady": "dsh web 可访问。",
     "probe.clusterDown":
       "使用 REGENIC_DSH_BASE_URL（集群 DNS，不是公网地址）",
+    "probe.clusterUnauthorized":
+      "集群 DSH 拒绝了 token（HTTP 401）。请设置或核对 REGENIC_DSH_TOKEN，然后重启桌面端。",
     "probe.clusterReady": "集群 DSH 可访问。",
     "probe.cliMissing": "终端里的 dsh 必须能用。",
     "probe.cliReady": "dsh 已在 PATH 上。",

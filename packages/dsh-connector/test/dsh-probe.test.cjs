@@ -23,6 +23,15 @@ describe("DSH catalog probe", () => {
       dshWebCatalogHint({ up: true, command_present: true, hosted: false }),
       "probe.webReady",
     );
+    assert.equal(
+      dshWebCatalogHint({
+        up: true,
+        auth_required: true,
+        command_present: true,
+        hosted: false,
+      }),
+      "probe.webUnauthorized",
+    );
     assert.deepEqual(
       dshWebCatalogHint({
         up: false,
@@ -104,16 +113,26 @@ describe("DSH catalog probe", () => {
     resetDshProbeCache();
   });
 
-  it("treats an HTTP error from dsh web as reachable", async () => {
+  it("reports an authentication hint when dsh web rejects the configured token", async () => {
     resetDshProbeCache();
+    const fetches = [];
     const probe = await probeDshCatalog({
-      env: {},
+      env: { REGENIC_DSH_TOKEN: "test-token" },
       now: () => 1,
-      async fetch() {
+      async fetch(url, init) {
+        fetches.push({ url: String(url), headers: init.headers });
         return new Response("no", { status: 401 });
       },
     });
-    assert.equal(probe.services["dsh-web"].ready, true);
+    assert.equal(probe.services["dsh-web"].ready, false);
+    assert.equal(
+      probe.services["dsh-web"].hint,
+      "probe.webUnauthorized",
+    );
+    assert.equal(
+      fetches[0].headers.authorization,
+      "Bearer test-token",
+    );
     resetDshProbeCache();
   });
 });
