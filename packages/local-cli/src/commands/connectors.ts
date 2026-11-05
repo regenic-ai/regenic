@@ -10,6 +10,7 @@ import {
   dshSessionPluginConfigFromInstallation,
   dshStreamKey,
   type DshFetch,
+  type DshMuxOpen,
   type DshSpawn,
 } from "@regenic/dsh-connector";
 import {
@@ -92,6 +93,7 @@ export async function syncDsh(
   createId: () => string,
   spawn?: DshSpawn,
   fetchOverride?: DshFetch,
+  muxOpenOverride?: DshMuxOpen,
 ): Promise<void> {
   const installationId = requireOption(options, "installation");
   await withLocalHost({
@@ -113,6 +115,7 @@ export async function syncDsh(
         env,
         spawn,
         fetch: fetchOverride,
+        mux_open: muxOpenOverride,
         access_token: env.REGENIC_DSH_TOKEN,
         now,
         createId,
@@ -168,6 +171,7 @@ export async function sendDsh(
   createId: () => string,
   spawn?: DshSpawn,
   fetchOverride?: DshFetch,
+  muxOpenOverride?: DshMuxOpen,
 ): Promise<void> {
   const installationId = requireOption(options, "installation");
   const text = requireOption(options, "text");
@@ -186,6 +190,7 @@ export async function sendDsh(
         env,
         spawn,
         fetch: fetchOverride,
+        mux_open: muxOpenOverride,
         access_token: env.REGENIC_DSH_TOKEN,
         now,
         createId,

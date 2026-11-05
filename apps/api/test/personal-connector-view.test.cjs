@@ -175,7 +175,7 @@ describe("connector catalog hints", () => {
     );
     assert.deepEqual(
       dsh.prerequisites.map((item) => item.key),
-      ["dsh-web", "dsh-cli", "REGENIC_DSH_TOKEN"],
+      ["dsh-web", "dsh-cli"],
     );
     assert.equal(dsh.prerequisites[1].visible_when.value, "cli");
     assert.equal(dsh.prerequisites[0].required, false);

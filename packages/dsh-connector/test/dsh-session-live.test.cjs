@@ -1,11 +1,14 @@
 const assert = require("node:assert/strict");
+const { createServer } = require("node:http");
 const { describe, it } = require("node:test");
+const { WebSocketServer } = require("ws");
 const {
   DshMuxSubscriber,
   DshPromptStore,
   DshSessionLiveHub,
   DshSessionPollConnector,
   dshMuxFrameWaits,
+  openDshMuxSocket,
   sessionEventFromMuxFrame,
 } = require("../dist");
 
@@ -94,7 +97,15 @@ describe("DSH mux wait", () => {
     const hub = new DshSessionLiveHub();
     const store = new DshPromptStore();
     const mux = new DshMuxSubscriber(
-      { muxUrl: () => "ws://127.0.0.1:3080/api/events.mux", accessToken: () => undefined },
+      {
+        async muxConnection() {
+          return {
+            url: "ws://127.0.0.1:3080/api/remote.mux",
+            cookie: "dsh-auth-test=api-cookie",
+          };
+        },
+        invalidateConnection() {},
+      },
       store,
       async () => ({ close() {} }),
       hub,
@@ -130,5 +141,37 @@ describe("DSH mux wait", () => {
     dispose();
     mux.stop();
     hub.stop();
+  });
+
+  it("sends the API cookie on the official Remote Mux WebSocket", async () => {
+    const server = createServer();
+    const mux = new WebSocketServer({ noServer: true });
+    let cookie;
+    let closed;
+    const closedPromise = new Promise((resolve) => {
+      closed = resolve;
+    });
+    server.on("upgrade", (request, socket, head) => {
+      cookie = request.headers.cookie;
+      mux.handleUpgrade(request, socket, head, (client) => {
+        client.close();
+      });
+    });
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    try {
+      const client = await openDshMuxSocket({
+        url: `ws://127.0.0.1:${address.port}/api/remote.mux`,
+        cookie: "dsh-auth-test=api-cookie",
+        onMessage() {},
+        onClose: closed,
+      });
+      await closedPromise;
+      client.close();
+      assert.equal(cookie, "dsh-auth-test=api-cookie");
+    } finally {
+      await new Promise((resolve) => mux.close(resolve));
+      await new Promise((resolve) => server.close(resolve));
+    }
   });
 });

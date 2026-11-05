@@ -8,6 +8,8 @@ import {
   type LocalNetworkKind,
   type TcpConnect,
 } from "@regenic/connector-contract";
+import { DshApiError } from "./dsh-cli-client";
+import { DshWebRpcClient, type DshFetch } from "./dsh-rpc-client";
 import { resolveOperatorDshBaseUrl } from "./dsh-url";
 
 const PROBE_TTL_MS = 20_000;
@@ -29,6 +31,7 @@ export interface DshWebProbe {
   hosted: boolean;
   up: boolean;
   auth_required?: boolean;
+  api_incompatible?: boolean;
   command_present: boolean;
   network_kind?: LocalNetworkKind;
 }
@@ -36,6 +39,11 @@ export interface DshWebProbe {
 let cache: { at: number; probe: DshWebProbe } | null = null;
 
 export function dshWebCatalogHint(input: DshWebProbe): CopyRef {
+  if (input.api_incompatible) {
+    return input.hosted
+      ? "probe.clusterIncompatible"
+      : "probe.webIncompatible";
+  }
   if (input.auth_required) {
     return input.hosted
       ? "probe.clusterUnauthorized"
@@ -114,14 +122,14 @@ async function runDshWebProbe(options: {
 }): Promise<DshWebProbe> {
   const env = options.env ?? process.env;
   const hosted = Boolean(env.REGENIC_DSH_BASE_URL?.trim());
-  const url = dshProbeUrl(env);
-  const reached = await probeLocalService(url, options.fetch ?? fetch, env);
-  const networkKind = reached.up
+  const baseUrl = dshProbeUrl(env);
+  const reached = await probeLocalService(baseUrl, options.fetch ?? fetch, env);
+  const networkKind = reached.up || reached.api_incompatible
     ? "ok"
     : (
         await watchLocalFetchFailure({
           error: reached.error ?? new Error("fetch failed"),
-          url,
+          url: baseUrl,
           env,
           connect: options.connect,
         })
@@ -135,12 +143,13 @@ async function runDshWebProbe(options: {
     up: reached.up,
     auth_required: reached.auth_required,
     command_present: commandPresent,
+    api_incompatible: reached.api_incompatible,
     network_kind: networkKind,
   };
 }
 
 export function dshWebProbeUrl(baseUrl: string): string {
-  return `${baseUrl.replace(/\/+$/, "")}/api/session.list`;
+  return `${baseUrl.replace(/\/+$/, "")}/api/session/list`;
 }
 
 function dshProbeUrl(env: NodeJS.ProcessEnv): string {
@@ -156,31 +165,33 @@ function dshProbeUrl(env: NodeJS.ProcessEnv): string {
 }
 
 async function probeLocalService(
-  url: string,
+  baseUrl: string,
   fetchImpl: typeof fetch,
   env: NodeJS.ProcessEnv,
-): Promise<{ up: boolean; auth_required?: boolean; error?: unknown }> {
+): Promise<{
+  up: boolean;
+  auth_required?: boolean;
+  api_incompatible?: boolean;
+  error?: unknown;
+}> {
   try {
     const token = env.REGENIC_DSH_TOKEN?.trim();
-    const headers: Record<string, string> = {
-      "content-type": "application/json",
-    };
-    if (token) {
-      headers.authorization = "Bearer ".concat(token);
-    }
-    const response = await fetchImpl(dshWebProbeUrl(url), {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        type: "client-request",
-        rpcId: "catalog-probe",
-        method: "session.list",
-        payload: {},
-      }),
-      signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
-    });
-    return { up: true, auth_required: response.status === 401 };
+    const fetch: DshFetch = (url, init) =>
+      fetchImpl(url, { ...init, signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) });
+    await new DshWebRpcClient({
+      base_url: baseUrl,
+      access_token: token,
+      fetch,
+      createId: () => "catalog-probe",
+    }).sessionList();
+    return { up: true };
   } catch (error) {
+    if (error instanceof DshApiError && error.code === "unauthorized") {
+      return { up: true, auth_required: true };
+    }
+    if (error instanceof DshApiError && error.code === "not_found") {
+      return { up: false, api_incompatible: true };
+    }
     return { up: false, error };
   }
 }

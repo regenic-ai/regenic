@@ -61,6 +61,11 @@ export interface CommandSyncRun {
   now: string;
 }
 
+export interface DeleteSyncRun {
+  id: string;
+  org_id: string;
+}
+
 export type SyncWorkStatus =
   | "pending"
   | "running"
@@ -170,6 +175,7 @@ export interface SyncWorkStore {
   getSyncRun(id: string, orgId: string): Promise<SyncRun | null>;
   listSyncRuns(query: ListSyncRunsQuery): Promise<SyncRun[]>;
   commandSyncRun(input: CommandSyncRun): Promise<SyncRun | null>;
+  deleteSyncRun(input: DeleteSyncRun): Promise<boolean>;
   enqueueSyncWork(input: EnqueueSyncWork): Promise<SyncWorkRecord>;
   enqueueSyncWorkMany(inputs: readonly EnqueueSyncWork[]): Promise<number>;
   claimSyncWork(input: ClaimSyncWork): Promise<SyncWorkRecord[]>;

@@ -1297,34 +1297,44 @@ describe("regenic-local", () => {
       "dsh-sync", "--database", database, "--blob-root", blobRoot,
       "--installation", "dsh-1",
     ], {
-      async fetch(url, init) {
-        assert.equal(url, "http://127.0.0.1:3080/api/session.history");
-        const body = JSON.parse(init.body);
-        assert.equal(body.payload.sessionId, "sess-1");
+      async fetch(url) {
+        throw new Error(`unexpected HTTP call ${url}`);
+      },
+      async mux_open(input) {
+        assert.equal(input.url, "ws://127.0.0.1:3080/api/remote.mux");
         return {
-          ok: true,
-          status: 200,
-          async json() {
-            return {
-              type: "server-response",
-              rpcId: body.rpcId,
-              result: {
-                ok: true,
+          send(data) {
+            const frame = JSON.parse(data);
+            if (frame.type !== "open") {
+              return;
+            }
+            assert.equal(frame.endpoint, "session/follow");
+            assert.equal(frame.payload.args.request.address.sessionId, "sess-1");
+            queueMicrotask(() => {
+              input.onMessage(JSON.stringify({
+                type: "item",
+                streamId: frame.streamId,
                 value: {
+                  type: "snapshot",
+                  cursor: 2,
                   hasMore: false,
-                  events: [{
-                    type: "user/message",
-                    seq: 2,
-                    time: 1_724_208_000_000,
-                    data: {
-                      content: [{ type: "text", text: "Hello" }],
-                      source: { kind: "user" },
+                  records: [{
+                    type: "event",
+                    event: {
+                      type: "user/message",
+                      seq: 2,
+                      time: 1_724_208_000_000,
+                      data: {
+                        content: [{ type: "text", text: "Hello" }],
+                        source: { kind: "user" },
+                      },
                     },
                   }],
                 },
-              },
-            };
+              }));
+            });
           },
+          close() {},
         };
       },
     });

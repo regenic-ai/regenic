@@ -96,6 +96,7 @@ import type {
   SyncRun,
   ListSyncRunsQuery,
   CommandSyncRun,
+  DeleteSyncRun,
   EnqueueSyncWork,
   SyncWorkRecord,
   ClaimSyncWork,
@@ -308,6 +309,7 @@ import {
   createInstallation,
   createSyncRun,
   deleteInstallation,
+  deleteSyncRun,
   enqueueSyncWork,
   enqueueSyncWorkMany,
   findInstallation,
@@ -1544,6 +1546,11 @@ export class SqliteAuthorityStore
   async commandSyncRun(input: CommandSyncRun): Promise<SyncRun | null> {
     this.assertWritable();
     return commandSyncRun(this.database, input);
+  }
+
+  async deleteSyncRun(input: DeleteSyncRun): Promise<boolean> {
+    this.assertWritable();
+    return deleteSyncRun(this.database, input);
   }
 
   async enqueueSyncWork(input: EnqueueSyncWork): Promise<SyncWorkRecord> {

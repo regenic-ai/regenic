@@ -37,6 +37,7 @@ import {
   validateSyncRunOptions,
   type ClaimSyncWork,
   type CommandSyncRun,
+  type DeleteSyncRun,
   type EnqueueSyncWork,
   type ListSyncRunsQuery,
   type NewSyncRun,
@@ -439,6 +440,26 @@ export class MemoryConnectorRuntimeStore implements ConnectorRuntimeStore {
     }
     run.updated_at = input.now;
     return copySyncRun(run);
+  }
+
+  async deleteSyncRun(input: DeleteSyncRun): Promise<boolean> {
+    const run = this.syncRuns.get(input.id);
+    if (
+      !run ||
+      run.org_id !== input.org_id ||
+      (run.status !== "succeeded" &&
+        run.status !== "failed" &&
+        run.status !== "cancelled")
+    ) {
+      return false;
+    }
+    this.syncRuns.delete(input.id);
+    for (const work of this.syncWork.values()) {
+      if (work.run_id === input.id) {
+        work.run_id = undefined;
+      }
+    }
+    return true;
   }
 
   async enqueueSyncWork(input: EnqueueSyncWork): Promise<SyncWorkRecord> {

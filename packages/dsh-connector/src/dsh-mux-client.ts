@@ -1,4 +1,10 @@
 import { DshWebRpcClient } from "./dsh-rpc-client";
+import {
+  dshMuxOpenFrame,
+  openDshMuxSocket,
+  type DshMuxOpen,
+  type DshMuxSocket,
+} from "./dsh-mux-socket";
 import { DshPromptStore, muxFrameFromMessage } from "./dsh-prompt-store";
 import {
   dshMuxFrameWaits,
@@ -6,16 +12,10 @@ import {
   type DshSessionLiveHub,
 } from "./dsh-session-live";
 
-export interface DshMuxSocket {
-  close(): void;
-}
+export { openDshMuxSocket, type DshMuxOpen, type DshMuxSocket };
 
-export type DshMuxOpen = (input: {
-  url: string;
-  access_token?: string;
-  onMessage: (data: string) => void;
-  onClose: () => void;
-}) => Promise<DshMuxSocket>;
+/** Host-wide live stream: one projection frame per Session state change. */
+export const DSH_CONTROL_STREAM_ID = "regenic-session-control";
 
 export class DshMuxSubscriber {
   private stopped = false;
@@ -52,6 +52,9 @@ export class DshMuxSubscriber {
     } catch {
       return;
     }
+    if (this.acceptControlFrame(parsed)) {
+      return;
+    }
     const envelope = muxFrameFromMessage(parsed);
     if (!envelope) {
       return;
@@ -73,20 +76,43 @@ export class DshMuxSubscriber {
     }
   }
 
+  /** `session/control` frames wake the matching Session poll. */
+  private acceptControlFrame(parsed: unknown): boolean {
+    if (!isObject(parsed) || parsed.streamId !== DSH_CONTROL_STREAM_ID) {
+      return false;
+    }
+    if (parsed.type !== "item" || !isObject(parsed.value)) {
+      return true;
+    }
+    const frame = parsed.value;
+    if (frame.type === "baseline") {
+      this.live?.notifyReconnect();
+    } else if (frame.type === "projection" && typeof frame.sessionId === "string") {
+      this.live?.notify(frame.sessionId);
+    }
+    return true;
+  }
+
   private async connect(): Promise<void> {
     if (this.stopped) {
       return;
     }
     try {
+      const connection = await this.client.muxConnection();
       this.socket = await this.open({
-        url: this.client.muxUrl(),
-        access_token: this.client.accessToken(),
+        url: connection.url,
+        cookie: connection.cookie,
         onMessage: (data) => this.acceptMessage(data),
-        onClose: () => this.scheduleReconnect(),
+        onClose: () => {
+          this.client.invalidateConnection();
+          this.scheduleReconnect();
+        },
       });
+      this.socket.send(dshMuxOpenFrame(DSH_CONTROL_STREAM_ID, "session/control", {}));
       this.delayMs = 1_000;
       this.live?.notifyReconnect();
     } catch {
+      this.client.invalidateConnection();
       this.scheduleReconnect();
     }
   }
@@ -106,59 +132,6 @@ export class DshMuxSubscriber {
   }
 }
 
-export async function openDshMuxSocket(input: {
-  url: string;
-  access_token?: string;
-  onMessage: (data: string) => void;
-  onClose: () => void;
-}): Promise<DshMuxSocket> {
-  const WebSocketCtor = (globalThis as {
-    WebSocket?: new (url: string) => {
-      addEventListener?(type: string, listener: (event: { data?: unknown }) => void): void;
-      onmessage?: ((event: { data?: unknown }) => void) | null;
-      onclose?: (() => void) | null;
-      onerror?: (() => void) | null;
-      close(): void;
-    };
-  }).WebSocket;
-  if (!WebSocketCtor) {
-    throw new Error("WebSocket is not available");
-  }
-  const socket = new WebSocketCtor(muxSocketUrl(input.url, input.access_token));
-  let closed = false;
-  const notifyClose = () => {
-    if (closed) {
-      return;
-    }
-    closed = true;
-    input.onClose();
-  };
-  const deliver = (event: { data?: unknown }) => {
-    if (typeof event.data === "string") {
-      input.onMessage(event.data);
-    }
-  };
-  if (typeof socket.addEventListener === "function") {
-    socket.addEventListener("message", deliver);
-    socket.addEventListener("close", notifyClose);
-    socket.addEventListener("error", notifyClose);
-  } else {
-    socket.onmessage = deliver;
-    socket.onclose = notifyClose;
-    socket.onerror = notifyClose;
-  }
-  return {
-    close() {
-      socket.close();
-    },
-  };
-}
-
-export function muxSocketUrl(url: string, accessToken?: string): string {
-  const token = accessToken?.trim() ?? "";
-  if (!token) {
-    return url;
-  }
-  const join = url.includes("?") ? "&" : "?";
-  return `${url}${join}access_token=${encodeURIComponent(token)}`;
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

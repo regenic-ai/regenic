@@ -154,6 +154,35 @@ describe("SQLite durable sync work", () => {
     store.close();
   });
 
+  it("deletes only terminal sync runs and detaches retained work rows", async () => {
+    const root = await createRoot();
+    const store = new SqliteAuthorityStore(join(root, "authority.db"));
+    await seedInstallation(store);
+    await seedRun(store);
+    await seedWork(store);
+
+    assert.equal(
+      await store.deleteSyncRun({ id: "run-1", org_id: installation.org_id }),
+      false,
+    );
+    await store.commandSyncRun({
+      id: "run-1",
+      org_id: installation.org_id,
+      command: "cancel",
+      now: "2026-09-21T00:00:01.000Z",
+    });
+    assert.equal(
+      await store.deleteSyncRun({ id: "run-1", org_id: installation.org_id }),
+      true,
+    );
+    assert.equal(await store.getSyncRun("run-1", installation.org_id), null);
+    assert.deepEqual(
+      await store.listSyncRuns({ org_id: installation.org_id }),
+      [],
+    );
+    store.close();
+  });
+
   it("lists selected cursors in one read", async () => {
     const root = await createRoot();
     const store = new SqliteAuthorityStore(join(root, "authority.db"));

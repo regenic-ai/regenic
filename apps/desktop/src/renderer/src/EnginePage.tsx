@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import {
   commandSyncRun,
+  deleteSyncRun,
   installConnector,
   installExecutor,
   retryConnectorQuarantines,
@@ -55,6 +56,7 @@ export function EnginePage({
     null,
   );
   const [actionError, setActionError] = useState<string | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const actionLock = useRef(false);
 
   const runAction = async (id: string, action: () => Promise<void>) => {
@@ -226,6 +228,9 @@ export function EnginePage({
           <div className="connector-kind">
             {visibleRuns.map((run) => {
               const completed = run.completed_work + run.failed_work;
+              const installation = engine.installations.find(
+                (item) => item.id === run.installation_id,
+              );
               const progress =
                 run.total_work > 0
                   ? `${completed}/${run.total_work}`
@@ -235,6 +240,16 @@ export function EnginePage({
                   <div>
                     <strong>{t(`sync.mode.${syncModeKey(run.mode)}`)}</strong>
                     <div className="install-meta">
+                      <span className="muted">
+                        {installation?.channel_label ?? installation?.label ?? run.installation_id}
+                      </span>
+                      <time
+                        className="muted"
+                        dateTime={run.created_at}
+                        title={new Date(run.created_at).toLocaleString()}
+                      >
+                        {t("sync.started", { when: formatChatTime(run.started_at ?? run.created_at) })}
+                      </time>
                       <span className={`chip ${run.status === "running" ? "running" : ""}`}>
                         {t(`sync.status.${run.status}`)}
                       </span>
@@ -285,6 +300,42 @@ export function EnginePage({
                         }
                       >
                         {t("sync.cancel")}
+                      </button>
+                    ) : null}
+                    {isDeletableRun(run.status) && confirmDeleteId === run.id ? (
+                      <button
+                        type="button"
+                        className="ghost"
+                        onClick={() => setConfirmDeleteId(null)}
+                      >
+                        {t("sync.cancel")}
+                      </button>
+                    ) : null}
+                    {isDeletableRun(run.status) ? (
+                      <button
+                        type="button"
+                        className="ghost danger"
+                        disabled={busyId === `run:${run.id}`}
+                        onClick={() => {
+                          if (confirmDeleteId !== run.id) {
+                            setConfirmDeleteId(run.id);
+                            return;
+                          }
+                          void (async () => {
+                            const started = await runAction(`run:${run.id}`, async () => {
+                              await deleteSyncRun(run.id);
+                            });
+                            if (started) {
+                              setConfirmDeleteId(null);
+                            } else if (actionLock.current) {
+                              setActionError(t("sync.deleteBusy"));
+                            }
+                          })();
+                        }}
+                      >
+                        {confirmDeleteId === run.id
+                          ? t("sync.deleteConfirm")
+                          : t("sync.delete")}
                       </button>
                     ) : null}
                   </div>
@@ -577,4 +628,8 @@ function syncModeKey(
     return "archive";
   }
   return "quick";
+}
+
+function isDeletableRun(status: string): boolean {
+  return status === "succeeded" || status === "failed" || status === "cancelled";
 }

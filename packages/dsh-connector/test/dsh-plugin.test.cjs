@@ -337,7 +337,7 @@ describe("dshSessionPlugin", () => {
     const previous = globalThis.fetch;
     globalThis.fetch = async (_url, init) => {
       const body = JSON.parse(String(init?.body ?? "{}"));
-      if (body.method === "session.list") {
+      if (body.method === "session/list") {
         listed += 1;
       }
       return {
@@ -403,11 +403,26 @@ describe("dshSessionPlugin", () => {
     };
     let listed = 0;
     const authorizations = [];
+    const cookies = [];
     const previous = globalThis.fetch;
     globalThis.fetch = async (_url, init) => {
       authorizations.push(init.headers.authorization);
+      cookies.push(init.headers.cookie);
+      if (String(_url).includes("/connect?")) {
+        return {
+          ok: false,
+          status: 302,
+          headers: new Headers({
+            location: "./api/remote.mux",
+            "set-cookie": "dsh-auth-test=api-cookie; Path=/",
+          }),
+          async json() {
+            return {};
+          },
+        };
+      }
       const body = JSON.parse(String(init?.body ?? "{}"));
-      if (body.method === "session.list") {
+      if (body.method === "session/list") {
         listed += 1;
       }
       return {
@@ -464,7 +479,8 @@ describe("dshSessionPlugin", () => {
       );
       assert.equal(page.complete, true);
       assert.equal(listed, 1);
-      assert.deepEqual(authorizations, ["Bearer installation-token"]);
+      assert.deepEqual(authorizations, [undefined, undefined]);
+      assert.deepEqual(cookies, [undefined, "dsh-auth-test=api-cookie"]);
       const streams = await dshSessionDriver.resolveStreams(installation, host, {});
       assert.deepEqual(streams, []);
       assert.equal(listed, 1);
@@ -505,11 +521,11 @@ describe("dshSessionPlugin", () => {
     });
     assert.deepEqual(created, { source: "dsh", target: "sess-new" });
     assert.equal(
-      methods.some((method) => String(method).includes("session.create")),
+      methods.some((method) => String(method).includes("session/create")),
       true,
     );
     assert.equal(
-      methods.some((method) => String(method).includes("session.prompt")),
+      methods.some((method) => String(method).includes("session/prompt")),
       false,
     );
 
@@ -542,6 +558,8 @@ describe("dshSessionPlugin", () => {
       hosted.fields.some((field) => field.key === "transport"),
       false,
     );
-    assert.equal(hosted.fields.find((field) => field.key === "token").secret, true);
+    const hostedToken = hosted.fields.find((field) => field.key === "token");
+    assert.equal(hostedToken.secret, true);
+    assert.equal(hostedToken.visible_when, undefined);
   });
 });

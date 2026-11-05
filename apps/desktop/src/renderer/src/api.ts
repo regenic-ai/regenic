@@ -764,6 +764,23 @@ export async function commandSyncRun(
   return body as SyncRunView;
 }
 
+export async function deleteSyncRun(id: string): Promise<void> {
+  const response = await fetch(
+    `${origin()}/v1/me/sync-runs/${encodeURIComponent(id)}`,
+    { method: "DELETE" },
+  );
+  const body = (await response.json()) as
+    | { deleted?: boolean }
+    | { error?: { message?: string } };
+  if (!response.ok || !("deleted" in body) || body.deleted !== true) {
+    throw new Error(
+      "error" in body && body.error?.message
+        ? body.error.message
+        : `sync-run ${response.status}`,
+    );
+  }
+}
+
 export async function retryConnectorQuarantines(
   installationId: string,
 ): Promise<SyncRunView> {
