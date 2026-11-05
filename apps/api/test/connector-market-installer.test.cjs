@@ -465,4 +465,121 @@ describe("ConnectorMarketInstaller", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("serializes uninstall against a concurrent market update", async () => {
+    const root = await mkdtemp(join(tmpdir(), "regenic-market-uninstall-race-"));
+    try {
+      const name = `${packageName}-uninstall-race`;
+      const { archive, integrity } = await setupPackage(root, { name });
+      const pluginDirectory = join(root, "plugins");
+      const plugins = new PersonalPluginService(
+        new ChannelDriverRegistry(),
+        new LocalExecutorPluginRegistry(),
+      );
+      const market = {
+        getMarket: async () => ({
+          configured: true,
+          title: "Test market",
+          connectors: [{
+            name,
+            versions: [{
+              version,
+              engines_regenic: "1.0",
+              compatible: true,
+              integrity,
+              driver_exports: drivers,
+            }, {
+              version: "1.1.0",
+              engines_regenic: "1.0",
+              compatible: true,
+              integrity,
+              driver_exports: drivers,
+            }],
+          }],
+        }),
+      };
+      let releaseInstallations;
+      let signalInstallationsRead;
+      const installationsRead = new Promise((resolve) => {
+        signalInstallationsRead = resolve;
+      });
+      const installationGate = new Promise((resolve) => {
+        releaseInstallations = resolve;
+      });
+      const runtime = {
+        requireHost: () => ({
+          get: () => ({
+            listInstallations: async () => {
+              signalInstallationsRead();
+              await installationGate;
+              return [];
+            },
+          }),
+        }),
+        orgId: () => "test-org",
+      };
+      const installer = new ConnectorMarketInstaller(market, plugins, runtime);
+      await installer.install(
+        { package_name: name, version, confirmed: true },
+        registryFetch({ archive, integrity, name }),
+        { REGENIC_PLUGIN_DIR: pluginDirectory },
+      );
+
+      const uninstall = installer.uninstall(name, { REGENIC_PLUGIN_DIR: pluginDirectory });
+      await installationsRead;
+      await assert.rejects(
+        installer.startUpdate(
+          { package_name: name, version: "1.1.0", confirmed: true },
+          registryFetch({ archive, integrity, name, packageVersion: "1.1.0" }),
+          { REGENIC_PLUGIN_DIR: pluginDirectory },
+        ),
+        (error) => error.getStatus() === 409,
+      );
+      releaseInstallations();
+      const result = await uninstall;
+      assert.equal(result.pending_restart, true);
+
+      const entries = await readdir(pluginDirectory);
+      assert.equal(entries.some((entry) => entry.startsWith(".regenic-market-transaction-")), false);
+      assert.equal(
+        await readFile(
+          join(
+            pluginDirectory,
+            `market-${createHash("sha256").update(name).digest("hex").slice(0, 24)}`,
+            ".regenic-market-uninstall.json",
+          ),
+          "utf8",
+        )
+          .then((text) => JSON.parse(text).package_name),
+        name,
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("cleans abandoned install staging directories on startup and preserves version history", async () => {
+    const root = await mkdtemp(join(tmpdir(), "regenic-market-staging-recovery-"));
+    try {
+      const pluginDirectory = join(root, "plugins");
+      const abandonedStage = join(pluginDirectory, ".regenic-market-Ab3xYz");
+      const versionHistory = join(
+        pluginDirectory,
+        `.regenic-market-versions-${createHash("sha256").update(packageName).digest("hex").slice(0, 24)}`,
+      );
+      await mkdir(abandonedStage, { recursive: true });
+      await writeFile(join(abandonedStage, "partial.tgz"), "partial");
+      await mkdir(versionHistory, { recursive: true });
+      await writeFile(join(versionHistory, "retained-version"), "keep");
+
+      createChannelDriverRegistry({ REGENIC_PLUGIN_DIR: pluginDirectory });
+
+      const entries = await readdir(pluginDirectory);
+      assert.equal(entries.includes(".regenic-market-Ab3xYz"), false);
+      assert.equal(entries.some((entry) => entry.startsWith(".regenic-market-versions-")), true);
+      assert.equal(await readFile(join(versionHistory, "retained-version"), "utf8"), "keep");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });

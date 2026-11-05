@@ -447,6 +447,14 @@ export function completePendingMarketVersionChanges(env: NodeJS.ProcessEnv = pro
       rmSync(path.join(pluginDir, entry.name), { recursive: true, force: true });
     }
   }
+  for (const entry of readdirSync(pluginDir, { withFileTypes: true })) {
+    if (
+      entry.isDirectory() &&
+      /^\.regenic-market-[A-Za-z0-9_-]{6}$/u.test(entry.name)
+    ) {
+      rmSync(path.join(pluginDir, entry.name), { recursive: true, force: true });
+    }
+  }
 }
 
 export function listPluginInventory(): PluginInventoryItem[] {
@@ -474,7 +482,8 @@ export function markMarketPluginRemovalPending(
     !item?.path ||
     !pluginDirectory ||
     path.resolve(path.dirname(item.path)) !== path.resolve(pluginDirectory) ||
-    !isMarketInstallPath(item.path, packageName)
+    !isMarketInstallPath(item.path, packageName) ||
+    existsSync(path.join(item.path, ".regenic-market-uninstall.json"))
   ) {
     throw new Error("Market-managed connector package directory was not found");
   }
@@ -540,6 +549,8 @@ export function beginMarketVersionChange(
     !pluginDirectory ||
     path.resolve(path.dirname(item.path)) !== path.resolve(pluginDirectory) ||
     !isMarketInstallPath(item.path, change.package_name) ||
+    item.status === "uninstall_pending" ||
+    existsSync(path.join(item.path, ".regenic-market-uninstall.json")) ||
     change.from_version !== item.version ||
     !isVersion(change.to_version) ||
     !isSafeTransaction(change, pluginDirectory)

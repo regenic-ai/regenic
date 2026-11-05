@@ -515,30 +515,43 @@ export class ConnectorMarketInstaller {
         error: { code: "market_connector_version_change_pending", message: "Restart the API to finish the pending version change before uninstalling." },
       });
     }
+    if (item.status === "uninstall_pending") {
+      throw new ConflictException({
+        error: { code: "market_connector_removal_pending", message: "Restart the API to finish the pending connector removal." },
+      });
+    }
     const pluginDirectory = ensurePluginDirectory(env);
     if (!pluginDirectory || path.resolve(path.dirname(item.path!)) !== path.resolve(pluginDirectory)) {
       throw new ServiceUnavailableException({
         error: { code: "plugin_directory_unavailable", message: "The local connector directory is unavailable." },
       });
     }
-    const activeInstallations = await this.runtime.requireHost()
-      .get("authority")
-      .listInstallations(this.runtime.orgId());
-    const conflicts = activeInstallations.filter((installation) =>
-      item.drivers.includes(installation.connector_type),
-    );
-    if (conflicts.length > 0) {
-      throw new ConflictException({
-        error: {
-          code: "connector_instances_must_be_removed",
-          message: "Remove all connector instances before uninstalling this package.",
-          connector_types: [...new Set(conflicts.map((item) => item.connector_type))],
-          installation_count: conflicts.length,
-        },
-      });
+    const operationId = `uninstall:${randomUUID()}`;
+    this.activeByPackage.set(packageName, operationId);
+    try {
+      const activeInstallations = await this.runtime.requireHost()
+        .get("authority")
+        .listInstallations(this.runtime.orgId());
+      const conflicts = activeInstallations.filter((installation) =>
+        item.drivers.includes(installation.connector_type),
+      );
+      if (conflicts.length > 0) {
+        throw new ConflictException({
+          error: {
+            code: "connector_instances_must_be_removed",
+            message: "Remove all connector instances before uninstalling this package.",
+            connector_types: [...new Set(conflicts.map((item) => item.connector_type))],
+            installation_count: conflicts.length,
+          },
+        });
+      }
+      this.plugins.markMarketRemovalPending(packageName, env);
+      return { package_name: packageName, pending_restart: true, removed: false };
+    } finally {
+      if (this.activeByPackage.get(packageName) === operationId) {
+        this.activeByPackage.delete(packageName);
+      }
     }
-    this.plugins.markMarketRemovalPending(packageName, env);
-    return { package_name: packageName, pending_restart: true, removed: false };
   }
 
   private async loadJobs(env: NodeJS.ProcessEnv): Promise<void> {
