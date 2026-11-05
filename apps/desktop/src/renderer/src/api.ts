@@ -547,7 +547,18 @@ export async function fetchConnectorMarket(
   return {
     configured: market.configured === true,
     title: typeof market.title === "string" ? market.title : null,
-    connectors: Array.isArray(market.connectors) ? market.connectors : [],
+    connectors: Array.isArray(market.connectors)
+      ? market.connectors.map((item) => ({
+          ...item,
+          versions: Array.isArray(item.versions)
+            ? item.versions.map((release) => ({
+                ...release,
+                driver_exports: stringList(release.driver_exports),
+                executor_exports: stringList(release.executor_exports),
+              }))
+            : [],
+        }))
+      : [],
   };
 }
 
@@ -577,6 +588,8 @@ export interface ConnectorMarketRegistrationResult {
   plugin_status: string;
   driver_types: string[];
   registered_driver_types: string[];
+  executor_sources: string[];
+  registered_executor_sources: string[];
   error: string | null;
 }
 

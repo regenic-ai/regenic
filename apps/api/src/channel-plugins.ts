@@ -24,6 +24,8 @@ const successfulExtraSpecs = new Set<string>();
 const inventoryBySpec = new Map<string, PluginInventoryItem>();
 const extraDriverOwnerByType = new Map<string, string>();
 const extraDriverSpecByObject = new WeakMap<ChannelDriver, string>();
+const extraExecutorOwnerBySource = new Map<string, string>();
+const extraExecutorSpecByObject = new WeakMap<TaskExecutor, string>();
 
 interface RegenicPluginManifest {
   plugin?: boolean;
@@ -144,6 +146,10 @@ export function createExecutorPluginRegistry(
       continue;
     }
     registry.register(plugin);
+    const spec = extraExecutorSpecByObject.get(plugin);
+    if (spec) {
+      extraExecutorOwnerBySource.set(source, spec);
+    }
   }
   return registry;
 }
@@ -189,6 +195,9 @@ export function extraPlugins(
     for (const driver of loaded.drivers) {
       extraDriverSpecByObject.set(driver, spec);
     }
+    for (const executor of loaded.executors) {
+      extraExecutorSpecByObject.set(executor, spec);
+    }
     drivers.push(...loaded.drivers);
     executors.push(...loaded.executors);
   }
@@ -207,10 +216,16 @@ export function loadNewExtraPlugins(
   drivers: ChannelDriverRegistry,
   executors: LocalExecutorPluginRegistry,
   env: NodeJS.ProcessEnv = process.env,
-): { drivers: string[]; executors: string[]; registeredDrivers: string[] } {
+): {
+  drivers: string[];
+  executors: string[];
+  registeredDrivers: string[];
+  registeredExecutors: string[];
+} {
   const addedDrivers: string[] = [];
   const addedExecutors: string[] = [];
   const registeredDrivers: string[] = [];
+  const registeredExecutors: string[] = [];
   const extra = extraPlugins(env);
   for (const driver of extra.drivers) {
     const spec = extraDriverSpecByObject.get(driver);
@@ -228,16 +243,26 @@ export function loadNewExtraPlugins(
   }
   for (const plugin of extra.executors) {
     const source = plugin.catalog().source?.trim();
-    if (!source || executors.forSource(source)) {
+    const spec = extraExecutorSpecByObject.get(plugin);
+    if (!source || !spec) {
+      continue;
+    }
+    if (executors.forSource(source)) {
+      if (extraExecutorOwnerBySource.get(source) === spec) {
+        registeredExecutors.push(source);
+      }
       continue;
     }
     executors.register(plugin);
+    extraExecutorOwnerBySource.set(source, spec);
     addedExecutors.push(source);
+    registeredExecutors.push(source);
   }
   return {
     drivers: addedDrivers,
     executors: addedExecutors,
     registeredDrivers,
+    registeredExecutors,
   };
 }
 
@@ -246,7 +271,12 @@ export function retryMarketPluginRegistration(
   drivers: ChannelDriverRegistry,
   executors: LocalExecutorPluginRegistry,
   env: NodeJS.ProcessEnv = process.env,
-): { driverTypes: string[]; registeredDriverTypes: string[] } | undefined {
+): {
+  driverTypes: string[];
+  registeredDriverTypes: string[];
+  executorSources: string[];
+  registeredExecutorSources: string[];
+} | undefined {
   const spec = pluginDirSpecs(env).find((candidate) => {
     const meta = readPluginPackage(candidate);
     return meta?.name === packageName &&
@@ -260,6 +290,7 @@ export function retryMarketPluginRegistration(
     origin: "extra",
   });
   const registeredDriverTypes: string[] = [];
+  const registeredExecutorSources: string[] = [];
   for (const driver of loaded.drivers) {
     extraDriverSpecByObject.set(driver, spec);
     if (drivers.has(driver.connector_type)) {
@@ -274,11 +305,25 @@ export function retryMarketPluginRegistration(
   }
   for (const executor of loaded.executors) {
     const source = executor.catalog().source?.trim();
-    if (source && !executors.forSource(source)) executors.register(executor);
+    if (!source) continue;
+    if (executors.forSource(source)) {
+      if (extraExecutorOwnerBySource.get(source) === spec) {
+        registeredExecutorSources.push(source);
+      }
+      continue;
+    }
+    executors.register(executor);
+    extraExecutorOwnerBySource.set(source, spec);
+    registeredExecutorSources.push(source);
   }
   return {
     driverTypes: loaded.drivers.map((driver) => driver.connector_type),
     registeredDriverTypes,
+    executorSources: loaded.executors.flatMap((executor) => {
+      const source = executor.catalog().source?.trim();
+      return source ? [source] : [];
+    }),
+    registeredExecutorSources,
   };
 }
 

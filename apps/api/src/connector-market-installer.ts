@@ -59,6 +59,8 @@ export interface ConnectorInstallResult {
   plugin_status: string;
   driver_types: string[];
   registered_driver_types: string[];
+  executor_sources: string[];
+  registered_executor_sources: string[];
   message: string | null;
   pending_restart?: boolean;
 }
@@ -270,6 +272,8 @@ export class ConnectorMarketInstaller {
         plugin_status: "update_pending",
         driver_types: installedPlugin?.drivers ?? [],
         registered_driver_types: [],
+        executor_sources: installedPlugin?.executors ?? [],
+        registered_executor_sources: [],
         message: "The update is staged and will apply after the API restarts.",
         pending_restart: true,
       };
@@ -279,10 +283,13 @@ export class ConnectorMarketInstaller {
     const reload = this.plugins.reload(env);
     const plugin = this.plugins.list().find((item) => item.package_name === packageName);
     const registeredDrivers = reload.registered_drivers;
+    const registeredExecutors = reload.registered_executors;
     const expectedDrivers = plugin?.drivers ?? [];
+    const expectedExecutors = plugin?.executors ?? [];
     const registered = plugin?.status === "loaded" &&
       expectedDrivers.length > 0 &&
-      expectedDrivers.every((type) => registeredDrivers.includes(type));
+      expectedDrivers.every((type) => registeredDrivers.includes(type)) &&
+      expectedExecutors.every((source) => registeredExecutors.includes(source));
     return {
       package_name: packageName,
       version,
@@ -291,9 +298,11 @@ export class ConnectorMarketInstaller {
       plugin_status: plugin?.status ?? "failed",
       driver_types: expectedDrivers,
       registered_driver_types: registeredDrivers,
+      executor_sources: expectedExecutors,
+      registered_executor_sources: registeredExecutors,
       message: registered
         ? null
-        : "The package is installed, but one or more connector types were not registered.",
+        : "The package is installed, but one or more connector types or executor sources were not registered.",
     };
   }
 
@@ -764,16 +773,20 @@ function assertPackageManifest(
   release: ConnectorMarketRelease,
 ): void {
   const drivers = manifest.regenic?.contributes?.drivers;
+  const executors = manifest.regenic?.contributes?.executors ?? [];
   if (
     manifest.name !== name ||
     manifest.version !== version ||
     manifest.regenic?.plugin !== true ||
     manifest.regenic.engines?.regenic !== release.engines_regenic ||
-    (manifest.regenic.contributes?.executors?.length ?? 0) > 0 ||
     !Array.isArray(drivers) ||
     drivers.length === 0 ||
     drivers.some((driver) => typeof driver !== "string" || !driver.trim()) ||
-    [...new Set(drivers)].sort().join("\n") !== release.driver_exports.join("\n")
+    !Array.isArray(executors) ||
+    executors.some((executor) => typeof executor !== "string" || !executor.trim()) ||
+    [...new Set(drivers)].sort().join("\n") !== release.driver_exports.join("\n") ||
+    [...new Set(executors)].sort().join("\n") !==
+      (release.executor_exports ?? []).join("\n")
   ) {
     throw new Error("Installed package manifest does not match its market release");
   }

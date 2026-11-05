@@ -58,7 +58,9 @@ export async function generateMarketIndex({
     const response = await fetchImpl(
       new URL(encodeURIComponent(name), REGISTRY_URL),
       {
-        headers: { accept: "application/vnd.npm.install-v1+json, application/json" },
+        // The abbreviated install-v1 representation intentionally omits
+        // package-defined metadata (including `regenic`) and publish times.
+        headers: { accept: "application/json" },
         redirect: "error",
         signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
       },
@@ -94,6 +96,9 @@ export async function generateMarketIndex({
           engines_regenic: manifest.regenic.engines.regenic.trim(),
           integrity,
           driver_exports: [...manifest.regenic.contributes.drivers].sort(),
+          executor_exports: Array.isArray(manifest.regenic.contributes.executors)
+            ? [...manifest.regenic.contributes.executors].sort()
+            : [],
         };
       })
       .sort((left, right) => Date.parse(right.published_at) - Date.parse(left.published_at)
@@ -148,7 +153,9 @@ function isMarketConnector(value) {
     && value.regenic.contributes.drivers.length > 0
     && value.regenic.contributes.drivers.every((item) => typeof item === "string" && item.trim())
     && (!Array.isArray(value.regenic.contributes?.executors)
-      || value.regenic.contributes.executors.length === 0);
+      || value.regenic.contributes.executors.every(
+        (item) => typeof item === "string" && item.trim(),
+      ));
 }
 
 function sha512Integrity(value) {

@@ -10,6 +10,8 @@ const SEMVER =
   /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u;
 const SHA512_INTEGRITY = /^sha512-[A-Za-z0-9+/]+={0,2}$/u;
 const CACHE_TTL_MS = 60_000;
+export const OFFICIAL_CONNECTOR_MARKET_INDEX_URL =
+  "https://raw.githubusercontent.com/regenic-ai/regenic/main/market/connectors.json";
 
 export interface ConnectorMarketRelease {
   version: string;
@@ -18,6 +20,7 @@ export interface ConnectorMarketRelease {
   compatible: boolean;
   integrity: string;
   driver_exports: string[];
+  executor_exports: string[];
 }
 
 export interface ConnectorMarketItem {
@@ -53,11 +56,11 @@ export class ConnectorMarketService {
     fetchImpl: typeof fetch = fetch,
   ): Promise<ConnectorMarketView> {
     const configuredUrl = env.REGENIC_CONNECTOR_MARKET_INDEX_URL?.trim();
-    if (!configuredUrl) {
+    if (configuredUrl?.toLowerCase() === "off") {
       return { configured: false, title: null, connectors: [] };
     }
 
-    const url = parseIndexUrl(configuredUrl);
+    const url = parseIndexUrl(configuredUrl || OFFICIAL_CONNECTOR_MARKET_INDEX_URL);
     if (
       !refresh &&
       this.cache?.url === url.href &&
@@ -204,6 +207,12 @@ function parseRelease(value: unknown): ConnectorMarketRelease {
           typeof name === "string" && Boolean(boundedText(name, 100)),
       )
     : [];
+  const executorExports = isRecord(value) && Array.isArray(value.executor_exports)
+    ? value.executor_exports.filter(
+        (name): name is string =>
+          typeof name === "string" && Boolean(boundedText(name, 100)),
+      )
+    : [];
   if (
     !isRecord(value) ||
     typeof value.version !== "string" ||
@@ -217,7 +226,11 @@ function parseRelease(value: unknown): ConnectorMarketRelease {
     !Array.isArray(value.driver_exports) ||
     driverExports.length === 0 ||
     driverExports.length > 50 ||
-    driverExports.length !== value.driver_exports.length
+    driverExports.length !== value.driver_exports.length ||
+    (value.executor_exports !== undefined && !Array.isArray(value.executor_exports)) ||
+    executorExports.length > 50 ||
+    (Array.isArray(value.executor_exports) &&
+      executorExports.length !== value.executor_exports.length)
   ) {
     throw new Error("Invalid connector release in market index");
   }
@@ -228,6 +241,7 @@ function parseRelease(value: unknown): ConnectorMarketRelease {
     compatible: value.engines_regenic.trim() === CONNECTOR_PROTOCOL,
     integrity: value.integrity,
     driver_exports: [...new Set(driverExports)].sort(),
+    executor_exports: [...new Set(executorExports)].sort(),
   };
 }
 
