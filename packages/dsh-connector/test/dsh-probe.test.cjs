@@ -113,7 +113,7 @@ describe("DSH catalog probe", () => {
     resetDshProbeCache();
   });
 
-  it("reports an authentication hint when dsh web rejects the configured token", async () => {
+  it("reports authentication requirements while keeping the reachable service ready", async () => {
     resetDshProbeCache();
     const fetches = [];
     const probe = await probeDshCatalog({
@@ -124,7 +124,7 @@ describe("DSH catalog probe", () => {
         return new Response("no", { status: 401 });
       },
     });
-    assert.equal(probe.services["dsh-web"].ready, false);
+    assert.equal(probe.services["dsh-web"].ready, true);
     assert.equal(
       probe.services["dsh-web"].hint,
       "probe.webUnauthorized",

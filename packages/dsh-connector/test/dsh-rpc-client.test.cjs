@@ -134,6 +134,7 @@ describe("DshWebRpcClient", () => {
       (error) => {
         assert.equal(error.name, "DshApiError");
         assert.match(error.message, /authentication failed \(HTTP 401\)/);
+        assert.match(error.message, /DSH web token field/);
         assert.match(error.message, /REGENIC_DSH_TOKEN/);
         return true;
       },
