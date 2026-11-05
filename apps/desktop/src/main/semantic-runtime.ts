@@ -11,7 +11,7 @@ import {
   type EmbeddingHardware,
   type EmbeddingLaunchPlan,
 } from "./embedding-launch.ts";
-import type { SemanticRuntimeView, SemanticStage } from "../shared/semantic-runtime.ts";
+import type { SemanticExecution, SemanticRuntimeView, SemanticStage } from "../shared/semantic-runtime.ts";
 
 const REVISION = "914f7f89142e33e77833254d9c9b90c3cef7303b";
 
@@ -30,6 +30,7 @@ export class SemanticRuntime {
   private stage: SemanticStage = "not_installed";
   private error: string | undefined;
   private healthy = false;
+  private execution: SemanticExecution | undefined;
   private origin: string | undefined;
   private working = false;
   private closing = false;
@@ -77,6 +78,7 @@ export class SemanticRuntime {
       stage: this.stage === "not_installed" && installed ? "stopped" : this.stage,
       installed, enabled, healthy: this.healthy, busy: this.working, canManage,
       ...(this.error ? { error: this.error } : {}),
+      ...(this.healthy && this.execution ? { execution: this.execution } : {}),
     };
   }
 
@@ -193,20 +195,24 @@ export class SemanticRuntime {
       const port = await freePort();
       const plan = this.plan();
       const child = this.launch(this.python(), this.modelArgs(["-B", join(this.options.assets, "serve.py"), "--port", String(port)]),
-        { env: { ...this.environment(), HF_HUB_OFFLINE: "1" }, stdio: "ignore", windowsHide: true });
+        { env: { ...this.environment(), HF_HUB_OFFLINE: "1" }, stdio: ["ignore", "ignore", "pipe"], windowsHide: true });
       this.child = child;
+      child.stderr?.on("data", (chunk) => process.stderr.write(`[semantic] ${chunk}`));
       applyEmbeddingPriority(child, plan.nice);
-      console.error(`[semantic] launch device=${plan.device} precision=${plan.precision} threads=${plan.threads}`);
+      console.error(`[semantic] launch requested_device=${plan.device} precision=${plan.precision} cpu_threads=${plan.threads}`);
       let exited = false;
       child.once("error", () => { exited = true; this.failedChild(child); });
       child.once("exit", () => { exited = true; this.failedChild(child); });
       const origin = `http://127.0.0.1:${port}`;
-      const deadline = Date.now() + (this.options.startupMs ?? 180_000);
+      const deadline = Date.now() + (this.options.startupMs ?? (plan.device === "auto-mps" ? 300_000 : 180_000));
       while (!this.closing && !exited && Date.now() < deadline) {
-        if (await this.probe(origin) && !exited && !this.closing && this.child === child) {
+        const execution = await this.probe(origin);
+        if (execution && !exited && !this.closing && this.child === child) {
           this.origin = origin;
+          this.execution = execution;
           this.healthy = true;
           this.stage = "running";
+          console.error(`[semantic] ready device=${execution.device} precision=${execution.precision} cpu_threads=${execution.threads}${execution.fallbackReason ? ` fallback=${execution.fallbackReason}` : ""}`);
           return;
         }
         await new Promise((resolve) => setTimeout(resolve, 500));
@@ -228,7 +234,7 @@ export class SemanticRuntime {
     }
   }
 
-  private async probe(origin: string): Promise<boolean> {
+  private async probe(origin: string): Promise<SemanticExecution | false> {
     try {
       const response = await this.request(`${origin}/health`, { signal: AbortSignal.timeout(2000), redirect: "error" });
       if (!response.ok) return false;
@@ -236,9 +242,21 @@ export class SemanticRuntime {
       if (!value || typeof value !== "object" || !("status" in value) || value.status !== "ready" ||
         !("descriptor" in value) || !value.descriptor || typeof value.descriptor !== "object") return false;
       const descriptor = value.descriptor;
-      return "model_id" in descriptor && descriptor.model_id === "google/embeddinggemma-2" &&
+      const valid = "model_id" in descriptor && descriptor.model_id === "google/embeddinggemma-2" &&
         "model_revision" in descriptor && descriptor.model_revision === REVISION &&
         "dimensions" in descriptor && descriptor.dimensions === 768;
+      if (!valid || !("runtime" in value) || !value.runtime || typeof value.runtime !== "object") return false;
+      const runtime = value.runtime;
+      if (!("device" in runtime) || (runtime.device !== "cpu" && runtime.device !== "mps") ||
+        !("precision" in runtime) || (runtime.precision !== "bfloat16" && runtime.precision !== "float32") ||
+        !("threads" in runtime) || typeof runtime.threads !== "number" || !Number.isSafeInteger(runtime.threads) || runtime.threads < 1) return false;
+      const fallbackReason = "fallback_reason" in runtime ? runtime.fallback_reason : undefined;
+      if (fallbackReason !== undefined && (runtime.device !== "cpu" ||
+        (fallbackReason !== "mps_unavailable" && fallbackReason !== "mps_failed"))) return false;
+      return {
+        device: runtime.device, precision: runtime.precision, threads: runtime.threads,
+        ...(fallbackReason ? { fallbackReason } : {}),
+      };
     } catch (error) {
       if (!(error instanceof TypeError) && !(error instanceof SyntaxError) &&
         !(error instanceof Error && ["AbortError", "TimeoutError"].includes(error.name))) throw error;
@@ -250,11 +268,11 @@ export class SemanticRuntime {
     if (!this.child || !this.origin || this.working) return;
     const child = this.child;
     const origin = this.origin;
-    const healthy = await this.probe(origin);
+    const execution = await this.probe(origin);
     if (this.closing || this.working || this.child !== child || this.origin !== origin) return;
-    this.healthy = healthy;
+    this.healthy = Boolean(execution);
     if (!this.healthy) { this.stage = "error"; this.error = "semantic.healthFailed"; }
-    else { this.stage = "running"; this.error = undefined; }
+    else { this.stage = "running"; this.error = undefined; this.execution = execution || undefined; }
   }
 
   private async stopChild(): Promise<void> {

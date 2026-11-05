@@ -264,6 +264,30 @@ export function SemanticSettings() {
       </div>
       <p className="muted">{t("semantic.lead")}</p>
 
+      {runtime?.canManage ? (
+        <p className="muted semantic-note">{t("semantic.automatic")}</p>
+      ) : null}
+      {runtime?.stage === "starting" ? (
+        <p className="muted semantic-note" role="status">{t("semantic.checkingAcceleration")}</p>
+      ) : null}
+      {runtime?.execution ? (
+        <div>
+          <p className="semantic-note" role="status">
+            {t(runtime.execution.device === "mps" ? "semantic.execution.mps" : "semantic.execution.cpu")}
+          </p>
+          {runtime.execution.fallbackReason ? (
+            <p className="action-hint" role="status">{t(`semantic.fallback.${runtime.execution.fallbackReason}`)}</p>
+          ) : null}
+          <details className="semantic-details">
+            <summary>{t("semantic.execution.details")}</summary>
+            <p className="muted semantic-note">{t("semantic.execution.parameters", {
+              device: runtime.execution.device === "mps" ? "Metal / MPS" : "CPU",
+              precision: runtime.execution.precision === "float32" ? "FP32" : "BF16",
+              threads: runtime.execution.threads,
+            })}</p>
+          </details>
+        </div>
+      ) : null}
       {runtime?.error ? <p className="action-error" role="alert">{message(runtime.error)}</p> : null}
       {error ? <p className="action-error" role="alert">{message(error)}</p> : null}
       {pollError ? <p className="action-error" role="alert">{message(pollError)}</p> : null}

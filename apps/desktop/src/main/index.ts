@@ -405,9 +405,10 @@ function spawnSidecar(port: number): void {
   child.stderr?.on("data", (chunk) => {
     process.stderr.write(`[kernel] ${chunk}`);
   });
-  child.on("exit", (code) => {
+  child.on("exit", (code, signal) => {
     if (!quitting) {
-      process.stderr.write(`[kernel] exited (${code ?? "null"})\n`);
+      const expected = sidecar !== child;
+      process.stderr.write(`[kernel] ${expected ? "stopped (requested)" : "exited unexpectedly"} code=${code ?? "null"} signal=${signal ?? "none"}\n`);
     }
     if (sidecar === child) {
       sidecar = null;
