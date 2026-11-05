@@ -411,7 +411,7 @@ describe("DshWebRpcClient", () => {
     assert.deepEqual(calls[0].body.payload, { args: { request: {} } });
   });
 
-  it("lists session ids from session/list pages", async () => {
+  it("lists non-blank session ids from session/list pages", async () => {
     const calls = [];
     const client = new DshWebRpcClient({
       base_url: "http://127.0.0.1:3080",
@@ -431,7 +431,10 @@ describe("DshWebRpcClient", () => {
                 value: cursor
                   ? { items: [{ id: "sess-2" }], hasMore: false }
                   : {
-                      items: [{ sessionId: "sess-1" }],
+                      items: [
+                        { sessionId: "sess-1", blank: false },
+                        { sessionId: "sess-blank", blank: true },
+                      ],
                       nextCursor: "page-2",
                       hasMore: true,
                     },

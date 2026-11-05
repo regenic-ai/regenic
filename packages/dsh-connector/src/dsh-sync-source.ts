@@ -26,13 +26,15 @@ export function createDshWebSyncSource(
   return {
     async listDirectory(cursor: string | null): Promise<SyncDirectoryPage> {
       const page = await client.sessionList(cursor ? { cursor } : {});
+      const complete = page.has_more !== true || !page.next_cursor;
       return {
         members: page.session_ids.map((sessionId) => ({
           stream_key: dshStreamKey(sessionId),
           thread_id: `${DSH_SOURCE}:${sessionId}`,
         })),
         next_cursor: page.next_cursor,
-        complete: page.has_more !== true || !page.next_cursor,
+        complete,
+        ...(!cursor && complete ? { replaces: true } : {}),
       };
     },
   };

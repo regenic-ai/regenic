@@ -501,6 +501,10 @@ function sessionIdFromListItem(item: unknown): string | undefined {
   if (!isObject(item)) {
     return undefined;
   }
+  // DSH lists never-prompted "New Session" placeholders as blank and hides them.
+  if (item.blank === true) {
+    return undefined;
+  }
   return (
     stringField(item, "sessionId")
     ?? stringField(item, "session_id")

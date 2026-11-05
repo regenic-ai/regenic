@@ -478,6 +478,7 @@ describe("dshSessionPlugin", () => {
         ["dsh:sess-a", "dsh:sess-b"],
       );
       assert.equal(page.complete, true);
+      assert.equal(page.replaces, true);
       assert.equal(listed, 1);
       assert.deepEqual(authorizations, [undefined, undefined]);
       assert.deepEqual(cookies, [undefined, "dsh-auth-test=api-cookie"]);
@@ -561,5 +562,36 @@ describe("dshSessionPlugin", () => {
     const hostedToken = hosted.fields.find((field) => field.key === "token");
     assert.equal(hostedToken.secret, true);
     assert.equal(hostedToken.visible_when, undefined);
+  });
+});
+
+describe("createDshWebSyncSource", () => {
+  const { createDshWebSyncSource } = require("../dist");
+
+  it("replaces the directory only when the first page is the whole list", async () => {
+    const pages = {
+      "": { session_ids: ["sess-a"], next_cursor: "p2", has_more: true },
+      p2: { session_ids: ["sess-b"], has_more: false },
+    };
+    const source = createDshWebSyncSource({
+      async sessionList(input) {
+        return pages[input.cursor ?? ""];
+      },
+    });
+    const first = await source.listDirectory(null);
+    assert.equal(first.complete, false);
+    assert.equal(first.replaces, undefined);
+    const last = await source.listDirectory("p2");
+    assert.equal(last.complete, true);
+    assert.equal(last.replaces, undefined);
+
+    const whole = createDshWebSyncSource({
+      async sessionList() {
+        return { session_ids: [], has_more: false };
+      },
+    });
+    const page = await whole.listDirectory(null);
+    assert.deepEqual(page.members, []);
+    assert.equal(page.replaces, true);
   });
 });
