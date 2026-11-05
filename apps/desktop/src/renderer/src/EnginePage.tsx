@@ -302,7 +302,7 @@ export function EnginePage({
                         {t("sync.cancel")}
                       </button>
                     ) : null}
-                    {run.status === "failed" && confirmDeleteId === run.id ? (
+                    {isDeletableRun(run.status) && confirmDeleteId === run.id ? (
                       <button
                         type="button"
                         className="ghost"
@@ -311,7 +311,7 @@ export function EnginePage({
                         {t("sync.cancel")}
                       </button>
                     ) : null}
-                    {run.status === "failed" ? (
+                    {isDeletableRun(run.status) ? (
                       <button
                         type="button"
                         className="ghost danger"
@@ -628,4 +628,8 @@ function syncModeKey(
     return "archive";
   }
   return "quick";
+}
+
+function isDeletableRun(status: string): boolean {
+  return status === "succeeded" || status === "failed" || status === "cancelled";
 }
