@@ -299,7 +299,6 @@ export const dshSessionDriver: ChannelDriver = {
           required: false,
           secret: true,
           placeholder: "field.token.placeholder",
-          visible_when: { field: "transport", value: "web" },
         },
         {
           key: "base_url",

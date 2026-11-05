@@ -3,6 +3,7 @@ const { createServer } = require("node:http");
 const { join } = require("node:path");
 const { describe, it } = require("node:test");
 const { SqliteAuthorityStore } = require("@regenic/authority-store/sqlite");
+const { readInstallSecret } = require("@regenic/domain");
 const {
   createRoot,
   ingestActionable,
@@ -13,6 +14,67 @@ const {
 } = require("./personal-api-harness.cjs");
 
 describe("personal /v1/me", { concurrency: 1 }, () => {
+  it("stores DSH install tokens securely and preserves them on blank edits", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    await ingestActionable(database, blobRoot);
+    const { app, origin } = await startPersonalApi(database, blobRoot);
+    try {
+      const created = await fetch(`${origin}/v1/me/connectors`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          connector_type: "dsh-session",
+          config: {
+            transport: "web",
+            session_id: "desk-token",
+            token: "test-dsh-token",
+          },
+        }),
+      });
+      const installation = await created.json();
+      assert.equal(created.status, 201, JSON.stringify(installation));
+      assert.equal(await readInstallSecret("dsh-session", installation.id, "token"), "test-dsh-token");
+      assert.equal(JSON.stringify(installation).includes("test-dsh-token"), false);
+
+      const updated = await fetch(
+        `${origin}/v1/me/connectors/${installation.id}/config`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            config: { transport: "web", session_id: "desk-token" },
+          }),
+        },
+      );
+      assert.equal(updated.status, 201);
+      assert.equal(await readInstallSecret("dsh-session", installation.id, "token"), "test-dsh-token");
+
+      const replaced = await fetch(
+        `${origin}/v1/me/connectors/${installation.id}/config`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            config: {
+              transport: "web",
+              session_id: "desk-token",
+              token: "replacement-token",
+            },
+          }),
+        },
+      );
+      assert.equal(replaced.status, 201);
+      assert.equal(
+        await readInstallSecret("dsh-session", installation.id, "token"),
+        "replacement-token",
+      );
+    } finally {
+      await app.close();
+    }
+  });
+
   it("pauses and cancels an async connector sync run", async () => {
     const root = await createRoot();
     const database = join(root, "authority.db");

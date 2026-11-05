@@ -17,7 +17,8 @@ export const dshLocaleTables = defineLocaleTables({
     "field.baseUrl": "Base URL",
     "field.baseUrl.placeholder": "Loopback only (127.0.0.1 / localhost)",
     "field.token": "DSH web token",
-    "field.token.placeholder": "Optional; leave empty to keep the saved token",
+    "field.token.placeholder":
+      "Saved tokens are hidden. Leave empty to keep the saved token, or enter a new one to replace it.",
     "field.mailbox": "Mailbox",
     "field.mailbox.placeholder": "CLI mode; defaults to the install ID",
     "prereq.dshWeb": "Local dsh web",
@@ -84,7 +85,8 @@ export const dshLocaleTables = defineLocaleTables({
     "field.baseUrl": "地址",
     "field.baseUrl.placeholder": "仅回环（127.0.0.1 / localhost）",
     "field.token": "DSH Web token",
-    "field.token.placeholder": "可选；留空则保留已保存的 token",
+    "field.token.placeholder":
+      "已保存的 token 不会显示；留空可保留，输入新 token 可替换。",
     "field.mailbox": "Mailbox",
     "field.mailbox.placeholder": "CLI 模式；默认用安装 id",
     "prereq.dshWeb": "本机 dsh web",

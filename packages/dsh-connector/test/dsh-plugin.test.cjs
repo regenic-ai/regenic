@@ -542,6 +542,8 @@ describe("dshSessionPlugin", () => {
       hosted.fields.some((field) => field.key === "transport"),
       false,
     );
-    assert.equal(hosted.fields.find((field) => field.key === "token").secret, true);
+    const hostedToken = hosted.fields.find((field) => field.key === "token");
+    assert.equal(hostedToken.secret, true);
+    assert.equal(hostedToken.visible_when, undefined);
   });
 });
