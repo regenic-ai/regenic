@@ -237,6 +237,10 @@ async function main() {
       }, "failed index cleanup");
       assert.equal(failed.visualEnabled, false);
       assert.equal(failed.canManage, true);
+      await click('nav button[aria-label="Search"]');
+      await waitFor(() => evaluate('Boolean(document.querySelector("#context-query"))'), "leave failed settings");
+      await click('nav button[aria-label="Settings"]');
+      await waitFor(() => evaluate('Array.from(document.querySelectorAll(".semantic-settings button")).some(button => button.textContent === "Apply permissions and restart" && !button.disabled)'), "reopened settings recovery without kernel");
     } finally { reader.close(); }
     await waitFor(() => evaluate('Array.from(document.querySelectorAll(".semantic-settings button")).some(button => button.textContent === "Apply permissions and restart")'), "retry permission controls");
     await applyVisual();
