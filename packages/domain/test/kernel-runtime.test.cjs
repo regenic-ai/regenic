@@ -258,6 +258,25 @@ describe("sync progress snapshot", () => {
     assert.equal(store.peekProgress("feishu-1")?.discovered, 1);
     assert.equal(store.peek("feishu-1")?.updated_at, "2026-01-01T00:00:00.000Z");
   });
+
+  it("does not count executor-owned agent threads as synced conversations", () => {
+    const member = (key) => ({
+      installation_id: "dsh-1",
+      stream_key: `session:${key}`,
+      thread_id: `dsh:${key}`,
+      generation: 1,
+      discovered_at: "t",
+      last_seen_at: "t",
+    });
+    const snapshot = buildSyncProgressSnapshot({
+      installation_id: "dsh-1",
+      members: [member("user"), member("agent")],
+      states: [],
+      catalog_complete: true,
+      hiddenThreadIds: new Set(["dsh:agent"]),
+    });
+    assert.equal(snapshot?.progress.discovered, 1);
+  });
 });
 
 describe("personal read tier", () => {

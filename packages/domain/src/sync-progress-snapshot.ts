@@ -4,6 +4,7 @@ import {
   scopeSyncCatalogMembers,
   summarizeSyncProgress,
   type SyncProgressView,
+  withoutHiddenThreads,
 } from "./sync-progress";
 
 /** Aggregated sync counters without loading full member rows on read paths. */
@@ -92,15 +93,17 @@ export function buildSyncProgressSnapshot(input: {
   catalog_complete: boolean;
   mountedStreamKeys?: ReadonlySet<string>;
   fallbackMembers?: readonly SyncCatalogMember[];
+  hiddenThreadIds?: ReadonlySet<string>;
   now?: () => string;
 }): SyncProgressSnapshot | null {
+  const visible = withoutHiddenThreads(input.members, input.hiddenThreadIds);
   const members = input.mountedStreamKeys
     ? scopeSyncCatalogMembers(
-        input.members,
+        visible,
         input.mountedStreamKeys,
-        input.fallbackMembers ?? [],
+        withoutHiddenThreads(input.fallbackMembers ?? [], input.hiddenThreadIds),
       )
-    : [...input.members];
+    : visible;
   if (members.length === 0 && !input.catalog_complete) {
     return null;
   }

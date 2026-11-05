@@ -395,11 +395,13 @@ class TextEncoder:
         if any(count > DESCRIPTOR["max_input_tokens"] for count in counts):
             raise InputError(413)
         prefix = DESCRIPTOR[f"{mode}_template"]
-        effective = self.model.preprocess([prefix + text for text in texts])
+        # Explicit text dicts: sentence-transformers otherwise treats a bare media
+        # URL or existing media path as an image/video and fetches/decodes it.
+        effective = self.model.preprocess([{"text": prefix + text} for text in texts])
         if effective["attention_mask"].sum(dim=1).tolist() != counts:
             raise InputError(409)
         vectors = self.model.encode(
-            texts,
+            [{"text": text} for text in texts],
             prompt_name="Document" if mode == "document" else "SearchQuery",
             normalize_embeddings=True,
             convert_to_numpy=True,

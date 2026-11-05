@@ -839,6 +839,29 @@ async function catchUpDueWork(state: ConnectorState, installationId: string): Pr
   });
 }
 
+const HIDDEN_THREADS_TTL_MS = 30_000;
+const hiddenThreadsCache = new WeakMap<
+  object,
+  { org_id: string; at: number; ids: Promise<Set<string>> }
+>();
+
+// Snapshot refreshes run per sync tick; the executor-thread scan does not need to.
+function hiddenExecutorThreads(
+  store: { listHiddenExecutorThreadIds(orgId: string): Promise<string[]> },
+  orgId: string,
+): Promise<Set<string>> {
+  const cached = hiddenThreadsCache.get(store);
+  if (cached && cached.org_id === orgId && Date.now() - cached.at < HIDDEN_THREADS_TTL_MS) {
+    return cached.ids;
+  }
+  const ids = store.listHiddenExecutorThreadIds(orgId).then((list) => new Set(list));
+  hiddenThreadsCache.set(store, { org_id: orgId, at: Date.now(), ids });
+  ids.catch(() => {
+    if (hiddenThreadsCache.get(store)?.ids === ids) hiddenThreadsCache.delete(store);
+  });
+  return ids;
+}
+
 async function refreshSyncSnapshot(
   state: ConnectorState,
   installationId: string,
@@ -846,14 +869,16 @@ async function refreshSyncSnapshot(
 ): Promise<void> {
   try {
     const store = state.runtime.requireHost().get("authority");
-    const [catalog, states, attempt] = await Promise.all([
+    const [catalog, states, attempt, hidden] = await Promise.all([
       store.getSyncCatalog(installationId),
       store.listSyncPhaseHeads(installationId),
       store.latestAttempt(installationId),
+      hiddenExecutorThreads(store, state.runtime.orgId()),
     ]);
     const snapshot = buildSyncProgressSnapshot({
       installation_id: installationId,
       members: catalog.members,
+      hiddenThreadIds: hidden,
       states,
       catalog_complete: catalog.catalog?.complete === true,
     });

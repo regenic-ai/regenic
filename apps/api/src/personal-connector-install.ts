@@ -251,11 +251,14 @@ async function viewOf(
   const host = state.runtime.requireHost();
   const streams = host.get("connectors").listStreams(installation.id);
   const fallbackMembers = catalogMembersFromStreams(installation.id, streams);
+  const hidden = await host.get("authority")
+    .listHiddenExecutorThreadIds(state.runtime.orgId());
   const [attempt, sync] = await Promise.all([
     store.latestAttempt(installation.id),
     loadSyncProgress(store, installation.id, {
       mountedStreamKeys: new Set(streams.map((stream) => stream.stream_key)),
       fallbackMembers,
+      hiddenThreadIds: new Set(hidden),
     }),
   ]);
   return toInstallationView(installation, attempt, state.drivers, DEFAULT_COPY_LOCALE, {

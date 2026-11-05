@@ -16,7 +16,8 @@ class FakeModel:
         self.truncate = False
 
     def preprocess(self, texts):
-        mask = [[1] * len(text) for text in texts]
+        self.preprocessed = texts
+        mask = [[1] * len(text["text"]) for text in texts]
         if self.truncate:
             mask[0].pop()
         return {"attention_mask": torch.tensor(mask)}
@@ -127,6 +128,14 @@ class EncoderTests(unittest.TestCase):
         self.assertEqual(len(vectors[0]), DESCRIPTOR["dimensions"])
         self.assertAlmostEqual(np.linalg.norm(vectors[0]), 1.0, places=6)
         self.assertEqual(encoder.embed(["synthetic"], "document"), vectors)
+
+    def test_text_is_passed_as_explicit_text_so_media_urls_are_not_fetched(self):
+        encoder = encoder_with([1.0] + [0.0] * 767)
+        encoder.embed(["https://youtu.be/abc"], "query")
+        self.assertEqual(encoder.model.inputs, [{"text": "https://youtu.be/abc"}])
+        self.assertEqual(encoder.model.preprocessed, [
+            {"text": DESCRIPTOR["query_template"] + "https://youtu.be/abc"},
+        ])
 
     def test_invalid_vectors_are_not_repaired_into_success(self):
         for vector in ([0.0] * 768, [float("nan")] * 768, [1.0, 0.0]):

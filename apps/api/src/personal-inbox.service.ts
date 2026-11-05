@@ -1001,11 +1001,15 @@ export class PersonalInboxService {
     }
     const host = this.runtime.requireHost();
     const authority = host.get("authority");
-    const [inbox, installations, syncRuns] = await Promise.all([
+    const [inbox, installations, syncRuns, hiddenThreads] = await Promise.all([
       this.summarizeInboxCached(orgId, authority),
       authority.listInstallations(orgId),
       authority.listSyncRuns({ org_id: orgId, limit: 50 }),
+      tier.sync_progress === "live"
+        ? authority.listHiddenExecutorThreadIds(orgId)
+        : Promise.resolve([]),
     ]);
+    const hiddenThreadIds = new Set(hiddenThreads);
     const views = await Promise.all(
       installations.map(async (installation) => {
         const store = authority as SyncStore & {
@@ -1013,7 +1017,9 @@ export class PersonalInboxService {
         };
         let sync = null;
         if (tier.sync_progress === "live") {
-          sync = await loadSyncProgress(store, installation.id);
+          sync = await loadSyncProgress(store, installation.id, {
+            hiddenThreadIds,
+          });
         } else if (tier.sync_progress === "snapshot") {
           sync = this.kernelRuntime.syncSnapshots.peekProgress(installation.id);
         }
