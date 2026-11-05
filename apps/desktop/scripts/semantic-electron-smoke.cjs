@@ -223,7 +223,7 @@ async function main() {
       return runtime.visualEnabled && !runtime.busy && runtime.canManage;
     }, "applied visual opt-in");
     assert.equal(await evaluate("window.regenic.getKernelSettings().then(settings => settings.activeOrigin)"), originBeforeConsent);
-    await waitFor(() => evaluate('Array.from(document.querySelectorAll(".semantic-consent")).find(label => label.textContent.includes("Visual analysis")).querySelector("input").checked'), "applied checkbox");
+    await waitFor(() => evaluate('Array.from(document.querySelectorAll(".semantic-consent")).find(label => label.textContent.includes("Visual analysis"))?.querySelector("input")?.checked'), "applied checkbox");
     await toggleVisual();
     await waitFor(() => evaluate('Array.from(document.querySelectorAll(".semantic-settings button")).some(button => button.textContent === "Save content permissions")'), "staged visual opt-out");
     const reader = new Database(`${database}.vector.db`, { readonly: true });
@@ -285,7 +285,7 @@ process.on("SIGTERM",() => server.close(() => process.exit(0)));
         assert.equal(runtime.error, undefined);
         return runtime.healthy && runtime.visualEnabled && !runtime.busy;
       }, "start using the unapplied visual selection");
-      await waitFor(() => evaluate('Array.from(document.querySelectorAll(".semantic-consent")).find(label => label.textContent.includes("Visual analysis")).querySelector("input").checked'), "running visual selection");
+      await waitFor(() => evaluate('Array.from(document.querySelectorAll(".semantic-consent")).find(label => label.textContent.includes("Visual analysis"))?.querySelector("input")?.checked'), "running visual selection");
       await toggleVisual();
       await waitFor(() => evaluate('Array.from(document.querySelectorAll(".semantic-settings button")).some(button => button.textContent === "Apply permissions and restart")'), "running permission change");
       await applyVisual();
