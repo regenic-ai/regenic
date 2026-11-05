@@ -174,4 +174,31 @@ describe("engineRevision", () => {
     );
     assert.notEqual(before, after);
   });
+
+  it("changes when a sync run is deleted or updated", () => {
+    const run = {
+      id: "run-1",
+      org_id: "local-owner",
+      installation_id: "inst-1",
+      mode: "quick_start",
+      status: "failed",
+      options: {},
+      total_work: 1,
+      completed_work: 0,
+      failed_work: 1,
+      accepted_count: 0,
+      last_error: "dsh_api",
+      started_at: "2026-11-05T04:21:00.000Z",
+      finished_at: "2026-11-05T04:21:01.000Z",
+      created_at: "2026-11-05T04:21:00.000Z",
+      updated_at: "2026-11-05T04:21:01.000Z",
+    } as unknown as NonNullable<PersonalEngineView["sync_runs"]>[number];
+    const base = engineWithCatalog("Feishu", "Install lark-cli");
+    const withRun = engineRevision({ ...base, sync_runs: [run] }, true);
+    assert.notEqual(withRun, engineRevision({ ...base, sync_runs: [] }, true));
+    assert.notEqual(
+      withRun,
+      engineRevision({ ...base, sync_runs: [{ ...run, status: "succeeded" }] }, true),
+    );
+  });
 });

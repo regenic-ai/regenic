@@ -40,7 +40,13 @@ export function engineRevision(
   const readiness = engine.sync_readiness
     ? `${engine.sync_readiness.freshness_ms ?? ""}:${engine.sync_readiness.eta?.low_ms ?? ""}:${engine.sync_readiness.eta?.high_ms ?? ""}:${engine.sync_readiness.throttle_reason ?? ""}`
     : "";
-  return `${engine.kernel}|${engine.inbox_count}|${engine.inbox_hidden_count ?? 0}|${engine.pull?.phase ?? ""}|${engine.pull?.catching_up_count ?? 0}|${engine.pull?.last_error ?? ""}|${engine.pull?.last_error_hint ?? ""}|${engine.pull?.network?.kind ?? ""}|${pullStreamRevision(engine)}|${installs}|${catalog}|${executors}|${executorCatalog}|${readiness}${
+  const syncRuns = (engine.sync_runs ?? [])
+    .map(
+      (run) =>
+        `${run.id}:${run.status}:${run.completed_work}:${run.failed_work}:${run.total_work}:${run.accepted_count}:${run.last_error ?? ""}`,
+    )
+    .join(",");
+  return `${engine.kernel}|${engine.inbox_count}|${engine.inbox_hidden_count ?? 0}|${engine.pull?.phase ?? ""}|${engine.pull?.catching_up_count ?? 0}|${engine.pull?.last_error ?? ""}|${engine.pull?.last_error_hint ?? ""}|${engine.pull?.network?.kind ?? ""}|${pullStreamRevision(engine)}|${installs}|${catalog}|${executors}|${executorCatalog}|${readiness}|${syncRuns}${
     detailed ? `|${engine.pull?.last_tick_at ?? ""}` : ""
   }`;
 }
