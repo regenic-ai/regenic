@@ -9,6 +9,18 @@
       "keywords": [],
       "versions": [
         {
+          "version": "0.1.1",
+          "published_at": "2026-11-05T11:06:33.370Z",
+          "engines_regenic": "1.0",
+          "integrity": "sha512-NY2ALIaixWDZ6D3t0/8i+gkmG8HOHc2bZ9e4AOMv9lN+uwV6pO0v57HSKKtfm25rcxb1pJZg7RYsndLRG3PLBw==",
+          "driver_exports": [
+            "githubCopilotSessionDriver"
+          ],
+          "executor_exports": [
+            "githubCopilotTaskExecutor"
+          ]
+        },
+        {
           "version": "0.1.0",
           "published_at": "2026-11-05T08:56:52.949Z",
           "engines_regenic": "1.0",
