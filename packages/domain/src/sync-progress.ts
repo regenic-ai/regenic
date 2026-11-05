@@ -46,6 +46,19 @@ export function scopeSyncCatalogMembers(
   return scoped.length > 0 ? scoped : [...fallbackMembers];
 }
 
+/** Executor-owned agent threads are hidden from the inbox, so they are not user conversations either. */
+export function withoutHiddenThreads(
+  members: readonly SyncCatalogMember[],
+  hiddenThreadIds?: ReadonlySet<string>,
+): SyncCatalogMember[] {
+  if (!hiddenThreadIds || hiddenThreadIds.size === 0) {
+    return [...members];
+  }
+  return members.filter(
+    (member) => !member.thread_id || !hiddenThreadIds.has(member.thread_id),
+  );
+}
+
 export function summarizeSyncProgress(
   catalog: SyncCatalogView,
   states: readonly SyncPhaseHead[],
@@ -119,19 +132,24 @@ export async function loadSyncProgress(
   options?: {
     mountedStreamKeys?: ReadonlySet<string>;
     fallbackMembers?: readonly SyncCatalogMember[];
+    hiddenThreadIds?: ReadonlySet<string>;
   },
 ): Promise<SyncProgressView | null> {
-  const [catalog, states] = await Promise.all([
+  const [loaded, states] = await Promise.all([
     store.getSyncCatalog(installationId),
     store.listSyncPhaseHeads(installationId),
   ]);
+  const catalog = {
+    ...loaded,
+    members: withoutHiddenThreads(loaded.members, options?.hiddenThreadIds),
+  };
   if (!options?.mountedStreamKeys) {
     return publishedSyncProgress(catalog, states);
   }
   const members = scopeSyncCatalogMembers(
     catalog.members,
     options.mountedStreamKeys,
-    options.fallbackMembers ?? [],
+    withoutHiddenThreads(options.fallbackMembers ?? [], options.hiddenThreadIds),
   );
   return publishedSyncProgress({ ...catalog, members }, states);
 }

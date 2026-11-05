@@ -846,14 +846,16 @@ async function refreshSyncSnapshot(
 ): Promise<void> {
   try {
     const store = state.runtime.requireHost().get("authority");
-    const [catalog, states, attempt] = await Promise.all([
+    const [catalog, states, attempt, hidden] = await Promise.all([
       store.getSyncCatalog(installationId),
       store.listSyncPhaseHeads(installationId),
       store.latestAttempt(installationId),
+      store.listHiddenExecutorThreadIds(state.runtime.orgId()),
     ]);
     const snapshot = buildSyncProgressSnapshot({
       installation_id: installationId,
       members: catalog.members,
+      hiddenThreadIds: new Set(hidden),
       states,
       catalog_complete: catalog.catalog?.complete === true,
     });
