@@ -207,10 +207,11 @@ export function requireWebhookPorts(driver: ChannelDriver): {
 
 export class ChannelDriverRegistry {
   private readonly drivers = new Map<string, ChannelDriver>();
+  private readonly retired = new Set<string>();
   readonly installationLifecycle = new ConnectorInstallationLifecycle();
 
   register(driver: ChannelDriver): this {
-    if (this.drivers.has(driver.connector_type)) {
+    if (this.drivers.has(driver.connector_type) || this.retired.has(driver.connector_type)) {
       return this;
     }
     this.drivers.set(driver.connector_type, this.installationLifecycle.guard(driver));
@@ -218,11 +219,17 @@ export class ChannelDriverRegistry {
   }
 
   get(connectorType: string): ChannelDriver | undefined {
-    return this.drivers.get(connectorType);
+    return this.retired.has(connectorType) ? undefined : this.drivers.get(connectorType);
   }
 
   list(): ChannelDriver[] {
-    return [...this.drivers.values()];
+    return [...this.drivers.entries()]
+      .filter(([connectorType]) => !this.retired.has(connectorType))
+      .map(([, driver]) => driver);
+  }
+
+  retire(connectorType: string): void {
+    this.retired.add(connectorType);
   }
 
   runInstallation<T>(installation: ConnectorInstallation, work: () => Promise<T>): Promise<T> {
@@ -355,7 +362,7 @@ export class ChannelDriverRegistry {
   }
 
   has(connectorType: string): boolean {
-    return this.drivers.has(connectorType);
+    return !this.retired.has(connectorType) && this.drivers.has(connectorType);
   }
 
   findForThread(

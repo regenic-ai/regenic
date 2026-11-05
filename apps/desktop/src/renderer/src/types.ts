@@ -924,20 +924,83 @@ export interface ProcessMemoryView {
 
 export type PluginOrigin = "first_party" | "extra";
 export type PluginTrust = "core" | "unsigned";
-export type PluginLoadStatus = "loaded" | "skipped" | "failed";
+export type PluginInstallSource = "built_in" | "market" | "local";
+export type PluginLoadStatus = "loaded" | "skipped" | "failed" | "uninstall_pending" | "update_pending";
 
 export interface PluginInventoryItem {
   id: string;
   spec: string;
+  package_name: string | null;
   version: string | null;
   display_name: string | null;
   origin: PluginOrigin;
+  install_source: PluginInstallSource;
+  previous_version: string | null;
+  pending_version: string | null;
+  pending_operation: "update" | "rollback" | null;
   trust: PluginTrust;
   status: PluginLoadStatus;
   path: string | null;
   drivers: string[];
   executors: string[];
   error: string | null;
+}
+
+export interface ConnectorMarketRelease {
+  version: string;
+  published_at: string;
+  engines_regenic: string;
+  compatible: boolean;
+  integrity: string;
+  driver_exports: string[];
+}
+
+export interface ConnectorMarketItem {
+  name: string;
+  title: string;
+  description: string;
+  author?: string;
+  homepage?: string;
+  repository?: string;
+  keywords: string[];
+  versions: ConnectorMarketRelease[];
+}
+
+export interface ConnectorMarketView {
+  configured: boolean;
+  title: string | null;
+  connectors: ConnectorMarketItem[];
+}
+
+export type ConnectorInstallPhase =
+  | "checking"
+  | "downloading"
+  | "verifying"
+  | "installing_dependencies"
+  | "registering"
+  | "staging_update"
+  | "completed"
+  | "failed";
+
+export interface ConnectorInstallJob {
+  id: string;
+  package_name: string;
+  version: string;
+  operation?: "install" | "update";
+  phase: ConnectorInstallPhase;
+  installed: boolean;
+  started_at: string;
+  updated_at: string;
+  result?: {
+    package_name: string;
+    version: string;
+    installed: boolean;
+    registered: boolean;
+    pending_restart?: boolean;
+    driver_types: string[];
+    message: string | null;
+  };
+  error?: string;
 }
 
 export interface PersonalHeartbeatInstallationPulse {

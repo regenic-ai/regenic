@@ -43,6 +43,8 @@ import type {
   ThreadPrompt,
   UiPrefsView,
   ConnectorImportView,
+  ConnectorMarketView,
+  ConnectorInstallJob,
 } from "./types";
 import { activeLocale } from "../../shared/i18n.ts";
 import { throwKernelError } from "./kernel-request.ts";
@@ -531,6 +533,140 @@ export async function fetchEngine(
   };
 }
 
+export async function fetchConnectorMarket(
+  refresh = false,
+): Promise<ConnectorMarketView> {
+  const response = await kernelFetch(
+    `/v1/me/connector-market${refresh ? "?refresh=1" : ""}`,
+    { signal: AbortSignal.timeout(ENGINE_FETCH_MS) },
+  );
+  if (!response.ok) {
+    throw new Error(`connector market ${response.status}`);
+  }
+  const market = (await response.json()) as ConnectorMarketView;
+  return {
+    configured: market.configured === true,
+    title: typeof market.title === "string" ? market.title : null,
+    connectors: Array.isArray(market.connectors) ? market.connectors : [],
+  };
+}
+
+export async function installConnectorFromMarket(
+  packageName: string,
+  version: string,
+): Promise<ConnectorInstallJob> {
+  const response = await kernelFetch("/v1/me/connector-market/install", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      package_name: packageName,
+      version,
+      confirmed: true,
+    }),
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!response.ok) {
+    throw new Error(`connector market install ${response.status}`);
+  }
+  return await response.json() as ConnectorInstallJob;
+}
+
+export interface ConnectorMarketRegistrationResult {
+  package_name: string;
+  registered: boolean;
+  plugin_status: string;
+  driver_types: string[];
+  registered_driver_types: string[];
+  error: string | null;
+}
+
+export async function retryConnectorMarketRegistration(
+  packageName: string,
+): Promise<ConnectorMarketRegistrationResult> {
+  const response = await kernelFetch("/v1/me/connector-market/register", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ package_name: packageName }),
+    signal: AbortSignal.timeout(ENGINE_FETCH_MS),
+  });
+  if (!response.ok) {
+    throw new Error(`connector market registration ${response.status}`);
+  }
+  return await response.json() as ConnectorMarketRegistrationResult;
+}
+
+export async function updateConnectorFromMarket(
+  packageName: string,
+  version: string,
+): Promise<ConnectorInstallJob> {
+  const response = await kernelFetch("/v1/me/connector-market/update", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      package_name: packageName,
+      version,
+      confirmed: true,
+    }),
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!response.ok) {
+    throw new Error(`connector market update ${response.status}`);
+  }
+  return await response.json() as ConnectorInstallJob;
+}
+
+export async function rollbackConnectorFromMarket(
+  packageName: string,
+): Promise<{ package_name: string; version: string; pending_restart: boolean }> {
+  const response = await kernelFetch(
+    `/v1/me/connector-market/${encodeURIComponent(packageName)}/rollback`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ confirmed: true }),
+      signal: AbortSignal.timeout(ENGINE_FETCH_MS),
+    },
+  );
+  if (!response.ok) {
+    throw new Error(`connector market rollback ${response.status}`);
+  }
+  return await response.json() as {
+    package_name: string;
+    version: string;
+    pending_restart: boolean;
+  };
+}
+
+export async function fetchConnectorMarketInstall(
+  installationId: string,
+): Promise<ConnectorInstallJob> {
+  const response = await kernelFetch(
+    `/v1/me/connector-market/install/${encodeURIComponent(installationId)}`,
+    { signal: AbortSignal.timeout(ENGINE_FETCH_MS) },
+  );
+  if (!response.ok) {
+    throw new Error(`connector market install status ${response.status}`);
+  }
+  return await response.json() as ConnectorInstallJob;
+}
+
+export async function uninstallConnectorFromMarket(
+  packageName: string,
+): Promise<{ package_name: string; pending_restart: boolean; removed: boolean }> {
+  const response = await kernelFetch(
+    `/v1/me/connector-market/install/${encodeURIComponent(packageName)}`,
+    { method: "DELETE", signal: AbortSignal.timeout(ENGINE_FETCH_MS) },
+  );
+  if (!response.ok) {
+    throw new Error(`connector market uninstall ${response.status}`);
+  }
+  return await response.json() as {
+    package_name: string;
+    pending_restart: boolean;
+    removed: boolean;
+  };
+}
+
 export async function fetchHeartbeat(): Promise<PersonalHeartbeatView> {
   const response = await kernelFetch("/v1/me/heartbeat", {
     signal: AbortSignal.timeout(HEARTBEAT_FETCH_MS),
@@ -605,13 +741,30 @@ function catalogPlugins(
       {
         id: id || spec,
         spec: spec || id,
+        package_name:
+          typeof item.package_name === "string" ? item.package_name : null,
         version: typeof item.version === "string" ? item.version : null,
         display_name:
           typeof item.display_name === "string" ? item.display_name : null,
         origin: item.origin === "extra" ? "extra" : "first_party",
+        install_source:
+          item.install_source === "market" || item.install_source === "local"
+            ? item.install_source
+            : "built_in",
+        previous_version:
+          typeof item.previous_version === "string" ? item.previous_version : null,
+        pending_version:
+          typeof item.pending_version === "string" ? item.pending_version : null,
+        pending_operation:
+          item.pending_operation === "update" || item.pending_operation === "rollback"
+            ? item.pending_operation
+            : null,
         trust: item.trust === "unsigned" ? "unsigned" : "core",
         status:
-          item.status === "skipped" || item.status === "failed"
+          item.status === "uninstall_pending" ||
+          item.status === "update_pending" ||
+          item.status === "skipped" ||
+          item.status === "failed"
             ? item.status
             : "loaded",
         path: typeof item.path === "string" ? item.path : null,

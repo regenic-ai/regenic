@@ -3,7 +3,7 @@
 连接器负责把其他工具里的消息接入 Regenic。本页列出目前可用的连接器、各自的能力和加载方式。
 
 - **English:** [../en/CONNECTOR_CATALOG.md](../en/CONNECTOR_CATALOG.md)
-- **相关：** [开发连接器](CONNECTOR.md) · [内置连接器说明](CONNECTOR_DRIVERS.md) · [示例插件](../../examples/connectors/README.md) · [安装与 CLI](SETUP_AND_CLI.md)
+- **相关：** [连接器市场发布与索引](CONNECTOR_MARKETPLACE.md) · [开发连接器](CONNECTOR.md) · [内置连接器说明](CONNECTOR_DRIVERS.md) · [示例插件](../../examples/connectors/README.md) · [安装与 CLI](SETUP_AND_CLI.md)
 
 ## 一览
 

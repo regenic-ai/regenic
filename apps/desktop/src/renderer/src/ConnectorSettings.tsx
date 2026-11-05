@@ -73,7 +73,10 @@ export function ConnectorKind({
   const { t } = useLocale();
   const [editingId, setEditingId] = useState<string | null>(null);
   return (
-    <div className={`connector-kind${kind.installed ? " is-installed" : ""}`}>
+    <div
+      id={`connector-type-${kind.connector_type}`}
+      className={`connector-kind${kind.installed ? " is-installed" : ""}`}
+    >
       <div className="install">
         <div>
           <strong>{kind.title}</strong>
@@ -142,6 +145,7 @@ export function ConnectorKind({
       {installations.map((installation) => (
         <ConnectorRow
           key={installation.id}
+          id={`connector-installation-${installation.id}`}
           kind={kind}
           installation={installation}
           busy={busyId === installation.id || syncingAll}
@@ -742,6 +746,7 @@ function visiblePrerequisites(
 }
 
 function ConnectorRow({
+  id,
   kind,
   installation,
   busy,
@@ -755,6 +760,7 @@ function ConnectorRow({
   onUninstall,
   onPairingCode,
 }: {
+  id: string;
   kind: ConnectorCatalogItem;
   installation: EngineInstallationView;
   busy: boolean;
@@ -777,7 +783,7 @@ function ConnectorRow({
         ? "stopped"
         : "";
   return (
-    <div className="install-block">
+    <div id={id} className="install-block">
       <div className="install install-instance">
         <div>
           <strong title={installation.id}>

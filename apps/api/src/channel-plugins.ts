@@ -1,5 +1,6 @@
 import { createRequire } from "node:module";
-import { existsSync, mkdirSync, readdirSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import {
   ChannelDriverRegistry,
@@ -17,8 +18,12 @@ import {
 
 const nodeRequire = createRequire(__filename);
 const DEFAULT_CATALOG_ORDER = 1_000;
+const MARKET_PACKAGE_NAME = /^(?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*$/u;
+const MARKET_VERSION = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u;
 const successfulExtraSpecs = new Set<string>();
 const inventoryBySpec = new Map<string, PluginInventoryItem>();
+const extraDriverOwnerByType = new Map<string, string>();
+const extraDriverSpecByObject = new WeakMap<ChannelDriver, string>();
 
 interface RegenicPluginManifest {
   plugin?: boolean;
@@ -51,14 +56,29 @@ interface LoadedPlugins {
 
 export type PluginOrigin = "first_party" | "extra";
 export type PluginTrust = "core" | "unsigned";
-export type PluginLoadStatus = "loaded" | "skipped" | "failed";
+export type PluginLoadStatus = "loaded" | "skipped" | "failed" | "uninstall_pending" | "update_pending";
+export type PluginInstallSource = "built_in" | "market" | "local";
+export type MarketVersionChange = {
+  package_name: string;
+  from_version: string;
+  to_version: string;
+  operation: "update" | "rollback";
+  stage_directory: string | null;
+  previous_directory: string;
+  target_directory: string | null;
+};
 
 export interface PluginInventoryItem {
   id: string;
   spec: string;
+  package_name: string | null;
   version: string | null;
   display_name: string | null;
   origin: PluginOrigin;
+  install_source: PluginInstallSource;
+  previous_version: string | null;
+  pending_version: string | null;
+  pending_operation: "update" | "rollback" | null;
   trust: PluginTrust;
   status: PluginLoadStatus;
   path: string | null;
@@ -84,6 +104,8 @@ export interface PluginInventoryItem {
 export function createChannelDriverRegistry(
   env: NodeJS.ProcessEnv = process.env,
 ): ChannelDriverRegistry {
+  completePendingMarketRemovals(env);
+  completePendingMarketVersionChanges(env);
   const registry = new ChannelDriverRegistry();
   for (const driver of firstPartyChannelDrivers()) {
     registry.register(driver);
@@ -96,6 +118,10 @@ export function createChannelDriverRegistry(
       continue;
     }
     registry.register(driver);
+    const spec = extraDriverSpecByObject.get(driver);
+    if (spec) {
+      extraDriverOwnerByType.set(driver.connector_type, spec);
+    }
   }
   return registry;
 }
@@ -160,6 +186,9 @@ export function extraPlugins(
     if (loaded.drivers.length > 0 || loaded.executors.length > 0) {
       successfulExtraSpecs.add(spec);
     }
+    for (const driver of loaded.drivers) {
+      extraDriverSpecByObject.set(driver, spec);
+    }
     drivers.push(...loaded.drivers);
     executors.push(...loaded.executors);
   }
@@ -178,16 +207,24 @@ export function loadNewExtraPlugins(
   drivers: ChannelDriverRegistry,
   executors: LocalExecutorPluginRegistry,
   env: NodeJS.ProcessEnv = process.env,
-): { drivers: string[]; executors: string[] } {
+): { drivers: string[]; executors: string[]; registeredDrivers: string[] } {
   const addedDrivers: string[] = [];
   const addedExecutors: string[] = [];
+  const registeredDrivers: string[] = [];
   const extra = extraPlugins(env);
   for (const driver of extra.drivers) {
+    const spec = extraDriverSpecByObject.get(driver);
+    if (!spec) continue;
     if (drivers.has(driver.connector_type)) {
+      if (extraDriverOwnerByType.get(driver.connector_type) === spec) {
+        registeredDrivers.push(driver.connector_type);
+      }
       continue;
     }
     drivers.register(driver);
+    extraDriverOwnerByType.set(driver.connector_type, spec);
     addedDrivers.push(driver.connector_type);
+    registeredDrivers.push(driver.connector_type);
   }
   for (const plugin of extra.executors) {
     const source = plugin.catalog().source?.trim();
@@ -197,7 +234,52 @@ export function loadNewExtraPlugins(
     executors.register(plugin);
     addedExecutors.push(source);
   }
-  return { drivers: addedDrivers, executors: addedExecutors };
+  return {
+    drivers: addedDrivers,
+    executors: addedExecutors,
+    registeredDrivers,
+  };
+}
+
+export function retryMarketPluginRegistration(
+  packageName: string,
+  drivers: ChannelDriverRegistry,
+  executors: LocalExecutorPluginRegistry,
+  env: NodeJS.ProcessEnv = process.env,
+): { driverTypes: string[]; registeredDriverTypes: string[] } | undefined {
+  const spec = pluginDirSpecs(env).find((candidate) => {
+    const meta = readPluginPackage(candidate);
+    return meta?.name === packageName &&
+      pluginInstallSource(meta, candidate, "extra") === "market";
+  });
+  if (!spec) return undefined;
+  if (!successfulExtraSpecs.has(spec)) forgetResolvedModule(spec);
+  const loaded = loadPlugin(spec, {
+    warnIfEmpty: true,
+    required: false,
+    origin: "extra",
+  });
+  const registeredDriverTypes: string[] = [];
+  for (const driver of loaded.drivers) {
+    extraDriverSpecByObject.set(driver, spec);
+    if (drivers.has(driver.connector_type)) {
+      if (extraDriverOwnerByType.get(driver.connector_type) === spec) {
+        registeredDriverTypes.push(driver.connector_type);
+      }
+      continue;
+    }
+    drivers.register(driver);
+    extraDriverOwnerByType.set(driver.connector_type, spec);
+    registeredDriverTypes.push(driver.connector_type);
+  }
+  for (const executor of loaded.executors) {
+    const source = executor.catalog().source?.trim();
+    if (source && !executors.forSource(source)) executors.register(executor);
+  }
+  return {
+    driverTypes: loaded.drivers.map((driver) => driver.connector_type),
+    registeredDriverTypes,
+  };
 }
 
 export function firstPartyPlugins(
@@ -298,12 +380,220 @@ export function ensurePluginDirectory(
   return dir;
 }
 
+function completePendingMarketRemovals(env: NodeJS.ProcessEnv): void {
+  const pluginDir = resolvePluginDirectory(env);
+  if (!pluginDir || !existsSync(pluginDir)) return;
+  for (const entry of readdirSync(pluginDir, { withFileTypes: true })) {
+    if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
+    removePendingMarketInstall(path.join(pluginDir, entry.name));
+  }
+}
+
+export function completePendingMarketVersionChanges(env: NodeJS.ProcessEnv = process.env): void {
+  const pluginDir = resolvePluginDirectory(env);
+  if (!pluginDir || !existsSync(pluginDir)) return;
+  for (const entry of readdirSync(pluginDir, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.startsWith(".regenic-market-transaction-")) continue;
+    const transactionPath = path.join(pluginDir, entry.name);
+    try {
+      const change = JSON.parse(readFileSync(transactionPath, "utf8")) as MarketVersionChange;
+      if (!isSafeTransaction(change, pluginDir) ||
+        entry.name !== path.basename(marketTransactionPath(pluginDir, change.package_name))) {
+        continue;
+      }
+      const currentPath = path.join(pluginDir, marketPackageDirectory(change.package_name));
+      const versionDirectory = marketVersionsDirectory(pluginDir, change.package_name);
+      const previousPath = path.join(versionDirectory, change.previous_directory);
+      const targetPath = change.operation === "update"
+        ? path.join(pluginDir, change.stage_directory!)
+        : path.join(versionDirectory, change.target_directory!);
+      const currentVersion = installedMarketVersion(currentPath, change.package_name);
+      if (currentVersion === change.to_version) {
+        rmSync(transactionPath, { force: true });
+        continue;
+      }
+      if (currentVersion && currentVersion !== change.from_version) {
+        throw new Error("Installed market package version changed during pending update");
+      }
+      mkdirSync(path.dirname(previousPath), { recursive: true });
+      if (existsSync(currentPath) && !existsSync(previousPath)) {
+        renameSync(currentPath, previousPath);
+      }
+      if (!existsSync(currentPath)) {
+        if (installedMarketVersion(targetPath, change.package_name) !== change.to_version) {
+          if (existsSync(previousPath)) renameSync(previousPath, currentPath);
+          throw new Error("Pending market package version is missing or invalid");
+        }
+        renameSync(targetPath, currentPath);
+      }
+      if (installedMarketVersion(currentPath, change.package_name) !== change.to_version) {
+        throw new Error("Market package version switch did not complete");
+      }
+      rmSync(transactionPath, { force: true });
+      pruneMarketVersionHistory(pluginDir, change.package_name);
+    } catch (error) {
+      console.warn("regenic connector market: pending version change could not be completed", error);
+    }
+  }
+  for (const entry of readdirSync(pluginDir, { withFileTypes: true })) {
+    if (!entry.isDirectory() || !entry.name.startsWith(".regenic-market-stage-")) continue;
+    const packageHash = entry.name.slice(".regenic-market-stage-".length);
+    if (!/^[0-9a-f]{24}$/u.test(packageHash)) continue;
+    const transactionPath = path.join(
+      pluginDir,
+      `.regenic-market-transaction-${packageHash}.json`,
+    );
+    if (!existsSync(transactionPath)) {
+      rmSync(path.join(pluginDir, entry.name), { recursive: true, force: true });
+    }
+  }
+  for (const entry of readdirSync(pluginDir, { withFileTypes: true })) {
+    if (
+      entry.isDirectory() &&
+      /^\.regenic-market-[A-Za-z0-9_-]{6}$/u.test(entry.name)
+    ) {
+      rmSync(path.join(pluginDir, entry.name), { recursive: true, force: true });
+    }
+  }
+}
+
 export function listPluginInventory(): PluginInventoryItem[] {
   return [...inventoryBySpec.values()].sort((left, right) => {
     if (left.origin !== right.origin) {
       return left.origin === "first_party" ? -1 : 1;
     }
     return left.id.localeCompare(right.id);
+  });
+}
+
+export function markMarketPluginRemovalPending(
+  packageName: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
+  const pluginDirectory = resolvePluginDirectory(env);
+  const item = [...inventoryBySpec.values()].find(
+    (candidate) =>
+      candidate.origin === "extra" &&
+      candidate.install_source === "market" &&
+      candidate.package_name === packageName &&
+      candidate.path,
+  );
+  if (
+    !item?.path ||
+    !pluginDirectory ||
+    path.resolve(path.dirname(item.path)) !== path.resolve(pluginDirectory) ||
+    !isMarketInstallPath(item.path, packageName) ||
+    existsSync(path.join(item.path, ".regenic-market-uninstall.json"))
+  ) {
+    throw new Error("Market-managed connector package directory was not found");
+  }
+  const uninstallPath = path.join(item.path, ".regenic-market-uninstall.json");
+  if (!existsSync(uninstallPath)) {
+    writeFileSync(
+      uninstallPath,
+      JSON.stringify({ package_name: packageName, requested_at: new Date().toISOString() }),
+      { flag: "wx" },
+    );
+  }
+  inventoryBySpec.set(item.spec, {
+    ...item,
+    status: "uninstall_pending",
+    error: "Package removal is pending; restart the API to complete it.",
+  });
+  return [...item.drivers];
+}
+
+export function marketVersionHistory(packageName: string, pluginDirectory?: string): Array<{
+  version: string;
+  directory: string;
+  installed_at: string;
+}> {
+  const root = pluginDirectory ?? resolvePluginDirectory(process.env);
+  if (!root || !MARKET_PACKAGE_NAME.test(packageName)) return [];
+  const archiveRoot = marketVersionsDirectory(root, packageName);
+  if (!existsSync(archiveRoot)) return [];
+  return readdirSync(archiveRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && /^[0-9a-f-]{36}$/u.test(entry.name))
+    .flatMap((entry) => {
+      const directory = path.join(archiveRoot, entry.name);
+      try {
+        const marker = JSON.parse(
+          readFileSync(path.join(directory, ".regenic-market-install.json"), "utf8"),
+        ) as { package_name?: unknown; version?: unknown; installed_at?: unknown };
+        if (
+          marker.package_name !== packageName ||
+          typeof marker.version !== "string" ||
+          typeof marker.installed_at !== "string"
+        ) return [];
+        return [{ version: marker.version, directory, installed_at: marker.installed_at }];
+      } catch {
+        return [];
+      }
+    })
+    .sort((left, right) => Date.parse(right.installed_at) - Date.parse(left.installed_at));
+}
+
+export function beginMarketVersionChange(
+  change: MarketVersionChange,
+  env: NodeJS.ProcessEnv = process.env,
+): void {
+  const item = [...inventoryBySpec.values()].find(
+    (candidate) =>
+      candidate.package_name === change.package_name &&
+      candidate.install_source === "market" &&
+      candidate.path,
+  );
+  const pluginDirectory = resolvePluginDirectory(env);
+  if (
+    !item?.path ||
+    !pluginDirectory ||
+    path.resolve(path.dirname(item.path)) !== path.resolve(pluginDirectory) ||
+    !isMarketInstallPath(item.path, change.package_name) ||
+    item.status === "uninstall_pending" ||
+    existsSync(path.join(item.path, ".regenic-market-uninstall.json")) ||
+    change.from_version !== item.version ||
+    !isVersion(change.to_version) ||
+    !isSafeTransaction(change, pluginDirectory)
+  ) {
+    throw new Error("Market connector version change could not be validated");
+  }
+  const transactionPath = marketTransactionPath(pluginDirectory, change.package_name);
+  if (existsSync(transactionPath)) {
+    throw new Error("A market connector version change is already pending");
+  }
+  const temporaryPath = `${transactionPath}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    writeFileSync(temporaryPath, JSON.stringify(change), { flag: "wx" });
+    renameSync(temporaryPath, transactionPath);
+  } finally {
+    rmSync(temporaryPath, { force: true });
+  }
+  inventoryBySpec.set(item.spec, {
+    ...item,
+    status: "update_pending",
+    pending_version: change.to_version,
+    pending_operation: change.operation,
+    error: `Version change to ${change.to_version} is pending; restart the API to apply it.`,
+  });
+}
+
+export function markMarketVersionChangePending(
+  packageName: string,
+  version: string,
+  operation: "update" | "rollback",
+): void {
+  const item = [...inventoryBySpec.values()].find(
+    (candidate) =>
+      candidate.package_name === packageName &&
+      candidate.install_source === "market",
+  );
+  if (!item) return;
+  inventoryBySpec.set(item.spec, {
+    ...item,
+    status: "update_pending",
+    pending_version: version,
+    pending_operation: operation,
+    error: `Version change to ${version} is pending; restart the API to apply it.`,
   });
 }
 
@@ -392,7 +682,7 @@ function pluginDirSpecs(env: NodeJS.ProcessEnv): string[] {
   }
   const specs: string[] = [];
   for (const entry of readdirSync(pluginDir, { withFileTypes: true })) {
-    if (!entry.isDirectory()) {
+    if (!entry.isDirectory() || entry.name.startsWith(".")) {
       continue;
     }
     const child = path.join(pluginDir, entry.name);
@@ -591,19 +881,171 @@ function recordInventory(
     executors?: string[];
   },
 ): void {
+  const packageName = meta?.name?.trim();
+  const packageDirectory = meta?.dir ?? spec;
+  const pendingChange = packageName
+    ? pendingMarketVersion(packageDirectory, packageName)
+    : undefined;
   inventoryBySpec.set(spec, {
     id: meta?.manifest?.id?.trim() || meta?.name?.trim() || spec,
     spec,
+    package_name: meta?.name?.trim() || null,
     version: meta?.version?.trim() || null,
     display_name: meta?.manifest?.displayName?.trim() || null,
     origin,
+    install_source: pluginInstallSource(meta, spec, origin),
+    previous_version: packageName
+      ? marketVersionHistory(packageName, path.dirname(packageDirectory))[0]?.version ?? null
+      : null,
+    pending_version: pendingChange?.to_version ?? null,
+    pending_operation: pendingChange?.operation ?? null,
     trust: origin === "first_party" ? "core" : "unsigned",
-    status: update.status,
+    status: pendingChange && update.status === "loaded" ? "update_pending" : update.status,
     path: meta?.dir ?? (existsSync(spec) ? spec : null),
     drivers: update.drivers ?? [],
     executors: update.executors ?? [],
-    error: update.error ?? null,
+    error: pendingChange
+      ? `Version change to ${pendingChange.to_version} is pending; restart the API to apply it.`
+      : update.error ?? null,
   });
+}
+
+function pendingMarketVersion(directory: string, packageName: string): MarketVersionChange | undefined {
+  try {
+    const pluginDirectory = path.dirname(directory);
+    const value = JSON.parse(
+      readFileSync(marketTransactionPath(pluginDirectory, packageName), "utf8"),
+    ) as MarketVersionChange;
+    return isSafeTransaction(value, pluginDirectory) ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function isSafeTransaction(value: MarketVersionChange, pluginDirectory: string): boolean {
+  if (
+    !value ||
+    !MARKET_PACKAGE_NAME.test(value.package_name) ||
+    !isVersion(value.from_version) ||
+    !isVersion(value.to_version) ||
+    !["update", "rollback"].includes(value.operation) ||
+    !/^[0-9a-f-]{36}$/u.test(value.previous_directory)
+  ) return false;
+  if (value.operation === "update") {
+    return value.stage_directory === marketStageDirectory(value.package_name) &&
+      value.target_directory === null;
+  }
+  const target = value.target_directory;
+  return value.stage_directory === null &&
+    typeof target === "string" &&
+    /^[0-9a-f-]{36}$/u.test(target);
+}
+
+function isVersion(value: string): boolean {
+  return typeof value === "string" && MARKET_VERSION.test(value);
+}
+
+function marketPackageDirectory(packageName: string): string {
+  return `market-${createHash("sha256").update(packageName).digest("hex").slice(0, 24)}`;
+}
+
+function marketStageDirectory(packageName: string): string {
+  return `.regenic-market-stage-${createHash("sha256").update(packageName).digest("hex").slice(0, 24)}`;
+}
+
+function marketVersionsDirectoryName(packageName: string): string {
+  return `.regenic-market-versions-${createHash("sha256").update(packageName).digest("hex").slice(0, 24)}`;
+}
+
+function marketVersionsDirectory(pluginDirectory: string, packageName: string): string {
+  return path.join(pluginDirectory, marketVersionsDirectoryName(packageName));
+}
+
+function marketTransactionPath(pluginDirectory: string, packageName: string): string {
+  return path.join(
+    pluginDirectory,
+    `.regenic-market-transaction-${createHash("sha256").update(packageName).digest("hex").slice(0, 24)}.json`,
+  );
+}
+
+function installedMarketVersion(directory: string, packageName: string): string | undefined {
+  try {
+    const manifest = JSON.parse(readFileSync(path.join(directory, "package.json"), "utf8")) as {
+      name?: unknown;
+      version?: unknown;
+    };
+    const marker = JSON.parse(
+      readFileSync(path.join(directory, ".regenic-market-install.json"), "utf8"),
+    ) as { package_name?: unknown; version?: unknown };
+    if (
+      manifest.name === packageName &&
+      typeof manifest.version === "string" &&
+      marker.package_name === packageName &&
+      marker.version === manifest.version
+    ) return manifest.version;
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
+
+function pruneMarketVersionHistory(pluginDirectory: string, packageName: string): void {
+  const history = marketVersionHistory(packageName, pluginDirectory);
+  for (const old of history.slice(3)) {
+    rmSync(old.directory, { recursive: true, force: true });
+  }
+}
+
+function pluginInstallSource(
+  meta: PluginPackage | undefined,
+  spec: string,
+  origin: PluginOrigin,
+): PluginInstallSource {
+  if (origin === "first_party") return "built_in";
+  const directory = meta?.dir ?? spec;
+  if (!meta?.name || !isMarketInstallPath(directory, meta.name)) return "local";
+  try {
+    const marker = JSON.parse(
+      readFileSync(path.join(directory, ".regenic-market-install.json"), "utf8"),
+    ) as { package_name?: unknown };
+    return marker.package_name === meta.name ? "market" : "local";
+  } catch {
+    return "local";
+  }
+}
+
+function isMarketInstallPath(directory: string, packageName: string): boolean {
+  const expected = `market-${createHash("sha256").update(packageName).digest("hex").slice(0, 24)}`;
+  return path.basename(directory) === expected;
+}
+
+function removePendingMarketInstall(directory: string): boolean {
+  const removalPath = path.join(directory, ".regenic-market-uninstall.json");
+  if (!existsSync(removalPath)) return false;
+  try {
+    const manifest = JSON.parse(
+      readFileSync(path.join(directory, "package.json"), "utf8"),
+    ) as { name?: unknown };
+    const install = JSON.parse(
+      readFileSync(path.join(directory, ".regenic-market-install.json"), "utf8"),
+    ) as { package_name?: unknown };
+    const removal = JSON.parse(readFileSync(removalPath, "utf8")) as {
+      package_name?: unknown;
+    };
+    if (
+      typeof manifest.name !== "string" ||
+      install.package_name !== manifest.name ||
+      removal.package_name !== manifest.name ||
+      !isMarketInstallPath(directory, manifest.name)
+    ) {
+      return false;
+    }
+    rmSync(directory, { recursive: true, force: true });
+    return true;
+  } catch (error) {
+    console.warn("regenic connector market: could not finish pending package removal", error);
+    return false;
+  }
 }
 
 function forgetResolvedModule(spec: string): void {

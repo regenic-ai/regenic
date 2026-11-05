@@ -3,7 +3,7 @@
 Connectors bring messages from other tools into Regenic. This page lists the connectors available today, what each one can do, and how to load it.
 
 - **简体中文:** [../zh/CONNECTOR_CATALOG.md](../zh/CONNECTOR_CATALOG.md)
-- **Related:** [Build a connector](CONNECTOR.md) · [Built-in connector notes](CONNECTOR_DRIVERS.md) · [Example plugins](../../examples/connectors/README.md) · [Setup and CLI](SETUP_AND_CLI.md)
+- **Related:** [Connector marketplace publishing and index](CONNECTOR_MARKETPLACE.md) · [Build a connector](CONNECTOR.md) · [Built-in connector notes](CONNECTOR_DRIVERS.md) · [Example plugins](../../examples/connectors/README.md) · [Setup and CLI](SETUP_AND_CLI.md)
 
 ## At a glance
 

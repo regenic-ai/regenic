@@ -1,8 +1,10 @@
 const assert = require("node:assert/strict");
+const { createHash } = require("node:crypto");
 const { describe, it } = require("node:test");
-const { mkdirSync, mkdtempSync, readFileSync, writeFileSync } = require("node:fs");
+const { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } = require("node:fs");
 const { tmpdir } = require("node:os");
 const { join } = require("node:path");
+const { LocalExecutorPluginRegistry } = require("@regenic/domain");
 const {
   extraChannelDrivers,
   extraTaskExecutors,
@@ -16,6 +18,7 @@ const {
   createExecutorPluginRegistry,
   firstPartyPluginSpecs,
 } = require("../dist/channel-plugins");
+const { PersonalPluginService } = require("../dist/personal-plugin.service");
 
 function extraManifest(name, contributes, manifest = {}) {
   return JSON.stringify({
@@ -144,6 +147,7 @@ describe("extraChannelDrivers", () => {
     assert.equal(typeof drivers[0].bindWebhook, "function");
     const extra = listPluginInventory().find((item) => item.spec === root);
     assert.equal(extra?.origin, "extra");
+    assert.equal(extra?.package_name, "extra-webhook");
     assert.equal(extra?.trust, "unsigned");
     assert.equal(extra?.status, "loaded");
   });
@@ -270,6 +274,50 @@ describe("first-party channel plugins", () => {
     assert.equal(drivers.has("extra-one"), true);
     assert.equal(drivers.has("extra-two"), true);
     assert.equal(drivers.has("extra-replaced"), false);
+  });
+
+  it("can retry registration of an installed market package after a load failure", () => {
+    const pluginDir = mkdtempSync(join(tmpdir(), "regenic-market-retry-"));
+    const packageName = `retry-market-${Date.now()}`;
+    const packageHash = createHash("sha256").update(packageName).digest("hex").slice(0, 24);
+    const packageDir = join(pluginDir, `market-${packageHash}`);
+    mkdirSync(packageDir);
+    writeFileSync(
+      join(packageDir, "package.json"),
+      extraManifest(packageName, { drivers: ["retryDriver"] }),
+    );
+    writeFileSync(
+      join(packageDir, ".regenic-market-install.json"),
+      JSON.stringify({ package_name: packageName, version: "1.0.0" }),
+    );
+    const env = { REGENIC_PLUGIN_DIR: pluginDir };
+    const drivers = createChannelDriverRegistry(env);
+    const plugins = new PersonalPluginService(
+      drivers,
+      new LocalExecutorPluginRegistry(),
+    );
+    assert.equal(
+      plugins.list().find((item) => item.package_name === packageName)?.status,
+      "failed",
+    );
+    writeFileSync(
+      join(packageDir, "index.cjs"),
+      `exports.retryDriver = {
+        connector_type: "retry-market-driver",
+        source: "retry-market-driver",
+        install() { return { id: "1", org_id: "o", connector_type: "retry-market-driver", status: "enabled", config: {}, created_at: "" }; },
+      };`,
+    );
+
+    try {
+      const result = plugins.retryMarketRegistration(packageName, env);
+      assert.equal(result.registered, true);
+      assert.deepEqual(result.driver_types, ["retry-market-driver"]);
+      assert.deepEqual(result.registered_driver_types, ["retry-market-driver"]);
+      assert.equal(drivers.has("retry-market-driver"), true);
+    } finally {
+      rmSync(pluginDir, { recursive: true, force: true });
+    }
   });
 
   it("assembles registries without Nest importing driver symbols", () => {
