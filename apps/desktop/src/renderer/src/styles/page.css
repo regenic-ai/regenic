@@ -759,6 +759,208 @@
   box-shadow: 0 0 0 1px var(--line-12);
 }
 
+.market-search {
+  margin-top: 12px;
+}
+
+.market-card {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+}
+
+.market-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.market-card-title {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.market-card-title h3 {
+  margin: 0;
+}
+
+.market-card-title code {
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.market-card-head .chip {
+  flex-shrink: 0;
+}
+
+.market-card-desc,
+.market-facts {
+  margin: 0;
+}
+
+.market-facts {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.market-capabilities {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.market-capability {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: var(--elevated);
+  border: 1px solid var(--line-8);
+  font-size: 12px;
+}
+
+.market-capability strong {
+  font-weight: 500;
+  color: var(--text);
+}
+
+.market-capability code {
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.market-card .action-error,
+.market-card .action-hint {
+  margin: 0;
+}
+
+.market-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.market-actions .field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.market-links {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-left: auto;
+  font-size: 12px;
+}
+
+.market-links a {
+  color: var(--muted);
+}
+
+.market-links a:hover {
+  color: var(--text);
+}
+
+.market-blockers {
+  flex-basis: 100%;
+}
+
+.market-progress {
+  display: grid;
+  gap: 6px;
+}
+
+.market-progress p {
+  margin: 0;
+  font-size: 12px;
+}
+
+.market-progress-bar {
+  position: relative;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--wash-8);
+}
+
+.market-progress-bar span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 35%;
+  border-radius: inherit;
+  background: var(--teal);
+  animation: market-progress 1.4s ease-in-out infinite;
+}
+
+@keyframes market-progress {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(300%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .market-progress-bar span {
+    animation: none;
+    width: 100%;
+    opacity: 0.5;
+  }
+}
+
+.market-confirm {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border-radius: var(--radius-row);
+  background: var(--elevated);
+  border: 1px solid var(--line-12);
+}
+
+.market-confirm.is-danger {
+  border-color: color-mix(in srgb, var(--orange) 30%, transparent);
+}
+
+.market-confirm p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.market-confirm dl {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+}
+
+.market-confirm dl > div {
+  display: grid;
+  grid-template-columns: 72px 1fr;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.market-confirm dt {
+  color: var(--muted);
+}
+
+.market-confirm dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.market-confirm-actions {
+  display: flex;
+  gap: 8px;
+}
+
 .install-instance {
   padding: 12px;
   border: 1px solid var(--line-8);
@@ -929,6 +1131,22 @@
 
 .card .field {
   margin-bottom: 12px;
+}
+
+.directory-field {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.directory-field input {
+  flex: 1;
+  min-width: 0;
+}
+
+.connector-next {
+  margin: 8px 0 0;
+  max-width: 42em;
 }
 
 .field {

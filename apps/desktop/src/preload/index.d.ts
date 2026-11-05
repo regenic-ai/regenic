@@ -87,6 +87,7 @@ export interface RegenicDesktop {
     mode: KernelMode;
     origin?: string;
   }) => Promise<KernelSettingsView>;
+  pickDirectory: () => Promise<string | null>;
   pickDataDirectory: () => Promise<DataDirectoryPlan | null>;
   setDataDirectory: (input: {
     path: string;

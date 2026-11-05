@@ -4,6 +4,7 @@ import {
   ChannelDriverRegistry,
   DEFAULT_COPY_LOCALE,
   DEFAULT_LOCAL_EXECUTOR_ID,
+  resolveCopyText,
   resolveExecutorCatalog,
   type CopyLocale,
   EXECUTOR_DEFAULTS_SEEDED_PREF,
@@ -211,6 +212,53 @@ export class PersonalExecutorService {
       }
       const view = toInstallationView(installation, null, this.drivers, locale);
       return [{ value: installation.id, label: view.label }];
+    });
+  }
+
+  async ensureDeclaredExecutor(installationId: string): Promise<void> {
+    if (!this.runtime.isReady()) {
+      return;
+    }
+    const installation = await this.runtime
+      .requireHost()
+      .get("authority")
+      .findInstallation(installationId);
+    if (!installation || installation.org_id !== this.runtime.orgId()) {
+      return;
+    }
+    const driver = this.drivers.get(installation.connector_type);
+    const catalog = driver?.installCatalog?.({ env: process.env });
+    if (!driver || !catalog?.bind_executor) {
+      return;
+    }
+    const capabilities = driver.capabilities(installation);
+    if (
+      installation.status !== "enabled" ||
+      capabilities.execute !== true ||
+      capabilities.create === true ||
+      !this.localBinding(installation)
+    ) {
+      return;
+    }
+    const rows = await this.runtime
+      .requireHost()
+      .get("authority")
+      .listExecutorInstallations(this.runtime.orgId());
+    const pinned = rows.some(
+      (row) =>
+        row.kind === "local_connector" &&
+        executorConfigText(row.config, "installation_id") === installationId,
+    );
+    if (pinned) {
+      return;
+    }
+    const tables = driver.locales?.() ?? [];
+    const name = resolveCopyText(tables, DEFAULT_COPY_LOCALE, catalog.title).trim()
+      || installation.connector_type;
+    await this.install({
+      kind: "local_connector",
+      name,
+      config: { installation_id: installationId },
     });
   }
 

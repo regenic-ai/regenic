@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld("regenic", {
     origin?: string;
     personalApiKey?: string;
   }) => ipcRenderer.invoke("regenic:set-kernel-settings", input),
+  pickDirectory: () => ipcRenderer.invoke("regenic:pick-directory"),
   pickDataDirectory: () => ipcRenderer.invoke("regenic:pick-data-directory"),
   setDataDirectory: (input: {
     path: string;

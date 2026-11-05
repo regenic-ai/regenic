@@ -25,6 +25,7 @@ export interface ResolvedCatalogField {
   label: string;
   required?: boolean;
   placeholder?: string;
+  widget?: "directory";
   default?: string;
   multiple?: boolean;
   secret?: boolean;
@@ -69,6 +70,7 @@ export interface ResolvedInstallCatalog {
   description: string;
   credential_hint: string;
   channel_label?: string;
+  sync_unavailable_hint?: string;
   singleton?: boolean;
   fields?: ResolvedCatalogField[];
   prerequisites?: ResolvedCatalogPrerequisite[];
@@ -95,6 +97,7 @@ export function resolveInstallCatalog(
     description: resolveCopyText(tables, locale, catalog.description),
     credential_hint: resolveCopyText(tables, locale, catalog.credential_hint),
     ...(copyOptional(tables, locale, catalog.channel_label, "channel_label")),
+    ...(copyOptional(tables, locale, catalog.sync_unavailable_hint, "sync_unavailable_hint")),
     ...(catalog.singleton ? { singleton: true } : {}),
     fields: (catalog.fields ?? []).map((field) => resolveField(field, tables, locale)),
     prerequisites: (catalog.prerequisites ?? []).map((item) =>
@@ -198,6 +201,7 @@ function resolveField(
     label: resolveCopyText(tables, locale, field.label),
     ...(field.required ? { required: true } : {}),
     ...(copyOptional(tables, locale, field.placeholder, "placeholder")),
+    ...(field.widget ? { widget: field.widget } : {}),
     ...(field.default ? { default: field.default } : {}),
     ...(field.multiple ? { multiple: true } : {}),
     ...(field.secret ? { secret: true } : {}),

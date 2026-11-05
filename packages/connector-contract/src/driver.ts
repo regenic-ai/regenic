@@ -216,6 +216,8 @@ export interface DriverCatalogField {
   label: CopyRef;
   required?: boolean;
   placeholder?: CopyRef;
+  /** Desktop renders a folder picker instead of a plain text field. */
+  widget?: "directory";
   default?: string;
   multiple?: boolean;
   secret?: boolean;
@@ -278,6 +280,16 @@ export interface DriverInstallCatalog {
   channel_label?: CopyRef;
   singleton?: boolean;
   fields?: DriverCatalogField[];
+  /**
+   * After install or config save, pin one local executor to this installation
+   * when it can execute tasks. The desktop does not ask for a second install.
+   */
+  bind_executor?: boolean;
+  /**
+   * Replaces the sync controls while an enabled installation is not syncing.
+   * Connectors that omit it keep the normal sync controls.
+   */
+  sync_unavailable_hint?: CopyRef;
   prerequisites?: DriverCatalogPrerequisite[];
   /**
    * Numbered setup the Engine dialog renders above the form.
