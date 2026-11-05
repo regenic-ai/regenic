@@ -922,9 +922,12 @@ export const en = {
   "market.readOnly":
     "Installing runs the package inside the kernel process. Review the source and verify the exact version before proceeding.",
   "market.loading": "Loading the connector market…",
-  "market.unavailable": "The connector market is unavailable right now.",
+  "market.unavailable":
+    "A market URL is configured, but its index could not be loaded. Ask the deployment administrator to verify the API environment, HTTPS URL, and index response.",
   "market.notConfigured":
-    "No market index is configured. Set REGENIC_CONNECTOR_MARKET_INDEX_URL to an HTTPS JSON index URL.",
+    "No shared default market is enabled. This deployment uses an operator-curated connector index.",
+  "market.setupSteps":
+    "An administrator must publish the approved HTTPS JSON index, set REGENIC_CONNECTOR_MARKET_INDEX_URL in the API service environment, restart the API, then refresh this page. This setting is not managed from the desktop.",
   "market.empty": "No connectors are listed in this market yet.",
   "market.search": "Search connectors",
   "market.searchPlaceholder": "Name, package, or keyword",
@@ -1002,6 +1005,12 @@ export const en = {
   "market.installRegistered": "Installed and registered: {types}",
   "market.installRegistrationFailed":
     "The package was installed, but one or more connector types could not be registered. Check plugin status and logs.",
+  "market.retryRegistration": "Retry registration",
+  "market.registrationRetrying": "Retrying registration…",
+  "market.registrationRetrySucceeded": "Registered connector types: {types}.",
+  "market.registrationRetryFailed":
+    "Could not register connector types: {types}. Check the plugin error and kernel logs, resolve the reported issue, then retry.",
+  "market.uninstallBlockedInstances": "Connector instances preventing uninstall:",
   "engine.unsignedPlugins":
     "{count} extra plugin(s) loaded without a signature. They run in-process with the kernel.",
   "engine.failedPlugins": "{count} plugin(s) failed to load.",
@@ -2118,9 +2127,12 @@ export const zh: Record<MessageKey, string> = {
   "market.lead": "发现已发布到 npm 并收录于当前市场索引的连接器。",
   "market.readOnly": "安装会在内核进程中运行连接器代码；请先核验包来源和精确版本。",
   "market.loading": "正在加载连接器市场…",
-  "market.unavailable": "连接器市场暂时不可用。",
+  "market.unavailable":
+    "已配置市场地址，但无法读取索引。请联系部署管理员检查 API 环境变量、HTTPS 地址和索引响应。",
   "market.notConfigured":
-    "尚未配置市场索引。请将 REGENIC_CONNECTOR_MARKET_INDEX_URL 设置为 HTTPS JSON 索引地址。",
+    "当前部署未启用共享默认市场；连接器列表由部署管理员维护。",
+  "market.setupSteps":
+    "请管理员发布经过审核的 HTTPS JSON 索引，在 API 服务环境中设置 REGENIC_CONNECTOR_MARKET_INDEX_URL，重启 API 后刷新此页面。此配置不能在桌面端修改。",
   "market.empty": "此市场暂时没有收录连接器。",
   "market.search": "搜索连接器",
   "market.searchPlaceholder": "名称、包名或关键词",
@@ -2198,6 +2210,12 @@ export const zh: Record<MessageKey, string> = {
   "market.installRegistered": "已安装并注册：{types}",
   "market.installRegistrationFailed":
     "包已安装，但部分连接器类型未能注册。请查看插件状态和日志。",
+  "market.retryRegistration": "重试注册",
+  "market.registrationRetrying": "正在重试注册…",
+  "market.registrationRetrySucceeded": "已注册连接器类型：{types}。",
+  "market.registrationRetryFailed":
+    "无法注册连接器类型：{types}。请查看插件错误和内核日志，解决问题后重试。",
+  "market.uninstallBlockedInstances": "以下连接实例阻止卸载：",
   "engine.unsignedPlugins":
     "已加载 {count} 个未签名的额外插件。它们与内核同进程运行。",
   "engine.failedPlugins": "{count} 个插件未能加载。",

@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -369,6 +370,21 @@ export class PersonalController {
     @Body() body: { package_name?: unknown; version?: unknown; confirmed?: unknown } | undefined,
   ) {
     return this.connectorMarketInstaller.startUpdate(body ?? {});
+  }
+
+  @Post("connector-market/register")
+  retryMarketConnectorRegistration(
+    @Body() body: { package_name?: unknown } | undefined,
+  ) {
+    const packageName = typeof body?.package_name === "string"
+      ? body.package_name.trim()
+      : "";
+    if (!packageName) {
+      throw new BadRequestException({
+        error: { code: "invalid_package_name", message: "A package name is required." },
+      });
+    }
+    return this.plugins.retryMarketRegistration(packageName);
   }
 
   @Post("connector-market/:packageName/rollback")

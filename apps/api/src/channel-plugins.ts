@@ -118,6 +118,10 @@ export function createChannelDriverRegistry(
       continue;
     }
     registry.register(driver);
+    const spec = extraDriverSpecByObject.get(driver);
+    if (spec) {
+      extraDriverOwnerByType.set(driver.connector_type, spec);
+    }
   }
   return registry;
 }
@@ -234,6 +238,47 @@ export function loadNewExtraPlugins(
     drivers: addedDrivers,
     executors: addedExecutors,
     registeredDrivers,
+  };
+}
+
+export function retryMarketPluginRegistration(
+  packageName: string,
+  drivers: ChannelDriverRegistry,
+  executors: LocalExecutorPluginRegistry,
+  env: NodeJS.ProcessEnv = process.env,
+): { driverTypes: string[]; registeredDriverTypes: string[] } | undefined {
+  const spec = pluginDirSpecs(env).find((candidate) => {
+    const meta = readPluginPackage(candidate);
+    return meta?.name === packageName &&
+      pluginInstallSource(meta, candidate, "extra") === "market";
+  });
+  if (!spec) return undefined;
+  if (!successfulExtraSpecs.has(spec)) forgetResolvedModule(spec);
+  const loaded = loadPlugin(spec, {
+    warnIfEmpty: true,
+    required: false,
+    origin: "extra",
+  });
+  const registeredDriverTypes: string[] = [];
+  for (const driver of loaded.drivers) {
+    extraDriverSpecByObject.set(driver, spec);
+    if (drivers.has(driver.connector_type)) {
+      if (extraDriverOwnerByType.get(driver.connector_type) === spec) {
+        registeredDriverTypes.push(driver.connector_type);
+      }
+      continue;
+    }
+    drivers.register(driver);
+    extraDriverOwnerByType.set(driver.connector_type, spec);
+    registeredDriverTypes.push(driver.connector_type);
+  }
+  for (const executor of loaded.executors) {
+    const source = executor.catalog().source?.trim();
+    if (source && !executors.forSource(source)) executors.register(executor);
+  }
+  return {
+    driverTypes: loaded.drivers.map((driver) => driver.connector_type),
+    registeredDriverTypes,
   };
 }
 

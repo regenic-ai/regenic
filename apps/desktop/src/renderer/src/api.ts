@@ -571,6 +571,30 @@ export async function installConnectorFromMarket(
   return await response.json() as ConnectorInstallJob;
 }
 
+export interface ConnectorMarketRegistrationResult {
+  package_name: string;
+  registered: boolean;
+  plugin_status: string;
+  driver_types: string[];
+  registered_driver_types: string[];
+  error: string | null;
+}
+
+export async function retryConnectorMarketRegistration(
+  packageName: string,
+): Promise<ConnectorMarketRegistrationResult> {
+  const response = await kernelFetch("/v1/me/connector-market/register", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ package_name: packageName }),
+    signal: AbortSignal.timeout(ENGINE_FETCH_MS),
+  });
+  if (!response.ok) {
+    throw new Error(`connector market registration ${response.status}`);
+  }
+  return await response.json() as ConnectorMarketRegistrationResult;
+}
+
 export async function updateConnectorFromMarket(
   packageName: string,
   version: string,

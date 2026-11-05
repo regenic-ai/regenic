@@ -6,6 +6,7 @@ import {
   installConnectorFromMarket,
   installConnector,
   rollbackConnectorFromMarket,
+  retryConnectorMarketRegistration,
   installExecutor,
   retryConnectorQuarantines,
   setConnectorStatus,
@@ -553,10 +554,17 @@ function ConnectorMarketplace({
   const [installing, setInstalling] = useState<string | null>(null);
   const [installJob, setInstallJob] = useState<ConnectorInstallJob | null>(null);
   const [selectedVersions, setSelectedVersions] = useState<Record<string, string>>({});
-  const [installNotice, setInstallNotice] = useState<Record<string, { message: string; error?: boolean; refresh?: boolean; driverType?: string }>>({});
+  const [installNotice, setInstallNotice] = useState<Record<string, {
+    message: string;
+    error?: boolean;
+    refresh?: boolean;
+    driverType?: string;
+    retryRegistration?: boolean;
+  }>>({});
   const [installedPackages, setInstalledPackages] = useState<Set<string>>(new Set());
   const [uninstalling, setUninstalling] = useState<string | null>(null);
   const [changingVersion, setChangingVersion] = useState<string | null>(null);
+  const [retryingRegistration, setRetryingRegistration] = useState<string | null>(null);
   const [visibleCount, setVisibleCount] = useState(30);
 
   const loadMarket = useCallback(async (refresh = false, quiet = false) => {
@@ -619,7 +627,12 @@ function ConnectorMarketplace({
                 : t("market.installFailed");
             setInstallNotice((current) => ({
               ...current,
-              [job.package_name]: { message, error: true, refresh: job.installed },
+              [job.package_name]: {
+                message,
+                error: true,
+                refresh: job.installed,
+                retryRegistration: job.operation !== "update" && job.installed,
+              },
             }));
             if (job.installed) {
               await onChanged().catch(() => undefined);
@@ -655,6 +668,7 @@ function ConnectorMarketplace({
               error: !isUpdate && !registered,
               refresh: (!isUpdate && !registered) || !refreshed || !marketRefreshed,
               driverType: isUpdate ? undefined : job.result?.driver_types[0],
+              retryRegistration: !isUpdate && !registered,
             },
           }));
           return;
@@ -677,6 +691,8 @@ function ConnectorMarketplace({
               message: t("market.installStatusLost"),
               error: true,
               refresh: true,
+              retryRegistration:
+                installJob.operation !== "update" && installJob.installed,
             },
           }));
           return;
@@ -724,7 +740,10 @@ function ConnectorMarketplace({
       {loading ? <p className="muted">{t("market.loading")}</p> : null}
       {error ? <p className="action-error">{error}</p> : null}
       {!loading && !error && !market?.configured ? (
-        <p className="muted">{t("market.notConfigured")}</p>
+        <>
+          <p className="muted">{t("market.notConfigured")}</p>
+          <p className="muted">{t("market.setupSteps")}</p>
+        </>
       ) : null}
       {!loading && !error && market?.configured ? (
         <>
@@ -764,6 +783,11 @@ function ConnectorMarketplace({
                   plugin.drivers.includes(installation.connector_type),
                 ).length
               : 0;
+            const blockingInstallations = plugin
+              ? installations.filter((installation) =>
+                  plugin.drivers.includes(installation.connector_type),
+                )
+              : [];
             return (
               <article className="connector-kind" key={item.name}>
                 <div className="card-head">
@@ -1053,9 +1077,19 @@ function ConnectorMarketplace({
                     </button>
                   ) : null}
                   {plugin?.install_source === "market" && installedInstanceCount > 0 ? (
-                    <span className="muted">
-                      {t("market.uninstallInstancesFirst", { count: installedInstanceCount })}
-                    </span>
+                    <div className="muted">
+                      <p>{t("market.uninstallInstancesFirst", { count: installedInstanceCount })}</p>
+                      <p>{t("market.uninstallBlockedInstances")}</p>
+                      <ul>
+                        {blockingInstallations.map((installation) => (
+                          <li key={installation.id}>
+                            <a href={`#connector-installation-${encodeURIComponent(installation.id)}`}>
+                              {installation.label} ({installation.connector_type})
+                            </a>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
                   ) : null}
                   {item.homepage ? (
                     <a href={item.homepage} target="_blank" rel="noreferrer">
@@ -1078,6 +1112,69 @@ function ConnectorMarketplace({
                 {installNotice[item.name]?.message ? (
                   <p className={installNotice[item.name].error ? "action-error" : "action-hint"}>
                     {installNotice[item.name].message}
+                    {installNotice[item.name].retryRegistration ? (
+                      <>
+                        {" "}
+                        <button
+                          type="button"
+                          className="ghost"
+                          disabled={retryingRegistration !== null}
+                          onClick={() => {
+                            void (async () => {
+                              setRetryingRegistration(item.name);
+                              try {
+                                const result = await retryConnectorMarketRegistration(item.name);
+                                let refreshed = true;
+                                try {
+                                  await onChanged();
+                                } catch {
+                                  refreshed = false;
+                                }
+                                const registeredTypes = result.registered_driver_types.join(", ");
+                                setInstallNotice((current) => ({
+                                  ...current,
+                                  [item.name]: result.registered
+                                    ? {
+                                        message: `${t("market.registrationRetrySucceeded", {
+                                          types: registeredTypes,
+                                        })}${refreshed ? "" : ` ${t("market.refreshAfterInstallFailed")}`}`,
+                                        driverType: result.driver_types[0],
+                                        refresh: !refreshed,
+                                      }
+                                    : {
+                                        message: t("market.registrationRetryFailed", {
+                                          types: result.driver_types
+                                            .filter((type) => !result.registered_driver_types.includes(type))
+                                            .join(", ") || result.driver_types.join(", "),
+                                        }),
+                                        error: true,
+                                        retryRegistration: true,
+                                      },
+                                }));
+                              } catch {
+                                setInstallNotice((current) => ({
+                                  ...current,
+                                  [item.name]: {
+                                    ...current[item.name],
+                                    message: t("market.registrationRetryFailed", {
+                                      types: current[item.name]?.driverType ?? item.name,
+                                    }),
+                                    retryRegistration: true,
+                                    error: true,
+                                  },
+                                }));
+                              } finally {
+                                setRetryingRegistration(null);
+                              }
+                            })();
+                          }}
+                        >
+                          {retryingRegistration === item.name
+                            ? t("market.registrationRetrying")
+                            : t("market.retryRegistration")}
+                        </button>
+                      </>
+                    ) : null}
                     {installNotice[item.name].driverType && !installNotice[item.name].error ? (
                       <> <a href={installNotice[item.name].driverType
                         ? `#connector-type-${encodeURIComponent(installNotice[item.name].driverType ?? "")}`

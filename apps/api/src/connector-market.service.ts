@@ -83,7 +83,8 @@ export class ConnectorMarketService {
       };
       this.cache = { url: url.href, expiresAt: Date.now() + CACHE_TTL_MS, view };
       return view;
-    } catch {
+    } catch (error) {
+      console.warn("regenic connector market: index request failed", error);
       throw new ServiceUnavailableException({
         error: {
           code: "connector_market_unavailable",

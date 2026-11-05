@@ -145,6 +145,7 @@ export function ConnectorKind({
       {installations.map((installation) => (
         <ConnectorRow
           key={installation.id}
+          id={`connector-installation-${installation.id}`}
           kind={kind}
           installation={installation}
           busy={busyId === installation.id || syncingAll}
@@ -745,6 +746,7 @@ function visiblePrerequisites(
 }
 
 function ConnectorRow({
+  id,
   kind,
   installation,
   busy,
@@ -758,6 +760,7 @@ function ConnectorRow({
   onUninstall,
   onPairingCode,
 }: {
+  id: string;
   kind: ConnectorCatalogItem;
   installation: EngineInstallationView;
   busy: boolean;
@@ -780,7 +783,7 @@ function ConnectorRow({
         ? "stopped"
         : "";
   return (
-    <div className="install-block">
+    <div id={id} className="install-block">
       <div className="install install-instance">
         <div>
           <strong title={installation.id}>

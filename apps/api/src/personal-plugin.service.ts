@@ -1,5 +1,11 @@
 import { watch, type FSWatcher } from "node:fs";
-import { Inject, Injectable, OnModuleDestroy } from "@nestjs/common";
+import {
+  Inject,
+  Injectable,
+  ConflictException,
+  NotFoundException,
+  OnModuleDestroy,
+} from "@nestjs/common";
 import {
   ChannelDriverRegistry,
   LocalExecutorPluginRegistry,
@@ -12,6 +18,7 @@ import {
   marketVersionHistory,
   markMarketVersionChangePending,
   markMarketPluginRemovalPending,
+  retryMarketPluginRegistration as retryPluginRegistration,
   type MarketVersionChange,
 } from "./channel-plugins";
 
@@ -40,6 +47,48 @@ export class PersonalPluginService implements OnModuleDestroy {
 
   list() {
     return listPluginInventory();
+  }
+
+  retryMarketRegistration(packageName: string, env: NodeJS.ProcessEnv = process.env) {
+    const installed = this.list().find((item) =>
+      item.package_name === packageName && item.install_source === "market",
+    );
+    if (!installed) {
+      throw new NotFoundException({
+        error: {
+          code: "market_connector_not_found",
+          message: "The market connector package was not found.",
+        },
+      });
+    }
+    if (installed.status === "update_pending" || installed.status === "uninstall_pending") {
+      throw new ConflictException({
+        error: {
+          code: "market_connector_lifecycle_pending",
+          message: "Finish the pending connector update or removal before retrying registration.",
+        },
+      });
+    }
+
+    const result = retryPluginRegistration(packageName, this.drivers, this.executors, env);
+    const plugin = this.list().find((item) =>
+      item.package_name === packageName && item.install_source === "market",
+    );
+    const driverTypes = result?.driverTypes ?? [];
+    const registeredDriverTypes = result?.registeredDriverTypes ?? [];
+    const registered = plugin?.status === "loaded" &&
+      !plugin.error &&
+      driverTypes.length > 0 &&
+      registeredDriverTypes.length === driverTypes.length;
+
+    return {
+      package_name: packageName,
+      registered,
+      plugin_status: plugin?.status ?? "failed",
+      driver_types: driverTypes,
+      registered_driver_types: registeredDriverTypes,
+      error: registered ? null : plugin?.error ?? "One or more connector types are already registered by another plugin.",
+    };
   }
 
   retireDrivers(connectorTypes: string[]): void {

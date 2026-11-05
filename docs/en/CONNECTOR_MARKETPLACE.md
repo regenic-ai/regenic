@@ -63,7 +63,16 @@ The UTF-8 JSON index uses format `1`, with top-level `title` and `connectors`. E
 
 ## Configure market discovery
 
-The deployment operator configures one HTTPS JSON index URL with `REGENIC_CONNECTOR_MARKET_INDEX_URL`. The Engine page reads it through the local API and displays connectors, published versions, and compatibility ranges. When unset, the market section explains which setting is missing. Market entries are matched to the local plugin inventory by npm package name and show plugin load status, declared connector types, and local and market versions. Load status reflects the current process's plugin scan; it does not guarantee successful connector registration and is not a security audit or package provenance check. Discovery is read-only: browsing or refreshing never downloads, installs, or executes npm packages.
+There is deliberately no shared default market: each deployment owns its connector allowlist and published index. To enable discovery for the first time:
+
+1. Maintain the approved npm package list and generate the index as described above.
+2. Publish the JSON file at an HTTPS URL reachable from the API host.
+3. Set `REGENIC_CONNECTOR_MARKET_INDEX_URL` in the **API service environment** (not the desktop environment) to that URL.
+4. Restart the API, then refresh the Engine page.
+
+The market section distinguishes an unset index from an empty configured index. If a configured market is unavailable, verify that the API host can reach the URL, that it serves valid format-1 JSON over HTTPS without redirects, and that the deployment has restarted with the intended environment variable. The desktop directs users to the deployment administrator instead of presenting a configuration task they cannot perform. The setting is intentionally not editable in the desktop app: changing it changes the trusted package discovery source for the whole deployment.
+
+The Engine page reads the index through the local API and displays connectors, published versions, and compatibility ranges. Market entries are matched to the local plugin inventory by npm package name and show plugin load status, declared connector types, and local and market versions. Load status reflects the current process's plugin scan; it does not guarantee successful connector registration and is not a security audit or package provenance check. Discovery is read-only: browsing or refreshing never downloads, installs, or executes npm packages.
 
 The API rejects non-HTTPS URLs and HTTP redirects, caps index responses at 2 MiB, uses an 8-second timeout, caches successful results for 60 seconds, and validates the index shape and fields. Third-party text is rendered as text, and links are limited to HTTP(S). The URL is deployment-controlled and must not accept ordinary user input. HTTPS and integrity metadata validate the source transport and published bytes; they do not prove package code is safe.
 
