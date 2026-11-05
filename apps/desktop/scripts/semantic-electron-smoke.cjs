@@ -1,6 +1,7 @@
 const assert = require("node:assert/strict");
 const { spawn } = require("node:child_process");
-const { existsSync, mkdtempSync, mkdirSync, rmSync } = require("node:fs");
+const { existsSync, mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync } = require("node:fs");
+const { createHash } = require("node:crypto");
 const { createServer } = require("node:http");
 const { createRequire } = require("node:module");
 const { observeChild, runWithFailureCleanup } = require("./smoke-process.cjs");
@@ -14,6 +15,7 @@ const { SqliteAuthorityStore } = apiRequire("@regenic/authority-store/sqlite");
 const { IngestionService } = apiRequire("@regenic/domain");
 const { FsBlobStore } = apiRequire("@regenic/blob-store");
 const { EMBEDDINGGEMMA_2 } = apiRequire("@regenic/embedding-provider");
+const Database = createRequire(apiRequire.resolve("@regenic/vector-index"))("better-sqlite3");
 const root = mkdtempSync(join(tmpdir(), "regenic-semantic-electron-"));
 let ownedModel;
 let ownedElectron;
@@ -205,6 +207,96 @@ async function main() {
     await waitFor(() => evaluate('document.querySelector("[role=alert]")?.textContent.includes("This result is no longer current")'), "stale source rejection");
     await evaluate('window.regenic.setKernelSettings({ mode: "local" })');
     await waitFor(() => evaluate('document.querySelectorAll(".semantic-results > li").length === 0'), "origin reset");
+    await click('nav button[aria-label="Settings"]');
+    await waitFor(() => evaluate('Boolean(Array.from(document.querySelectorAll(".semantic-consent")).find(label => label.textContent.includes("Visual analysis")))'), "content permissions");
+    assert.equal((await evaluate("window.regenic.getSemanticRuntime()")).visualEnabled, false);
+    const toggleVisual = () => evaluate('Array.from(document.querySelectorAll(".semantic-consent")).find(label => label.textContent.includes("Visual analysis")).querySelector("input").click()');
+    const applyVisual = () => evaluate('Array.from(document.querySelectorAll(".semantic-settings button")).find(button => ["Save content permissions", "Apply permissions and restart"].includes(button.textContent)).click()');
+    await toggleVisual();
+    await waitFor(() => evaluate('Array.from(document.querySelectorAll(".semantic-settings button")).some(button => button.textContent === "Save content permissions")'), "staged visual opt-in");
+    assert.equal((await evaluate("window.regenic.getSemanticRuntime()")).visualEnabled, false);
+    const originBeforeConsent = await evaluate("window.regenic.getKernelSettings().then(settings => settings.activeOrigin)");
+    await applyVisual();
+    await waitFor(async () => {
+      const runtime = await evaluate("window.regenic.getSemanticRuntime()");
+      assert.equal(runtime.error, undefined);
+      return runtime.visualEnabled && !runtime.busy && runtime.canManage;
+    }, "applied visual opt-in");
+    assert.equal(await evaluate("window.regenic.getKernelSettings().then(settings => settings.activeOrigin)"), originBeforeConsent);
+    await waitFor(() => evaluate('Array.from(document.querySelectorAll(".semantic-consent")).find(label => label.textContent.includes("Visual analysis"))?.querySelector("input")?.checked'), "applied checkbox");
+    await toggleVisual();
+    await waitFor(() => evaluate('Array.from(document.querySelectorAll(".semantic-settings button")).some(button => button.textContent === "Save content permissions")'), "staged visual opt-out");
+    const reader = new Database(`${database}.vector.db`, { readonly: true });
+    try {
+      reader.exec("BEGIN");
+      reader.prepare("SELECT * FROM chunks").all();
+      await applyVisual();
+      const failed = await waitFor(async () => {
+        const runtime = await evaluate("window.regenic.getSemanticRuntime()");
+        return runtime.error && !runtime.busy ? runtime : null;
+      }, "failed index cleanup");
+      assert.equal(failed.visualEnabled, false);
+      assert.equal(failed.canManage, true);
+      await click('nav button[aria-label="Search"]');
+      await waitFor(() => evaluate('Boolean(document.querySelector("#context-query"))'), "leave failed settings");
+      await click('nav button[aria-label="Settings"]');
+      await waitFor(() => evaluate('Array.from(document.querySelectorAll(".semantic-settings button")).some(button => button.textContent === "Apply permissions and restart" && !button.disabled)'), "reopened settings recovery without kernel");
+    } finally { reader.close(); }
+    await waitFor(() => evaluate('Array.from(document.querySelectorAll(".semantic-settings button")).some(button => button.textContent === "Apply permissions and restart")'), "retry permission controls");
+    await applyVisual();
+    await waitFor(async () => {
+      const runtime = await evaluate("window.regenic.getSemanticRuntime()");
+      assert.equal(runtime.error, undefined);
+      return !runtime.visualEnabled && !runtime.busy && runtime.canManage;
+    }, "confirmed visual opt-out");
+    assert.equal(confirmed, 3);
+    assert.equal((await api("/v1/me/context/embedding/status")).configured, true);
+    console.log("PASS: actual permission UI saves opt-in without restarting, confirms opt-out, and recovers failed cleanup with the same saved permission (synthetic inference)");
+    const managedRoot = join(profile, "semantic-runtime");
+    const python = process.platform === "win32" ? null : join(managedRoot, "venv", "bin", "python");
+    if (python) {
+      mkdirSync(join(managedRoot, "venv", "bin"), { recursive: true });
+      const assets = join(desktop, "out", "main", "embedding");
+      const fingerprint = createHash("sha256").update(readFileSync(join(assets, "requirements.txt")))
+        .update(readFileSync(join(assets, "serve.py"))).digest("hex");
+      writeFileSync(join(managedRoot, "installed.json"), JSON.stringify({ fingerprint }));
+      writeFileSync(python, `#!${process.execPath}
+const {createServer} = require("node:http");
+const args = process.argv.slice(2);
+const descriptor = ${JSON.stringify(EMBEDDINGGEMMA_2)};
+const runtime = {device:"cpu",precision:"float32",threads:Number(process.env.OMP_NUM_THREADS),visual_enabled:args.includes("--visual")};
+const server = createServer(async (request, response) => {
+  let body = "";
+  for await (const chunk of request) body += chunk;
+  const input = body ? JSON.parse(body) : {};
+  response.setHeader("content-type", "application/json");
+  response.end(JSON.stringify(request.url === "/health" ? {status:"ready",descriptor,runtime} :
+    {descriptor,counts:input.texts.map(() => 10),vectors:input.texts.map(() => [1,...Array(767).fill(0)])}));
+});
+server.listen(Number(args[args.indexOf("--port")+1]),"127.0.0.1");
+process.on("SIGTERM",() => server.close(() => process.exit(0)));
+`, { mode: 0o755 });
+      await waitFor(async () => (await evaluate("window.regenic.getSemanticRuntime()")).installed, "synthetic managed installation");
+      await toggleVisual();
+      await waitFor(() => evaluate('Array.from(document.querySelectorAll(".semantic-settings button")).some(button => button.textContent === "Save permissions and start")'), "combined permission startup");
+      await evaluate('Array.from(document.querySelectorAll(".semantic-settings button")).find(button => button.textContent === "Save permissions and start").click()');
+      await waitFor(async () => {
+        const runtime = await evaluate("window.regenic.getSemanticRuntime()");
+        assert.equal(runtime.error, undefined);
+        return runtime.healthy && runtime.visualEnabled && !runtime.busy;
+      }, "start using the unapplied visual selection");
+      await waitFor(() => evaluate('Array.from(document.querySelectorAll(".semantic-consent")).find(label => label.textContent.includes("Visual analysis"))?.querySelector("input")?.checked'), "running visual selection");
+      await toggleVisual();
+      await waitFor(() => evaluate('Array.from(document.querySelectorAll(".semantic-settings button")).some(button => button.textContent === "Apply permissions and restart")'), "running permission change");
+      await applyVisual();
+      await waitFor(async () => {
+        const runtime = await evaluate("window.regenic.getSemanticRuntime()");
+        assert.equal(runtime.error, undefined);
+        return runtime.healthy && !runtime.visualEnabled && !runtime.busy;
+      }, "text-only reload after running opt-out", 90_000);
+      assert.equal(confirmed, 4);
+      console.log("PASS: combined startup uses the selected permission; running opt-out reloads text-only inference (synthetic managed model)");
+    }
     console.log("PASS: actual Electron search source navigation/highlight, bounded recovery, stale-source rejection and origin reset (synthetic inference)");
   } catch (error) {
     process.exitCode = 1;

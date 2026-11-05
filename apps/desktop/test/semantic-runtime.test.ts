@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { embeddingLaunchPlan, type EmbeddingHardware } from "../src/main/embedding-launch.ts";
 import { SemanticRuntime } from "../src/main/semantic-runtime.ts";
-import { semanticAction } from "../src/shared/semantic-runtime.ts";
+import { semanticAction, semanticVisualPreference } from "../src/shared/semantic-runtime.ts";
 import { loadDesktopPreference, saveDesktopPreference, saveKernelPreference, saveLocalePreference } from "../src/main/kernel-settings.ts";
 import {
   SEARCH_CONTEXT,
@@ -29,7 +29,7 @@ import { en, zh, type MessageKey } from "../src/shared/messages.ts";
 const revision = "914f7f89142e33e77833254d9c9b90c3cef7303b";
 const descriptor = { model_id: "google/embeddinggemma-2", model_revision: revision, dimensions: 768 };
 
-function fixture(hardware: EmbeddingHardware = { cpus: 8, totalMemoryBytes: 8 * 1024 ** 3 }) {
+function fixture(hardware: EmbeddingHardware = { cpus: 8, totalMemoryBytes: 8 * 1024 ** 3 }, visualEnabled = false) {
   const root = mkdtempSync(join(tmpdir(), "regenic-semantic-"));
   const assets = join(root, "assets");
   mkdirSync(assets);
@@ -40,12 +40,13 @@ function fixture(hardware: EmbeddingHardware = { cpus: 8, totalMemoryBytes: 8 * 
   let failAt: string | undefined;
   let hold = false;
   let health = descriptor;
-  let execution: Record<string, unknown> = { device: "cpu", precision: "bfloat16", threads: 2 };
+  let execution: Record<string, unknown> = { device: "cpu", precision: "bfloat16", threads: 2, visual_enabled: visualEnabled };
   let healthWait: Promise<void> | undefined;
   let server: ReturnType<typeof spawn> | undefined;
   const runtime = new SemanticRuntime({
     root, assets, startupMs: 30,
     hardware: () => hardware,
+    visualEnabled: () => visualEnabled,
     spawn(binary, args, options) {
       calls.push({ binary, args, options });
       if (args.includes("venv")) {
@@ -66,7 +67,7 @@ function fixture(hardware: EmbeddingHardware = { cpus: 8, totalMemoryBytes: 8 * 
   return { runtime, root, assets, calls, fail: () => { fail = true; }, hold: () => { hold = true; },
     wrongHealth: () => { health = { ...descriptor, dimensions: 1 }; },
     correctHealth: () => { health = descriptor; },
-    execution: (value: Record<string, unknown>) => { execution = value; },
+    execution: (value: Record<string, unknown>) => { execution = { visual_enabled: visualEnabled, ...value }; },
     failDownload: () => { failAt = "--download-only"; },
     deferHealth: () => {
       let release: () => void = () => {};
@@ -279,15 +280,33 @@ test("invalid execution diagnostics cannot advertise healthy model readiness", a
   } finally { f.cleanup(); }
 });
 
+test("visual encoder loads only with explicit opt-in and readiness must match the permission", async () => {
+  const f = fixture(undefined, true);
+  try {
+    await f.runtime.install();
+    assert.ok(f.calls[3].args.includes("--visual"));
+    await f.runtime.start();
+    assert.ok(f.calls[4].args.includes("--visual"));
+    await f.runtime.stop();
+    f.execution({ device: "cpu", precision: "bfloat16", threads: 2, visual_enabled: false });
+    await assert.rejects(f.runtime.start(), /semantic.startFailed/);
+  } finally { f.cleanup(); }
+});
+
 test("semantic preference is optional and survives locale and kernel changes", () => {
   const f = fixture();
   try {
     const file = join(f.root, "preferences.json");
     assert.equal(loadDesktopPreference(file).semanticEnabled, undefined);
-    saveDesktopPreference(file, { mode: "local", locale: "en", semanticEnabled: true });
+    assert.equal(semanticVisualPreference(false), false);
+    assert.equal(semanticVisualPreference(true), true);
+    for (const value of [undefined, null, "true", 1, {}]) assert.throws(() => semanticVisualPreference(value));
+    assert.equal(loadDesktopPreference(file).semanticVisualEnabled, undefined);
+    saveDesktopPreference(file, { mode: "local", locale: "en", semanticEnabled: true, semanticVisualEnabled: true });
     saveLocalePreference(file, "zh");
     saveKernelPreference(file, { mode: "custom", origin: "https://example.com" });
     assert.equal(loadDesktopPreference(file).semanticEnabled, true);
+    assert.equal(loadDesktopPreference(file).semanticVisualEnabled, true);
     saveDesktopPreference(file, { ...loadDesktopPreference(file), semanticEnabled: false });
     assert.equal(loadDesktopPreference(file).semanticEnabled, false);
   } finally { f.cleanup(); }
@@ -315,6 +334,7 @@ test("install uses isolated fixed assets, actual verification before marker and 
     assert.ok(f.calls[4].args.includes("--precision"));
     assert.ok(f.calls[4].args.includes("bfloat16"));
     assert.equal(f.calls[4].options.env?.HF_HUB_OFFLINE, "1");
+    assert.equal(f.calls[4].args.includes("--visual"), false);
     await f.runtime.start();
     assert.equal(f.calls.length, 5);
     await assert.rejects(f.runtime.install(), /semantic.stopFirst/);

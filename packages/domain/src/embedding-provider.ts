@@ -24,6 +24,7 @@ export interface EmbeddingAttachmentInput {
 export interface ProcessedEmbeddingAttachment {
   text?: string;
   vectors: number[][];
+  skipped_visual?: boolean;
 }
 
 export interface CountedEmbeddingBatch {
@@ -33,6 +34,7 @@ export interface CountedEmbeddingBatch {
 
 export interface EmbeddingProvider {
   readonly descriptor: EmbeddingModelDescriptor;
+  readonly visualEnabled?: boolean;
   countTokens(texts: string[], mode: EmbeddingMode, signal?: AbortSignal): Promise<number[]>;
   embed(texts: string[], mode: EmbeddingMode, signal?: AbortSignal): Promise<number[][]>;
   embedWithTokenCounts?(

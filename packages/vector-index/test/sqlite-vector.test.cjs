@@ -46,6 +46,78 @@ function query(index, authorized, extra = {}) {
 }
 
 describe("SQLite vector projection and independent durable jobs", () => {
+  it("revokes visual indexes across generations while preserving contiguous text, namespaces and reindex eligibility", async t => {
+    const f = await fixture(t);
+    const second = embeddingGeneration(model, 64);
+    await f.index.registerGeneration("org", second);
+    await f.index.registerGeneration("other", generation);
+    const visual = (ordinal, start) => ({
+      ordinal, start, end: start + 1, vector: [1, 0],
+      text_hash: createHash("sha256").update(`${hash}:0`).digest("hex"),
+      origin: { part_index: 2, content_hash: hash, mode: "visual", start: 0 },
+    });
+    const text = (ordinal, start, value) => ({
+      ordinal, start, end: start + value.length, vector: [0, 1],
+      text_hash: createHash("sha256").update(value).digest("hex"),
+      origin: { part_index: 1, content_hash: hash, mode: "text", start: 0, text: value },
+    });
+    for (const [org, gen] of [["org", generation], ["org", second], ["other", generation]]) {
+      await reconcile(f.index, [head("mixed"), head("image"), head("staged")], org, gen);
+      for (const job of await claim(f.index, "owner", at, org, gen)) {
+        if (job.event_id === "staged") {
+          await f.index.stageChunk({ job, owner: "owner", now: at, chunk: visual(0, 0) });
+        } else {
+          await f.index.complete({ job, owner: "owner", now: at, chunks: job.event_id === "image"
+            ? [visual(0, 0)] : [visual(0, 0), text(1, 1, "first"), visual(2, 6), text(3, 7, "second")] });
+        }
+      }
+    }
+    await f.index.setVisualEnabled("org", false);
+    const db = new Database(f.path);
+    try {
+      assert.equal(db.prepare("SELECT count(*) AS n FROM chunks WHERE org_id='org' AND json_extract(origin_json,'$.mode')='visual'").get().n, 0);
+      assert.equal(db.prepare("SELECT count(*) AS n FROM staged_chunks s JOIN jobs j ON j.id=s.job_id WHERE j.org_id='org'").get().n, 0);
+      assert.equal(db.prepare("SELECT count(*) AS n FROM chunks WHERE org_id='other'").get().n, 5);
+      assert.equal(db.prepare("SELECT count(*) AS n FROM staged_chunks s JOIN jobs j ON j.id=s.job_id WHERE j.org_id='other'").get().n, 1);
+      for (const gen of [generation, second]) {
+        assert.deepEqual(db.prepare("SELECT ordinal,start,end FROM chunks WHERE org_id='org' AND generation=? AND event_id='mixed' ORDER BY ordinal").all(gen.id),
+          [{ ordinal: 0, start: 0, end: 5 }, { ordinal: 1, start: 5, end: 11 }]);
+        const result = await query(f.index, [{ event_id: "mixed", content_hash: hash }, { event_id: "image", content_hash: hash }],
+          { generation: gen.id, query: "first", search_kind: "files" });
+        assert.equal(result.matched.length, 1);
+        assert.ok(result.matched[0].search_matches.every(match => match.origin.mode === "text"));
+      }
+    } finally { db.close(); }
+    f.reopen();
+    await f.index.setVisualEnabled("org", false);
+    assert.equal((await f.index.listJobs("org", generation.id)).find(job => job.event_id === "mixed").status, "succeeded");
+    await f.index.setVisualEnabled("org", true);
+    const jobs = await f.index.listJobs("org", generation.id);
+    assert.ok(jobs.every(job => job.status === "pending"));
+    assert.equal((await query(f.index, [{ event_id: "mixed", content_hash: hash }], { query: "first" })).matched.length, 1);
+  });
+
+  it("denied visual permission fences stale work and rejects visual staging and publication", async t => {
+    const f = await fixture(t);
+    await reconcile(f.index, [head("image")]);
+    const [stale] = await claim(f.index);
+    await f.index.setVisualEnabled("org", false);
+    const value = {
+      ordinal: 0, start: 0, end: 1, vector: [1, 0],
+      text_hash: createHash("sha256").update(`${hash}:0`).digest("hex"),
+      origin: { part_index: 1, content_hash: hash, mode: "visual", start: 0 },
+    };
+    assert.equal(await f.index.complete({ job: stale, owner: "owner", now: at, chunks: [value] }), false);
+    const [current] = await claim(f.index);
+    await assert.rejects(f.index.stageChunk({ job: current, owner: "owner", now: at, chunk: value }), /permission is disabled/);
+    await assert.rejects(f.index.complete({ job: current, owner: "owner", now: at, chunks: [value] }), /permission is disabled/);
+    await f.index.clearOrganization("org");
+    await f.index.registerGeneration("org", generation);
+    await reconcile(f.index, [head("image")]);
+    const [rebuilt] = await claim(f.index);
+    await assert.rejects(f.index.complete({ job: rebuilt, owner: "owner", now: at, chunks: [value] }), /permission is disabled/);
+  });
+
   it("excludes attachment lexical priority from messages-only top-k while preserving file/all priority", async (t) => {
     const f = await fixture(t);
     const heads = [...Array.from({ length: 50 }, (_, index) => head(`mixed-${index}`)), head("message")];

@@ -53,6 +53,53 @@ async function fixture(t, embedding = provider(), gen = generation) {
 }
 
 describe("independent embedding indexing worker", () => {
+  it("skips unauthorized images as completed empty work and rebuilds them only after opt-in", async t => {
+    const embedding = provider({
+      visualEnabled: false,
+      async processAttachment() {
+        return this.visualEnabled ? { vectors: [[1, 0]] } : { vectors: [], skipped_visual: true };
+      },
+    });
+    const f = await fixture(t, embedding);
+    await f.index.setVisualEnabled("org", false);
+    const input = batch("create", undefined);
+    input.records[0].content = [{ role: "attachment", media_type: "image/png",
+      source_filename: "photo.png", bytes: Buffer.from("synthetic image") }];
+    await f.ingest.ingest(input);
+    assert.deepEqual(await f.worker.runOnce(), { processed: 1, failed: 0, superseded: 0 });
+    const [job] = await f.index.listJobs("org", generation.id);
+    assert.equal(job.status, "skipped");
+    await f.index.setVisualEnabled("org", true);
+    embedding.visualEnabled = true;
+    assert.deepEqual(await f.worker.runOnce(), { processed: 1, failed: 0, superseded: 0 });
+    assert.equal((await f.index.listJobs("org", generation.id))[0].status, "succeeded");
+    assert.equal((await f.index.matchAuthorized({ org_id: "org", generation: generation.id,
+      authorized: [{ event_id: job.event_id, content_hash: job.content_hash }],
+      query_vector: [1, 0], limit: 10 })).matched.length, 1);
+    await f.index.setVisualEnabled("org", false);
+    assert.deepEqual((await f.index.matchAuthorized({ org_id: "org", generation: generation.id,
+      authorized: [{ event_id: job.event_id, content_hash: job.content_hash }],
+      query_vector: [1, 0], limit: 10 })).matched, []);
+  });
+
+  it("retains body and extracted document text when visual material is intentionally skipped", async t => {
+    const f = await fixture(t, provider({
+      visualEnabled: false,
+      async processAttachment() { return { text: "Local PDF text", vectors: [], skipped_visual: true }; },
+    }));
+    const input = batch("create", "body");
+    input.records[0].content.push({ role: "attachment", media_type: "application/pdf",
+      source_filename: "notes.pdf", bytes: Buffer.from("%PDF-synthetic") });
+    await f.ingest.ingest(input);
+    assert.deepEqual(await f.worker.runOnce(), { processed: 1, failed: 0, superseded: 0 });
+    const [job] = await f.index.listJobs("org", generation.id);
+    assert.equal(job.status, "succeeded");
+    const result = await f.index.matchAuthorized({ org_id: "org", generation: generation.id,
+      authorized: [{ event_id: job.event_id, content_hash: job.content_hash }],
+      query_vector: [1, 0], query: "Local PDF", search_kind: "files", limit: 10 });
+    assert.equal(result.matched[0].search_matches[0].origin.mode, "text");
+  });
+
   it("resumes a 567-chunk attachment across batches without publishing partial coverage or repeating inference", async (t) => {
     const large = embeddingGeneration(descriptor, 32, 1024);
     const extracted = "x".repeat(27 * 566 + 1);

@@ -74,7 +74,7 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
       this.db.pragma("secure_delete = ON");
       this.db.pragma("busy_timeout = 5000");
       const version = this.db.pragma("user_version", { simple: true });
-      if (version !== 0 && version !== 1 && version !== 2 && version !== 3 && version !== 4 && version !== 5 && version !== 6) throw new VectorIndexSchemaError("Unsupported vector index schema");
+      if (version !== 0 && version !== 1 && version !== 2 && version !== 3 && version !== 4 && version !== 5 && version !== 6 && version !== 7) throw new VectorIndexSchemaError("Unsupported vector index schema");
       this.db.transaction(() => {
         this.db.exec(`
           CREATE TABLE IF NOT EXISTS generations (
@@ -129,6 +129,9 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
             FOREIGN KEY (org_id, generation) REFERENCES generations(org_id, generation) ON DELETE CASCADE
           );
           INSERT OR IGNORE INTO generation_activations SELECT org_id,generation FROM active_generations;
+          CREATE TABLE IF NOT EXISTS visual_policies (
+            org_id TEXT PRIMARY KEY, enabled INTEGER NOT NULL CHECK (enabled IN (0,1))
+          );
           CREATE TEMP TABLE IF NOT EXISTS vector_authorized (
             event_id TEXT PRIMARY KEY,
             content_hash TEXT NOT NULL
@@ -155,7 +158,7 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
           }
           this.db.exec("UPDATE jobs SET started_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE status='running' AND started_at IS NULL;");
         }
-        this.db.pragma("user_version = 6");
+        this.db.pragma("user_version = 7");
       }).immediate();
     } catch (error) {
       this.db.close();
@@ -164,6 +167,68 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
   }
 
   close(): void { if (this.db.open) this.db.close(); }
+
+  async setVisualEnabled(orgId: string, enabled: boolean): Promise<void> {
+    required(orgId);
+    if (typeof enabled !== "boolean") throw new Error("Invalid visual processing permission");
+    this.db.transaction(() => {
+      const previous = this.db.prepare("SELECT enabled FROM visual_policies WHERE org_id=?")
+        .get(orgId) as { enabled: number } | undefined;
+      if (previous?.enabled === Number(enabled)) return;
+      if (!enabled) {
+        const readChunks = this.db.prepare(`
+          SELECT ordinal,start,end,origin_json FROM chunks
+          WHERE org_id=? AND generation=? AND event_id=? ORDER BY ordinal
+        `);
+        const deleteChunk = this.db.prepare("DELETE FROM chunks WHERE org_id=? AND generation=? AND event_id=? AND ordinal=?");
+        const updateChunk = this.db.prepare(`UPDATE chunks SET ordinal=?,start=?,end=?
+          WHERE org_id=? AND generation=? AND event_id=? AND ordinal=?`);
+        const deleteCoverage = this.db.prepare("DELETE FROM coverage WHERE org_id=? AND generation=? AND event_id=?");
+        const updateCoverage = this.db.prepare("UPDATE coverage SET chunk_count=? WHERE org_id=? AND generation=? AND event_id=?");
+        const skipJob = this.db.prepare(`UPDATE jobs SET status='skipped'
+          WHERE org_id=? AND generation=? AND event_id=? AND status='succeeded'`);
+        const groups = this.db.prepare(`
+          SELECT DISTINCT generation,event_id FROM chunks
+          WHERE org_id=? AND json_extract(origin_json,'$.mode')='visual'
+        `).all(orgId) as Array<{ generation: string; event_id: string }>;
+        for (const group of groups) {
+          const rows = readChunks.all(orgId, group.generation, group.event_id) as Array<{
+            ordinal: number; start: number; end: number; origin_json: string | null;
+          }>;
+          let ordinal = 0;
+          let cursor = 0;
+          for (const row of rows) {
+            const origin = row.origin_json === null ? undefined : JSON.parse(row.origin_json) as { mode?: string };
+            if (origin?.mode === "visual") {
+              deleteChunk.run(orgId, group.generation, group.event_id, row.ordinal);
+              continue;
+            }
+            const length = row.end - row.start;
+            updateChunk.run(ordinal++, cursor, cursor + length, orgId, group.generation, group.event_id, row.ordinal);
+            cursor += length;
+          }
+          if (ordinal === 0) {
+            deleteCoverage.run(orgId, group.generation, group.event_id);
+            skipJob.run(orgId, group.generation, group.event_id);
+          } else {
+            updateCoverage.run(ordinal, orgId, group.generation, group.event_id);
+          }
+        }
+      }
+      // Permission changes invalidate checkpoint offsets, not retained text vectors.
+      this.db.prepare("DELETE FROM staged_chunks WHERE job_id IN (SELECT id FROM jobs WHERE org_id=?)").run(orgId);
+      this.db.prepare(`UPDATE jobs SET status='pending',owner=NULL,lease_until=NULL,retry_at=NULL,
+        error_code=NULL,started_at=NULL,completed_at=NULL,attempts=0
+        WHERE org_id=? AND operation!='tombstone' AND status!='superseded'
+        AND (?=1 OR status='running')`).run(orgId, enabled && previous?.enabled === 0 ? 1 : 0);
+      this.db.prepare("INSERT OR REPLACE INTO visual_policies(org_id,enabled) VALUES (?,?)")
+        .run(orgId, Number(enabled));
+    }).immediate();
+    if (!enabled) {
+      const checkpoint = this.db.pragma("wal_checkpoint(TRUNCATE)") as Array<{ busy: number }>;
+      if (checkpoint.some((row) => row.busy !== 0)) throw new Error("Visual index deletion checkpoint is busy");
+    }
+  }
 
   async registerGeneration(orgId: string, generation: EmbeddingGeneration): Promise<void> {
     required(orgId);
@@ -396,6 +461,7 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
     if (chunk.origin) parseOrigin(JSON.stringify(chunk.origin), chunk.text_hash, chunk.end - chunk.start);
     return this.db.transaction(() => {
       if (!this.ownsJob(job, owner, now)) return false;
+      this.assertVisualPermission(job.org_id, [chunk]);
       const previous = this.db.prepare("SELECT ordinal,end FROM staged_chunks WHERE job_id=? ORDER BY ordinal DESC LIMIT 1")
         .get(job.id) as { ordinal: number; end: number } | undefined;
       if (chunk.ordinal !== (previous ? previous.ordinal + 1 : 0) || chunk.start !== (previous?.end ?? 0)) {
@@ -440,6 +506,7 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
     }
     return this.db.transaction(() => {
       if (!this.ownsJob(job, owner, now)) return false;
+      this.assertVisualPermission(job.org_id, chunks);
       this.db.prepare("DELETE FROM coverage WHERE org_id=? AND generation=? AND event_id=?")
         .run(job.org_id, job.generation, job.event_id);
       if (!noContent) {
@@ -797,11 +864,21 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
     }
     return value;
   }
+
+  private assertVisualPermission(orgId: string, chunks: ContextVectorChunk[]): void {
+    const policy = this.db.prepare("SELECT enabled FROM visual_policies WHERE org_id=?")
+      .get(orgId) as { enabled: number } | undefined;
+    if (policy?.enabled === 0 && chunks.some((chunk) => chunk.origin?.mode === "visual")) {
+      throw new Error("Visual indexing permission is disabled");
+    }
+  }
 }
 
-export const sqliteContextVectorIndexPlugin = definePlugin<{ path: string }>({
+export const sqliteContextVectorIndexPlugin = definePlugin<{
+  path: string; org_id?: string; visual_enabled?: boolean;
+}>({
   name: "context-vector-index-sqlite",
-  apply(ctx, options) {
+  async apply(ctx, options) {
     let index: SqliteContextVectorIndex;
     try {
       index = new SqliteContextVectorIndex(options.path);
@@ -813,6 +890,14 @@ export const sqliteContextVectorIndexPlugin = definePlugin<{ path: string }>({
       console.error("Vector index unavailable", "vector_index_unavailable");
       ctx.provide("context-vector-status", { status: "unavailable", error_code: "vector_index_unavailable" });
       return;
+    }
+    try {
+      if (options.org_id !== undefined) {
+        await index.setVisualEnabled(options.org_id, options.visual_enabled === true);
+      }
+    } catch (error) {
+      index.close();
+      throw error;
     }
     ctx.provide("context-vector-status", { status: "ready" });
     ctx.provide("context-vector-index", index);

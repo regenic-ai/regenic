@@ -9,7 +9,7 @@ import {
   shouldStartBackgroundWork,
   shouldRunInProcessContextJobs,
 } from "@regenic/config";
-import { embeddingConfigFromEnv } from "@regenic/embedding-provider";
+import { embeddingConfigFromEnv, embeddingVisualEnabledFromEnv } from "@regenic/embedding-provider";
 import { SqliteContextVectorIndex } from "@regenic/vector-index";
 import { postgresAuthorityPlugin, sqliteAuthorityPlugin } from "@regenic/authority-store";
 import { fsBlobPlugin } from "@regenic/blob-store";
@@ -64,6 +64,13 @@ export class PersonalRuntimeService implements OnModuleInit, OnModuleDestroy {
     if (backend.driver === "sqlite") {
       const database = resolve(backend.path);
       await mkdir(dirname(database), { recursive: true });
+      if (!embedding && process.env.REGENIC_EMBEDDING_VISUAL !== undefined &&
+        existsSync(`${database}.vector.db`)) {
+        const index = new SqliteContextVectorIndex(`${database}.vector.db`);
+        try {
+          await index.setVisualEnabled(env.REGENIC_ORG, embeddingVisualEnabledFromEnv(process.env));
+        } finally { index.close(); }
+      }
       this.options = {
         database,
         blobRoot,

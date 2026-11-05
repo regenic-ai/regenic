@@ -139,6 +139,8 @@ export function SemanticSettings() {
   const [indexResult, setIndexResult] = useState<string | null>(null);
   const [clockNow, setClockNow] = useState(Date.now());
   const [serverOffset, setServerOffset] = useState(0);
+  const [visualDraft, setVisualDraft] = useState<boolean | null>(null);
+  const [visualApplying, setVisualApplying] = useState(false);
   const operation = useRef<AbortController | null>(null);
 
   useEffect(() => {
@@ -156,15 +158,19 @@ export function SemanticSettings() {
       controller = new AbortController();
       const current = controller;
       try {
-        const [local, next] = await Promise.all([
+        const [local, next] = await Promise.allSettled([
           window.regenic?.getSemanticRuntime?.() ?? Promise.resolve(null),
           fetchSemanticIndexStatus(AbortSignal.any([current.signal, AbortSignal.timeout(10_000)])),
         ]);
         if (!cancelled && !current.signal.aborted) {
-          setRuntime(local);
-          setIndex(next);
-          setServerOffset(serverClockOffset(next.server_now));
-          setPollError(null);
+          if (local.status === "fulfilled") setRuntime(local.value);
+          if (next.status === "fulfilled") {
+            setIndex(next.value);
+            setServerOffset(serverClockOffset(next.value.server_now));
+          }
+          const failure = local.status === "rejected" ? local.reason :
+            next.status === "rejected" ? next.reason : null;
+          setPollError(failure ? failure instanceof Error ? failure.message : t("semantic.failed") : null);
         }
       } catch (caught) {
         if (!cancelled && !current.signal.aborted) setPollError(caught instanceof Error ? caught.message : t("semantic.failed"));
@@ -184,17 +190,40 @@ export function SemanticSettings() {
   function message(value: string): string { return isMessageKey(value) ? t(value) : value; }
 
   async function action(next: SemanticAction) {
+    const visualEnabled = visualDraft ?? Boolean(runtime?.visualEnabled);
+    if (next !== "stop" && runtime?.visualEnabled && !visualEnabled &&
+      !window.confirm(t("semantic.visual.disableConfirm"))) return;
     const controller = new AbortController();
     operation.current = controller;
     setBusy(true); setError(null);
     try {
       if (!window.regenic?.semanticAction) throw new Error(t("semantic.localOnly"));
-      const nextRuntime = await window.regenic.semanticAction(next);
-      if (!controller.signal.aborted) { setRuntime(nextRuntime); setConsent(false); }
+      const nextRuntime = await window.regenic.semanticAction(next, next === "stop" ? undefined : visualEnabled);
+      if (!controller.signal.aborted) {
+        setRuntime(nextRuntime);
+        if (!nextRuntime.error) { setConsent(false); setVisualDraft(null); }
+      }
     } catch (caught) {
       if (!controller.signal.aborted) setError(caught instanceof Error ? message(caught.message) : t("semantic.failed"));
     }
     finally { if (!controller.signal.aborted) setBusy(false); }
+  }
+
+  async function applyVisual() {
+    const enabled = visualDraft ?? Boolean(runtime?.visualEnabled);
+    if (enabled === Boolean(runtime?.visualEnabled) && !runtime?.error) return;
+    if (!enabled && !window.confirm(t("semantic.visual.disableConfirm"))) return;
+    setVisualApplying(true);
+    setError(null);
+    try {
+      if (!window.regenic?.setSemanticVisual) throw new Error(t("semantic.localOnly"));
+      const next = await window.regenic.setSemanticVisual(enabled);
+      setRuntime(next);
+      if (next.error) setError(message(next.error));
+      else setVisualDraft(null);
+    } catch (caught) {
+      setError(caught instanceof Error ? message(caught.message) : t("semantic.failed"));
+    } finally { setVisualApplying(false); }
   }
 
   async function indexAction(generation?: string) {
@@ -227,7 +256,7 @@ export function SemanticSettings() {
     }
   }
 
-  const disabled = busy || Boolean(runtime?.busy);
+  const disabled = busy || visualApplying || Boolean(runtime?.busy);
   const running = runtime?.stage === "running";
   const working = runtime ? transitional.includes(runtime.stage) : false;
   const tone = stageTone(runtime, index);
@@ -264,6 +293,39 @@ export function SemanticSettings() {
       </div>
       <p className="muted">{t("semantic.lead")}</p>
 
+      {runtime?.canManage || visualApplying ? (
+        <div className="semantic-setup">
+          <h3>{t("semantic.content.title")}</h3>
+          <p className="muted semantic-note">{t(running ? "semantic.content.hint" : "semantic.content.setupHint")}</p>
+          <label className="semantic-consent">
+            <input type="checkbox" checked disabled />
+            <span>{t("semantic.content.text")}</span>
+          </label>
+          <label className="semantic-consent">
+            <input type="checkbox" checked={visualDraft ?? Boolean(runtime?.visualEnabled)}
+              disabled={disabled || !runtime?.canManage}
+              onChange={(event) => setVisualDraft(event.target.checked)} />
+            <span>{t("semantic.content.visual")}</span>
+          </label>
+          <p className="muted semantic-note">{t("semantic.visual.cost")}</p>
+          <label className="semantic-consent">
+            <input type="checkbox" checked={false} disabled />
+            <span>{t("semantic.content.audio")}</span>
+          </label>
+          <p className="muted semantic-note">{t("semantic.visual.removal")}</p>
+          {visualApplying ? <p className="muted semantic-note" role="status">{t("semantic.visual.applying")}</p> : null}
+          {(visualDraft !== null && visualDraft !== Boolean(runtime?.visualEnabled)) || runtime?.error ? (
+            <div className="semantic-actions">
+              <button type="button" className={running ? "primary" : "ghost"} disabled={disabled}
+                onClick={() => void applyVisual()}>{t(running || runtime?.error ? "semantic.visual.apply" : "semantic.visual.save")}</button>
+              {visualDraft !== null ? (
+                <button type="button" className="ghost" disabled={disabled}
+                  onClick={() => setVisualDraft(null)}>{t("semantic.visual.cancel")}</button>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
       {runtime?.canManage ? (
         <p className="muted semantic-note">{t("semantic.automatic")}</p>
       ) : null}
@@ -285,6 +347,7 @@ export function SemanticSettings() {
               precision: runtime.execution.precision === "float32" ? "FP32" : "BF16",
               threads: runtime.execution.threads,
             })}</p>
+            <p className="muted semantic-note">{t(runtime.visualEnabled ? "semantic.visual.enabled" : "semantic.visual.disabled")}</p>
           </details>
         </div>
       ) : null}
@@ -300,7 +363,7 @@ export function SemanticSettings() {
             <div className="semantic-actions">
               {running ? null : (
                 <button type="button" className="primary" disabled={disabled}
-                  onClick={() => void action("start")}>{t(runtime.enabled ? "semantic.restart" : "semantic.start")}</button>
+                  onClick={() => void action("start")}>{t("semantic.startWithPermissions")}</button>
               )}
               {running || runtime.enabled ? (
                 <button type="button" className="ghost" disabled={disabled}

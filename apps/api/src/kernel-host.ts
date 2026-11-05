@@ -64,7 +64,10 @@ export async function createKernelHost<A, B>(
     await host.plugin(modelProviderPlugin, options.model ?? { driver: "none" });
     if (options.embedding) {
       await host.plugin(localEmbeddingProviderPlugin, options.embedding);
-      await host.plugin(sqliteContextVectorIndexPlugin, { path: options.embedding.database });
+      await host.plugin(sqliteContextVectorIndexPlugin, {
+        path: options.embedding.database, org_id: options.orgId,
+        visual_enabled: options.embedding.visual_enabled,
+      });
       await host.plugin(hybridEventRetrieverPlugin, {
         ...options.embedding,
         lexical_index: options.lexicalDatabase === undefined ? undefined : host.get("context-lexical-index"),

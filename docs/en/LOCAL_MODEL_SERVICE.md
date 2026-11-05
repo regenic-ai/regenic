@@ -40,8 +40,8 @@ tokenizers is not supported:
 The desktop-managed service configures itself without tuning controls:
 
 - On Apple Silicon with at least 12 GiB of total memory, startup tries Apple GPU
-  acceleration (Metal / MPS) with FP32 weights. It checks query, document, image and
-  video inference before reporting readiness. If MPS is unavailable or model loading/
+  acceleration (Metal / MPS) with FP32 weights. It checks query and document inference,
+  plus image/video inference only when visual analysis is authorized. If MPS is unavailable or model loading/
   verification raises an inference error, it releases GPU allocations and retries
   on CPU. The fallback reason appears in Settings and logs; CPU failures still fail
   startup. Later request failures remain visible rather than silently switching devices.
@@ -56,12 +56,43 @@ The desktop-managed service configures itself without tuning controls:
 
 Settings shows the **actual** ready backend, not just the requested device, with
 precision and CPU thread limits under **Technical details**. Startup verification
-is a compatibility check, not a cross-hardware performance certification. All paths
-retain text and vision encoders and return float32, re-normalized vectors; the model
+is a compatibility check, not a cross-hardware performance certification. Text is
+always loaded; vision is loaded only with explicit consent, and audio is never loaded.
+All paths return float32, re-normalized vectors; the model
 descriptor and generation identity do not change. Manual services retain the CPU/BF16
 default; `--precision float32` selects FP32, and `--device auto-mps --precision float32`
 opts into the same verified MPS/CPU fallback. Install-time `--download-only` uses CPU
 for `auto-mps`; offline startup verifies acceleration on the current machine.
+
+### Content processing permissions
+
+Local semantic search remains optional. When enabled, it defaults to **text only**:
+messages and extractable document text are indexed; visual and audio encoders are not loaded.
+Under **Settings > Local semantic search > Content you allow the model to analyze**,
+opt into **Visual analysis** for images, scanned pages and video frames, then choose
+**Save content permissions**, or install/start with the current selection in one action.
+While inference is running, choose **Apply permissions and restart** instead.
+Audio is shown as **Not supported**, not as an inactive
+feature that can be enabled. Video soundtracks are never transcribed or indexed.
+
+Saving an opt-in before inference starts does not restart the kernel. Installing or
+starting always saves the displayed permission selection first. Turning visual analysis
+off requires confirmation. The app stops owned services,
+deletes visual chunks across all generations and clears checkpoints before restarting
+text-only inference. Text vectors and original files remain intact; mixed projections
+are compacted to keep valid text coordinates. Visual-only items become skipped, not failures.
+Re-enabling requeues current indexing jobs; text remains searchable during backfill.
+Permissions persist across restarts and locale/kernel changes. The default also applies
+to existing profiles without an explicit visual preference; legacy visual indexes are removed.
+Disabling local semantic search entirely retains downloads and indexes; it is distinct
+from revoking visual consent.
+
+Manual services default to text-only too. To authorize visuals, start the Python service
+with `--visual` **and** set `REGENIC_EMBEDDING_VISUAL=true` on the kernel. Both sides
+must opt in; missing consent prevents visual vectors even if weights were loaded.
+This is an analysis permission, not filesystem/camera/microphone access.
+Python service changes require **Reinstall / repair** once; changing the content
+preference thereafter restarts services without requiring reinstallation.
 
 [requirements.txt](../../packages/embedding-provider/python/requirements.txt) is
 authoritative: `sentence-transformers[image]==6.1.0`, `transformers==5.19.0`,
