@@ -3,7 +3,7 @@ const { describe, it } = require("node:test");
 const { DshApiError, DshWebRpcClient } = require("../dist");
 
 describe("DshWebRpcClient", () => {
-  it("exchanges the launch token for a cookie used by HTTP RPC and the Mux", async () => {
+  it("uses a cached cookie for HTTP RPC and a fresh cookie per Mux socket", async () => {
     const calls = [];
     const client = new DshWebRpcClient({
       base_url: "http://127.0.0.1:3080",
@@ -12,12 +12,13 @@ describe("DshWebRpcClient", () => {
       async fetch(url, init) {
         calls.push({ url: String(url), init });
         if (String(url).includes("/connect?")) {
+          const peer = calls.filter((call) => call.url.includes("/connect?")).length;
           return {
             ok: false,
             status: 302,
             headers: new Headers({
               location: "./api/remote.mux",
-              "set-cookie": "dsh-auth-test=api-cookie; Path=/; HttpOnly",
+              "set-cookie": `dsh-auth-test=peer-${peer}; Path=/; HttpOnly`,
             }),
             async json() {
               return {};
@@ -40,18 +41,23 @@ describe("DshWebRpcClient", () => {
 
     await client.sessionList();
     const mux = await client.muxConnection();
+    const secondMux = await client.muxConnection();
+    await client.sessionList();
 
-    assert.equal(calls.length, 2);
+    assert.equal(calls.length, 5);
     assert.equal(new URL(calls[0].url).pathname, "/connect");
     assert.equal(new URL(calls[0].url).searchParams.get("interactions"), "none");
     assert.equal(calls[0].init.redirect, "manual");
     assert.equal(calls[0].init.headers.authorization, undefined);
     assert.equal(calls[1].url, "http://127.0.0.1:3080/api/session/list");
     assert.deepEqual(JSON.parse(calls[1].init.body).payload, { args: { _request: {} } });
-    assert.equal(calls[1].init.headers.cookie, "dsh-auth-test=api-cookie");
+    assert.equal(calls[1].init.headers.cookie, "dsh-auth-test=peer-1");
     assert.equal(calls[1].init.headers.authorization, undefined);
     assert.equal(mux.url, "ws://127.0.0.1:3080/api/remote.mux");
-    assert.equal(mux.cookie, "dsh-auth-test=api-cookie");
+    assert.equal(mux.cookie, "dsh-auth-test=peer-2");
+    assert.equal(secondMux.cookie, "dsh-auth-test=peer-3");
+    assert.equal(calls[4].url, "http://127.0.0.1:3080/api/session/list");
+    assert.equal(calls[4].init.headers.cookie, "dsh-auth-test=peer-1");
   });
 
   it("renews an expired API cookie once after an unauthorized RPC", async () => {

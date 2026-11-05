@@ -199,8 +199,16 @@ export class DshWebRpcClient {
     return this.url("api/remote.mux").replace(/^http/i, "ws");
   }
 
+  /**
+   * DSH binds each `/connect` cookie to at most one Mux socket (a second
+   * upgrade gets 409) and disposes that cookie when its socket closes, so
+   * every socket gets its own cookie; the cached one is HTTP-only.
+   */
   async muxConnection(): Promise<DshMuxConnection> {
-    return this.connection();
+    if (!this.options.access_token?.trim()) {
+      return { url: this.muxUrl(), cookie: "" };
+    }
+    return this.openConnection();
   }
 
   invalidateConnection(): void {
@@ -258,7 +266,6 @@ export class DshWebRpcClient {
       if (!isUpgradeUnauthorized(error)) {
         throw this.unavailable(error);
       }
-      this.invalidateConnection();
       try {
         return await this.streamFirstOnce(endpoint, args);
       } catch (retryError) {
@@ -273,9 +280,7 @@ export class DshWebRpcClient {
     endpoint: string,
     args: Record<string, unknown>,
   ): Promise<unknown> {
-    const connection = this.options.access_token?.trim()
-      ? await this.connection()
-      : { url: this.muxUrl(), cookie: "" };
+    const connection = await this.muxConnection();
     const streamId = this.createId();
     return new Promise<unknown>((resolve, reject) => {
       let socket: DshMuxSocket | undefined;
