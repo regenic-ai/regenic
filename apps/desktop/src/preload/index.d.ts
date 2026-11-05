@@ -82,7 +82,7 @@ export interface RegenicDesktop {
   getKernelSettings: () => Promise<KernelSettingsView>;
   getSemanticRuntime: () => Promise<SemanticRuntimeView>;
   setSemanticVisual: (enabled: boolean) => Promise<SemanticRuntimeView>;
-  semanticAction: (action: SemanticAction) => Promise<SemanticRuntimeView>;
+  semanticAction: (action: SemanticAction, visualEnabled?: boolean) => Promise<SemanticRuntimeView>;
   setKernelSettings: (input: {
     mode: KernelMode;
     origin?: string;

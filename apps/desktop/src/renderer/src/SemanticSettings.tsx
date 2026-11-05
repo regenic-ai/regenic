@@ -186,13 +186,19 @@ export function SemanticSettings() {
   function message(value: string): string { return isMessageKey(value) ? t(value) : value; }
 
   async function action(next: SemanticAction) {
+    const visualEnabled = visualDraft ?? Boolean(runtime?.visualEnabled);
+    if (next !== "stop" && runtime?.visualEnabled && !visualEnabled &&
+      !window.confirm(t("semantic.visual.disableConfirm"))) return;
     const controller = new AbortController();
     operation.current = controller;
     setBusy(true); setError(null);
     try {
       if (!window.regenic?.semanticAction) throw new Error(t("semantic.localOnly"));
-      const nextRuntime = await window.regenic.semanticAction(next);
-      if (!controller.signal.aborted) { setRuntime(nextRuntime); setConsent(false); }
+      const nextRuntime = await window.regenic.semanticAction(next, next === "stop" ? undefined : visualEnabled);
+      if (!controller.signal.aborted) {
+        setRuntime(nextRuntime);
+        if (!nextRuntime.error) { setConsent(false); setVisualDraft(null); }
+      }
     } catch (caught) {
       if (!controller.signal.aborted) setError(caught instanceof Error ? message(caught.message) : t("semantic.failed"));
     }
@@ -200,7 +206,7 @@ export function SemanticSettings() {
   }
 
   async function applyVisual() {
-    if (visualDraft === null || visualDraft === Boolean(runtime?.visualEnabled)) return;
+    if (visualDraft === null || (visualDraft === Boolean(runtime?.visualEnabled) && !runtime?.error)) return;
     if (!visualDraft && !window.confirm(t("semantic.visual.disableConfirm"))) return;
     setVisualApplying(true);
     setError(null);
@@ -285,7 +291,7 @@ export function SemanticSettings() {
       {runtime?.canManage || visualApplying ? (
         <div className="semantic-setup">
           <h3>{t("semantic.content.title")}</h3>
-          <p className="muted semantic-note">{t("semantic.content.hint")}</p>
+          <p className="muted semantic-note">{t(running ? "semantic.content.hint" : "semantic.content.setupHint")}</p>
           <label className="semantic-consent">
             <input type="checkbox" checked disabled />
             <span>{t("semantic.content.text")}</span>
@@ -303,10 +309,10 @@ export function SemanticSettings() {
           </label>
           <p className="muted semantic-note">{t("semantic.visual.removal")}</p>
           {visualApplying ? <p className="muted semantic-note" role="status">{t("semantic.visual.applying")}</p> : null}
-          {visualDraft !== null && visualDraft !== Boolean(runtime?.visualEnabled) ? (
+          {visualDraft !== null && (visualDraft !== Boolean(runtime?.visualEnabled) || runtime?.error) ? (
             <div className="semantic-actions">
-              <button type="button" className="primary" disabled={disabled}
-                onClick={() => void applyVisual()}>{t("semantic.visual.apply")}</button>
+              <button type="button" className={running ? "primary" : "ghost"} disabled={disabled}
+                onClick={() => void applyVisual()}>{t(running || runtime?.error ? "semantic.visual.apply" : "semantic.visual.save")}</button>
               <button type="button" className="ghost" disabled={disabled}
                 onClick={() => setVisualDraft(null)}>{t("semantic.visual.cancel")}</button>
             </div>
@@ -350,7 +356,7 @@ export function SemanticSettings() {
             <div className="semantic-actions">
               {running ? null : (
                 <button type="button" className="primary" disabled={disabled}
-                  onClick={() => void action("start")}>{t(runtime.enabled ? "semantic.restart" : "semantic.start")}</button>
+                  onClick={() => void action("start")}>{t("semantic.startWithPermissions")}</button>
               )}
               {running || runtime.enabled ? (
                 <button type="button" className="ghost" disabled={disabled}

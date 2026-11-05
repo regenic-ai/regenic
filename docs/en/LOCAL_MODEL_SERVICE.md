@@ -70,10 +70,14 @@ Local semantic search remains optional. When enabled, it defaults to **text only
 messages and extractable document text are indexed; visual and audio encoders are not loaded.
 Under **Settings > Local semantic search > Content you allow the model to analyze**,
 opt into **Visual analysis** for images, scanned pages and video frames, then choose
-**Apply content permissions**. Audio is shown as **Not supported**, not as an inactive
+**Save content permissions**, or install/start with the current selection in one action.
+While inference is running, choose **Apply permissions and restart** instead.
+Audio is shown as **Not supported**, not as an inactive
 feature that can be enabled. Video soundtracks are never transcribed or indexed.
 
-Turning visual analysis off requires confirmation. The app stops owned services,
+Saving an opt-in before inference starts does not restart the kernel. Installing or
+starting always saves the displayed permission selection first. Turning visual analysis
+off requires confirmation. The app stops owned services,
 deletes visual chunks across all generations and clears checkpoints before restarting
 text-only inference. Text vectors and original files remain intact; mixed projections
 are compacted to keep valid text coordinates. Visual-only items become skipped, not failures.

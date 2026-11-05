@@ -74,6 +74,7 @@ import {
   createConversationPresence,
 } from "./conversation-presence";
 import { SemanticRuntime } from "./semantic-runtime";
+import { applySemanticPermission } from "./semantic-permissions";
 import { semanticAction, semanticVisualPreference } from "../shared/semantic-runtime";
 
 const TRAY_SIZE = { width: 360, height: 480 };
@@ -111,18 +112,21 @@ function managedSemantic(): SemanticRuntime {
 function semanticView() {
   const preference = loadDesktopPreference(settingsFile());
   return {
-    ...managedSemantic().view(preference.semanticEnabled === true, !kernelMutation && preference.mode === "local" && sidecar !== null),
+    ...managedSemantic().view(preference.semanticEnabled === true, !kernelMutation && preference.mode === "local" && (sidecar !== null || Boolean(semanticActionError))),
     visualEnabled: preference.semanticVisualEnabled === true,
     ...(semanticActionError ? { error: semanticActionError } : {}),
     busy: Boolean(semanticJob),
   };
 }
 
-async function changeSemantic(action: "install" | "start" | "stop"): Promise<void> {
+async function changeSemantic(action: "install" | "start" | "stop", visualEnabled?: boolean): Promise<void> {
   if (semanticJob) throw new Error("semantic.busy");
   if (!semanticView().canManage) throw new Error("semantic.localOnly");
   semanticActionError = undefined;
   const run = async () => {
+    if (visualEnabled !== undefined && action !== "stop") {
+      await applySemanticVisual(visualEnabled, false);
+    }
     if (action === "install") { await managedSemantic().install(); return; }
     if (action === "start") await managedSemantic().start();
     const current = loadDesktopPreference(settingsFile());
@@ -139,21 +143,41 @@ async function changeSemantic(action: "install" | "start" | "stop"): Promise<voi
   }).finally(() => { semanticJob = undefined; });
 }
 
+async function applySemanticVisual(enabled: boolean, restartRunning: boolean): Promise<void> {
+  const preference = loadDesktopPreference(settingsFile());
+  await applySemanticPermission(enabled, restartRunning, {
+    visualEnabled: preference.semanticVisualEnabled === true,
+    running: managedSemantic().endpoint() !== undefined,
+    kernelAvailable: sidecar !== null,
+    save: (value) => saveDesktopPreference(settingsFile(), { ...preference, semanticVisualEnabled: value }),
+    stopModel: () => managedSemantic().stop(),
+    startModel: () => managedSemantic().start(),
+    restartKernel: async () => {
+      await stopOwnedSidecarAndWait();
+      releaseOwnedStoreLock();
+      await startLocalKernel({ forceSpawn: true });
+      broadcastOrigin();
+    },
+  });
+}
+
 async function changeSemanticVisual(enabled: boolean): Promise<void> {
   if (semanticJob || kernelMutation) throw new Error("semantic.busy");
   if (!semanticView().canManage) throw new Error("semantic.localOnly");
+  const retrying = Boolean(semanticActionError);
   const preference = loadDesktopPreference(settingsFile());
-  if ((preference.semanticVisualEnabled === true) === enabled) return;
+  if ((preference.semanticVisualEnabled === true) === enabled && !retrying) return;
   semanticActionError = undefined;
   semanticJob = (async () => {
-    await stopOwnedSidecarAndWait();
-    await managedSemantic().stop();
-    saveDesktopPreference(settingsFile(), { ...preference, semanticVisualEnabled: enabled });
-    releaseOwnedStoreLock();
-    // Apply the index permission before loading a newly authorized model.
-    await startLocalKernel({ forceSpawn: true });
-    broadcastOrigin();
-    if (preference.semanticEnabled && managedSemantic().view(true, true).installed) {
+    if (retrying) {
+      await stopOwnedSidecarAndWait();
+      releaseOwnedStoreLock();
+      await startLocalKernel({ forceSpawn: true });
+      broadcastOrigin();
+    }
+    await applySemanticVisual(enabled, true);
+    if (retrying && preference.semanticEnabled && managedSemantic().view(true, true).installed &&
+      !managedSemantic().endpoint()) {
       await managedSemantic().start();
       await stopOwnedSidecarAndWait();
       releaseOwnedStoreLock();
@@ -1071,9 +1095,9 @@ app.whenReady().then(async () => {
     await managedSemantic().refreshHealth();
     return semanticView();
   });
-  ipcMain.handle("regenic:semantic-action", async (event, action: unknown) => {
+  ipcMain.handle("regenic:semantic-action", async (event, action: unknown, visualEnabled: unknown) => {
     if (event.sender !== mainWindow?.webContents) throw new Error("semantic.localOnly");
-    await changeSemantic(semanticAction(action));
+    await changeSemantic(semanticAction(action), visualEnabled === undefined ? undefined : semanticVisualPreference(visualEnabled));
     return semanticView();
   });
   ipcMain.handle("regenic:semantic-visual", async (event, value: unknown) => {
