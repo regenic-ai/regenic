@@ -27,7 +27,8 @@
     "@regenic/vector-index": "workspace:*",
     "pg": "^8.13.1",
     "reflect-metadata": "^0.2.2",
-    "rxjs": "^7.8.1"
+    "rxjs": "^7.8.1",
+    "tar": "^7.4.3"
   },
   "devDependencies": {
     "@types/express": "^5.0.0",

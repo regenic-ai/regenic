@@ -14,11 +14,21 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
     const database = join(root, "authority.db");
     const blobRoot = join(root, "blobs");
     await ingestActionable(database, blobRoot);
-    const { app, origin } = await startPersonalApi(database, blobRoot);
+    const { app, origin } = await startPersonalApi(database, blobRoot, {
+      REGENIC_CONNECTOR_MARKET_INDEX_URL: undefined,
+    });
     try {
       const engine = await (await fetch(`${origin}/v1/me/engine`)).json();
+      const market = await (
+        await fetch(`${origin}/v1/me/connector-market`)
+      ).json();
       const health = await (await fetch(`${origin}/health`)).json();
 
+      assert.deepEqual(market, {
+        configured: false,
+        title: null,
+        connectors: [],
+      });
       assert.equal(engine.kernel, "running");
       assert.equal(engine.org_id, "local-owner");
       assert.equal(engine.database_path, database);

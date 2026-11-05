@@ -144,6 +144,7 @@ describe("extraChannelDrivers", () => {
     assert.equal(typeof drivers[0].bindWebhook, "function");
     const extra = listPluginInventory().find((item) => item.spec === root);
     assert.equal(extra?.origin, "extra");
+    assert.equal(extra?.package_name, "extra-webhook");
     assert.equal(extra?.trust, "unsigned");
     assert.equal(extra?.status, "loaded");
   });

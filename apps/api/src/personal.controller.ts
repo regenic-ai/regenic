@@ -4,6 +4,7 @@ import {
   Delete,
   Get,
   Headers,
+  HttpCode,
   HttpException,
   HttpStatus,
   Inject,
@@ -59,6 +60,8 @@ import {
   type RecipeInput,
 } from "./personal-work.service";
 import { PersonalEventsService } from "./personal-events.service";
+import { ConnectorMarketService } from "./connector-market.service";
+import { ConnectorMarketInstaller } from "./connector-market-installer";
 
 const EVENTS_HEARTBEAT_MS = 30_000;
 
@@ -84,6 +87,10 @@ export class PersonalController {
     private readonly plugins: PersonalPluginService,
     @Inject(PersonalEventsService)
     private readonly events: PersonalEventsService,
+    @Inject(ConnectorMarketService)
+    private readonly connectorMarket: ConnectorMarketService,
+    @Inject(ConnectorMarketInstaller)
+    private readonly connectorMarketInstaller: ConnectorMarketInstaller,
   ) {}
 
   @Sse("events")
@@ -341,6 +348,45 @@ export class PersonalController {
         requestLocale(locale, acceptLanguage),
       ),
     }));
+  }
+
+  @Get("connector-market")
+  getConnectorMarket(@Query("refresh") refresh?: string) {
+    return this.connectorMarket.getMarket(refresh === "1");
+  }
+
+  @Post("connector-market/install")
+  @HttpCode(HttpStatus.ACCEPTED)
+  installMarketConnector(
+    @Body() body: { package_name?: unknown; version?: unknown; confirmed?: unknown } | undefined,
+  ) {
+    return this.connectorMarketInstaller.startInstall(body ?? {});
+  }
+
+  @Post("connector-market/update")
+  @HttpCode(HttpStatus.ACCEPTED)
+  updateMarketConnector(
+    @Body() body: { package_name?: unknown; version?: unknown; confirmed?: unknown } | undefined,
+  ) {
+    return this.connectorMarketInstaller.startUpdate(body ?? {});
+  }
+
+  @Post("connector-market/:packageName/rollback")
+  rollbackMarketConnector(
+    @Param("packageName") packageName: string,
+    @Body() body: { confirmed?: unknown } | undefined,
+  ) {
+    return this.connectorMarketInstaller.rollback(packageName, body?.confirmed);
+  }
+
+  @Get("connector-market/install/:installationId")
+  getMarketConnectorInstall(@Param("installationId") installationId: string) {
+    return this.connectorMarketInstaller.getInstall(installationId);
+  }
+
+  @Delete("connector-market/install/:packageName")
+  uninstallMarketConnector(@Param("packageName") packageName: string) {
+    return this.connectorMarketInstaller.uninstall(packageName);
   }
 
   @Get("store")

@@ -73,7 +73,10 @@ export function ConnectorKind({
   const { t } = useLocale();
   const [editingId, setEditingId] = useState<string | null>(null);
   return (
-    <div className={`connector-kind${kind.installed ? " is-installed" : ""}`}>
+    <div
+      id={`connector-type-${kind.connector_type}`}
+      className={`connector-kind${kind.installed ? " is-installed" : ""}`}
+    >
       <div className="install">
         <div>
           <strong>{kind.title}</strong>

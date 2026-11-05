@@ -1,13 +1,19 @@
-import { useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   commandSyncRun,
+  fetchConnectorMarket,
+  fetchConnectorMarketInstall,
+  installConnectorFromMarket,
   installConnector,
+  rollbackConnectorFromMarket,
   installExecutor,
   retryConnectorQuarantines,
   setConnectorStatus,
   setExecutorStatus,
   syncConnector,
+  uninstallConnectorFromMarket,
   uninstallConnector,
+  updateConnectorFromMarket,
   uninstallExecutor,
   updateConnectorConfig,
   updateExecutorConfig,
@@ -32,7 +38,14 @@ import {
 } from "./format";
 import type { HostStats } from "../../shared/host-watch.ts";
 import { useLocale } from "./LocaleContext";
-import type { PersonalEngineView, SyncRunMode } from "./types";
+import type {
+  ConnectorMarketView,
+  ConnectorInstallJob,
+  EngineInstallationView,
+  PersonalEngineView,
+  PluginInventoryItem,
+  SyncRunMode,
+} from "./types";
 
 export function EnginePage({
   engine,
@@ -294,7 +307,7 @@ export function EnginePage({
           </div>
         </section>
       ) : null}
-      <section className="card engine-connectors">
+      <section className="card engine-connectors" id="engine-connector-config">
         <div className="card-head">
           <div className="card-title">
             <h2>{t("engine.connectors")}</h2>
@@ -459,6 +472,11 @@ export function EnginePage({
         ))}
         {actionError ? <p className="action-error">{actionError}</p> : null}
       </section>
+      <ConnectorMarketplace
+        plugins={engine.plugins ?? []}
+        installations={engine.installations}
+        onChanged={onChanged}
+      />
       <section className="card engine-connectors">
         <div className="card-head">
           <div className="card-title">
@@ -515,6 +533,642 @@ export function EnginePage({
         ))}
       </section>
     </div>
+  );
+}
+
+function ConnectorMarketplace({
+  plugins,
+  installations,
+  onChanged,
+}: {
+  plugins: PluginInventoryItem[];
+  installations: EngineInstallationView[];
+  onChanged: () => Promise<void>;
+}) {
+  const { t } = useLocale();
+  const [market, setMarket] = useState<ConnectorMarketView | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState("");
+  const [installing, setInstalling] = useState<string | null>(null);
+  const [installJob, setInstallJob] = useState<ConnectorInstallJob | null>(null);
+  const [selectedVersions, setSelectedVersions] = useState<Record<string, string>>({});
+  const [installNotice, setInstallNotice] = useState<Record<string, { message: string; error?: boolean; refresh?: boolean; driverType?: string }>>({});
+  const [installedPackages, setInstalledPackages] = useState<Set<string>>(new Set());
+  const [uninstalling, setUninstalling] = useState<string | null>(null);
+  const [changingVersion, setChangingVersion] = useState<string | null>(null);
+  const [visibleCount, setVisibleCount] = useState(30);
+
+  const loadMarket = useCallback(async (refresh = false, quiet = false) => {
+    if (!quiet) {
+      setLoading(true);
+      setError(null);
+    }
+    try {
+      setMarket(await fetchConnectorMarket(refresh));
+      return true;
+    } catch {
+      if (!quiet) setError(t("market.unavailable"));
+      return false;
+    } finally {
+      if (!quiet) setLoading(false);
+    }
+  }, [t]);
+
+  useEffect(() => {
+    void loadMarket();
+  }, [loadMarket]);
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("regenic.connector-market.install");
+      if (saved) {
+        const job = JSON.parse(saved) as ConnectorInstallJob;
+        setInstallJob(job);
+        setInstalling(job.package_name);
+      }
+    } catch {
+      localStorage.removeItem("regenic.connector-market.install");
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!installJob) return;
+    let active = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const poll = async () => {
+      try {
+        const job = await fetchConnectorMarketInstall(installJob.id);
+        if (!active) return;
+        if (job.phase === "completed" || job.phase === "failed") {
+          localStorage.removeItem("regenic.connector-market.install");
+          setInstallJob(null);
+          setInstalling(null);
+          if (job.installed || job.result?.installed) {
+            setInstalledPackages((current) => new Set(current).add(job.package_name));
+          }
+          if (job.phase === "failed") {
+            const message = job.operation === "update"
+              ? t(job.error?.includes("restarted")
+                  ? "market.updateStatusLost"
+                  : job.result?.pending_restart
+                    ? "market.updateStatusUnknown"
+                    : "market.updateFailed")
+              : job.installed
+                ? t("market.installRegistrationUnknown")
+                : t("market.installFailed");
+            setInstallNotice((current) => ({
+              ...current,
+              [job.package_name]: { message, error: true, refresh: job.installed },
+            }));
+            if (job.installed) {
+              await onChanged().catch(() => undefined);
+            }
+            return;
+          }
+
+          const registered = job.result?.registered === true;
+          const isUpdate = job.operation === "update";
+          let refreshed = true;
+          try {
+            await onChanged();
+          } catch {
+            refreshed = false;
+          }
+          const marketRefreshed = await loadMarket(true, true);
+          const notice = isUpdate
+            ? t("market.updateStaged", { version: job.version })
+            : registered
+              ? t("market.installRegistered", {
+                types: job.result?.driver_types.join(", ") ?? "",
+              })
+              : t("market.installRegistrationFailed");
+          const refreshNote = refreshed && marketRefreshed
+            ? ""
+            : ` ${t(isUpdate
+                ? "market.refreshAfterUpdateFailed"
+                : "market.refreshAfterInstallFailed")}`;
+          setInstallNotice((current) => ({
+            ...current,
+            [job.package_name]: {
+              message: `${notice}${refreshNote}`,
+              error: !isUpdate && !registered,
+              refresh: (!isUpdate && !registered) || !refreshed || !marketRefreshed,
+              driverType: isUpdate ? undefined : job.result?.driver_types[0],
+            },
+          }));
+          return;
+        }
+        setInstallJob(job);
+        localStorage.setItem("regenic.connector-market.install", JSON.stringify(job));
+        timer = setTimeout(poll, 1200);
+      } catch (caught) {
+        if (!active) return;
+        if (caught instanceof Error && caught.message.endsWith("404")) {
+          localStorage.removeItem("regenic.connector-market.install");
+          setInstallJob(null);
+          setInstalling(null);
+          if (installJob.installed) {
+            setInstalledPackages((current) => new Set(current).add(installJob.package_name));
+          }
+          setInstallNotice((current) => ({
+            ...current,
+            [installJob.package_name]: {
+              message: t("market.installStatusLost"),
+              error: true,
+              refresh: true,
+            },
+          }));
+          return;
+        }
+        timer = setTimeout(poll, 2500);
+      }
+    };
+    void poll();
+    return () => {
+      active = false;
+      if (timer) clearTimeout(timer);
+    };
+  }, [installJob?.id, loadMarket, onChanged, t]);
+
+  const connectors = (market?.connectors ?? []).filter((item) => {
+    const query = search.trim().toLocaleLowerCase();
+    if (!query) return true;
+    const searchable = [
+      item.name,
+      item.title,
+      item.description,
+      item.author,
+      ...item.keywords,
+    ]
+      .filter((value): value is string => typeof value === "string");
+    return searchable.some((value) => value.toLocaleLowerCase().includes(query));
+  });
+  const visibleConnectors = connectors.slice(0, visibleCount);
+
+  return (
+    <section className="card engine-connectors">
+      <div className="card-head">
+        <h2>{market?.title ?? t("market.title")}</h2>
+        <button
+          type="button"
+          className="ghost"
+          disabled={loading}
+          onClick={() => void loadMarket(true)}
+        >
+          {loading ? t("market.refreshing") : t("market.refresh")}
+        </button>
+      </div>
+      <p className="muted">{t("market.lead")}</p>
+      <p className="action-hint">{t("market.readOnly")}</p>
+      {loading ? <p className="muted">{t("market.loading")}</p> : null}
+      {error ? <p className="action-error">{error}</p> : null}
+      {!loading && !error && !market?.configured ? (
+        <p className="muted">{t("market.notConfigured")}</p>
+      ) : null}
+      {!loading && !error && market?.configured ? (
+        <>
+          <label className="field">
+            <span>{t("market.search")}</span>
+            <input
+              type="search"
+              value={search}
+              placeholder={t("market.searchPlaceholder")}
+              onChange={(event) => {
+                setSearch(event.currentTarget.value);
+                setVisibleCount(30);
+              }}
+            />
+          </label>
+          {connectors.length === 0 ? (
+            <p className="muted">
+              {market.connectors.length > 0
+                ? t("market.noResults")
+                : t("market.empty")}
+            </p>
+          ) : null}
+          {visibleConnectors.map((item) => {
+            const latest = item.versions[0];
+            const compatibleReleases = item.versions.filter((release) => release.compatible);
+            const defaultInstallRelease = compatibleReleases[0];
+            const installRelease = item.versions.find(
+              (release) => release.version === selectedVersions[item.name],
+            ) ?? defaultInstallRelease;
+            const plugin = plugins.find(
+              (candidate) =>
+                candidate.origin === "extra" &&
+                candidate.package_name === item.name,
+            );
+            const installedInstanceCount = plugin
+              ? installations.filter((installation) =>
+                  plugin.drivers.includes(installation.connector_type),
+                ).length
+              : 0;
+            return (
+              <article className="connector-kind" key={item.name}>
+                <div className="card-head">
+                  <div>
+                    <h3>{item.title}</h3>
+                    <code>{item.name}</code>
+                  </div>
+                  {latest ? (
+                    <span className="chip">{t("market.latestVersion", { version: latest.version })}</span>
+                  ) : null}
+                </div>
+                {item.description ? <p>{item.description}</p> : null}
+                <div className="install-meta">
+                  <span className={`chip ${plugin?.status === "loaded" ? "running" : "stopped"}`}>
+                    {plugin?.status === "loaded"
+                      ? t("market.pluginLoaded")
+                      : plugin
+                        ? plugin.status === "uninstall_pending"
+                          ? t("market.uninstallPendingRestart")
+                          : plugin.status === "update_pending"
+                            ? t("market.versionChangePendingRestart", {
+                                version: plugin.pending_version ?? "",
+                              })
+                          : plugin.status === "skipped"
+                            ? t("market.pluginSkipped")
+                            : t("market.pluginLoadFailed")
+                        : t("market.pluginNotFound")}
+                  </span>
+                  {plugin ? (
+                    <span>{plugin.install_source === "market"
+                      ? t("market.sourceMarket")
+                      : plugin.install_source === "local"
+                        ? t("market.sourceLocal")
+                        : t("market.sourceBuiltIn")}</span>
+                  ) : null}
+                  {plugin?.version ? (
+                    <span>{t("market.localVersion", { version: plugin.version })}</span>
+                  ) : null}
+                  {plugin?.drivers.length ? (
+                    <span>{t("market.driverTypes", { types: plugin.drivers.join(", ") })}</span>
+                  ) : null}
+                  {plugin?.version && installRelease && plugin.version !== installRelease.version ? (
+                    <span>{t("market.availableVersion", { version: installRelease.version })}</span>
+                  ) : null}
+                  {plugin?.pending_operation ? (
+                    <span>{plugin.pending_operation === "rollback"
+                      ? t("market.rollbackPending")
+                      : t("market.updatePending")}</span>
+                  ) : null}
+                  {item.author ? <span>{t("market.author", { name: item.author })}</span> : null}
+                  {latest ? (
+                    <span className={`chip ${latest.compatible ? "running" : "stopped"}`}>
+                      {latest.compatible
+                        ? t("market.supportedProtocol")
+                        : t("market.unsupportedProtocol", {
+                            version: latest.engines_regenic,
+                          })}
+                    </span>
+                  ) : null}
+                  {!plugin && !installedPackages.has(item.name) && installRelease ? (
+                    <span>{t("market.installTargetVersion", { version: installRelease.version })}</span>
+                  ) : null}
+                  <span>{t("market.releaseCount", { count: item.versions.length })}</span>
+                </div>
+                {plugin?.error ? (
+                  <p className="action-error">{plugin.error}</p>
+                ) : null}
+                <div className="install-actions">
+                  {(!plugin || plugin.install_source === "market") &&
+                    plugin?.status !== "update_pending" &&
+                    plugin?.status !== "uninstall_pending" &&
+                    compatibleReleases.length > 1 ? (
+                    <label className="field">
+                      <span>{t("market.installVersion")}</span>
+                      <select
+                        value={installRelease?.version ?? ""}
+                        onChange={(event) => setSelectedVersions((current) => ({
+                          ...current,
+                          [item.name]: event.currentTarget.value,
+                        }))}
+                      >
+                        {compatibleReleases.map((release) => (
+                          <option key={release.version} value={release.version}>
+                            {release.version}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  ) : null}
+                  {!plugin && !installedPackages.has(item.name) && installRelease ? (
+                    <button
+                      type="button"
+                      disabled={installing !== null || installJob !== null}
+                      onClick={() => {
+                        if (
+                          !window.confirm(
+                            t("market.installConfirm", {
+                              name: item.name,
+                              version: installRelease.version,
+                              publisher: item.author ?? t("market.unknownPublisher"),
+                              source: item.repository ?? item.homepage ?? `https://www.npmjs.com/package/${item.name}`,
+                            }),
+                          )
+                        ) {
+                          return;
+                        }
+                        void (async () => {
+                          setInstalling(item.name);
+                          setInstallNotice((current) => ({
+                            ...current,
+                            [item.name]: { message: "" },
+                          }));
+                          try {
+                            const job = await installConnectorFromMarket(
+                              item.name,
+                              installRelease.version,
+                            );
+                            setInstallJob(job);
+                            localStorage.setItem("regenic.connector-market.install", JSON.stringify(job));
+                          } catch (caught) {
+                            setInstalling(null);
+                            setInstallNotice((current) => ({
+                              ...current,
+                              [item.name]: {
+                                message: caught instanceof Error && caught.message.endsWith("409")
+                                  ? t("market.installAlreadyRunning")
+                                  : t("market.installFailed"),
+                                error: true,
+                              },
+                            }));
+                          }
+                        })();
+                      }}
+                    >
+                      {installing === item.name
+                        ? t("market.installing")
+                        : t("market.installVersionButton", {
+                            version: installRelease.version,
+                          })}
+                    </button>
+                  ) : null}
+                  {plugin?.install_source === "market" &&
+                    plugin.status !== "update_pending" &&
+                    plugin.status !== "uninstall_pending" &&
+                    plugin.version !== installRelease?.version &&
+                    installRelease ? (
+                    <button
+                      type="button"
+                      disabled={installing !== null || installJob !== null || changingVersion !== null}
+                      onClick={() => {
+                        if (!window.confirm(t("market.updateConfirm", {
+                          name: item.name,
+                          from: plugin.version ?? "",
+                          to: installRelease.version,
+                          publisher: item.author ?? t("market.unknownPublisher"),
+                          source: item.repository ?? item.homepage ?? `https://www.npmjs.com/package/${item.name}`,
+                        }))) return;
+                        void (async () => {
+                          setChangingVersion(item.name);
+                          try {
+                            const job = await updateConnectorFromMarket(item.name, installRelease.version);
+                            setInstallJob(job);
+                            setInstalling(item.name);
+                            localStorage.setItem("regenic.connector-market.install", JSON.stringify(job));
+                          } catch {
+                            setInstallNotice((current) => ({
+                              ...current,
+                              [item.name]: { message: t("market.updateFailed"), error: true },
+                            }));
+                          } finally {
+                            setChangingVersion(null);
+                          }
+                        })();
+                      }}
+                    >
+                      {changingVersion === item.name
+                        ? t("market.updating")
+                        : t("market.updateVersionButton", { version: installRelease.version })}
+                    </button>
+                  ) : null}
+                  {plugin?.install_source === "market" &&
+                    plugin.status !== "update_pending" &&
+                    plugin.status !== "uninstall_pending" &&
+                    plugin.previous_version ? (
+                    <button
+                      type="button"
+                      className="ghost"
+                      disabled={changingVersion !== null || installJob !== null}
+                      onClick={() => {
+                        if (!window.confirm(t("market.rollbackConfirm", {
+                          name: item.name,
+                          version: plugin.previous_version ?? "",
+                        }))) return;
+                        void (async () => {
+                          setChangingVersion(item.name);
+                          try {
+                            const rollback = await rollbackConnectorFromMarket(item.name);
+                            setInstallNotice((current) => ({
+                              ...current,
+                              [item.name]: {
+                                message: t("market.rollbackStaged", { version: rollback.version }),
+                              },
+                            }));
+                            try {
+                              await onChanged();
+                            } catch {
+                              setInstallNotice((current) => ({
+                                ...current,
+                                [item.name]: {
+                                  ...current[item.name],
+                                  message: t("market.rollbackRefreshFailed"),
+                                  refresh: true,
+                                },
+                              }));
+                            }
+                          } catch {
+                            setInstallNotice((current) => ({
+                              ...current,
+                              [item.name]: { message: t("market.rollbackFailed"), error: true },
+                            }));
+                          } finally {
+                            setChangingVersion(null);
+                          }
+                        })();
+                      }}
+                    >
+                      {t("market.rollbackButton", { version: plugin.previous_version })}
+                    </button>
+                  ) : null}
+                  {!plugin && !installedPackages.has(item.name) && compatibleReleases.length === 0 ? (
+                    <span className="muted">{t("market.noCompatibleRelease")}</span>
+                  ) : null}
+                  {installedPackages.has(item.name) && !plugin ? (
+                    <span className="chip stopped">{t("market.installedRefreshPending")}</span>
+                  ) : null}
+                  {plugin?.install_source === "market" &&
+                    plugin.status !== "uninstall_pending" &&
+                    plugin.status !== "update_pending" ? (
+                    <button
+                      type="button"
+                      className="ghost"
+                      disabled={uninstalling !== null || installedInstanceCount > 0 || installJob !== null}
+                      onClick={() => {
+                        if (!window.confirm(t("market.uninstallConfirm", { name: item.name }))) return;
+                        void (async () => {
+                          setUninstalling(item.name);
+                          try {
+                            await uninstallConnectorFromMarket(item.name);
+                            setInstallNotice((current) => ({
+                              ...current,
+                              [item.name]: {
+                                message: t("market.uninstallPendingNotice"),
+                                error: false,
+                              },
+                            }));
+                            try {
+                              await onChanged();
+                            } catch {
+                              setInstallNotice((current) => ({
+                                ...current,
+                                [item.name]: {
+                                  ...current[item.name],
+                                  message: t("market.uninstallRefreshFailed"),
+                                  refresh: true,
+                                },
+                              }));
+                            }
+                          } catch (caught) {
+                            setInstallNotice((current) => ({
+                              ...current,
+                              [item.name]: {
+                                message: caught instanceof Error && caught.message.endsWith("409")
+                                  ? t("market.uninstallInstancesFirst", { count: installedInstanceCount })
+                                  : t("market.uninstallFailed"),
+                                error: true,
+                              },
+                            }));
+                          } finally {
+                            setUninstalling(null);
+                          }
+                        })();
+                      }}
+                    >
+                      {uninstalling === item.name
+                        ? t("market.uninstalling")
+                        : t("market.uninstall")}
+                    </button>
+                  ) : null}
+                  {plugin?.install_source === "market" && installedInstanceCount > 0 ? (
+                    <span className="muted">
+                      {t("market.uninstallInstancesFirst", { count: installedInstanceCount })}
+                    </span>
+                  ) : null}
+                  {item.homepage ? (
+                    <a href={item.homepage} target="_blank" rel="noreferrer">
+                      {t("market.homepage")}
+                    </a>
+                  ) : null}
+                  {item.repository ? (
+                    <a href={item.repository} target="_blank" rel="noreferrer">
+                      {t("market.repository")}
+                    </a>
+                  ) : null}
+                  <a
+                    href={`https://www.npmjs.com/package/${encodeURIComponent(item.name)}`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {t("market.npm")}
+                  </a>
+                </div>
+                {installNotice[item.name]?.message ? (
+                  <p className={installNotice[item.name].error ? "action-error" : "action-hint"}>
+                    {installNotice[item.name].message}
+                    {installNotice[item.name].driverType && !installNotice[item.name].error ? (
+                      <> <a href={installNotice[item.name].driverType
+                        ? `#connector-type-${encodeURIComponent(installNotice[item.name].driverType ?? "")}`
+                        : "#engine-connector-config"}>{t("market.configureNext")}</a></>
+                    ) : null}
+                    {installNotice[item.name].refresh ? (
+                      <>
+                        {" "}
+                        <button
+                          type="button"
+                          className="ghost"
+                          onClick={() => {
+                            void (async () => {
+                              try {
+                                await onChanged();
+                                await loadMarket(true, true);
+                              } catch {
+                                setInstallNotice((current) => ({
+                                  ...current,
+                                  [item.name]: {
+                                    ...current[item.name],
+                                    message: t("market.refreshAfterInstallFailed"),
+                                  },
+                                }));
+                              }
+                            })();
+                          }}
+                        >
+                          {t("market.refreshLocalStatus")}
+                        </button>
+                      </>
+                    ) : null}
+                  </p>
+                ) : null}
+                {item.versions.length > 1 ? (
+                  <ConnectorReleaseDetails releases={item.versions} />
+                ) : null}
+              </article>
+            );
+          })}
+          {visibleCount < connectors.length ? (
+            <button
+              type="button"
+              className="ghost"
+              onClick={() => setVisibleCount((count) => count + 30)}
+            >
+              {t("market.showMore", { count: connectors.length - visibleCount })}
+            </button>
+          ) : null}
+          {installJob ? (
+            <p className="action-hint" role="status" aria-live="polite">
+              {t(`market.phase.${installJob.phase}`, {
+                name: installJob.package_name,
+                version: installJob.version,
+              })}
+            </p>
+          ) : null}
+        </>
+      ) : null}
+    </section>
+  );
+}
+
+function ConnectorReleaseDetails({
+  releases,
+}: {
+  releases: ConnectorMarketView["connectors"][number]["versions"];
+}) {
+  const { t } = useLocale();
+  const [open, setOpen] = useState(false);
+  return (
+    <details onToggle={(event) => setOpen(event.currentTarget.open)}>
+      <summary>{t("market.allReleases")}</summary>
+      {open ? (
+        <ul>
+          {releases.map((release) => (
+            <li key={release.version}>
+              <code>{release.version}</code>
+              {" · "}
+              {release.published_at.slice(0, 10)}
+              {" · "}
+              {release.compatible
+                ? t("market.supportedProtocol")
+                : t("market.unsupportedProtocol", {
+                    version: release.engines_regenic,
+                  })}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </details>
   );
 }
 
