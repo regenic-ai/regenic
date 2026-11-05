@@ -100,6 +100,7 @@ import type {
   SyncRun,
   ListSyncRunsQuery,
   CommandSyncRun,
+  DeleteSyncRun,
   EnqueueSyncWork,
   SyncWorkRecord,
   ClaimSyncWork,
@@ -156,6 +157,7 @@ import {
   createInstallation,
   createSyncRun,
   deleteInstallation,
+  deleteSyncRun,
   enqueueSyncWork,
   enqueueSyncWorkMany,
   findInstallation,
@@ -1451,6 +1453,10 @@ export class PostgresAuthorityStore
 
   async commandSyncRun(input: CommandSyncRun): Promise<SyncRun | null> {
     return commandSyncRun(this.sql, input);
+  }
+
+  async deleteSyncRun(input: DeleteSyncRun): Promise<boolean> {
+    return deleteSyncRun(this.sql, input);
   }
 
   async enqueueSyncWork(input: EnqueueSyncWork): Promise<SyncWorkRecord> {

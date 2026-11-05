@@ -1,16 +1,30 @@
 import { randomUUID } from "node:crypto";
 import { DshApiError, type DshHistoryEvent, type DshHistoryPage } from "./dsh-cli-client";
+import {
+  dshMuxCancelFrame,
+  dshMuxOpenFrame,
+  openDshMuxSocket,
+  type DshMuxOpen,
+  type DshMuxSocket,
+} from "./dsh-mux-socket";
 import type { DshPromptPart } from "./dsh-prompt-part";
 
 export interface DshFetchResponse {
   ok: boolean;
   status: number;
+  headers?: Pick<Headers, "get">;
   json(): Promise<unknown>;
 }
 
 export type DshFetch = (
   url: string,
-  init: { method: string; headers: Record<string, string>; body: string },
+  init: {
+    method: string;
+    headers: Record<string, string>;
+    body?: string;
+    redirect?: "follow" | "error" | "manual";
+    signal?: AbortSignal;
+  },
 ) => Promise<DshFetchResponse>;
 
 export interface DshWebRpcClientOptions {
@@ -18,6 +32,13 @@ export interface DshWebRpcClientOptions {
   access_token?: string;
   fetch?: DshFetch;
   createId?: () => string;
+  openSocket?: DshMuxOpen;
+  stream_timeout_ms?: number;
+}
+
+export interface DshMuxConnection {
+  url: string;
+  cookie: string;
 }
 
 export interface DshSessionPromptInput {
@@ -36,6 +57,10 @@ export class DshWebRpcClient {
   private readonly baseUrl: string;
   private readonly fetch: DshFetch;
   private readonly createId: () => string;
+  private readonly openSocket: DshMuxOpen;
+  private readonly streamTimeoutMs: number;
+  private readonly throughSeqs = new Map<string, number>();
+  private connectionPromise: Promise<DshMuxConnection> | null = null;
 
   constructor(private readonly options: DshWebRpcClientOptions) {
     this.baseUrl = options.base_url.replace(/\/+$/, "");
@@ -44,30 +69,44 @@ export class DshWebRpcClient {
     }
     this.fetch = options.fetch ?? fetch;
     this.createId = options.createId ?? randomUUID;
+    this.openSocket = options.openSocket ?? openDshMuxSocket;
+    this.streamTimeoutMs = options.stream_timeout_ms ?? 10_000;
   }
 
+  /**
+   * DSH serves history as a `session/follow` opening snapshot (newest window)
+   * plus backwards `session/page` reads bounded by that snapshot's cursor.
+   */
   async sessionHistory(input: {
     sessionId: string;
     maxMessages?: number;
     beforeSeq?: number;
   }): Promise<DshHistoryPage> {
-    const payload: Record<string, unknown> = { sessionId: input.sessionId };
+    if (input.beforeSeq === undefined) {
+      const snapshot = await this.followSnapshot(input.sessionId, input.maxMessages);
+      return { events: snapshot.events, hasMore: snapshot.hasMore };
+    }
+    const throughSeq =
+      this.throughSeqs.get(input.sessionId)
+      ?? (await this.followSnapshot(input.sessionId, 1)).cursor;
+    const request: Record<string, unknown> = {
+      address: sessionAddress(input.sessionId),
+      throughSeq,
+      beforeSeq: input.beforeSeq,
+    };
     if (input.maxMessages !== undefined) {
-      payload.maxMessages = input.maxMessages;
+      request.maxMessages = input.maxMessages;
     }
-    if (input.beforeSeq !== undefined) {
-      payload.beforeSeq = input.beforeSeq;
-    }
-    const { value } = await this.call("session.history", payload);
+    const { value } = await this.call("session/page", { request });
     return parseHistoryPage(value);
   }
 
   async sessionList(input: { cursor?: string } = {}): Promise<DshSessionListPage> {
-    const payload: Record<string, unknown> = {};
+    const request: Record<string, unknown> = {};
     if (input.cursor) {
-      payload.cursor = input.cursor;
+      request.cursor = input.cursor;
     }
-    const { value } = await this.call("session.list", payload);
+    const { value } = await this.call("session/list", { _request: request });
     return parseSessionListPage(value);
   }
 
@@ -103,20 +142,20 @@ export class DshWebRpcClient {
   async sessionCreate(
     input: { workspaceId?: string; cwd?: string; agentPreset?: string } = {},
   ): Promise<{ sessionId: string }> {
-    const payload: Record<string, unknown> = {};
+    const request: Record<string, unknown> = {};
     if (input.workspaceId) {
-      payload.workspaceId = input.workspaceId;
+      request.workspaceId = input.workspaceId;
     }
     if (input.cwd) {
-      payload.cwd = input.cwd;
+      request.cwd = input.cwd;
     }
     if (input.agentPreset) {
-      payload.agentPreset = input.agentPreset;
+      request.agentPreset = input.agentPreset;
     }
-    const { value } = await this.call("session.create", payload);
+    const { value } = await this.call("session/create", { request });
     const sessionId = createdSessionId(value);
     if (!sessionId) {
-      throw new DshApiError("DSH session.create did not return a sessionId");
+      throw new DshApiError("DSH session/create did not return a sessionId");
     }
     return { sessionId };
   }
@@ -125,44 +164,31 @@ export class DshWebRpcClient {
     accepted: true;
     rpc_id: string;
   }> {
-    const { rpc_id } = await this.call("session.prompt", {
-      sessionId: input.sessionId,
-      mode: "queue",
-      content: promptContent(input),
+    const requestId = this.createId();
+    await this.call("session/prompt", {
+      request: {
+        requestId,
+        sessionId: input.sessionId,
+        mode: "queue",
+        content: promptContent(input).map(wirePromptPart),
+      },
     });
-    return { accepted: true, rpc_id };
+    return { accepted: true, rpc_id: requestId };
   }
 
   async respond(input: {
     rpc_id: string;
     value: unknown;
   }): Promise<{ accepted: boolean; reason?: string }> {
-    const headers: Record<string, string> = {
-      "content-type": "application/json",
-    };
-    if (this.options.access_token) {
-      headers.authorization = `Bearer ${this.options.access_token}`;
-    }
-    const url = `${this.baseUrl}/api/respond`;
-    let response: DshFetchResponse;
-    try {
-      response = await this.fetch(url, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          type: "client-response",
-          rpcId: input.rpc_id,
-          result: { ok: true, value: input.value },
-        }),
-      });
-    } catch (error) {
-      throw new DshApiError(
-        `Cannot reach DSH web at ${this.baseUrl} (is \`dsh web\` running?): ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-        "unavailable",
-      );
-    }
+    const response = await this.authenticatedRequest("api/respond", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        type: "client-response",
+        rpcId: input.rpc_id,
+        result: { ok: true, value: input.value },
+      }),
+    });
     if (!response.ok) {
       throw httpStatusError(response.status, this.options.access_token);
     }
@@ -170,49 +196,238 @@ export class DshWebRpcClient {
   }
 
   muxUrl(): string {
-    return `${this.baseUrl.replace(/^http/i, "ws")}/api/events.mux`;
+    return this.url("api/remote.mux").replace(/^http/i, "ws");
   }
 
-  accessToken(): string | undefined {
-    return this.options.access_token;
+  async muxConnection(): Promise<DshMuxConnection> {
+    return this.connection();
   }
 
+  invalidateConnection(): void {
+    this.connectionPromise = null;
+  }
+
+  /** Unary Remote call: `POST /api/<namespace>/<method>` with `{ args }`. */
   private async call(
-    method: string,
-    payload: Record<string, unknown>,
+    endpoint: string,
+    args: Record<string, unknown>,
   ): Promise<{ value: unknown; rpc_id: string }> {
     const rpcId = this.createId();
-    const headers: Record<string, string> = {
-      "content-type": "application/json",
-    };
-    if (this.options.access_token) {
-      headers.authorization = `Bearer ${this.options.access_token}`;
-    }
-    const url = `${this.baseUrl}/api/${method}`;
-    let response: DshFetchResponse;
-    try {
-      response = await this.fetch(url, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          type: "client-request",
-          rpcId,
-          method,
-          payload,
-        }),
-      });
-    } catch (error) {
-      throw new DshApiError(
-        `Cannot reach DSH web at ${this.baseUrl} (is \`dsh web\` running?): ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-        "unavailable",
-      );
-    }
+    const response = await this.authenticatedRequest(`api/${endpoint}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        type: "client-request",
+        rpcId,
+        method: endpoint,
+        payload: { args },
+      }),
+    });
     if (!response.ok) {
       throw httpStatusError(response.status, this.options.access_token);
     }
     return parseServerResponse(await response.json(), rpcId);
+  }
+
+  private async followSnapshot(
+    sessionId: string,
+    maxMessages?: number,
+  ): Promise<{ events: DshHistoryEvent[]; hasMore: boolean; cursor: number }> {
+    const request: Record<string, unknown> = { address: sessionAddress(sessionId) };
+    if (maxMessages !== undefined) {
+      request.maxMessages = maxMessages;
+    }
+    const value = await this.streamFirst("session/follow", { request });
+    if (!isObject(value) || value.type !== "snapshot" || !Number.isInteger(value.cursor)) {
+      throw new DshApiError("DSH session/follow did not open with a snapshot");
+    }
+    const cursor = value.cursor as number;
+    this.throughSeqs.set(sessionId, cursor);
+    const page = parseHistoryPage(value);
+    return { ...page, cursor };
+  }
+
+  /** Open one Mux stream, return its first item, then cancel the stream. */
+  private async streamFirst(
+    endpoint: string,
+    args: Record<string, unknown>,
+  ): Promise<unknown> {
+    try {
+      return await this.streamFirstOnce(endpoint, args);
+    } catch (error) {
+      if (!isUpgradeUnauthorized(error)) {
+        throw this.unavailable(error);
+      }
+      this.invalidateConnection();
+      try {
+        return await this.streamFirstOnce(endpoint, args);
+      } catch (retryError) {
+        throw isUpgradeUnauthorized(retryError)
+          ? httpStatusError(401, this.options.access_token)
+          : this.unavailable(retryError);
+      }
+    }
+  }
+
+  private async streamFirstOnce(
+    endpoint: string,
+    args: Record<string, unknown>,
+  ): Promise<unknown> {
+    const connection = this.options.access_token?.trim()
+      ? await this.connection()
+      : { url: this.muxUrl(), cookie: "" };
+    const streamId = this.createId();
+    return new Promise<unknown>((resolve, reject) => {
+      let socket: DshMuxSocket | undefined;
+      let settled = false;
+      const finish = (settle: () => void) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timer);
+        socket?.send(dshMuxCancelFrame(streamId));
+        socket?.close();
+        settle();
+      };
+      const timer = setTimeout(() => {
+        finish(() => reject(new DshApiError(`DSH ${endpoint} stream timed out`, "unavailable")));
+      }, this.streamTimeoutMs);
+      timer.unref?.();
+      this.openSocket({
+        url: connection.url,
+        cookie: connection.cookie,
+        onMessage: (data) => {
+          const frame = parseStreamFrame(data, streamId);
+          if (!frame) {
+            return;
+          }
+          if (frame.type === "item") {
+            finish(() => resolve(frame.value));
+          } else if (frame.type === "error") {
+            finish(() => reject(new DshApiError(frame.message, frame.code)));
+          } else {
+            finish(() => reject(new DshApiError(`DSH ${endpoint} stream ended without data`)));
+          }
+        },
+        onClose: () => {
+          finish(() => reject(new DshApiError(`DSH ${endpoint} stream closed`, "unavailable")));
+        },
+      }).then(
+        (opened) => {
+          socket = opened;
+          if (settled) {
+            opened.close();
+            return;
+          }
+          opened.send(dshMuxOpenFrame(streamId, endpoint, args));
+        },
+        (error: unknown) => finish(() => reject(error)),
+      );
+    });
+  }
+
+  private unavailable(error: unknown): DshApiError {
+    if (error instanceof DshApiError) {
+      return error;
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    const token = this.options.access_token;
+    return new DshApiError(
+      `Cannot reach DSH web at ${this.baseUrl} (is \`dsh web\` running?): ${
+        token ? message.replaceAll(token, "[redacted]") : message
+      }`,
+      "unavailable",
+    );
+  }
+
+  private async authenticatedRequest(
+    path: string,
+    init: { method: string; headers: Record<string, string>; body?: string },
+  ): Promise<DshFetchResponse> {
+    let response: DshFetchResponse;
+    try {
+      if (!this.options.access_token?.trim()) {
+        return await this.fetch(this.url(path), init);
+      }
+      let connection = await this.connection();
+      response = await this.fetchWithCookie(path, init, connection);
+      if (response.status === 401) {
+        this.invalidateConnection();
+        connection = await this.connection();
+        response = await this.fetchWithCookie(path, init, connection);
+      }
+    } catch (error) {
+      if (error instanceof DshApiError) throw error;
+      const message = error instanceof Error ? error.message : String(error);
+      throw new DshApiError(
+        `Cannot reach DSH web at ${this.baseUrl} (is \`dsh web\` running?): ${
+          this.options.access_token
+            ? message.replaceAll(this.options.access_token, "[redacted]")
+            : message
+        }`,
+        "unavailable",
+      );
+    }
+    return response;
+  }
+
+  private async fetchWithCookie(
+    path: string,
+    init: { method: string; headers: Record<string, string>; body?: string },
+    connection: DshMuxConnection,
+  ): Promise<DshFetchResponse> {
+    return this.fetch(this.url(path), {
+      ...init,
+      headers: { ...init.headers, cookie: connection.cookie },
+    });
+  }
+
+  private connection(): Promise<DshMuxConnection> {
+    if (!this.connectionPromise) {
+      this.connectionPromise = this.openConnection().catch((error: unknown) => {
+        this.connectionPromise = null;
+        throw error;
+      });
+    }
+    return this.connectionPromise;
+  }
+
+  private async openConnection(): Promise<DshMuxConnection> {
+    const token = this.options.access_token?.trim();
+    if (!token) {
+      throw httpStatusError(401);
+    }
+    const url = new URL(this.url("connect"));
+    url.searchParams.set("token", token);
+    url.searchParams.set("interactions", "none");
+    const response = await this.fetch(url.href, {
+      method: "GET",
+      headers: {},
+      redirect: "manual",
+      signal: AbortSignal.timeout(5_000),
+    });
+    if (response.status !== 302) {
+      throw httpStatusError(response.status, token);
+    }
+    const location = response.headers?.get("location");
+    const setCookie = response.headers?.get("set-cookie");
+    const cookie = setCookie?.split(";", 1)[0]?.trim();
+    if (!location || !cookie || !cookie.includes("=")) {
+      throw new DshApiError("DSH connect response is missing its Mux location or authentication cookie");
+    }
+    const muxUrl = new URL(location, url);
+    if (muxUrl.origin !== url.origin) {
+      throw new DshApiError("DSH connect response redirected to an unexpected origin");
+    }
+    return {
+      url: muxUrl.href.replace(/^http/i, "ws"),
+      cookie,
+    };
+  }
+
+  private url(path: string): string {
+    return new URL(path, `${this.baseUrl}/`).href;
   }
 }
 
@@ -227,6 +442,12 @@ function httpStatusError(
     return new DshApiError(
       message,
       "unauthorized",
+    );
+  }
+  if (status === 404) {
+    return new DshApiError(
+      "DSH does not expose the requested API route (HTTP 404). Update DSH to a compatible version.",
+      "not_found",
     );
   }
   return new DshApiError(`DSH HTTP ${status}`, "internal");
@@ -293,12 +514,15 @@ function stringField(
 }
 
 function parseHistoryPage(value: unknown): DshHistoryPage {
-  if (!isObject(value) || !Array.isArray(value.events)) {
-    throw new DshApiError("DSH session.history returned an invalid page");
+  const records = isObject(value)
+    ? Array.isArray(value.records) ? value.records : value.events
+    : undefined;
+  if (!isObject(value) || !Array.isArray(records)) {
+    throw new DshApiError("DSH session history returned an invalid page");
   }
   return {
     hasMore: value.hasMore === true,
-    events: value.events.map((item, index) => {
+    events: records.map((item, index) => {
       const event = unwrapHistoryEntry(item);
       if (
         !isObject(event) ||
@@ -380,6 +604,58 @@ function promptContent(input: {
       : input.content;
   }
   return [{ type: "text", text: input.text ?? "" }];
+}
+
+function wirePromptPart(part: DshPromptPart): Record<string, unknown> {
+  if (part.type === "text") {
+    return { type: "text", text: part.text };
+  }
+  return {
+    type: "image",
+    mediaType: part.mediaType,
+    data: part.data,
+    ...(part.name ? { name: part.name } : {}),
+  };
+}
+
+function sessionAddress(sessionId: string): { kind: "session"; sessionId: string } {
+  return { kind: "session", sessionId };
+}
+
+type DshStreamFrame =
+  | { type: "item"; value: unknown }
+  | { type: "end" }
+  | { type: "error"; code?: string; message: string };
+
+export function parseStreamFrame(data: string, streamId: string): DshStreamFrame | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(data) as unknown;
+  } catch {
+    return undefined;
+  }
+  if (!isObject(parsed) || parsed.streamId !== streamId) {
+    return undefined;
+  }
+  if (parsed.type === "item") {
+    return { type: "item", value: parsed.value };
+  }
+  if (parsed.type === "end") {
+    return { type: "end" };
+  }
+  if (parsed.type === "error") {
+    const error = isObject(parsed.error) ? parsed.error : {};
+    return {
+      type: "error",
+      code: typeof error.code === "string" ? error.code : undefined,
+      message: typeof error.message === "string" ? error.message : "DSH stream failed",
+    };
+  }
+  return undefined;
+}
+
+function isUpgradeUnauthorized(error: unknown): boolean {
+  return error instanceof Error && /\b401\b/.test(error.message) && !(error instanceof DshApiError);
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {

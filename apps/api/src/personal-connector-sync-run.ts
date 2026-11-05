@@ -152,6 +152,33 @@ export async function commandSyncRun(
   return run;
 }
 
+export async function deleteSyncRun(
+  state: ConnectorState,
+  runId: string,
+): Promise<{ deleted: true }> {
+  const store = state.runtime.requireHost().get("authority");
+  const deleted = await store.deleteSyncRun({
+    id: runId,
+    org_id: state.runtime.orgId(),
+  });
+  if (!deleted) {
+    const run = await store.getSyncRun(runId, state.runtime.orgId());
+    if (!run) {
+      throw new PersonalConnectorError(
+        "sync_failed",
+        "Sync run was not found",
+        404,
+      );
+    }
+    throw new PersonalConnectorError(
+      "sync_failed",
+      "Only completed, failed, or canceled sync jobs can be deleted",
+      409,
+    );
+  }
+  return { deleted: true };
+}
+
 export async function listQuarantines(
   state: ConnectorState,
   installationId: string,

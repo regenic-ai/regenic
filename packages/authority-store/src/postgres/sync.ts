@@ -17,6 +17,7 @@ import type {
   NewSyncRun,
   ListSyncRunsQuery,
   CommandSyncRun,
+  DeleteSyncRun,
   EnqueueSyncWork,
   ClaimSyncWork,
   RenewSyncWork,
@@ -869,6 +870,38 @@ export async function commandSyncRun(db: PgSql, input: CommandSyncRun): Promise<
         client,
       );
       return next ? toSyncRun(db, next) : null;
+    });
+  }
+
+export async function deleteSyncRun(
+  db: PgSql,
+  input: DeleteSyncRun,
+): Promise<boolean> {
+    return db.withTx(async (client) => {
+      const current = await db.queryOne<SyncRunRow>(
+        `SELECT * FROM sync_runs WHERE id = $1 AND org_id = $2 FOR UPDATE`,
+        [input.id, input.org_id],
+        client,
+      );
+      if (
+        !current ||
+        (current.status !== "succeeded" &&
+          current.status !== "failed" &&
+          current.status !== "cancelled")
+      ) {
+        return false;
+      }
+      await db.execute(
+        `UPDATE connector_sync_work SET run_id = NULL WHERE run_id = $1`,
+        [input.id],
+        client,
+      );
+      const deleted = await db.queryOne<{ id: string }>(
+        `DELETE FROM sync_runs WHERE id = $1 AND org_id = $2 RETURNING id`,
+        [input.id, input.org_id],
+        client,
+      );
+      return deleted !== null;
     });
   }
 

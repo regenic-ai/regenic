@@ -111,6 +111,11 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
       assert.equal(synced.status, 201);
       assert.equal(body.installation_id, installation.id);
       assert.ok(["queued", "running"].includes(body.status));
+      const activeDelete = await fetch(
+        `${origin}/v1/me/sync-runs/${body.id}`,
+        { method: "DELETE" },
+      );
+      assert.equal(activeDelete.status, 409);
 
       const paused = await fetch(
         `${origin}/v1/me/sync-runs/${body.id}/pause`,
@@ -125,6 +130,12 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
       );
       assert.equal(cancelled.status, 201);
       assert.equal((await cancelled.json()).status, "cancelled");
+      const deleted = await fetch(
+        `${origin}/v1/me/sync-runs/${body.id}`,
+        { method: "DELETE" },
+      );
+      assert.equal(deleted.status, 200);
+      assert.deepEqual(await deleted.json(), { deleted: true });
     } finally {
       hanging.closeAllConnections?.();
       hanging.close();

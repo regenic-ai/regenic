@@ -273,6 +273,10 @@ export class PersonalConnectorService implements OnModuleDestroy {
     return connectorSyncRun.commandSyncRun(this.connectorState(), runId, command);
   }
 
+  async deleteSyncRun(runId: string): Promise<{ deleted: true }> {
+    return connectorSyncRun.deleteSyncRun(this.connectorState(), runId);
+  }
+
   async listQuarantines(
     installationId: string,
   ): Promise<IngestQuarantine[]> {

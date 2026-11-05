@@ -19,6 +19,7 @@ import type {
   NewSyncRun,
   ListSyncRunsQuery,
   CommandSyncRun,
+  DeleteSyncRun,
   EnqueueSyncWork,
   ClaimSyncWork,
   RenewSyncWork,
@@ -868,6 +869,37 @@ export async function commandSyncRun(db: Database.Database, input: CommandSyncRu
       return findSyncRun(db, input.id);
     });
     return command.immediate();
+  }
+
+export async function deleteSyncRun(
+  db: Database.Database,
+  input: DeleteSyncRun,
+): Promise<boolean> {
+    const remove = db.transaction(() => {
+      const current = db
+        .prepare(
+          `SELECT status FROM sync_runs WHERE id = ? AND org_id = ?`,
+        )
+        .get(input.id, input.org_id) as
+        | { status: SyncRun["status"] }
+        | undefined;
+      if (
+        !current ||
+        (current.status !== "succeeded" &&
+          current.status !== "failed" &&
+          current.status !== "cancelled")
+      ) {
+        return false;
+      }
+      db.prepare(`UPDATE connector_sync_work SET run_id = NULL WHERE run_id = ?`)
+        .run(input.id);
+      return db
+        .prepare(
+          `DELETE FROM sync_runs WHERE id = ? AND org_id = ?`,
+        )
+        .run(input.id, input.org_id).changes === 1;
+    });
+    return remove.immediate();
   }
 
 export async function enqueueSyncWork(db: Database.Database, input: EnqueueSyncWork): Promise<SyncWorkRecord> {

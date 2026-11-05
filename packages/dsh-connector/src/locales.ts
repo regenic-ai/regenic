@@ -51,11 +51,15 @@ export const dshLocaleTables = defineLocaleTables({
     "probe.webDown": "Start dsh web --port 3080 first.",
     "probe.webUnauthorized":
       "dsh web is reachable and requires a token. Enter the token value in the DSH web token field below; do not paste the full browser URL.",
+    "probe.webIncompatible":
+      "dsh web is reachable, but its API is not compatible with this connector. Update DSH and try again.",
     "probe.webReady": "dsh web is reachable.",
     "probe.clusterDown":
       "Uses REGENIC_DSH_BASE_URL (cluster DNS, not a public URL)",
     "probe.clusterUnauthorized":
       "Cluster DSH is reachable and requires a token. Enter the configured token in the DSH web token field below.",
+    "probe.clusterIncompatible":
+      "Cluster DSH is reachable, but its API is not compatible with this connector. Update DSH and try again.",
     "probe.clusterReady": "Cluster DSH is reachable.",
     "probe.cliMissing": "dsh must work in your terminal.",
     "probe.cliReady": "dsh is on PATH.",
@@ -116,11 +120,15 @@ export const dshLocaleTables = defineLocaleTables({
     "probe.webDown": "先启动 dsh web --port 3080。",
     "probe.webUnauthorized":
       "dsh web 可访问，但要求 token。请在下方的 DSH Web token 栏填写 token 值，不要粘贴完整浏览器 URL。",
+    "probe.webIncompatible":
+      "dsh web 可访问，但 API 与此连接器不兼容。请更新 DSH 后重试。",
     "probe.webReady": "dsh web 可访问。",
     "probe.clusterDown":
       "使用 REGENIC_DSH_BASE_URL（集群 DNS，不是公网地址）",
     "probe.clusterUnauthorized":
       "集群 DSH 可访问，但要求 token。请在下方的 DSH Web token 栏填写配置的 token。",
+    "probe.clusterIncompatible":
+      "集群 DSH 可访问，但 API 与此连接器不兼容。请更新 DSH 后重试。",
     "probe.clusterReady": "集群 DSH 可访问。",
     "probe.cliMissing": "终端里的 dsh 必须能用。",
     "probe.cliReady": "dsh 已在 PATH 上。",

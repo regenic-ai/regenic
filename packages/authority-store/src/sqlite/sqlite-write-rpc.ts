@@ -168,6 +168,7 @@ export const AUTHORITY_WRITE_METHODS = [
   "settleAttempt",
   "createSyncRun",
   "commandSyncRun",
+  "deleteSyncRun",
   "enqueueSyncWork",
   "enqueueSyncWorkMany",
   "claimSyncWork",
