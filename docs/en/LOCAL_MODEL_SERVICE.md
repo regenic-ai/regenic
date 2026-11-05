@@ -37,12 +37,31 @@ tokenizers is not supported:
 | Document prefix | `title: none \| text: ` |
 | CPU weights / output | BF16 weights by default; float32 output, L2 normalized, cosine similarity |
 
-The desktop-managed service loads CPU weights as BF16 by default while retaining the
-text and vision encoders. Vectors are still converted to float32 and normalized again,
-so the vector protocol and generation identity do not change. BF16 materially reduces
-resident memory, but CPUs without native BF16 instructions take longer to run inference,
-primarily affecting background image, PDF and video indexing. A manually managed service
-can use `--precision float32` as a faster, higher-memory fallback.
+The desktop-managed service configures itself without tuning controls:
+
+- On Apple Silicon with at least 12 GiB of total memory, startup tries Apple GPU
+  acceleration (Metal / MPS) with FP32 weights. It checks query, document, image and
+  video inference before reporting readiness. If MPS is unavailable or model loading/
+  verification raises an inference error, it releases GPU allocations and retries
+  on CPU. The fallback reason appears in Settings and logs; CPU failures still fail
+  startup. Later request failures remain visible rather than silently switching devices.
+- CPU weights use BF16 below 12 GiB of total memory and FP32 otherwise. This is a
+  total-memory heuristic, not a guarantee of available RAM. BF16 reduces resident
+  memory but may be slower on CPUs without native BF16 instructions.
+- Mac CPU work uses half the available CPU count (rounded down, at least one, at
+  most eight threads) at reduced process priority. Below 12 GiB it uses at most two
+  threads. This bounds background CPU work; it does not reserve specific performance
+  cores or cap GPU utilization. Other platforms retain the existing CPU policy:
+  at most two threads below 12 GiB; otherwise all available CPUs minus two, at least one.
+
+Settings shows the **actual** ready backend, not just the requested device, with
+precision and CPU thread limits under **Technical details**. Startup verification
+is a compatibility check, not a cross-hardware performance certification. All paths
+retain text and vision encoders and return float32, re-normalized vectors; the model
+descriptor and generation identity do not change. Manual services retain the CPU/BF16
+default; `--precision float32` selects FP32, and `--device auto-mps --precision float32`
+opts into the same verified MPS/CPU fallback. Install-time `--download-only` uses CPU
+for `auto-mps`; offline startup verifies acceleration on the current machine.
 
 [requirements.txt](../../packages/embedding-provider/python/requirements.txt) is
 authoritative: `sentence-transformers[image]==6.1.0`, `transformers==5.19.0`,
@@ -90,6 +109,9 @@ or service assets invalidate the installation fingerprint and require reinstalla
 while keeping downloads. Quitting also stops owned services. The next launch restores
 an enabled preference, but still needs time to load the model. Desktop does not
 start or stop a custom kernel's model.
+
+The model handles termination gracefully to release runtime resources. Kernel logs
+distinguish requested stops from unexpected exits and include both exit code and signal.
 
 ## 3. Manual: independent Python service and custom kernel
 

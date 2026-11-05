@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { embeddingLaunchPlan } from "../src/main/embedding-launch.ts";
+import { embeddingLaunchPlan, type EmbeddingHardware } from "../src/main/embedding-launch.ts";
 import { SemanticRuntime } from "../src/main/semantic-runtime.ts";
 import { semanticAction } from "../src/shared/semantic-runtime.ts";
 import { loadDesktopPreference, saveDesktopPreference, saveKernelPreference, saveLocalePreference } from "../src/main/kernel-settings.ts";
@@ -29,7 +29,7 @@ import { en, zh, type MessageKey } from "../src/shared/messages.ts";
 const revision = "914f7f89142e33e77833254d9c9b90c3cef7303b";
 const descriptor = { model_id: "google/embeddinggemma-2", model_revision: revision, dimensions: 768 };
 
-function fixture() {
+function fixture(hardware: EmbeddingHardware = { cpus: 8, totalMemoryBytes: 8 * 1024 ** 3 }) {
   const root = mkdtempSync(join(tmpdir(), "regenic-semantic-"));
   const assets = join(root, "assets");
   mkdirSync(assets);
@@ -40,11 +40,12 @@ function fixture() {
   let failAt: string | undefined;
   let hold = false;
   let health = descriptor;
+  let execution: Record<string, unknown> = { device: "cpu", precision: "bfloat16", threads: 2 };
   let healthWait: Promise<void> | undefined;
   let server: ReturnType<typeof spawn> | undefined;
   const runtime = new SemanticRuntime({
     root, assets, startupMs: 30,
-    hardware: () => ({ cpus: 8, totalMemoryBytes: 8 * 1024 ** 3 }),
+    hardware: () => hardware,
     spawn(binary, args, options) {
       calls.push({ binary, args, options });
       if (args.includes("venv")) {
@@ -59,12 +60,13 @@ function fixture() {
     },
     fetch: async () => {
       await healthWait;
-      return new Response(JSON.stringify({ status: "ready", descriptor: health }));
+      return new Response(JSON.stringify({ status: "ready", descriptor: health, runtime: execution }));
     },
   });
   return { runtime, root, assets, calls, fail: () => { fail = true; }, hold: () => { hold = true; },
     wrongHealth: () => { health = { ...descriptor, dimensions: 1 }; },
     correctHealth: () => { health = descriptor; },
+    execution: (value: Record<string, unknown>) => { execution = value; },
     failDownload: () => { failAt = "--download-only"; },
     deferHealth: () => {
       let release: () => void = () => {};
@@ -223,6 +225,60 @@ test("embedding launch reserves cores on small machines and widens large ones", 
   });
 });
 
+test("Apple Silicon verifies acceleration and Mac CPU work leaves room for interactive apps", () => {
+  const hardware = { cpus: 15, totalMemoryBytes: 24 * 1024 ** 3, platform: "darwin" as const, arch: "arm64" };
+  assert.deepEqual(embeddingLaunchPlan(hardware), { device: "auto-mps", precision: "float32", threads: 7, nice: 5 });
+  assert.deepEqual(embeddingLaunchPlan({ ...hardware, cpus: 32 }).threads, 8);
+  assert.equal(embeddingLaunchPlan({ ...hardware, totalMemoryBytes: 8 * 1024 ** 3 }).device, "cpu");
+  assert.equal(embeddingLaunchPlan({ ...hardware, arch: "x64" }).device, "cpu");
+  assert.equal(embeddingLaunchPlan({ ...hardware, platform: "linux" }).device, "cpu");
+  assert.equal(embeddingLaunchPlan({ ...hardware, cpus: 1 }).threads, 1);
+  assert.equal(embeddingLaunchPlan({ ...hardware, totalMemoryBytes: 12 * 1024 ** 3 }).device, "auto-mps");
+});
+
+test("runtime reports verified backend and CPU fallback, never just the requested device", async () => {
+  const f = fixture({ cpus: 15, totalMemoryBytes: 24 * 1024 ** 3, platform: "darwin", arch: "arm64" });
+  try {
+    await f.runtime.install();
+    assert.equal(f.runtime.view(false, true).execution, undefined);
+    f.execution({ device: "mps", precision: "float32", threads: 7 });
+    await f.runtime.start();
+    assert.deepEqual(f.calls[4].args.slice(-4), ["--device", "auto-mps", "--precision", "float32"]);
+    assert.equal(f.calls[4].options.env?.VECLIB_MAXIMUM_THREADS, "7");
+    assert.deepEqual(f.runtime.view(true, true).execution, { device: "mps", precision: "float32", threads: 7 });
+    await f.runtime.stop();
+    assert.equal(f.runtime.view(false, true).execution, undefined);
+    for (const reason of ["mps_failed", "mps_unavailable"] as const) {
+      f.execution({ device: "cpu", precision: "float32", threads: 7, fallback_reason: reason });
+      await f.runtime.start();
+      assert.deepEqual(f.runtime.view(true, true).execution, {
+        device: "cpu", precision: "float32", threads: 7, fallbackReason: reason,
+      });
+      await f.runtime.stop();
+    }
+  } finally { f.cleanup(); }
+});
+
+test("invalid execution diagnostics cannot advertise healthy model readiness", async () => {
+  const f = fixture();
+  try {
+    await f.runtime.install();
+    for (const execution of [
+      {}, { device: "cuda", precision: "float32", threads: 2 },
+      { device: "cpu", precision: "float16", threads: 2 },
+      { device: "cpu", precision: "float32", threads: 0 },
+      { device: "cpu", precision: "float32", threads: 1.5 },
+      { device: "mps", precision: "float32", threads: 2, fallback_reason: "mps_failed" },
+      { device: "cpu", precision: "float32", threads: 2, fallback_reason: "unknown" },
+    ]) {
+      f.execution(execution);
+      await assert.rejects(f.runtime.start(), /semantic.startFailed/);
+      assert.equal(f.runtime.view(true, true).execution, undefined);
+      assert.equal(f.runtime.endpoint(), undefined);
+    }
+  } finally { f.cleanup(); }
+});
+
 test("semantic preference is optional and survives locale and kernel changes", () => {
   const f = fixture();
   try {
@@ -360,5 +416,6 @@ test("late health probes cannot revive stopped processes", async () => {
     assert.equal(f.runtime.endpoint(), undefined);
     assert.equal(f.runtime.view(false, true).healthy, false);
     assert.equal(f.runtime.view(false, true).stage, "stopped");
+    assert.equal(f.runtime.view(false, true).execution, undefined);
   } finally { f.cleanup(); }
 });

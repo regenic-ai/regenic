@@ -30,10 +30,26 @@
 | 文档前缀 | `title: none \| text: ` |
 | CPU 权重 / 输出 | 默认 BF16 权重；float32 输出，L2 归一化，cosine 相似度 |
 
-桌面托管服务默认以 BF16 加载 CPU 权重，保留文本和视觉编码器；返回向量仍转换为
-float32 并再次归一化，因此向量协议和 generation 身份不变。BF16 显著降低常驻内存，
-但不具备原生 BF16 指令的 CPU 会增加推理时间，主要影响后台图片、PDF 和视频索引。
-手动服务可用 `--precision float32` 回退到较快但更占内存的模式。
+桌面托管服务自动配置，无需手动调参：
+
+- Apple Silicon 且总内存至少 12 GiB 时，启动尝试使用 FP32 权重的 Apple GPU
+  加速（Metal / MPS），通过查询、文档、图片和视频推理验证后才报告就绪。
+  MPS 不可用或加载/验证发生推理错误时，会释放 GPU 分配并改用 CPU；
+  设置页与日志明确展示回退原因。CPU 启动失败仍报错；运行后的请求失败不会被静默切换后端掩盖。
+- CPU 在总内存低于 12 GiB 时使用 BF16，否则使用 FP32。这是基于总内存的启发式，
+  不保证当前有足够可用内存。BF16 降低常驻内存，但在缺乏原生 BF16 指令的 CPU 上可能更慢。
+- Mac 使用可用 CPU 数量的一半（向下取整，至少 1、最多 8 线程），并降低进程优先级；
+  低于 12 GiB 时最多 2 线程。这限制后台 CPU 工作量，不绑定性能核，也不限制 GPU 使用率。
+  其他平台保持原 CPU 策略：低于 12 GiB 时最多 2 线程，否则预留 2 个可用 CPU、至少 1 线程。
+
+设置页显示**实际就绪后端**，而不是启动时请求的设备；精度和 CPU 线程上限收在“技术详情”中。
+启动验证是兼容性检查，不是跨硬件性能认证。所有路径保留文本和视觉编码器，向量仍转换为
+float32 并再次归一化，不改变模型 descriptor 和 generation 身份。
+手动服务仍默认 CPU/BF16；`--precision float32` 选择 FP32，
+`--device auto-mps --precision float32` 启用相同的 MPS 验证与 CPU 回退。
+`auto-mps` 安装时的 `--download-only` 使用 CPU；离线启动时再验证当前设备的加速能力。
+
+模型收到终止信号时会正常退出并释放运行资源；内核日志会区分主动停止与意外退出，同时记录退出码和信号。
 
 依赖以 [requirements.txt](../../packages/embedding-provider/python/requirements.txt) 为准：
 `sentence-transformers[image]==6.1.0`、`transformers==5.19.0`、`torch==2.14.1`、
