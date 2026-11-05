@@ -164,7 +164,7 @@ export class DshWebRpcClient {
       );
     }
     if (!response.ok) {
-      throw httpStatusError(response.status);
+      throw httpStatusError(response.status, this.options.access_token);
     }
     return parseRespondReceipt(await response.json());
   }
@@ -210,16 +210,22 @@ export class DshWebRpcClient {
       );
     }
     if (!response.ok) {
-      throw httpStatusError(response.status);
+      throw httpStatusError(response.status, this.options.access_token);
     }
     return parseServerResponse(await response.json(), rpcId);
   }
 }
 
-function httpStatusError(status: number): DshApiError {
+function httpStatusError(
+  status: number,
+  accessToken?: string,
+): DshApiError {
   if (status === 401) {
+    const message = accessToken
+      ? "DSH rejected the configured token (HTTP 401). Verify the saved DSH web token exactly matches the current token printed by the running dsh web server. If it changed, replace it in Engine → DSH → Edit. Do not paste the full browser URL."
+      : "DSH authentication failed (HTTP 401): a token is required. Enter the token printed by dsh web in the installation's DSH web token field (not the full browser URL). REGENIC_DSH_TOKEN remains available as an environment fallback.";
     return new DshApiError(
-      "DSH authentication failed (HTTP 401). Enter the token printed by dsh web in the installation's DSH web token field (not the full browser URL). REGENIC_DSH_TOKEN remains available as an environment fallback.",
+      message,
       "unauthorized",
     );
   }

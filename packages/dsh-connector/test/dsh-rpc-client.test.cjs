@@ -141,6 +141,32 @@ describe("DshWebRpcClient", () => {
     );
   });
 
+  it("explains when DSH rejects a configured token", async () => {
+    const client = new DshWebRpcClient({
+      base_url: "http://127.0.0.1:3080",
+      access_token: "do-not-include-in-errors",
+      async fetch() {
+        return {
+          ok: false,
+          status: 401,
+          async json() {
+            return {};
+          },
+        };
+      },
+    });
+    await assert.rejects(
+      () => client.sessionList(),
+      (error) => {
+        assert.equal(error.name, "DshApiError");
+        assert.match(error.message, /rejected the configured token/);
+        assert.match(error.message, /current token printed by the running dsh web server/);
+        assert.equal(error.message.includes("do-not-include-in-errors"), false);
+        return true;
+      },
+    );
+  });
+
   it("sends image and file parts on session.prompt", async () => {
     const calls = [];
     const client = new DshWebRpcClient({
