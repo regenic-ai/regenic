@@ -1,0 +1,26 @@
+{
+  "format": 1,
+  "title": "Regenic Connectors",
+  "connectors": [
+    {
+      "name": "@regenic/connector-github-copilot",
+      "title": "GitHub Copilot CLI",
+      "description": "Regenic connector for GitHub Copilot CLI SDK task sessions",
+      "keywords": [],
+      "versions": [
+        {
+          "version": "0.1.0",
+          "published_at": "2026-11-05T08:56:52.949Z",
+          "engines_regenic": "1.0",
+          "integrity": "sha512-Aqa/wBeawtSWM1cu2cCkfmGJ42/YtEyVFOfJ4x07tpl0wMBLr9TxeecutQSATt5U4MlXz3AxgFHgRu+7TN5rxg==",
+          "driver_exports": [
+            "githubCopilotSessionDriver"
+          ],
+          "executor_exports": [
+            "githubCopilotTaskExecutor"
+          ]
+        }
+      ]
+    }
+  ]
+}

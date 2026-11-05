@@ -21,6 +21,7 @@ const host = () => run(process.execPath, ["--test",
 ], { cwd: join(repo, "apps/api"), env });
 try {
   if (lane === "pr") {
+    run(process.execPath, ["scripts/connectors/check-official-market-index.mjs"], { env });
     command(["test:tooling"]);
     command(["check:boundaries"]);
     command(["build"]);

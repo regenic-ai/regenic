@@ -1,6 +1,9 @@
 const assert = require("node:assert/strict");
 const { describe, it } = require("node:test");
-const { ConnectorMarketService } = require("../dist/connector-market.service");
+const {
+  ConnectorMarketService,
+  OFFICIAL_CONNECTOR_MARKET_INDEX_URL,
+} = require("../dist/connector-market.service");
 
 const release = {
   version: "1.2.3",
@@ -8,6 +11,7 @@ const release = {
   engines_regenic: "1.0",
   integrity: `sha512-${Buffer.alloc(64, 1).toString("base64")}`,
   driver_exports: ["exampleDriver"],
+  executor_exports: ["exampleExecutor"],
 };
 
 function index() {
@@ -37,16 +41,31 @@ function jsonResponse(value, status = 200) {
 }
 
 describe("ConnectorMarketService", () => {
-  it("reports an unconfigured market without making a network request", async () => {
+  it("supports explicitly disabling the official market without making a request", async () => {
     const service = new ConnectorMarketService();
     let fetched = false;
-    const market = await service.getMarket(false, {}, async () => {
+    const market = await service.getMarket(false, {
+      REGENIC_CONNECTOR_MARKET_INDEX_URL: "off",
+    }, async () => {
       fetched = true;
       return jsonResponse(index());
     });
 
     assert.deepEqual(market, { configured: false, title: null, connectors: [] });
     assert.equal(fetched, false);
+  });
+
+  it("uses the official index when no deployment override is configured", async () => {
+    const service = new ConnectorMarketService();
+    let requested;
+    const market = await service.getMarket(false, {}, async (url) => {
+      requested = url.href;
+      return jsonResponse(index());
+    });
+
+    assert.equal(requested, OFFICIAL_CONNECTOR_MARKET_INDEX_URL);
+    assert.equal(market.configured, true);
+    assert.equal(market.connectors.length, 1);
   });
 
   it("validates and normalizes a configured static index", async () => {
@@ -68,8 +87,25 @@ describe("ConnectorMarketService", () => {
     assert.equal(market.title, "Regenic Connectors");
     assert.equal(market.connectors[0].name, "@example/regenic-connector-example");
     assert.equal(market.connectors[0].versions[0].integrity, release.integrity);
+    assert.deepEqual(
+      market.connectors[0].versions[0].executor_exports,
+      ["exampleExecutor"],
+    );
     assert.equal(market.connectors[0].versions[0].compatible, true);
     assert.equal(market.connectors[0].homepage, undefined);
+  });
+
+  it("treats executor exports as optional for existing format-1 indexes", async () => {
+    const legacy = index();
+    delete legacy.connectors[0].versions[0].executor_exports;
+    const service = new ConnectorMarketService();
+    const market = await service.getMarket(
+      false,
+      { REGENIC_CONNECTOR_MARKET_INDEX_URL: "https://market.example/connectors.json" },
+      async () => jsonResponse(legacy),
+    );
+
+    assert.deepEqual(market.connectors[0].versions[0].executor_exports, []);
   });
 
   it("uses the current exact connector protocol for compatibility status", async () => {

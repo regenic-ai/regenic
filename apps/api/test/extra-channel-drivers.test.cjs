@@ -320,6 +320,65 @@ describe("first-party channel plugins", () => {
     }
   });
 
+  it("reports an executor source collision during market registration", () => {
+    const pluginDir = mkdtempSync(join(tmpdir(), "regenic-market-executor-conflict-"));
+    const packageName = `retry-market-executor-${Date.now()}`;
+    const packageHash = createHash("sha256").update(packageName).digest("hex").slice(0, 24);
+    const packageDir = join(pluginDir, `market-${packageHash}`);
+    mkdirSync(packageDir);
+    writeFileSync(
+      join(packageDir, "package.json"),
+      extraManifest(packageName, {
+        drivers: ["marketDriver"],
+        executors: ["marketExecutor"],
+      }),
+    );
+    writeFileSync(
+      join(packageDir, ".regenic-market-install.json"),
+      JSON.stringify({ package_name: packageName, version: "1.0.0" }),
+    );
+    writeFileSync(
+      join(packageDir, "index.cjs"),
+      `
+        exports.marketDriver = {
+          connector_type: "executor-conflict-driver",
+          source: "shared-executor-source",
+          install() { return { id: "1", org_id: "o", connector_type: "executor-conflict-driver", status: "enabled", config: {}, created_at: "" }; },
+        };
+        exports.marketExecutor = {
+          executor_type: "market",
+          capabilities() { return { start: true }; },
+          catalog() { return { source: "shared-executor-source" }; },
+          async start() {},
+          async resume() {},
+          async status() {},
+        };
+      `,
+    );
+    const env = { REGENIC_PLUGIN_DIR: pluginDir };
+    const drivers = createChannelDriverRegistry(env);
+    const executors = new LocalExecutorPluginRegistry();
+    executors.register({
+      executor_type: "existing",
+      capabilities() { return { start: true }; },
+      catalog() { return { source: "shared-executor-source" }; },
+      async start() {},
+      async resume() {},
+      async status() {},
+    });
+    const plugins = new PersonalPluginService(drivers, executors);
+
+    try {
+      const result = plugins.retryMarketRegistration(packageName, env);
+      assert.equal(result.registered, false);
+      assert.deepEqual(result.executor_sources, ["shared-executor-source"]);
+      assert.deepEqual(result.registered_executor_sources, []);
+      assert.match(result.error, /executor sources/u);
+    } finally {
+      rmSync(pluginDir, { recursive: true, force: true });
+    }
+  });
+
   it("assembles registries without Nest importing driver symbols", () => {
     const drivers = createChannelDriverRegistry({}).list().map((item) => item.connector_type);
     assert.deepEqual(drivers, [

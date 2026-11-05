@@ -15,7 +15,7 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
     const blobRoot = join(root, "blobs");
     await ingestActionable(database, blobRoot);
     const { app, origin } = await startPersonalApi(database, blobRoot, {
-      REGENIC_CONNECTOR_MARKET_INDEX_URL: undefined,
+      REGENIC_CONNECTOR_MARKET_INDEX_URL: "off",
     });
     try {
       const engine = await (await fetch(`${origin}/v1/me/engine`)).json();

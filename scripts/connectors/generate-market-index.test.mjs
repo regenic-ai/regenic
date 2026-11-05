@@ -53,7 +53,7 @@ const packument = {
       regenic: {
         plugin: true,
         engines: { regenic: "1.0" },
-        contributes: { drivers: ["demoDriver"], executors: ["executor"] },
+        contributes: { drivers: [], executors: ["executor"] },
       },
       dist: { integrity: integrityTwo },
     },
@@ -83,7 +83,7 @@ describe("connector market index generator", () => {
       title: "Regenic connectors",
       fetchImpl: async (url, options) => {
         assert.equal(url.href, "https://registry.npmjs.org/%40regenic%2Fconnector-demo");
-        assert.match(options.headers.accept, /application\/json/u);
+        assert.equal(options.headers.accept, "application/json");
         return Response.json(packument);
       },
     });
@@ -106,6 +106,7 @@ describe("connector market index generator", () => {
             engines_regenic: "1.0",
             integrity: integrityTwo,
             driver_exports: ["demoDriver"],
+            executor_exports: [],
           },
           {
             version: "1.0.0",
@@ -113,10 +114,51 @@ describe("connector market index generator", () => {
             engines_regenic: "1.0",
             integrity: integrityOne,
             driver_exports: ["demoDriver"],
+            executor_exports: [],
           },
         ],
       }],
     });
+  });
+
+  it("keeps connector releases that also contribute executors", async () => {
+    const combined = structuredClone(packument);
+    combined.versions["1.0.0"].regenic.contributes.executors = ["demoExecutor"];
+    const index = await generateMarketIndex({
+      packages: ["@regenic/connector-demo"],
+      title: "Demo",
+      fetchImpl: async (_url, options) => {
+        assert.equal(options.headers.accept, "application/json");
+        return Response.json(combined);
+      },
+    });
+
+    assert.deepEqual(
+      index.connectors[0].versions.find((item) => item.version === "1.0.0")
+        ?.executor_exports,
+      ["demoExecutor"],
+    );
+  });
+
+  it("does not request npm's abbreviated metadata representation", async () => {
+    const index = await generateMarketIndex({
+      packages: ["@regenic/connector-demo"],
+      title: "Demo",
+      fetchImpl: async (_url, options) =>
+        options.headers.accept === "application/json"
+          ? Response.json(packument)
+          : Response.json({
+              name: packument.name,
+              versions: {
+                "1.0.0": {
+                  name: packument.name,
+                  version: "1.0.0",
+                  dist: { integrity: integrityOne },
+                },
+              },
+            }),
+    });
+    assert.equal(index.connectors[0].versions.length, 2);
   });
 
   it("fails closed when npm metadata is unavailable or malformed", async () => {

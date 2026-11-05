@@ -24,6 +24,7 @@ const integrityBytes = (bytes) =>
 async function setupPackage(root, {
   name = packageName,
   contributes = drivers,
+  executors = [],
   packageVersion = version,
 } = {}) {
   const packageRoot = join(root, "package");
@@ -38,13 +39,17 @@ async function setupPackage(root, {
       regenic: {
         plugin: true,
         engines: { regenic: "1.0" },
-        contributes: { drivers: contributes },
+        contributes: { drivers: contributes, executors },
       },
     }),
   );
   await writeFile(
     join(packageRoot, "index.cjs"),
-    "exports.marketTestDriver = { connector_type: 'market-test', source: 'market-test', install() {} };\n",
+    [
+      "exports.marketTestDriver = { connector_type: 'market-test', connector_protocol: '1.0', source: 'market-test', install() {} };",
+      "exports.marketTestExecutor = { executor_type: 'market-test', capabilities() { return { start: true }; }, catalog() { return { source: 'market-test' }; }, async start() {}, async resume() {}, async status() {} };",
+      "",
+    ].join("\n"),
   );
   const archivePath = join(root, "connector.tgz");
   await tar.c({ cwd: root, gzip: true, file: archivePath }, ["package"]);
@@ -145,6 +150,56 @@ describe("ConnectorMarketInstaller", () => {
           .then((text) => JSON.parse(text).version),
         version,
       );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("installs and registers a connector package that also contributes an executor", async () => {
+    const root = await mkdtemp(join(tmpdir(), "regenic-market-combined-"));
+    try {
+      const name = `${packageName}-combined`;
+      const executorExports = ["marketTestExecutor"];
+      const { archive, integrity } = await setupPackage(root, {
+        name,
+        executors: executorExports,
+      });
+      const pluginDirectory = join(root, "plugins");
+      const plugins = new PersonalPluginService(
+        new ChannelDriverRegistry(),
+        new LocalExecutorPluginRegistry(),
+      );
+      const installer = new ConnectorMarketInstaller(
+        {
+          getMarket: async () => ({
+            configured: true,
+            title: "Test market",
+            connectors: [{
+              name,
+              versions: [{
+                version,
+                engines_regenic: "1.0",
+                compatible: true,
+                integrity,
+                driver_exports: drivers,
+                executor_exports: executorExports,
+              }],
+            }],
+          }),
+        },
+        plugins,
+        runtimeService(),
+      );
+
+      const result = await installer.install(
+        { package_name: name, version, confirmed: true },
+        registryFetch({ archive, integrity, name }),
+        { REGENIC_PLUGIN_DIR: pluginDirectory },
+      );
+
+      assert.equal(result.registered, true);
+      assert.deepEqual(result.executor_sources, ["market-test"]);
+      assert.deepEqual(result.registered_executor_sources, ["market-test"]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
