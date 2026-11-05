@@ -251,7 +251,8 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
               ...(attachment.source_filename ? { source_filename: attachment.source_filename } : {}),
               bytes: attachment.bytes,
             }, this.abort.signal);
-            if (!processed.text?.trim() && processed.vectors.length === 0) {
+            if (!processed.text?.trim() && processed.vectors.length === 0 &&
+              !(processed.skipped_visual === true && this.provider.visualEnabled === false)) {
               throw new EmbeddingError("invalid_response", true);
             }
             if (processed.text?.trim()) {
@@ -261,6 +262,9 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
               await appendText(processed.text, attachment.part_index === undefined ? undefined : {
                 part_index: attachment.part_index, content_hash: attachment.content_hash,
               });
+            }
+            if (this.provider.visualEnabled === false && processed.vectors.length > 0) {
+              throw new EmbeddingError("invalid_response", false);
             }
             for (const [index, vector] of processed.vectors.entries()) {
               const cursor = chunks.length ? chunks[chunks.length - 1].end : 0;
@@ -293,7 +297,8 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
             }
           }
         }
-        const noContent = chunks.length === 0 && !material?.attachments.length &&
+        const noContent = chunks.length === 0 &&
+          (!material?.attachments.length || this.provider.visualEnabled === false) &&
           generation.extractor_version === "stored-body-and-attachments-v2";
         if (staged.length > chunks.length) throw new Error("Embedding checkpoint content mismatch");
         if (chunks.length === 0 && !noContent) throw new EmbeddingError("invalid_input", false);

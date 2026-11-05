@@ -30,19 +30,20 @@ class FakeModel:
 
 def encoder_with(vector):
     encoder = TextEncoder.__new__(TextEncoder)
+    encoder.visual_enabled = True
     encoder.tokenizer = FakeTokenizer()
     encoder.model = FakeModel(vector)
     return encoder
 
 
 class EncoderTests(unittest.TestCase):
-    def test_cpu_defaults_to_bfloat16_and_keeps_vision_enabled(self):
+    def test_cpu_defaults_to_text_only_and_never_loads_audio(self):
         model = FakeModel([1.0] + [0.0] * 767)
         with patch("sentence_transformers.SentenceTransformer", return_value=model) as constructor, \
                 patch("transformers.AutoTokenizer.from_pretrained", return_value=FakeTokenizer()):
             TextEncoder("cpu")
         self.assertEqual(constructor.call_args.kwargs["model_kwargs"], {"dtype": "bfloat16"})
-        self.assertEqual(constructor.call_args.kwargs["config_kwargs"], {"audio_config": None})
+        self.assertEqual(constructor.call_args.kwargs["config_kwargs"], {"audio_config": None, "vision_config": None})
 
     def test_cpu_float32_fallback_is_explicit(self):
         model = FakeModel([1.0] + [0.0] * 767)
@@ -65,8 +66,8 @@ class EncoderTests(unittest.TestCase):
         model = Mock()
         with patch("torch.backends.mps.is_available", return_value=True), \
                 patch("serve.TextEncoder", return_value=model) as constructor:
-            encoder, runtime = initialize_encoder("auto-mps", "bfloat16")
-        constructor.assert_called_once_with("mps", "float32")
+            encoder, runtime = initialize_encoder("auto-mps", "bfloat16", True)
+        constructor.assert_called_once_with("mps", "float32", True)
         self.assertIs(encoder, model)
         self.assertEqual(runtime, {"device": "mps", "precision": "float32"})
         self.assertEqual([call.args[1] for call in model.embed.call_args_list], ["query", "document"])
@@ -78,7 +79,7 @@ class EncoderTests(unittest.TestCase):
                 patch("serve.TextEncoder") as constructor, \
                 self.assertLogs(level="WARNING"):
             _, runtime = initialize_encoder("auto-mps", "float32")
-        constructor.assert_called_once_with("cpu", "float32")
+        constructor.assert_called_once_with("cpu", "float32", False)
         self.assertEqual(runtime, {"device": "cpu", "precision": "float32", "fallback_reason": "mps_unavailable"})
 
     def test_mps_load_and_inference_failures_retry_cpu_explicitly(self):
@@ -98,8 +99,8 @@ class EncoderTests(unittest.TestCase):
                     patch("torch.mps.empty_cache") as empty_cache, \
                     patch("serve.TextEncoder", side_effect=candidates) as constructor, \
                     self.assertLogs(level="WARNING"):
-                encoder, runtime = initialize_encoder("auto-mps", "float32")
-            self.assertEqual([call.args for call in constructor.call_args_list], [("mps", "float32"), ("cpu", "float32")])
+                encoder, runtime = initialize_encoder("auto-mps", "float32", True)
+            self.assertEqual([call.args for call in constructor.call_args_list], [("mps", "float32", True), ("cpu", "float32", True)])
             self.assertIs(encoder, candidates[1])
             empty_cache.assert_called_once()
             self.assertEqual(runtime["fallback_reason"], "mps_failed")
@@ -119,7 +120,20 @@ class EncoderTests(unittest.TestCase):
                 patch("serve.TextEncoder") as constructor:
             initialize_encoder("cpu", "bfloat16")
         available.assert_not_called()
-        constructor.assert_called_once_with("cpu", "bfloat16")
+        constructor.assert_called_once_with("cpu", "bfloat16", False)
+
+    def test_text_only_mps_verifies_only_authorized_modalities(self):
+        model = Mock()
+        with patch("torch.backends.mps.is_available", return_value=True), \
+                patch("serve.TextEncoder", return_value=model) as constructor:
+            initialize_encoder("auto-mps", "float32")
+        constructor.assert_called_once_with("mps", "float32", False)
+        self.assertEqual(model.embed.call_count, 2)
+        model.image.assert_not_called()
+        model.video.assert_not_called()
+        model.visual_enabled = False
+        with self.assertRaises(InputError):
+            TextEncoder.visual(model, {})
 
     def test_float32_normalization_after_low_precision_inference(self):
         encoder = encoder_with([0.9984] + [0.0] * 767)

@@ -64,7 +64,10 @@ export async function createLocalHost(options: LocalHostOptions): Promise<Host> 
       await host.plugin(modelProviderPlugin, options.model ?? { driver: "none" });
       if (options.embedding) {
         await host.plugin(localEmbeddingProviderPlugin, options.embedding);
-        await host.plugin(sqliteContextVectorIndexPlugin, { path: `${options.database}.vector.db` });
+        await host.plugin(sqliteContextVectorIndexPlugin, {
+          path: `${options.database}.vector.db`, org_id: options.orgId,
+          visual_enabled: options.embedding.visual_enabled,
+        });
         await host.plugin(hybridEventRetrieverPlugin, {
           ...options.embedding, lexical_index: host.get("context-lexical-index"),
         });

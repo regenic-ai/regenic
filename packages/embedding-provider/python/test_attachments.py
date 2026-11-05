@@ -5,6 +5,7 @@ import http.client
 import threading
 import unittest
 import zipfile
+from unittest.mock import patch
 
 from PIL import Image
 from serve import (
@@ -15,6 +16,7 @@ from serve import (
 
 class FakeEncoder:
     attachment = TextEncoder.attachment
+    visual_enabled = True
 
     def __init__(self):
         self.images = 0
@@ -74,6 +76,7 @@ def request(data, media_type="application/octet-stream", filename=""):
     return {
         "descriptor": DESCRIPTOR,
         "bytes_base64": base64.b64encode(data).decode(),
+        "visual_enabled": True,
         "media_type": media_type,
         "source_filename": filename,
     }
@@ -84,6 +87,42 @@ def extract(data, media_type="application/octet-stream", filename=""):
 
 
 class AttachmentTests(unittest.TestCase):
+    def test_visual_is_denied_without_both_request_and_model_consent(self):
+        for requested, loaded in ((False, True), (True, False), (False, False)):
+            encoder = FakeEncoder()
+            encoder.visual_enabled = loaded
+            body = request(image_bytes())
+            if requested:
+                body["visual_enabled"] = True
+            else:
+                body.pop("visual_enabled")
+            result = encoder.attachment(body, "document")
+            self.assertEqual(result, {"text": "", "vectors": [], "skipped_visual": True})
+            self.assertEqual(encoder.images, 0)
+
+    def test_text_only_pdf_keeps_text_without_rendering_pages(self):
+        body = {**request(pdf_bytes()), "visual_enabled": False}
+        with patch("pypdfium2.PdfPage.render", side_effect=AssertionError("unauthorized render")):
+            result = FakeEncoder().attachment(body, "document")
+        self.assertIn("Local PDF", result["text"])
+        self.assertEqual(result["vectors"], [])
+        self.assertTrue(result["skipped_visual"])
+
+    def test_text_only_skips_embedded_images_and_video_decoding(self):
+        document = archive_bytes({
+            "word/document.xml": '<w:document xmlns:w="urn:word"><w:t>Local notes</w:t></w:document>',
+            "word/media/image1.jpg": image_bytes(),
+        })
+        encoder = FakeEncoder()
+        result = encoder.attachment({**request(document), "visual_enabled": False}, "document")
+        self.assertIn("Local notes", result["text"])
+        self.assertEqual(result["vectors"], [])
+        self.assertEqual(encoder.images, 0)
+        with patch("av.open", side_effect=AssertionError("unauthorized video decode")):
+            result = encoder.attachment({**request(b"\x00\x00\x00\x18ftypisom"), "visual_enabled": False}, "document")
+        self.assertEqual(result["vectors"], [])
+        self.assertTrue(result["skipped_visual"])
+
     def test_signature_overrides_wrong_filename_and_mime(self):
         result = extract(image_bytes(), "image/png", "wrong.png")
         self.assertEqual(len(result["vectors"]), 1)

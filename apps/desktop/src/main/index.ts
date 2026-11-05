@@ -74,7 +74,7 @@ import {
   createConversationPresence,
 } from "./conversation-presence";
 import { SemanticRuntime } from "./semantic-runtime";
-import { semanticAction } from "../shared/semantic-runtime";
+import { semanticAction, semanticVisualPreference } from "../shared/semantic-runtime";
 
 const TRAY_SIZE = { width: 360, height: 480 };
 const DEFAULT_PORT = Number(process.env.REGENIC_DESKTOP_API_PORT ?? 4370);
@@ -104,6 +104,7 @@ function managedSemantic(): SemanticRuntime {
   return semanticRuntime ??= new SemanticRuntime({
     root: join(app.getPath("userData"), "semantic-runtime"),
     assets: join(__dirname, "embedding"),
+    visualEnabled: () => loadDesktopPreference(settingsFile()).semanticVisualEnabled === true,
   });
 }
 
@@ -111,6 +112,7 @@ function semanticView() {
   const preference = loadDesktopPreference(settingsFile());
   return {
     ...managedSemantic().view(preference.semanticEnabled === true, !kernelMutation && preference.mode === "local" && sidecar !== null),
+    visualEnabled: preference.semanticVisualEnabled === true,
     ...(semanticActionError ? { error: semanticActionError } : {}),
     busy: Boolean(semanticJob),
   };
@@ -135,6 +137,34 @@ async function changeSemantic(action: "install" | "start" | "stop"): Promise<voi
     semanticActionError = error instanceof Error && error.message.startsWith("semantic.") ? error.message : "semantic.kernelFailed";
     console.error("[semantic]", semanticActionError);
   }).finally(() => { semanticJob = undefined; });
+}
+
+async function changeSemanticVisual(enabled: boolean): Promise<void> {
+  if (semanticJob || kernelMutation) throw new Error("semantic.busy");
+  if (!semanticView().canManage) throw new Error("semantic.localOnly");
+  const preference = loadDesktopPreference(settingsFile());
+  if ((preference.semanticVisualEnabled === true) === enabled) return;
+  semanticActionError = undefined;
+  semanticJob = (async () => {
+    await stopOwnedSidecarAndWait();
+    await managedSemantic().stop();
+    saveDesktopPreference(settingsFile(), { ...preference, semanticVisualEnabled: enabled });
+    releaseOwnedStoreLock();
+    // Apply the index permission before loading a newly authorized model.
+    await startLocalKernel({ forceSpawn: true });
+    broadcastOrigin();
+    if (preference.semanticEnabled && managedSemantic().view(true, true).installed) {
+      await managedSemantic().start();
+      await stopOwnedSidecarAndWait();
+      releaseOwnedStoreLock();
+      await startLocalKernel({ forceSpawn: true });
+      broadcastOrigin();
+    }
+  })().catch((error: unknown) => {
+    semanticActionError = error instanceof Error && error.message.startsWith("semantic.") ? error.message : "semantic.kernelFailed";
+    console.error("[semantic]", semanticActionError);
+  }).finally(() => { semanticJob = undefined; });
+  await semanticJob;
 }
 const conversationPresence = createConversationPresence({
   getMainWindow: () => mainWindow,
@@ -237,6 +267,7 @@ function sidecarEnv(
   env.NO_PROXY = [...new Set(noProxy)].join(",");
   env.no_proxy = env.NO_PROXY;
   const semanticEnabled = loadDesktopPreference(settingsFile()).semanticEnabled;
+  env.REGENIC_EMBEDDING_VISUAL = String(loadDesktopPreference(settingsFile()).semanticVisualEnabled === true);
   if (semanticEnabled !== undefined) {
     const endpoint = semanticEnabled ? managedSemantic().endpoint() : undefined;
     env.REGENIC_EMBEDDING_DRIVER = endpoint ? "local_http" : "none";
@@ -1043,6 +1074,11 @@ app.whenReady().then(async () => {
   ipcMain.handle("regenic:semantic-action", async (event, action: unknown) => {
     if (event.sender !== mainWindow?.webContents) throw new Error("semantic.localOnly");
     await changeSemantic(semanticAction(action));
+    return semanticView();
+  });
+  ipcMain.handle("regenic:semantic-visual", async (event, value: unknown) => {
+    if (event.sender !== mainWindow?.webContents) throw new Error("semantic.localOnly");
+    await changeSemanticVisual(semanticVisualPreference(value));
     return semanticView();
   });
   ipcMain.handle("regenic:open-external", async (_event, url: unknown) => {

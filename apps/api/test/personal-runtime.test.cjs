@@ -2,6 +2,7 @@ const assert = require("node:assert/strict");
 const { mkdtemp, rm } = require("node:fs/promises");
 const { tmpdir } = require("node:os");
 const { join } = require("node:path");
+const { createHash } = require("node:crypto");
 const { describe, it } = require("node:test");
 const {
   PersonalRuntimeService,
@@ -13,6 +14,62 @@ const {
 const { embeddingGeneration } = require("@regenic/domain");
 const { EMBEDDINGGEMMA_2 } = require("@regenic/embedding-provider");
 const { SqliteContextVectorIndex } = require("@regenic/vector-index");
+
+for (const enabled of [false, true]) {
+  it(`revokes persisted visuals before API readiness with embeddings ${enabled ? "enabled" : "disabled"}`, async t => {
+    const root = await mkdtemp(join(tmpdir(), "regenic-runtime-visual-consent-"));
+    const database = join(root, "authority.db");
+    const generation = embeddingGeneration(EMBEDDINGGEMMA_2, 256);
+    const hash = "b".repeat(64);
+    const now = "2026-10-16T00:00:00.000Z";
+    const store = new SqliteContextVectorIndex(`${database}.vector.db`);
+    try {
+      await store.registerGeneration("local-owner", generation);
+      await store.setVisualEnabled("local-owner", true);
+      await store.reconcile({ org_id: "local-owner", generation: generation.id, read_epoch: "initial", now,
+        heads: [{ source: "synthetic", external_id: "image", event_id: "image", content_hash: hash,
+          operation: "create", lineage: ["image"] }] });
+      const [job] = await store.claim({ org_id: "local-owner", generation: generation.id,
+        owner: "owner", now, lease_ms: 1000, limit: 1 });
+      await store.complete({ job, owner: "owner", now, chunks: [{
+        ordinal: 0, start: 0, end: 1, vector: [1, ...Array(767).fill(0)],
+        text_hash: createHash("sha256").update(`${hash}:0`).digest("hex"),
+        origin: { part_index: 1, content_hash: hash, mode: "visual", start: 0 },
+      }] });
+    } finally { store.close(); }
+    const values = {
+      REGENIC_AUTHORITY_DRIVER: "sqlite", REGENIC_DATABASE: database,
+      REGENIC_BLOB_ROOT: join(root, "blobs"), REGENIC_ORG: "local-owner",
+      REGENIC_MODEL_DRIVER: "none", REGENIC_REPLICAS: "1",
+      REGENIC_EMBEDDING_DRIVER: enabled ? "local_http" : "none",
+      REGENIC_EMBEDDING_BASE_URL: "http://127.0.0.1:9", REGENIC_EMBEDDING_VISUAL: "false",
+    };
+    const previous = Object.fromEntries(Object.keys(values).map(key => [key, process.env[key]]));
+    const runtime = new PersonalRuntimeService();
+    t.after(async () => {
+      try { await runtime.onModuleDestroy(); }
+      finally {
+        for (const [key, value] of Object.entries(previous)) {
+          if (value === undefined) delete process.env[key];
+          else process.env[key] = value;
+        }
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+    Object.assign(process.env, values);
+    await runtime.onModuleInit();
+    assert.equal(runtime.isReady(), true);
+    const inspected = new SqliteContextVectorIndex(`${database}.vector.db`);
+    try {
+      assert.deepEqual((await inspected.matchAuthorized({
+        org_id: "local-owner", generation: generation.id,
+        authorized: [{ event_id: "image", content_hash: hash }],
+        query_vector: [1, ...Array(767).fill(0)], limit: 10,
+      })).matched, []);
+      assert.equal((await inspected.listJobs("local-owner", generation.id))[0].status, "skipped");
+    } finally { inspected.close(); }
+  });
+}
 
 it("reports empty skipped events separately from indexed coverage and attachment failures", async () => {
   const services = {

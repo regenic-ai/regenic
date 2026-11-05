@@ -205,6 +205,32 @@ async function main() {
     await waitFor(() => evaluate('document.querySelector("[role=alert]")?.textContent.includes("This result is no longer current")'), "stale source rejection");
     await evaluate('window.regenic.setKernelSettings({ mode: "local" })');
     await waitFor(() => evaluate('document.querySelectorAll(".semantic-results > li").length === 0'), "origin reset");
+    await click('nav button[aria-label="Settings"]');
+    await waitFor(() => evaluate('Boolean(Array.from(document.querySelectorAll(".semantic-consent")).find(label => label.textContent.includes("Visual analysis")))'), "content permissions");
+    assert.equal((await evaluate("window.regenic.getSemanticRuntime()")).visualEnabled, false);
+    const toggleVisual = () => evaluate('Array.from(document.querySelectorAll(".semantic-consent")).find(label => label.textContent.includes("Visual analysis")).querySelector("input").click()');
+    const applyVisual = () => evaluate('Array.from(document.querySelectorAll(".semantic-settings button")).find(button => button.textContent === "Apply content permissions").click()');
+    await toggleVisual();
+    await waitFor(() => evaluate('Array.from(document.querySelectorAll(".semantic-settings button")).some(button => button.textContent === "Apply content permissions")'), "staged visual opt-in");
+    assert.equal((await evaluate("window.regenic.getSemanticRuntime()")).visualEnabled, false);
+    await applyVisual();
+    await waitFor(async () => {
+      const runtime = await evaluate("window.regenic.getSemanticRuntime()");
+      assert.equal(runtime.error, undefined);
+      return runtime.visualEnabled && !runtime.busy && runtime.canManage;
+    }, "applied visual opt-in");
+    await waitFor(() => evaluate('Array.from(document.querySelectorAll(".semantic-consent")).find(label => label.textContent.includes("Visual analysis")).querySelector("input").checked'), "applied checkbox");
+    await toggleVisual();
+    await waitFor(() => evaluate('Array.from(document.querySelectorAll(".semantic-settings button")).some(button => button.textContent === "Apply content permissions")'), "staged visual opt-out");
+    await applyVisual();
+    await waitFor(async () => {
+      const runtime = await evaluate("window.regenic.getSemanticRuntime()");
+      assert.equal(runtime.error, undefined);
+      return !runtime.visualEnabled && !runtime.busy && runtime.canManage;
+    }, "confirmed visual opt-out");
+    assert.equal(confirmed, 2);
+    assert.equal((await api("/v1/me/context/embedding/status")).configured, true);
+    console.log("PASS: actual permission UI stages consent, applies opt-in, confirms opt-out and restarts the kernel (synthetic inference)");
     console.log("PASS: actual Electron search source navigation/highlight, bounded recovery, stale-source rejection and origin reset (synthetic inference)");
   } catch (error) {
     process.exitCode = 1;

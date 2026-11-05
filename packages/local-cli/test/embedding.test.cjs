@@ -9,6 +9,57 @@ const { FsBlobStore } = require("@regenic/blob-store");
 const { IngestionService } = require("@regenic/domain");
 const { EMBEDDINGGEMMA_2 } = require("@regenic/embedding-provider");
 const { runLocalCli } = require("../dist/main");
+const { createLocalHost } = require("../dist/host");
+const { SqliteContextVectorIndex } = require("@regenic/vector-index");
+const { embeddingGeneration } = require("@regenic/domain");
+const { createHash } = require("node:crypto");
+
+it("applies default text-only consent to existing CLI visual indexes and requeues on opt-in", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "regenic-cli-visual-consent-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const database = join(root, "authority.db");
+  const config = { base_url: "http://127.0.0.1:1", chunk_tokens: 128, max_chunks_per_event: 1024 };
+  const generation = embeddingGeneration(EMBEDDINGGEMMA_2, config.chunk_tokens, config.max_chunks_per_event);
+  const hash = "a".repeat(64);
+  const now = new Date().toISOString();
+  const index = new SqliteContextVectorIndex(`${database}.vector.db`);
+  try {
+    await index.registerGeneration("owner", generation);
+    await index.reconcile({
+      org_id: "owner", generation: generation.id, read_epoch: "fixture", now,
+      heads: [{
+        source: "synthetic", external_id: "image", event_id: "image", content_hash: hash,
+        operation: "create", lineage: ["image"],
+      }],
+    });
+    const [job] = await index.claim({ org_id: "owner", generation: generation.id, owner: "test", now, lease_ms: 1000, limit: 1 });
+    await index.complete({
+      job, owner: "test", now, chunks: [{
+        ordinal: 0, start: 0, end: 1, vector: [1, ...Array(767).fill(0)],
+        text_hash: createHash("sha256").update(`${hash}:0`).digest("hex"),
+        origin: { part_index: 0, content_hash: hash, mode: "visual", start: 0 },
+      }],
+    });
+  } finally { index.close(); }
+  async function mount(embedding, verify) {
+    const host = await createLocalHost({ database, blobRoot: join(root, "blobs"), orgId: "owner", embedding });
+    try { await verify(host); } finally { await host.dispose(); }
+  }
+  await mount(config, async (host) => {
+    const vectors = host.get("context-vector-index");
+    assert.equal(host.get("embedding").visualEnabled, false);
+    const result = await vectors.matchAuthorized({
+      org_id: "owner", generation: generation.id, authorized: [{ event_id: "image", content_hash: hash }],
+      query_vector: [1, ...Array(767).fill(0)], limit: 1,
+    });
+    assert.equal(result.matched.length, 0);
+    assert.equal((await host.get("context-embedding-jobs").listJobs("owner", generation.id))[0].status, "skipped");
+  });
+  await mount({ ...config, visual_enabled: true }, async (host) => {
+    assert.equal(host.get("embedding").visualEnabled, true);
+    assert.equal((await host.get("context-embedding-jobs").listJobs("owner", generation.id))[0].status, "pending");
+  });
+});
 
 it("runs local HTTP indexing/status/retry commands with durable progress across CLI hosts", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "regenic-cli-embedding-"));

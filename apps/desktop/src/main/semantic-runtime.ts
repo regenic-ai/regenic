@@ -22,6 +22,7 @@ interface RuntimeOptions {
   fetch?: typeof fetch;
   startupMs?: number;
   hardware?: () => EmbeddingHardware;
+  visualEnabled?: () => boolean;
 }
 
 export class SemanticRuntime {
@@ -105,7 +106,8 @@ export class SemanticRuntime {
 
   private modelArgs(prefix: string[]): string[] {
     const plan = this.plan();
-    return [...prefix, "--device", plan.device, "--precision", plan.precision];
+    return [...prefix, ...(this.options.visualEnabled?.() === true ? ["--visual"] : []),
+      "--device", plan.device, "--precision", plan.precision];
   }
 
   private async exclusive(run: () => Promise<void>): Promise<void> {
@@ -247,6 +249,7 @@ export class SemanticRuntime {
         "dimensions" in descriptor && descriptor.dimensions === 768;
       if (!valid || !("runtime" in value) || !value.runtime || typeof value.runtime !== "object") return false;
       const runtime = value.runtime;
+      if (!("visual_enabled" in runtime) || runtime.visual_enabled !== (this.options.visualEnabled?.() === true)) return false;
       if (!("device" in runtime) || (runtime.device !== "cpu" && runtime.device !== "mps") ||
         !("precision" in runtime) || (runtime.precision !== "bfloat16" && runtime.precision !== "float32") ||
         !("threads" in runtime) || typeof runtime.threads !== "number" || !Number.isSafeInteger(runtime.threads) || runtime.threads < 1) return false;

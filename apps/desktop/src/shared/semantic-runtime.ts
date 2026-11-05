@@ -18,6 +18,12 @@ export interface SemanticRuntimeView {
   canManage: boolean;
   error?: string;
   execution?: SemanticExecution;
+  visualEnabled?: boolean;
+}
+
+export function semanticVisualPreference(value: unknown): boolean {
+  if (typeof value !== "boolean") throw new Error("semantic.invalidVisualPreference");
+  return value;
 }
 
 export function semanticAction(value: unknown): SemanticAction {

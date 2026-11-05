@@ -29,6 +29,7 @@ export interface LocalEmbeddingOptions {
   base_url: string;
   timeout_ms?: number;
   fetch?: typeof fetch;
+  visual_enabled?: boolean;
 }
 
 export interface LocalEmbeddingConfig extends LocalEmbeddingOptions {
@@ -45,13 +46,23 @@ export function embeddingConfigFromEnv(env: NodeJS.ProcessEnv): LocalEmbeddingCo
     timeout_ms: integer(env.REGENIC_EMBEDDING_TIMEOUT_MS, 30000, 1, 300000),
     chunk_tokens: integer(env.REGENIC_EMBEDDING_CHUNK_TOKENS, 128, 32, EMBEDDINGGEMMA_2.max_input_tokens),
     max_chunks_per_event: integer(env.REGENIC_EMBEDDING_MAX_CHUNKS, 1024, 1, 1024),
+    visual_enabled: embeddingVisualEnabledFromEnv(env),
   };
   endpoint(config.base_url);
   return config;
 }
 
+export function embeddingVisualEnabledFromEnv(env: NodeJS.ProcessEnv): boolean {
+  const value = env.REGENIC_EMBEDDING_VISUAL;
+  if (value !== undefined && value !== "true" && value !== "false") {
+    throw new Error("REGENIC_EMBEDDING_VISUAL must be true or false");
+  }
+  return value === "true";
+}
+
 export class LocalHttpEmbeddingProvider implements EmbeddingProvider {
   readonly descriptor = EMBEDDINGGEMMA_2;
+  readonly visualEnabled: boolean;
   private readonly base: string;
   private readonly timeout: number;
   private readonly request: typeof fetch;
@@ -59,6 +70,7 @@ export class LocalHttpEmbeddingProvider implements EmbeddingProvider {
   private attachmentBytes = 0;
 
   constructor(options: LocalEmbeddingOptions) {
+    this.visualEnabled = options.visual_enabled === true;
     this.base = endpoint(options.base_url);
     this.timeout = integer(options.timeout_ms?.toString(), 30000, 1, 300000);
     this.request = options.fetch ?? fetch;
@@ -136,20 +148,25 @@ export class LocalHttpEmbeddingProvider implements EmbeddingProvider {
       media_type: attachment.media_type,
       source_filename: attachment.source_filename,
       bytes_base64: Buffer.from(attachment.bytes).toString("base64"),
+      visual_enabled: this.visualEnabled,
     });
     const value = await this.requestBody("attachment", body, signal, Math.max(this.timeout, 300000));
     if ((value.text !== undefined &&
         (typeof value.text !== "string" || Buffer.byteLength(value.text, "utf8") > 262144)) ||
-      !Array.isArray(value.vectors) || value.vectors.length > 128) {
+      !Array.isArray(value.vectors) || value.vectors.length > 128 ||
+      (!this.visualEnabled && value.vectors.length > 0) ||
+      (value.skipped_visual !== undefined && typeof value.skipped_visual !== "boolean")) {
       throw new EmbeddingError("invalid_response", true);
     }
     for (const vector of value.vectors) validateEmbeddingVector(vector, this.descriptor.dimensions);
-    if (!(typeof value.text === "string" && value.text.trim()) && value.vectors.length === 0) {
+    if (!(typeof value.text === "string" && value.text.trim()) && value.vectors.length === 0 &&
+      !(value.skipped_visual === true && !this.visualEnabled)) {
       throw new EmbeddingError("invalid_input", false);
     }
     const material: ProcessedEmbeddingAttachment = {
       ...(typeof value.text === "string" ? { text: value.text } : {}),
       vectors: value.vectors,
+      ...(value.skipped_visual === true ? { skipped_visual: true } : {}),
     };
     const size = Buffer.byteLength(material.text ?? "", "utf8") +
       material.vectors.length * this.descriptor.dimensions * 8;

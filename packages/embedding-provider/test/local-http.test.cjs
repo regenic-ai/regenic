@@ -6,13 +6,36 @@ const { EMBEDDINGGEMMA_2, LocalHttpEmbeddingProvider, embeddingConfigFromEnv } =
 
 const vector = () => [1, ...Array(767).fill(0)];
 function provider(reply, timeout = 1000) {
-  return new LocalHttpEmbeddingProvider({ base_url: "http://127.0.0.1:8765", timeout_ms: timeout, fetch: reply });
+  return new LocalHttpEmbeddingProvider({ base_url: "http://127.0.0.1:8765", timeout_ms: timeout, fetch: reply, visual_enabled: true });
 }
 function response(value) {
   return new Response(JSON.stringify({ descriptor: EMBEDDINGGEMMA_2, ...value }), { headers: { "content-type": "application/json" } });
 }
 
 describe("local embedding provider", () => {
+  it("defaults to text-only and rejects unauthorized visual vectors", async () => {
+    const requests = [];
+    let vectors = [];
+    const subject = new LocalHttpEmbeddingProvider({
+      base_url: "http://127.0.0.1:8765",
+      fetch: async (_, init) => {
+        requests.push(JSON.parse(init.body));
+        return response({ vectors, skipped_visual: true });
+      },
+    });
+    assert.equal(subject.visualEnabled, false);
+    const input = { media_type: "image/png", bytes: Buffer.from("first") };
+    assert.deepEqual(await subject.processAttachment(input), { vectors: [], skipped_visual: true });
+    assert.equal(requests[0].visual_enabled, false);
+    vectors = [vector()];
+    await assert.rejects(subject.processAttachment({ ...input, bytes: Buffer.from("second") }),
+      error => error.code === "invalid_response");
+    assert.equal(embeddingConfigFromEnv({ REGENIC_EMBEDDING_DRIVER: "local_http",
+      REGENIC_EMBEDDING_BASE_URL: "http://127.0.0.1:8765" }).visual_enabled, false);
+    assert.throws(() => embeddingConfigFromEnv({ REGENIC_EMBEDDING_DRIVER: "local_http",
+      REGENIC_EMBEDDING_BASE_URL: "http://127.0.0.1:8765", REGENIC_EMBEDDING_VISUAL: "1" }));
+  });
+
   it("separates modes and sends the fixed descriptor without duplicating prompts", async () => {
     const requests = [];
     const subject = provider(async (url, init) => {

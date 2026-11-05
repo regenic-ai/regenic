@@ -78,8 +78,10 @@ class HTMLText(HTMLParser):
 class AttachmentProcessor:
     """Bounded, in-memory extraction. Archive paths and external links are never opened."""
 
-    def __init__(self, encoder):
+    def __init__(self, encoder, visual_enabled=True):
         self.encoder = encoder
+        self.visual_enabled = visual_enabled
+        self.skipped_visual = False
         self.texts = []
         self.text_bytes = 0
         self.vectors = []
@@ -95,6 +97,9 @@ class AttachmentProcessor:
         self.texts.append(value)
 
     def image(self, image):
+        if not self.visual_enabled:
+            self.skipped_visual = True
+            return
         if len(self.vectors) >= MAX_MEDIA_VECTORS or image.width * image.height > MAX_PIXELS:
             raise InputError(413)
         converted = image.convert("RGB")
@@ -116,7 +121,10 @@ class AttachmentProcessor:
         elif data.startswith((b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")):
             self.archive(data, depth)
         elif len(data) >= 12 and data[4:8] == b"ftyp":
-            self.video(data)
+            if self.visual_enabled:
+                self.video(data)
+            else:
+                self.skipped_visual = True
         else:
             try:
                 with Image.open(io.BytesIO(data)) as image:
@@ -152,6 +160,9 @@ class AttachmentProcessor:
                 try:
                     with closing(page.get_textpage()) as textpage:
                         self.text(textpage.get_text_bounded())
+                    if not self.visual_enabled:
+                        self.skipped_visual = True
+                        continue
                     width, height = page.get_size()
                     if width <= 0 or height <= 0:
                         raise InputError(400)
@@ -244,6 +255,10 @@ class AttachmentProcessor:
                     self.process(archive.read(entry), filename=entry.filename, depth=depth + 1)
 
     def office_images(self, archive, names, prefix):
+        if not self.visual_enabled:
+            if any(name.startswith(prefix) for name in names):
+                self.skipped_visual = True
+            return
         for name in sorted(names):
             if name.startswith(prefix):
                 self.process(archive.read(name), filename=name)
@@ -294,9 +309,10 @@ class AttachmentProcessor:
                 raise InputError(400)
 
     def result(self):
-        if not self.texts and not self.vectors:
+        if not self.texts and not self.vectors and not self.skipped_visual:
             raise InputError(400)
-        return {"text": "\n\n".join(self.texts), "vectors": self.vectors}
+        return {"text": "\n\n".join(self.texts), "vectors": self.vectors,
+                **({"skipped_visual": True} if self.skipped_visual else {})}
 
 
 def validate_attachment(value):
@@ -305,6 +321,8 @@ def validate_attachment(value):
     encoded = value.get("bytes_base64")
     media_type = value.get("media_type", "")
     filename = value.get("source_filename", "")
+    if "visual_enabled" in value and not isinstance(value["visual_enabled"], bool):
+        raise InputError(400)
     if not isinstance(encoded, str) or not isinstance(media_type, str) or \
             not isinstance(filename, str) or len(media_type) > 256 or len(filename) > 1024:
         raise InputError(400)
@@ -325,7 +343,9 @@ def process_attachment(encoder, value):
     from xml.etree.ElementTree import ParseError
 
     try:
-        processor = AttachmentProcessor(encoder)
+        processor = AttachmentProcessor(
+            encoder, value.get("visual_enabled", False) and getattr(encoder, "visual_enabled", False),
+        )
         processor.process(*validate_attachment(value))
         return processor.result()
     except (Image.DecompressionBombError, Image.DecompressionBombWarning) as error:
@@ -350,13 +370,14 @@ def validate_request(value):
 
 
 class TextEncoder:
-    def __init__(self, device, precision="bfloat16"):
+    def __init__(self, device, precision="bfloat16", visual_enabled=False):
         from sentence_transformers import SentenceTransformer
         from transformers import AutoTokenizer
 
         if precision not in ("bfloat16", "float32"):
             raise ValueError("unsupported precision")
         self.precision = precision
+        self.visual_enabled = visual_enabled
         self.tokenizer = AutoTokenizer.from_pretrained(
             MODEL_ID, revision=REVISION, trust_remote_code=False
         )
@@ -365,7 +386,7 @@ class TextEncoder:
             revision=REVISION,
             device=device,
             trust_remote_code=False,
-            config_kwargs={"audio_config": None},
+            config_kwargs={"audio_config": None, **({"vision_config": None} if not visual_enabled else {})},
             model_kwargs={"dtype": precision} if device in ("cpu", "mps") else None,
         )
         self.model.max_seq_length = DESCRIPTOR["max_input_tokens"]
@@ -434,6 +455,8 @@ class TextEncoder:
         })
 
     def visual(self, value):
+        if not self.visual_enabled:
+            raise InputError(403)
         import numpy as np
 
         vectors = self.model.encode(
@@ -460,6 +483,7 @@ class PriorityEncoder:
         reserved_queries=2, max_query_burst=8,
     ):
         self.encoder = encoder
+        self.visual_enabled = getattr(encoder, "visual_enabled", False)
         self.max_pending = max_pending
         self.wait_seconds = wait_seconds
         self.reserved_queries = max(0, min(reserved_queries, max(0, max_pending - 1)))
@@ -567,9 +591,9 @@ class BoundedHTTPServer(ThreadingHTTPServer):
             self.slots.release()
 
 
-def initialize_encoder(device, precision):
+def initialize_encoder(device, precision, visual_enabled=False):
     if device != "auto-mps":
-        return TextEncoder(device, precision), {"device": device, "precision": precision}
+        return TextEncoder(device, precision, visual_enabled), {"device": device, "precision": precision}
 
     import torch
 
@@ -577,13 +601,14 @@ def initialize_encoder(device, precision):
     if torch.backends.mps.is_available():
         candidate = None
         try:
-            candidate = TextEncoder("mps", "float32")
+            candidate = TextEncoder("mps", "float32", visual_enabled)
             candidate.embed(["Readiness check"], "query")
             candidate.embed(["Readiness check"], "document")
-            from PIL import Image
-            with Image.new("RGB", (32, 32), "white") as image:
-                candidate.image(image)
-                candidate.video([image, image])
+            if visual_enabled:
+                from PIL import Image
+                with Image.new("RGB", (32, 32), "white") as image:
+                    candidate.image(image)
+                    candidate.video([image, image])
         except (RuntimeError, NotImplementedError):
             logging.exception("embedding_mps_verification_failed; retrying on CPU")
             fallback_reason = "mps_failed"
@@ -594,7 +619,7 @@ def initialize_encoder(device, precision):
         torch.mps.empty_cache()
 
     logging.warning("embedding_cpu_fallback reason=%s", fallback_reason)
-    return TextEncoder("cpu", precision), {
+    return TextEncoder("cpu", precision, visual_enabled), {
         "device": "cpu", "precision": precision, "fallback_reason": fallback_reason,
     }
 
@@ -685,6 +710,7 @@ def main():
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--precision", choices=("bfloat16", "float32"), default="bfloat16")
     parser.add_argument("--download-only", action="store_true")
+    parser.add_argument("--visual", action="store_true", help="Opt in to image and video analysis; audio is not supported")
     args = parser.parse_args()
     if not 1 <= args.port <= 65535:
         parser.error("port must be between 1 and 65535")
@@ -694,9 +720,10 @@ def main():
     warnings.simplefilter("error", Image.DecompressionBombWarning)
     # Installation verifies the portable CPU path; acceleration is checked offline at startup.
     device = "cpu" if args.download_only and args.device == "auto-mps" else args.device
-    model, runtime = initialize_encoder(device, args.precision)
+    model, runtime = initialize_encoder(device, args.precision, args.visual)
     import torch
     runtime["threads"] = torch.get_num_threads()
+    runtime["visual_enabled"] = args.visual
     encoder = PriorityEncoder(model)
     if args.download_only:
         logging.warning(

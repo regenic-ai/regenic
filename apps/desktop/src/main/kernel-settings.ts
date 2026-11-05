@@ -18,6 +18,7 @@ export interface KernelPreference {
 
 export interface DesktopPreference extends KernelPreference {
   semanticEnabled?: boolean;
+  semanticVisualEnabled?: boolean;
   locale: Locale;
   dataRoot?: string;
   previousDataRoot?: string;
@@ -51,6 +52,7 @@ export function loadDesktopPreference(file: string): DesktopPreference {
       previousDataRoot?: unknown;
       personalApiKeys?: unknown;
       semanticEnabled?: unknown;
+      semanticVisualEnabled?: unknown;
     };
     const locale = parseLocale(raw.locale ?? DEFAULT_LOCALE);
     const dataRoot = tryParseDataRoot(raw.dataRoot);
@@ -62,6 +64,7 @@ export function loadDesktopPreference(file: string): DesktopPreference {
         origin: parseKernelOrigin(raw.origin),
         locale,
         ...(typeof raw.semanticEnabled === "boolean" ? { semanticEnabled: raw.semanticEnabled } : {}),
+        ...(typeof raw.semanticVisualEnabled === "boolean" ? { semanticVisualEnabled: raw.semanticVisualEnabled } : {}),
         ...(dataRoot ? { dataRoot } : {}),
         ...(previousDataRoot ? { previousDataRoot } : {}),
         ...(personalApiKeys ? { personalApiKeys } : {}),
@@ -71,6 +74,7 @@ export function loadDesktopPreference(file: string): DesktopPreference {
       mode: "local",
       locale,
       ...(typeof raw.semanticEnabled === "boolean" ? { semanticEnabled: raw.semanticEnabled } : {}),
+      ...(typeof raw.semanticVisualEnabled === "boolean" ? { semanticVisualEnabled: raw.semanticVisualEnabled } : {}),
       ...(dataRoot ? { dataRoot } : {}),
       ...(previousDataRoot ? { previousDataRoot } : {}),
       ...(personalApiKeys ? { personalApiKeys } : {}),
@@ -96,6 +100,7 @@ export function saveDesktopPreference(
     locale: preference.locale,
   };
   if (preference.semanticEnabled !== undefined) body.semanticEnabled = preference.semanticEnabled;
+  if (preference.semanticVisualEnabled !== undefined) body.semanticVisualEnabled = preference.semanticVisualEnabled;
   if (preference.mode === "custom" && preference.origin) {
     body.origin = preference.origin;
   }

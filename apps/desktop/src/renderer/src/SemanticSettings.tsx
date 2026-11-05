@@ -139,6 +139,8 @@ export function SemanticSettings() {
   const [indexResult, setIndexResult] = useState<string | null>(null);
   const [clockNow, setClockNow] = useState(Date.now());
   const [serverOffset, setServerOffset] = useState(0);
+  const [visualDraft, setVisualDraft] = useState<boolean | null>(null);
+  const [visualApplying, setVisualApplying] = useState(false);
   const operation = useRef<AbortController | null>(null);
 
   useEffect(() => {
@@ -197,6 +199,22 @@ export function SemanticSettings() {
     finally { if (!controller.signal.aborted) setBusy(false); }
   }
 
+  async function applyVisual() {
+    if (visualDraft === null || visualDraft === Boolean(runtime?.visualEnabled)) return;
+    if (!visualDraft && !window.confirm(t("semantic.visual.disableConfirm"))) return;
+    setVisualApplying(true);
+    setError(null);
+    try {
+      if (!window.regenic?.setSemanticVisual) throw new Error(t("semantic.localOnly"));
+      const next = await window.regenic.setSemanticVisual(visualDraft);
+      setRuntime(next);
+      if (next.error) setError(message(next.error));
+      else setVisualDraft(null);
+    } catch (caught) {
+      setError(caught instanceof Error ? message(caught.message) : t("semantic.failed"));
+    } finally { setVisualApplying(false); }
+  }
+
   async function indexAction(generation?: string) {
     if (generation && !window.confirm(t("semantic.retryConfirm"))) return;
     const controller = new AbortController();
@@ -227,7 +245,7 @@ export function SemanticSettings() {
     }
   }
 
-  const disabled = busy || Boolean(runtime?.busy);
+  const disabled = busy || visualApplying || Boolean(runtime?.busy);
   const running = runtime?.stage === "running";
   const working = runtime ? transitional.includes(runtime.stage) : false;
   const tone = stageTone(runtime, index);
@@ -264,6 +282,37 @@ export function SemanticSettings() {
       </div>
       <p className="muted">{t("semantic.lead")}</p>
 
+      {runtime?.canManage || visualApplying ? (
+        <div className="semantic-setup">
+          <h3>{t("semantic.content.title")}</h3>
+          <p className="muted semantic-note">{t("semantic.content.hint")}</p>
+          <label className="semantic-consent">
+            <input type="checkbox" checked disabled />
+            <span>{t("semantic.content.text")}</span>
+          </label>
+          <label className="semantic-consent">
+            <input type="checkbox" checked={visualDraft ?? Boolean(runtime?.visualEnabled)}
+              disabled={disabled || !runtime?.canManage}
+              onChange={(event) => setVisualDraft(event.target.checked)} />
+            <span>{t("semantic.content.visual")}</span>
+          </label>
+          <p className="muted semantic-note">{t("semantic.visual.cost")}</p>
+          <label className="semantic-consent">
+            <input type="checkbox" checked={false} disabled />
+            <span>{t("semantic.content.audio")}</span>
+          </label>
+          <p className="muted semantic-note">{t("semantic.visual.removal")}</p>
+          {visualApplying ? <p className="muted semantic-note" role="status">{t("semantic.visual.applying")}</p> : null}
+          {visualDraft !== null && visualDraft !== Boolean(runtime?.visualEnabled) ? (
+            <div className="semantic-actions">
+              <button type="button" className="primary" disabled={disabled}
+                onClick={() => void applyVisual()}>{t("semantic.visual.apply")}</button>
+              <button type="button" className="ghost" disabled={disabled}
+                onClick={() => setVisualDraft(null)}>{t("semantic.visual.cancel")}</button>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
       {runtime?.canManage ? (
         <p className="muted semantic-note">{t("semantic.automatic")}</p>
       ) : null}
@@ -285,6 +334,7 @@ export function SemanticSettings() {
               precision: runtime.execution.precision === "float32" ? "FP32" : "BF16",
               threads: runtime.execution.threads,
             })}</p>
+            <p className="muted semantic-note">{t(runtime.visualEnabled ? "semantic.visual.enabled" : "semantic.visual.disabled")}</p>
           </details>
         </div>
       ) : null}
