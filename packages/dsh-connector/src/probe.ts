@@ -149,7 +149,7 @@ async function runDshWebProbe(options: {
 }
 
 export function dshWebProbeUrl(baseUrl: string): string {
-  return `${baseUrl.replace(/\/+$/, "")}/api/session.list`;
+  return `${baseUrl.replace(/\/+$/, "")}/api/session/list`;
 }
 
 function dshProbeUrl(env: NodeJS.ProcessEnv): string {

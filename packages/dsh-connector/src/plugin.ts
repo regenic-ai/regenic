@@ -230,6 +230,7 @@ function createWebClient(config: DshSessionPluginConfig) {
     access_token: config.access_token,
     fetch: config.fetch,
     createId: config.createId,
+    openSocket: config.mux_open,
   });
 }
 

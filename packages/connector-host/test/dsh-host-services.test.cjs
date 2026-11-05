@@ -47,8 +47,22 @@ describe("createDshHostRpcServices", () => {
         });
         const services = createDshHostRpcServices(host, {
           org_id: "local-owner",
-          fetch: async (_url, init) => {
-            assert.equal(init.headers.authorization, "Bearer installation-token");
+          fetch: async (url, init) => {
+            if (String(url).includes("/connect?")) {
+              assert.equal(new URL(url).searchParams.get("token"), "installation-token");
+              return {
+                ok: false,
+                status: 302,
+                headers: new Headers({
+                  location: "./api/remote.mux",
+                  "set-cookie": "dsh-auth-test=api-cookie; Path=/",
+                }),
+                async json() {
+                  return {};
+                },
+              };
+            }
+            assert.equal(init.headers.cookie, "dsh-auth-test=api-cookie");
             const body = JSON.parse(init.body);
             return {
               ok: true,
@@ -88,7 +102,8 @@ describe("createDshHostRpcServices", () => {
         org_id: "local-owner",
         now: () => "2026-08-21T00:00:00.000Z",
         createId: () => "test",
-        fetch: historyFetch(HISTORY_EVENTS),
+        fetch: rejectFetch,
+        mux_open: historyMux(HISTORY_EVENTS),
       });
 
       const first = await services.receive("dsh-main");
@@ -126,7 +141,8 @@ describe("createDshHostRpcServices", () => {
         org_id: "local-owner",
         now: () => "2026-08-21T00:00:00.000Z",
         lease_owner: "api",
-        fetch: historyFetch(HISTORY_EVENTS),
+        fetch: rejectFetch,
+        mux_open: historyMux(HISTORY_EVENTS),
       });
 
       await assert.rejects(
@@ -150,37 +166,19 @@ describe("createDshHostRpcServices", () => {
         },
         created_at: "2026-08-21T00:00:00.000Z",
       });
-      let calls = 0;
       const services = createDshHostRpcServices(host, {
         org_id: "local-owner",
         now: () => "2026-08-21T00:00:00.000Z",
-        fetch: async (_url, init) => {
-          calls += 1;
-          if (calls > 1) {
-            throw new Error("DSH walk failed");
-          }
-          const body = JSON.parse(init.body);
-          return {
-            ok: true,
-            status: 200,
-            async json() {
-              return {
-                type: "server-response",
-                rpcId: body.rpcId,
-                result: {
-                  ok: true,
-                  value: {
-                    events: [
-                      { ...HISTORY_EVENTS[0], seq: 100 },
-                      { ...HISTORY_EVENTS[1], seq: 101 },
-                    ],
-                    hasMore: true,
-                  },
-                },
-              };
-            },
-          };
+        fetch: async () => {
+          throw new Error("DSH walk failed");
         },
+        mux_open: historyMux(
+          [
+            { ...HISTORY_EVENTS[0], seq: 100 },
+            { ...HISTORY_EVENTS[1], seq: 101 },
+          ],
+          true,
+        ),
       });
 
       const page = await services.receive("dsh-main");
@@ -200,14 +198,15 @@ describe("createDshHostRpcServices", () => {
         created_at: "2026-08-21T00:00:00.000Z",
       });
       const calls = [];
+      const opened = [];
       const services = createDshHostRpcServices(host, {
         org_id: "local-owner",
         now: () => "2026-08-21T00:00:00.000Z",
         createId: () => "test",
         fetch: async (url, init) => {
           const body = JSON.parse(init.body);
-          calls.push({ url, method: body.method, sessionId: body.payload?.sessionId });
-          if (url.includes("session.create")) {
+          calls.push({ url, method: body.method });
+          if (url.includes("session/create")) {
             return {
               ok: true,
               status: 200,
@@ -220,7 +219,7 @@ describe("createDshHostRpcServices", () => {
               },
             };
           }
-          if (url.includes("session.list")) {
+          if (url.includes("session/list")) {
             return {
               ok: true,
               status: 200,
@@ -233,8 +232,9 @@ describe("createDshHostRpcServices", () => {
               },
             };
           }
-          return historyFetch(HISTORY_EVENTS)(url, init);
+          throw new Error(`unexpected ${url}`);
         },
+        mux_open: historyMux(HISTORY_EVENTS, false, opened),
       });
 
       const created = await services.createSession();
@@ -244,7 +244,9 @@ describe("createDshHostRpcServices", () => {
       const page = await services.receive("sess-real");
       assert.deepEqual(page.events.map((event) => event.seq), [0, 1]);
       assert.equal(
-        calls.some((item) => item.method === "session.history" && item.sessionId === "sess-real"),
+        opened.some((frame) =>
+          frame.endpoint === "session/follow"
+          && frame.payload.args.request.address.sessionId === "sess-real"),
         true,
       );
     });
@@ -266,31 +268,47 @@ describe("createDshHostRpcServices", () => {
         now: () => "2026-08-21T00:00:00.000Z",
         createId: () => "test",
         env: { REGENIC_DSH_BASE_URL: "http://regenic-dsh:3080" },
-        fetch: async (url, init) => {
-          urls.push(url);
-          return historyFetch(HISTORY_EVENTS)(url, init);
+        fetch: rejectFetch,
+        mux_open: async (input) => {
+          urls.push(input.url);
+          return historyMux(HISTORY_EVENTS)(input);
         },
       });
 
       await services.receive("dsh-main");
-      assert.equal(urls[0], "http://regenic-dsh:3080/api/session.history");
+      assert.equal(urls[0], "ws://regenic-dsh:3080/api/remote.mux");
     });
   });
 });
 
-function historyFetch(events, hasMore = false) {
-  return async function fetch(_url, init) {
-    const body = JSON.parse(init.body);
+async function rejectFetch(url) {
+  throw new Error(`unexpected HTTP call ${url}`);
+}
+
+/** Fake `/api/remote.mux` that answers `session/follow` with one snapshot. */
+function historyMux(events, hasMore = false, opened = []) {
+  return async function open(input) {
     return {
-      ok: true,
-      status: 200,
-      async json() {
-        return {
-          type: "server-response",
-          rpcId: body.rpcId,
-          result: { ok: true, value: { events, hasMore } },
-        };
+      send(data) {
+        const frame = JSON.parse(data);
+        if (frame.type !== "open") {
+          return;
+        }
+        opened.push(frame);
+        queueMicrotask(() => {
+          input.onMessage(JSON.stringify({
+            type: "item",
+            streamId: frame.streamId,
+            value: {
+              type: "snapshot",
+              cursor: events.reduce((max, event) => Math.max(max, event.seq), 0),
+              hasMore,
+              records: events.map((event) => ({ type: "event", event })),
+            },
+          }));
+        });
       },
+      close() {},
     };
   };
 }

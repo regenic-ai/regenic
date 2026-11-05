@@ -17,6 +17,7 @@ import {
   type SyncSource,
 } from "@regenic/connector-contract";
 import { DshWebRpcClient, type DshFetch } from "./dsh-rpc-client";
+import type { DshMuxOpen } from "./dsh-mux-socket";
 import {
   dshPromptStoreFor,
   dshRespondValue,
@@ -410,12 +411,19 @@ export const dshSessionDriver: ChannelDriver = {
   },
 };
 
+/** Test and host overrides for the DSH web transport. */
+export interface DshClientExtras {
+  fetch?: DshFetch;
+  mux_open?: DshMuxOpen;
+  access_token?: string;
+}
+
 export async function answerDshPrompt(
   installation: { id: string; config: Record<string, unknown> },
   thread: ConversationThread,
   answer: PromptAnswer,
   env: NodeJS.ProcessEnv,
-  extras: { fetch?: DshFetch; access_token?: string } = {},
+  extras: DshClientExtras = {},
 ): Promise<{ accepted: boolean }> {
   const parsed = parseDshPromptId(answer.prompt_id);
   if (!parsed) {
@@ -462,7 +470,7 @@ export async function mountDshSessions(
   },
   env: NodeJS.ProcessEnv,
   sessionIds: string[],
-  extras: { fetch?: DshFetch; access_token?: string } = {},
+  extras: DshClientExtras = {},
 ): Promise<ConnectorStream[]> {
   if (sessionIds.length === 0) {
     return [];
@@ -482,6 +490,7 @@ export async function mountDshSessions(
         secrets: host.secrets,
       }),
       fetch: extras.fetch,
+      mux_open: extras.mux_open,
     });
     if (pluginConfig.transport === "web" && !pluginConfig.base_url) {
       pluginConfig.base_url = resolveDshWebBaseUrl(installation, env);
@@ -517,7 +526,7 @@ async function mountInstalled(
 export async function createDshConversation(
   installation: ConnectorInstallation,
   env: NodeJS.ProcessEnv,
-  extras: { fetch?: DshFetch; access_token?: string; cwd?: string } = {},
+  extras: DshClientExtras & { cwd?: string } = {},
 ): Promise<ConversationThread> {
   if (!dshSessionDriver.capabilities(installation).create) {
     throw new ChannelDriverError(
@@ -534,7 +543,7 @@ export async function createDshConversation(
 export function dshWebRpcClient(
   installation: { config: Record<string, unknown>; credentials_ref?: string },
   env: NodeJS.ProcessEnv,
-  extras: { fetch?: DshFetch; access_token?: string } = {},
+  extras: DshClientExtras = {},
 ): DshWebRpcClient {
   return new DshWebRpcClient({
     base_url: resolveDshWebBaseUrl(installation, env),
@@ -546,6 +555,7 @@ export function dshWebRpcClient(
         "REGENIC_DSH_TOKEN",
       ),
     fetch: extras.fetch,
+    openSocket: extras.mux_open,
   });
 }
 

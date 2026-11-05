@@ -14,6 +14,7 @@ import {
   type DshFetch,
   type DshHistoryQuery,
   type DshListedSession,
+  type DshMuxOpen,
   type DshRpcServices,
   type DshSpawn,
 } from "@regenic/dsh-connector";
@@ -22,6 +23,7 @@ export interface DshHostServiceOptions {
   org_id: string;
   spawn?: DshSpawn;
   fetch?: DshFetch;
+  mux_open?: DshMuxOpen;
   access_token?: string;
   env?: NodeJS.ProcessEnv;
   now?: () => string;
@@ -52,6 +54,7 @@ export function createDshHostRpcServices(
   const env = options.env ?? process.env;
   const clientExtras = {
     fetch: options.fetch,
+    mux_open: options.mux_open,
     access_token: options.access_token,
   };
   const driverHost = asConnectorHost(host);
@@ -231,6 +234,7 @@ async function connectorForSession(
     [sessionId],
     {
       fetch: options.fetch,
+      mux_open: options.mux_open,
       access_token: await installationAccessToken(
         driverHost,
         installation,
@@ -262,6 +266,7 @@ async function mountedSessionEgress(
     [sessionId],
     {
       fetch: options.fetch,
+      mux_open: options.mux_open,
       access_token: await installationAccessToken(
         driverHost,
         installation,
