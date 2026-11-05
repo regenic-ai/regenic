@@ -34,7 +34,10 @@ export function createDshWebSyncSource(
         })),
         next_cursor: page.next_cursor,
         complete,
-        ...(!cursor && complete ? { replaces: true } : {}),
+        // An empty listing may be a transient DSH state; never let it wipe the catalog.
+        ...(!cursor && complete && page.session_ids.length > 0
+          ? { replaces: true }
+          : {}),
       };
     },
   };

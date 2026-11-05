@@ -60,6 +60,50 @@ describe("DshWebRpcClient", () => {
     assert.equal(calls[4].init.headers.cookie, "dsh-auth-test=peer-1");
   });
 
+  it("shares one HTTP peer across clients of the same DSH and token", async () => {
+    let connects = 0;
+    const fetch = async (url) => {
+      if (String(url).includes("/connect?")) {
+        connects += 1;
+        return {
+          ok: false,
+          status: 302,
+          headers: new Headers({
+            location: "./api/remote.mux",
+            "set-cookie": `dsh-auth-test=peer-${connects}; Path=/`,
+          }),
+          async json() {
+            return {};
+          },
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return {
+            type: "server-response",
+            rpcId: "rpc-1",
+            result: { ok: true, value: { items: [], hasMore: false } },
+          };
+        },
+      };
+    };
+    const client = (token) =>
+      new DshWebRpcClient({
+        base_url: "http://127.0.0.1:3081",
+        access_token: token,
+        createId: () => "rpc-1",
+        fetch,
+      });
+
+    await Promise.all([client("t1").sessionList(), client("t1").sessionList()]);
+    await client("t1").sessionList();
+    assert.equal(connects, 1);
+    await client("t2").sessionList();
+    assert.equal(connects, 2);
+  });
+
   it("renews an expired API cookie once after an unauthorized RPC", async () => {
     let exchanges = 0;
     const requestCookies = [];

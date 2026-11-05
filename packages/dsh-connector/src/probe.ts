@@ -164,6 +164,19 @@ function dshProbeUrl(env: NodeJS.ProcessEnv): string {
   return DEFAULT_DSH_WEB_URL;
 }
 
+const probeFetches = new WeakMap<typeof fetch, DshFetch>();
+
+// Stable per fetchImpl so repeated probes share one DSH HTTP peer.
+function probeFetch(fetchImpl: typeof fetch): DshFetch {
+  let wrapped = probeFetches.get(fetchImpl);
+  if (!wrapped) {
+    wrapped = (url, init) =>
+      fetchImpl(url, { ...init, signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) });
+    probeFetches.set(fetchImpl, wrapped);
+  }
+  return wrapped;
+}
+
 async function probeLocalService(
   baseUrl: string,
   fetchImpl: typeof fetch,
@@ -176,8 +189,7 @@ async function probeLocalService(
 }> {
   try {
     const token = env.REGENIC_DSH_TOKEN?.trim();
-    const fetch: DshFetch = (url, init) =>
-      fetchImpl(url, { ...init, signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) });
+    const fetch = probeFetch(fetchImpl);
     await new DshWebRpcClient({
       base_url: baseUrl,
       access_token: token,

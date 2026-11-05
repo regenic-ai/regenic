@@ -587,11 +587,20 @@ describe("createDshWebSyncSource", () => {
 
     const whole = createDshWebSyncSource({
       async sessionList() {
-        return { session_ids: [], has_more: false };
+        return { session_ids: ["sess-a"], has_more: false };
       },
     });
     const page = await whole.listDirectory(null);
-    assert.deepEqual(page.members, []);
+    assert.equal(page.members.length, 1);
     assert.equal(page.replaces, true);
+
+    const empty = createDshWebSyncSource({
+      async sessionList() {
+        return { session_ids: [], has_more: false };
+      },
+    });
+    const emptyPage = await empty.listDirectory(null);
+    assert.deepEqual(emptyPage.members, []);
+    assert.equal(emptyPage.replaces, undefined);
   });
 });
