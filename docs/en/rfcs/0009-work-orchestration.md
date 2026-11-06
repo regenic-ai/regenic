@@ -175,6 +175,10 @@ Push selection checks the triggering event body, and queued starts/retries reche
 
 For a manual start of an existing work item, filters check its fixed `head_event_id`; scheduled runs and rule trials check the latest message. They never scan conversation history, even when `include_context` is enabled. A rejected scheduled occurrence advances `next_run_at` without opening a work item. A filtered trial anchors a new item to the tested latest message instead of reusing an older item with different evidence.
 
+The editor adds conditions on demand instead of showing empty optional fields. Each row reads **Message body → contains / does not contain → text**, can be removed, and belongs to a fixed **all conditions match** group. Added rows require a value before saving or running; removal clears that restriction. **Test conditions** checks a pasted sample locally, explains a failed match and never invokes an executor or sends a message. Detailed matching help is expandable; the live coverage preview remains separate from the sample test.
+
+Interaction references: [Zapier filters](https://help.zapier.com/hc/en-us/articles/8496276332557-Add-conditions-to-Zaps-with-filters) (field/rule/value, explicit AND, test feedback), [Linear filters](https://linear.app/docs/filters) (add only needed criteria, immediate results) and [Intercom branches](https://www.intercom.com/help/en/articles/7846212-how-to-use-branches-in-workflows) (explicit condition creation and logical relationships). These are interaction references, not additional supported operators: this editor does not add OR, patterns, regex or branching.
+
 `trigger` is first-class and separate from match:
 
 | `kind` | When it runs | `unit_key` | Evidence |

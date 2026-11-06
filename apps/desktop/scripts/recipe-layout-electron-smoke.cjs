@@ -38,6 +38,36 @@ async function rendererSmoke() {
         .find(row => row.textContent.includes("Send result to"));
       return Boolean(row?.querySelector(".menu-select-btn"));
     })()`), true, "Destination picker must remain reachable when results stay local");
+    const addCondition = async (label) => {
+      await window.webContents.executeJavaScript(
+        'document.querySelector(\'button[aria-label="Add condition"]\').click()',
+      );
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      await window.webContents.executeJavaScript(`(() => {
+        const option = [...document.querySelectorAll('[role="option"]')]
+          .find(item => item.textContent.trim() === ${JSON.stringify(label)});
+        if (!option) throw new Error("Missing add-condition option");
+        option.click();
+      })()`);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    };
+    assert.equal(await window.webContents.executeJavaScript(
+      'document.querySelectorAll(".recipe-condition input").length',
+    ), 0, "New rules should not show two empty condition inputs");
+    await addCondition("Body contains");
+    assert.equal(await window.webContents.executeJavaScript(
+      'document.activeElement?.getAttribute("aria-label")',
+    ), "Body contains", "Adding a condition must focus its value");
+    await window.webContents.executeJavaScript(
+      'document.querySelector(".recipe-form").requestSubmit()',
+    );
+    assert.equal(await window.webContents.executeJavaScript(
+      'Boolean(window.__savedRecipe)',
+    ), false, "An empty added condition must not silently save as an unfiltered rule");
+    await addCondition("Body does not contain");
+    assert.equal(await window.webContents.executeJavaScript(
+      'Boolean(document.querySelector(\'button[aria-label="Add condition"]\'))',
+    ), false, "Do not offer unsupported duplicate conditions");
     const setFilters = async (contains, excludes) => {
       await window.webContents.executeJavaScript(`(() => {
         const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
@@ -52,6 +82,13 @@ async function rendererSmoke() {
       })()`);
       await new Promise((resolve) => setTimeout(resolve, 100));
     };
+    await setFilters("   ", "DRAFT");
+    await window.webContents.executeJavaScript(
+      'document.querySelector(".recipe-form").requestSubmit()',
+    );
+    assert.equal(await window.webContents.executeJavaScript(
+      'Boolean(window.__savedRecipe)',
+    ), false, "Whitespace-only conditions must not silently save as an unfiltered rule");
     await setFilters("APPROVE", "RELEASE");
     assert.match(await window.webContents.executeJavaScript(
       'document.querySelector(".recipe-preview-body").textContent',
@@ -60,13 +97,47 @@ async function rendererSmoke() {
     assert.match(await window.webContents.executeJavaScript(
       'document.querySelector(".recipe-preview-body").textContent',
     ), /Filter smoke chat/, "Matching body must appear in the real editor preview");
+    await window.webContents.executeJavaScript('document.querySelector(".recipe-condition-test-toggle").click()');
+    const testMessage = async (value) => {
+      await window.webContents.executeJavaScript(`(() => {
+        const input = document.querySelector(".recipe-condition-test textarea");
+        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set.call(input, ${JSON.stringify(value)});
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      })()`);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      return window.webContents.executeJavaScript(
+        'document.querySelector(".recipe-condition-result").getAttribute("data-result")',
+      );
+    };
+    assert.equal(await testMessage("approve release"), "pass");
+    assert.equal(await testMessage("APPROVE this DRAFT"), "fail");
+    assert.match(await window.webContents.executeJavaScript(
+      'document.querySelector(".recipe-condition-test").textContent',
+    ), /Contains excluded text/, "Explain why an excluded sample fails");
+    assert.equal(await testMessage("release"), "fail");
+    assert.match(await window.webContents.executeJavaScript(
+      'document.querySelector(".recipe-condition-test").textContent',
+    ), /Missing required text/, "Explain why a missing required substring fails");
+    assert.equal(await testMessage(""), "idle");
+    assert.equal(await testMessage("approve release"), "pass");
+    assert.equal(await window.webContents.executeJavaScript(
+      'Boolean(window.__savedRecipe)',
+    ), false, "Local text tests must not save or execute the rule");
+    await window.webContents.executeJavaScript(
+      'document.querySelector(\'button[aria-label="Remove does-not-contain condition"]\').click()',
+    );
+    assert.equal(await window.webContents.executeJavaScript(
+      'document.querySelector(\'input[aria-label="Body contains"]\').value',
+    ), "APPROVE", "Removing a condition must preserve the other value");
+    await addCondition("Body does not contain");
+    await setFilters("APPROVE", "DRAFT");
     await window.webContents.executeJavaScript(
       'document.querySelector(\'input[aria-label="Body contains"]\').scrollIntoView({ block: "start" })',
     );
     writeFileSync(join(process.env.REGENIC_SMOKE_OUTPUT, "filters.png"),
       (await window.webContents.capturePage()).toPNG());
     for (const [width, height] of [[800, 800], [1000, 800], [1099, 800], [1100, 800],
-      [1186, 800], [1440, 800], [1920, 800], [1186, 600]]) {
+      [1186, 800], [1440, 800], [1920, 800], [1186, 600], [600, 800], [480, 800]]) {
       window.setContentSize(width, height);
       await new Promise((resolve) => setTimeout(resolve, 150));
       const measurement = await window.webContents.executeJavaScript(`(async () => {
@@ -101,6 +172,19 @@ async function rendererSmoke() {
         `Footer escapes editor at ${width}x${height}`);
       assert.ok(measurement.hintBottom <= measurement.cardBottom,
         `Hint escapes editor at ${width}x${height}`);
+      const filterLayout = await window.webContents.executeJavaScript(`(async () => {
+        const group = document.querySelector(".recipe-conditions");
+        group.scrollIntoView({ block: "center" });
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        const bounds = group.getBoundingClientRect();
+        return [...group.querySelectorAll("input, textarea, .recipe-condition-remove")].every(input => {
+          const box = input.getBoundingClientRect();
+          return box.width > 20 && box.left >= bounds.left && box.right <= bounds.right;
+        });
+      })()`);
+      assert.equal(filterLayout, true, `Condition controls must fit at ${width}x${height}`);
+      writeFileSync(join(process.env.REGENIC_SMOKE_OUTPUT, `filters-${width}x${height}.png`),
+        (await window.webContents.capturePage()).toPNG());
     }
     await window.webContents.executeJavaScript(
       'document.querySelector(".recipe-form").requestSubmit()',
@@ -121,6 +205,7 @@ async function rendererSmoke() {
       const edited = await window.webContents.executeJavaScript(`(() => {
         const card = document.querySelector(".recipe-card-hit");
         if (!card) return false;
+        if (document.querySelector(".recipe-condition input")) throw new Error("New draft retained old condition rows after save");
         card.click();
         return true;
       })()`);
@@ -133,6 +218,56 @@ async function rendererSmoke() {
       document.querySelector('input[aria-label="Body contains"]').value,
       document.querySelector('input[aria-label="Body does not contain"]').value
     ]`), ["APPROVE", "DRAFT"], "Editing must restore saved filters");
+    await window.webContents.executeJavaScript(
+      'document.querySelector(\'button[aria-label="Remove contains condition"]\').click()',
+    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await window.webContents.executeJavaScript(
+      'document.querySelector(\'button[aria-label="Remove does-not-contain condition"]\').click()',
+    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(await window.webContents.executeJavaScript(
+      'document.querySelectorAll(".recipe-condition input").length',
+    ), 0);
+    assert.equal(await window.webContents.executeJavaScript(
+      'document.activeElement?.getAttribute("aria-label")',
+    ), "Add condition", "Removing the last condition must restore a reachable add action");
+    await window.webContents.executeJavaScript(
+      'document.querySelector(".recipe-form").requestSubmit()',
+    );
+    for (let attempt = 0; ; attempt++) {
+      const cleared = await window.webContents.executeJavaScript(
+        'window.__savedRecipe.match.text_contains === undefined && window.__savedRecipe.match.text_excludes === undefined',
+      );
+      if (cleared) break;
+      assert.ok(attempt < 50, "Removing all conditions must persist an unfiltered rule");
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    for (let attempt = 0; ; attempt++) {
+      const ready = await window.webContents.executeJavaScript(`(() => {
+        if (document.querySelector('.recipe-form button[type="submit"]').textContent.trim() === "Saving…") return false;
+        const card = document.querySelector(".recipe-card-hit");
+        if (!card) return false;
+        card.click();
+        return true;
+      })()`);
+      if (ready) break;
+      assert.ok(attempt < 50, "Updated recipe did not finish saving");
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await addCondition("Body contains");
+    await window.webContents.executeJavaScript(`(() => {
+      window.__confirmCalls = 0;
+      window.confirm = () => { window.__confirmCalls++; return true; };
+      const button = [...document.querySelectorAll(".recipe-form-foot button")]
+        .find(item => item.textContent.trim() === "Try once");
+      if (!button || button.disabled) throw new Error("Missing enabled trial action");
+      button.click();
+    })()`);
+    assert.equal(await window.webContents.executeJavaScript(
+      'window.__confirmCalls',
+    ), 0, "A new blank condition must block trial before confirmation, even when the persisted payload is unchanged");
     console.log("Recipe filter preview, save and edit smoke passed");
   } finally {
     window.destroy();
@@ -167,11 +302,11 @@ async function launchSmoke() {
     };
     window.fetch = async (input, init) => {
       const path = new URL(String(input), location.href).pathname;
-      if (path === "/v1/me/recipes" && init?.method === "POST") {
+      if ((path === "/v1/me/recipes" || path === "/v1/me/recipes/smoke-rule") && init?.method === "POST") {
         const recipe = { ...JSON.parse(init.body), id: "smoke-rule", org_id: "local-owner",
           created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
         window.__savedRecipe = recipe;
-        fixtures[path] = [recipe];
+        fixtures["/v1/me/recipes"] = [recipe];
         return new Response(JSON.stringify(recipe), { headers: { "content-type": "application/json" } });
       }
       if (!(path in fixtures)) throw new Error("Unexpected smoke request: " + path);

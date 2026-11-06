@@ -5,6 +5,7 @@ import {
   overlappingPriorityGroup,
   previewRecipeMatch,
   recipeMatches,
+  recipeTextMatches,
   shouldConfirmRecipeSave,
   subjectFromConversation,
 } from "../src/renderer/src/recipe-preview.ts";
@@ -37,6 +38,19 @@ const otherChannel: RecipeConversationOption = {
 };
 
 describe("recipe match preview", () => {
+  it("uses the same literal AND semantics in the local text tester and coverage preview", () => {
+    const match = { text_contains: "Report", text_excludes: "Draft" };
+    assert.equal(recipeTextMatches(match, "weekly REPORT"), true);
+    assert.equal(recipeTextMatches(match, "weekly REPORT DRAFT"), false);
+    assert.equal(recipeTextMatches(match, "weekly update"), false);
+    assert.equal(recipeTextMatches(match, undefined), false);
+    assert.equal(recipeTextMatches({ text_excludes: "Draft" }, ""), true);
+    assert.equal(recipeTextMatches({ text_contains: "a.b" }, "a-b"), false);
+    assert.equal(recipeTextMatches({ text_contains: "a.b" }, "a.b"), true);
+    assert.equal(recipeTextMatches({ text_contains: "报告" }, "周报告"), true);
+    assert.equal(recipeTextMatches({}, undefined), true);
+  });
+
   it("previews both filters against message bodies, not conversation names", () => {
     const match = { record_class: "task" as const, text_contains: "approve", text_excludes: "draft" };
     const preview = previewRecipeMatch({

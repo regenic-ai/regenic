@@ -175,6 +175,10 @@ Push 选规则时检查触发事件正文，排队开跑和失败重试前再次
 
 手动执行已有待处理项时，过滤检查其固定的 `head_event_id`；定时和规则试运行检查最新消息。即使开启 `include_context`，过滤也不扫描历史上下文。不匹配的定时触发直接推进 `next_run_at`，不新建工作项。带过滤的试运行把新工作项锚定到刚检查的最新消息，不复用证据不同的旧工作项。
 
+编辑器按需添加条件，不常驻空白可选输入。每行按「消息正文 → 包含／不包含 → 文本」排列，支持移除，条件组固定为「全部满足」。已添加的条件必须填写文本后才能保存或运行；移除即取消该限制。「测试条件」在本地检查粘贴的示例消息，说明不匹配原因，不调用执行器或发送消息。详细匹配说明按需展开；会话覆盖预览与示例文本测试相互独立。
+
+交互参考：[Zapier filters](https://help.zapier.com/hc/en-us/articles/8496276332557-Add-conditions-to-Zaps-with-filters)（字段／操作符／值、显式 AND、测试反馈）、[Linear filters](https://linear.app/docs/filters)（按需添加、即时结果）、[Intercom branches](https://www.intercom.com/help/en/articles/7846212-how-to-use-branches-in-workflows)（显式添加条件与逻辑关系）。仅借鉴交互，不增加 OR、通配符、正则或分支能力。
+
 `trigger` 是一等字段，和 match 分开：
 
 | `kind` | 何时开跑 | `unit_key` | 证据 |

@@ -61,13 +61,22 @@ export function recipeMatches(match: RecipeMatch, subject: RecipePreviewSubject)
   if (match.thread_facet && match.thread_facet !== subject.thread_facet) {
     return false;
   }
-  if (match.text_contains || match.text_excludes) {
-    if (subject.body_text === undefined) return false;
-    const folded = subject.body_text.toLowerCase();
-    if (match.text_contains && !folded.includes(match.text_contains.toLowerCase())) return false;
-    if (match.text_excludes && folded.includes(match.text_excludes.toLowerCase())) return false;
+  return recipeTextMatches(match, subject.body_text);
+}
+
+/** Mirrors the kernel's literal, case-insensitive body filter for previews and local tests. */
+export function recipeTextMatches(match: RecipeMatch, text: string | undefined): boolean {
+  if (!match.text_contains && !match.text_excludes) {
+    return true;
   }
-  return true;
+  if (text === undefined) {
+    return false;
+  }
+  const folded = text.toLowerCase();
+  return (
+    (!match.text_contains || folded.includes(match.text_contains.toLowerCase())) &&
+    (!match.text_excludes || !folded.includes(match.text_excludes.toLowerCase()))
+  );
 }
 
 export function subjectFromConversation(
