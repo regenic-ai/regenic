@@ -98,6 +98,7 @@ import type {
   UnassignedSyncWorkQuery,
   SyncWorkIdentity,
   WakeUnassignedSyncWork,
+  ReleaseFinishedExecutorPolls,
   SyncCatalogView,
   SyncCatalogHead,
   ApplySyncCatalogPageInput,
@@ -317,6 +318,7 @@ import {
   settleSyncWork,
   updateInstallationConfig,
   wakeUnassignedSyncWork,
+  releaseFinishedExecutorPolls,
 } from "./sync";
 
 export interface SqliteOpenOptions {
@@ -1528,6 +1530,13 @@ export class SqliteAuthorityStore
   ): Promise<number> {
     this.assertWritable();
     return wakeUnassignedSyncWork(this.database, input);
+  }
+
+  async releaseFinishedExecutorPolls(
+    input: ReleaseFinishedExecutorPolls,
+  ): Promise<number> {
+    this.assertWritable();
+    return releaseFinishedExecutorPolls(this.database, input);
   }
 
   async getSyncCatalog(installationId: string): Promise<SyncCatalogView> {

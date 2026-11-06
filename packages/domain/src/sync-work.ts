@@ -165,6 +165,19 @@ export interface WakeUnassignedSyncWork {
   now: string;
 }
 
+/**
+ * How long a DSH session stays out of the poll claim after its work item is
+ * done. Pending rows are left in place so gap-fill does not recreate them.
+ */
+export const FINISHED_EXECUTOR_POLL_IDLE_MS = 365 * 24 * 60 * 60 * 1000;
+
+export interface ReleaseFinishedExecutorPolls {
+  now: string;
+  /** Sessions already due later than this are left alone. */
+  parked_before: string;
+  next_due_at: string;
+}
+
 export interface SyncWorkStore {
   createSyncRun(input: NewSyncRun): Promise<SyncRun>;
   getSyncRun(id: string, orgId: string): Promise<SyncRun | null>;
@@ -190,6 +203,14 @@ export interface SyncWorkStore {
     options?: ListSyncWorkGapsOptions,
   ): Promise<SyncWorkGap[]>;
   wakeUnassignedSyncWork(input: WakeUnassignedSyncWork): Promise<number>;
+  /**
+   * Push pending DSH session polls whose work item is done off the claim
+   * queue. Interactive rows drop to live priority so they stop jumping ahead
+   * of CRM pulls.
+   */
+  releaseFinishedExecutorPolls(
+    input: ReleaseFinishedExecutorPolls,
+  ): Promise<number>;
 }
 
 export function isUnassignedSyncWork(work: SyncWorkRecord): boolean {

@@ -24,6 +24,7 @@ import type {
   UnassignedSyncWorkQuery,
   SyncWorkIdentity,
   WakeUnassignedSyncWork,
+  ReleaseFinishedExecutorPolls,
   SyncCatalogView,
   SyncCatalogHead,
   ApplySyncCatalogPageInput,
@@ -1206,6 +1207,52 @@ export async function wakeUnassignedSyncWork(db: PgSql, input: WakeUnassignedSyn
       [input.now, input.now, input.installation_id, ...streamKeys],
     );
   }
+
+const FINISHED_EXECUTOR_POLL_SQL = `
+  UPDATE connector_sync_work AS w
+  SET next_due_at = $1::timestamptz,
+      priority = $2,
+      lane = CASE
+        WHEN w.lane = 'interactive' AND NOT EXISTS (
+          SELECT 1 FROM connector_sync_work AS live
+          WHERE live.installation_id = w.installation_id
+            AND live.stream_key = w.stream_key
+            AND live.generation = w.generation
+            AND live.lane = 'live'
+        ) THEN 'live'
+        ELSE w.lane
+      END,
+      updated_at = $3::timestamptz
+  WHERE w.stream_key LIKE 'session:%'
+    AND w.status = 'pending'
+    AND w.run_id IS NULL
+    AND w.next_due_at < $4::timestamptz
+    AND EXISTS (
+      SELECT 1 FROM work_runs AS r
+      JOIN work_items AS wi ON wi.id = r.work_item_id
+      WHERE r.agent_thread_id = replace(w.stream_key, 'session:', 'dsh:')
+        AND wi.status = 'done'
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM work_runs AS r
+      JOIN work_items AS wi ON wi.id = r.work_item_id
+      WHERE r.agent_thread_id = replace(w.stream_key, 'session:', 'dsh:')
+        AND wi.status IN ('open', 'running', 'waiting_human', 'failed')
+    )
+`;
+
+/** Drop finished DSH sessions out of the due-work claim. */
+export async function releaseFinishedExecutorPolls(
+  db: PgSql,
+  input: ReleaseFinishedExecutorPolls,
+): Promise<number> {
+  return db.execute(FINISHED_EXECUTOR_POLL_SQL, [
+    input.next_due_at,
+    syncWorkPriority("live"),
+    input.now,
+    input.parked_before,
+  ]);
+}
 
 export async function getSyncCatalog(db: PgSql, installationId: string): Promise<SyncCatalogView> {
     return loadSyncCatalog(db, installationId);

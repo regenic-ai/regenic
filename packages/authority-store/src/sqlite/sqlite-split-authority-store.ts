@@ -105,6 +105,7 @@ import type {
   SyncWorkRecord,
   UnassignedSyncWorkQuery,
   WakeUnassignedSyncWork,
+  ReleaseFinishedExecutorPolls,
 } from "@regenic/domain";
 import { resolve } from "node:path";
 import { SqliteWriteClient } from "./sqlite-write-client";
@@ -628,6 +629,12 @@ export class SqliteSplitAuthorityStore
     input: WakeUnassignedSyncWork,
   ): Promise<number> {
     return this.writer.call("wakeUnassignedSyncWork", [input]);
+  }
+
+  async releaseFinishedExecutorPolls(
+    input: ReleaseFinishedExecutorPolls,
+  ): Promise<number> {
+    return this.writer.call("releaseFinishedExecutorPolls", [input]);
   }
 
   async getSyncCatalog(installationId: string): Promise<SyncCatalogView> {

@@ -42,11 +42,20 @@ import { PersonalWorkSupervise } from "./personal-work-supervise";
 import { PersonalRuntimeService } from "./personal-runtime.service";
 import { shouldDeferWorkForThread } from "./personal-sync-phase";
 
+/** How many inbox rows one dispatch tick may open. The next tick continues after them. */
+const INBOX_OBSERVE_PAGE = 16;
+/** Failed retries are a second pass so open work is not stuck behind them. */
+const FAILED_RETRY_PAGE = 20;
+
 export class PersonalWorkDispatch {
   private readonly starting = new Map<string, string>();
   /** Per-recipe claim order so parallel starts reserve slots one at a time. */
   private readonly startLanes = new Map<string, Promise<void>>();
   private autoWork: Promise<void>[] = [];
+  /** Order tasks move on their own cursor so the email backlog cannot block them. */
+  private orderScan: { occurred_at: string; id: string } | null = null;
+  private opsScan: { occurred_at: string; id: string } | null = null;
+  private failedScan = 0;
 
   constructor(
     private readonly runtime: PersonalRuntimeService,
@@ -80,54 +89,83 @@ export class PersonalWorkDispatch {
         authority.listHiddenExecutorThreadIds(orgId),
       ]);
       const hidden = new Set(hiddenIds);
+      const open: WorkItem[] = [];
+      const failed: WorkItem[] = [];
       for (const item of items) {
-        if (hidden.has(item.thread_id) || !item.recipe_id) {
-          continue;
+        if (item.status === "open") {
+          open.push(item);
+        } else if (item.status === "failed") {
+          failed.push(item);
         }
-        const recipe = recipes.find((row) => row.id === item.recipe_id);
-        if (
-          !recipe ||
-          (!recipeAllowsPushDispatch(recipe) && !recipeAllowsPullDispatch(recipe))
-        ) {
-          continue;
-        }
-        await this.retryOrResume(
-          item,
-          recipe,
-          undefined,
-          recipe.max_concurrent !== undefined,
-        );
+      }
+      for (const item of interleaveByRecipe(open)) {
+        await this.resumeListedItem(item, recipes, hidden);
+      }
+      const failedPage = takeRingPage(failed, this.failedScan, FAILED_RETRY_PAGE);
+      this.failedScan = failedPage.next;
+      for (const item of failedPage.page) {
+        await this.resumeListedItem(item, recipes, hidden);
       }
     } finally {
       await this.drainAutoWork();
     }
   }
 
+  private async resumeListedItem(
+    item: WorkItem,
+    recipes: Recipe[],
+    hidden: Set<string>,
+  ): Promise<void> {
+    if (hidden.has(item.thread_id) || !item.recipe_id) {
+      return;
+    }
+    const recipe = recipes.find((row) => row.id === item.recipe_id);
+    if (
+      !recipe ||
+      (!recipeAllowsPushDispatch(recipe) && !recipeAllowsPullDispatch(recipe))
+    ) {
+      return;
+    }
+    await this.retryOrResume(
+      item,
+      recipe,
+      undefined,
+      recipe.max_concurrent !== undefined,
+    );
+  }
+
   private async observeInbox(): Promise<void> {
     const host = this.runtime.requireHost();
     const orgId = this.runtime.orgId();
     const authority = host.get("authority");
-    const [recipes, items, hiddenIds, heads, taskRows] = await Promise.all([
+    const [recipes, items, hiddenIds, taskRows] = await Promise.all([
       authority.listRecipes(orgId),
       authority.listWorkItems(orgId, { statuses: [...ACTIVE_WORK_STATUSES] }),
       authority.listHiddenExecutorThreadIds(orgId),
-      authority.listInbox(orgId, { heads: true, needs_work: true }),
       authority.listInbox(orgId, { tasks: true, needs_work: true }),
     ]);
-    if (heads.length === 0 && taskRows.length === 0 && items.length === 0) {
+    if (taskRows.length === 0 && items.length === 0) {
       return;
     }
     const hidden = new Set(hiddenIds);
-    const observeRows = uniqueInboxItems([...taskRows, ...heads]);
+    const observeRows = uniqueInboxItems(taskRows).sort(compareInboxItems);
+    const orderRows = observeRows.filter((row) => isOrderTask(row));
+    const otherRows = observeRows.filter((row) => !isOrderTask(row));
+    const orderPage = takeInboxScanPage(orderRows, this.orderScan, INBOX_OBSERVE_PAGE);
+    const opsPage = takeInboxScanPage(otherRows, this.opsScan, INBOX_OBSERVE_PAGE);
+    this.orderScan = orderPage.next;
+    this.opsScan = opsPage.next;
+    const page = [...orderPage.page, ...opsPage.page];
     const bodies = await resolveInboxBodies(
       authority,
       host.get("blobs"),
-      observeRows.map((row) => row.event.content_hash),
+      page.map((row) => row.event.content_hash),
       "meta",
     );
     const installations = await authority.listInstallations(orgId);
+    const coveredEvents = new Set(observeRows.map((row) => row.event.id));
     const seenEvents = new Set<string>();
-    for (const row of observeRows) {
+    for (const row of page) {
       const threadId = conversationId(row.event.source, row.event.external_id, row.event.id);
       if (hidden.has(threadId) || seenEvents.has(row.event.id)) {
         continue;
@@ -148,7 +186,9 @@ export class PersonalWorkDispatch {
     for (const item of items) {
       if (
         hidden.has(item.thread_id) ||
-        (item.head_event_id && seenEvents.has(item.head_event_id))
+        (item.head_event_id &&
+          (seenEvents.has(item.head_event_id) ||
+            coveredEvents.has(item.head_event_id)))
       ) {
         continue;
       }
@@ -676,6 +716,93 @@ export class PersonalWorkDispatch {
 
 function failedRunCount(runs: WorkRun[]): number {
   return runs.filter((run) => run.status === "failed").length;
+}
+
+function isOrderTask(row: InboxItem): boolean {
+  return (row.event.thread_id ?? "").startsWith("crm:order:");
+}
+
+function compareInboxItems(left: InboxItem, right: InboxItem): number {
+  if (left.event.occurred_at !== right.event.occurred_at) {
+    return left.event.occurred_at < right.event.occurred_at ? -1 : 1;
+  }
+  if (left.event.id === right.event.id) {
+    return 0;
+  }
+  return left.event.id < right.event.id ? -1 : 1;
+}
+
+function isAfterInboxScan(
+  event: { occurred_at: string; id: string },
+  scan: { occurred_at: string; id: string },
+): boolean {
+  if (event.occurred_at !== scan.occurred_at) {
+    return event.occurred_at > scan.occurred_at;
+  }
+  return event.id > scan.id;
+}
+
+/** One forward page. Reaching the end arms the next tick to start over. */
+function takeInboxScanPage(
+  rows: InboxItem[],
+  scan: { occurred_at: string; id: string } | null,
+  limit: number,
+): { page: InboxItem[]; next: { occurred_at: string; id: string } | null } {
+  if (rows.length <= limit) {
+    return { page: rows, next: null };
+  }
+  let start = 0;
+  if (scan) {
+    const found = rows.findIndex((row) => isAfterInboxScan(row.event, scan));
+    start = found < 0 ? 0 : found;
+  }
+  const page = rows.slice(start, start + limit);
+  const last = page[page.length - 1];
+  if (!last || start + page.length >= rows.length) {
+    return { page, next: null };
+  }
+  return {
+    page,
+    next: { occurred_at: last.event.occurred_at, id: last.event.id },
+  };
+}
+
+function interleaveByRecipe(items: WorkItem[]): WorkItem[] {
+  const groups = new Map<string, WorkItem[]>();
+  for (const item of items) {
+    const key = item.recipe_id ?? "";
+    const list = groups.get(key);
+    if (list) {
+      list.push(item);
+    } else {
+      groups.set(key, [item]);
+    }
+  }
+  const queues = [...groups.values()];
+  const mixed: WorkItem[] = [];
+  let added = true;
+  while (added) {
+    added = false;
+    for (const queue of queues) {
+      const next = queue.shift();
+      if (!next) {
+        continue;
+      }
+      mixed.push(next);
+      added = true;
+    }
+  }
+  return mixed;
+}
+
+function takeRingPage<T>(items: T[], start: number, limit: number): { page: T[]; next: number } {
+  if (items.length === 0 || items.length <= limit) {
+    return { page: items, next: 0 };
+  }
+  const index = start >= 0 && start < items.length ? start : 0;
+  const page = items.slice(index, index + limit);
+  const next = index + page.length;
+  return { page, next: next >= items.length ? 0 : next };
 }
 
 function uniqueInboxItems(rows: InboxItem[]): InboxItem[] {

@@ -102,6 +102,7 @@ import type {
   UnassignedSyncWorkQuery,
   SyncWorkIdentity,
   WakeUnassignedSyncWork,
+  ReleaseFinishedExecutorPolls,
   SyncCatalogView,
   SyncCatalogHead,
   ApplySyncCatalogPageInput,
@@ -174,6 +175,7 @@ import {
   settleSyncWork,
   updateInstallationConfig,
   wakeUnassignedSyncWork,
+  releaseFinishedExecutorPolls,
 } from "./sync";
 import {
   append,
@@ -1437,6 +1439,12 @@ export class PostgresAuthorityStore
     input: WakeUnassignedSyncWork,
   ): Promise<number> {
     return wakeUnassignedSyncWork(this.sql, input);
+  }
+
+  async releaseFinishedExecutorPolls(
+    input: ReleaseFinishedExecutorPolls,
+  ): Promise<number> {
+    return releaseFinishedExecutorPolls(this.sql, input);
   }
 
   async getSyncCatalog(installationId: string): Promise<SyncCatalogView> {

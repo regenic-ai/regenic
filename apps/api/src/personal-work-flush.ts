@@ -18,6 +18,9 @@ import { PersonalWorkChannel } from "./personal-work-channel";
 import { PersonalRuntimeService } from "./personal-runtime.service";
 import { WriteBackTimeoutError, withTimeout } from "./personal-work-support";
 
+/** One organization shares this flush. Keep CRM writes overlapping, not unbounded. */
+const WRITE_BACK_CONCURRENCY = 4;
+
 export class PersonalWorkFlush {
   constructor(
     private readonly runtime: PersonalRuntimeService,
@@ -34,6 +37,11 @@ export class PersonalWorkFlush {
       authority.listRecipes(orgId),
     ]);
     const recipesById = new Map(recipes.map((recipe) => [recipe.id, recipe]));
+    const pending: Array<{
+      item: WorkItem;
+      recipe: Recipe;
+      delivery: WorkDelivery;
+    }> = [];
     for (const delivery of deliveries) {
       const reclaimed = reclaimDeliveryLease(delivery, now);
       if (reclaimed !== delivery) {
@@ -48,7 +56,13 @@ export class PersonalWorkFlush {
       if (!item || !recipe || !shouldFlushDelivery(reclaimed, now)) {
         continue;
       }
-      await this.flushOne(item, recipe, reclaimed);
+      pending.push({ item, recipe, delivery: reclaimed });
+    }
+    for (let index = 0; index < pending.length; index += WRITE_BACK_CONCURRENCY) {
+      const batch = pending.slice(index, index + WRITE_BACK_CONCURRENCY);
+      await Promise.all(
+        batch.map((row) => this.flushOne(row.item, row.recipe, row.delivery)),
+      );
     }
   }
 

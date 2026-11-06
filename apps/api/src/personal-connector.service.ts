@@ -25,6 +25,7 @@ import {
   historySyncClaimLanes,
   shouldRunHistoryTick,
   steadySyncClaimLanes,
+  FINISHED_EXECUTOR_POLL_IDLE_MS,
 } from "@regenic/domain";
 import {
   nextPickedChatNames,
@@ -454,6 +455,16 @@ export class PersonalConnectorService implements OnModuleDestroy {
     }
     try {
       const store = this.runtime.requireHost().get("authority");
+      const now = new Date();
+      await store.releaseFinishedExecutorPolls({
+        now: now.toISOString(),
+        parked_before: new Date(
+          now.getTime() + 30 * 24 * 60 * 60 * 1000,
+        ).toISOString(),
+        next_due_at: new Date(
+          now.getTime() + FINISHED_EXECUTOR_POLL_IDLE_MS,
+        ).toISOString(),
+      });
       await runDueWorkPlane(this.connectorState(), store, {
         plane: "steady",
         lanes: [...steadySyncClaimLanes()],
