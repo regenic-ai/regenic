@@ -2,13 +2,172 @@ import { MenuSelect } from "./MenuSelect";
 import { RecipeRow } from "./RecipeRow";
 import {
   unitKindsForSource,
+  draftMatch,
   withSuggestedName,
   type RecipeDraft,
   type Translate,
 } from "./recipe-draft";
-import { overlappingPriorityGroup, previewRecipeMatch } from "./recipe-preview";
+import { overlappingPriorityGroup, previewRecipeMatch, recipeTextMatches } from "./recipe-preview";
 import type { RecipeSourceOption } from "./types";
-import { useState, type Dispatch, type SetStateAction } from "react";
+import { useId, useRef, useState, type Dispatch, type SetStateAction } from "react";
+
+type TextFilterKey = "text_contains" | "text_excludes";
+const TEXT_FILTER_KEYS: TextFilterKey[] = ["text_contains", "text_excludes"];
+
+export function TextFilterConditions({
+  draft,
+  setDraft,
+  t,
+}: {
+  draft: RecipeDraft;
+  setDraft: Dispatch<SetStateAction<RecipeDraft>>;
+  t: Translate;
+}) {
+  const [added, setAdded] = useState<TextFilterKey[]>([]);
+  const [testText, setTestText] = useState("");
+  const [testOpen, setTestOpen] = useState(false);
+  const inputs = useRef<Partial<Record<TextFilterKey, HTMLInputElement | null>>>({});
+  const addControl = useRef<HTMLDivElement>(null);
+  const nextFocus = useRef<TextFilterKey | null>(null);
+  const id = useId();
+  const shown = TEXT_FILTER_KEYS.filter((key) => draft[key] !== "" || added.includes(key));
+  const available = TEXT_FILTER_KEYS.filter((key) => !shown.includes(key));
+  const complete = shown.length > 0 && shown.every((key) => draft[key].trim());
+  const passed = complete && recipeTextMatches(draftMatch(draft), testText);
+
+  const addCondition = (key: string) => {
+    if (key !== "text_contains" && key !== "text_excludes") return;
+    nextFocus.current = key;
+    setAdded((current) => [...current, key]);
+  };
+  const removeCondition = (key: TextFilterKey) => {
+    setDraft((current) => ({ ...current, [key]: "" }));
+    setAdded((current) => current.filter((entry) => entry !== key));
+    const remaining = shown.find((entry) => entry !== key);
+    if (remaining) inputs.current[remaining]?.focus();
+    else {
+      setTestOpen(false);
+      setTestText("");
+      requestAnimationFrame(() => addControl.current?.querySelector("button")?.focus());
+    }
+  };
+  if (draft.trigger_kind !== "push") {
+    return null;
+  }
+  return (
+    <RecipeRow label={t("recipes.filterConditions")}>
+      <div className={`recipe-conditions${shown.length ? " has-conditions" : ""}`}>
+        {shown.length > 0 ? (
+          <>
+            <div className="recipe-conditions-heading">
+              <span>{t("recipes.filterOnlyIf")}</span>
+              <span className="recipe-conditions-all">{t("recipes.filterAll")}</span>
+            </div>
+            <div className="recipe-condition-list">
+              {shown.map((key, index) => (
+                <div className="recipe-condition-entry" key={key}>
+                  {index > 0 ? <span className="recipe-condition-and">{t("recipes.filterAnd")}</span> : null}
+                  <div className="recipe-condition">
+                    <span className="recipe-condition-field">{t("recipes.filterBody")}</span>
+                    <label className="recipe-condition-operator" htmlFor={`${id}-${key}`}>
+                      {t(key === "text_contains" ? "recipes.filterOperatorContains" : "recipes.filterOperatorExcludes")}
+                    </label>
+                    <input
+                      id={`${id}-${key}`}
+                      ref={(node) => {
+                        inputs.current[key] = node;
+                        node?.setCustomValidity(draft[key] && !draft[key].trim() ? t("recipes.filterNeedValue") : "");
+                        if (node && nextFocus.current === key) {
+                          node.focus();
+                          nextFocus.current = null;
+                        }
+                      }}
+                      aria-label={t(key === "text_contains" ? "recipes.filterContains" : "recipes.filterExcludes")}
+                      aria-describedby={`${id}-hint`}
+                      value={draft[key]}
+                      required
+                      placeholder={t("recipes.filterValuePlaceholder")}
+                      onChange={(event) => {
+                        const value = event.target.value;
+                        event.target.setCustomValidity(value && !value.trim() ? t("recipes.filterNeedValue") : "");
+                        setDraft((current) => ({ ...current, [key]: value }));
+                      }}
+                    />
+                    <button
+                      type="button"
+                      className="recipe-condition-remove"
+                      aria-label={t(key === "text_contains" ? "recipes.filterRemoveContains" : "recipes.filterRemoveExcludes")}
+                      title={t("recipes.filterRemove")}
+                      onClick={() => removeCondition(key)}
+                    >
+                      <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
+                        <path d="m4 4 8 8M12 4l-8 8" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
+        ) : null}
+        <div className="recipe-conditions-actions">
+          {available.length ? (
+            <div ref={addControl}>
+              <MenuSelect
+                className="recipe-condition-add"
+                value=""
+                ariaLabel={t("recipes.filterAdd")}
+                placeholder={`+ ${t("recipes.filterAdd")}`}
+                options={available.map((key) => ({
+                  value: key,
+                  label: t(key === "text_contains" ? "recipes.filterContains" : "recipes.filterExcludes"),
+                }))}
+                onChange={addCondition}
+              />
+            </div>
+          ) : null}
+          {shown.length ? (
+            <button type="button" className="recipe-condition-test-toggle" aria-expanded={testOpen}
+              aria-controls={`${id}-test`} onClick={() => setTestOpen((current) => !current)}>
+              {t("recipes.filterTest")}
+            </button>
+          ) : <span className="recipe-hint">{t("recipes.filterEmpty")}</span>}
+        </div>
+        {shown.length ? (
+          <div className="recipe-conditions-help" id={`${id}-hint`}>
+            <span>{t("recipes.filterShortHint")}</span>
+            <details>
+              <summary>{t("recipes.filterDetails")}</summary>
+              <p>{t("recipes.filterHint")}</p>
+            </details>
+          </div>
+        ) : null}
+        {testOpen && shown.length ? (
+          <div className="recipe-condition-test" id={`${id}-test`}>
+            <label htmlFor={`${id}-sample`}>{t("recipes.filterTestLabel")}</label>
+            <textarea id={`${id}-sample`} value={testText}
+              placeholder={t("recipes.filterTestPlaceholder")}
+              onChange={(event) => setTestText(event.target.value)} />
+            <p className="recipe-condition-result" role="status" data-result={!complete || !testText ? "idle" : passed ? "pass" : "fail"}>
+              {complete && testText ? (
+                <span className="recipe-condition-result-icon" aria-hidden="true">{passed ? "\u2713" : "\u00d7"}</span>
+              ) : null}
+              {t(!complete ? "recipes.filterTestIncomplete" : !testText ? "recipes.filterTestIdle" : passed ? "recipes.filterTestPass" : "recipes.filterTestFail")}
+            </p>
+            {complete && testText && !passed ? (
+              <p className="recipe-hint">
+                {!recipeTextMatches({ text_contains: draft.text_contains }, testText)
+                  ? t("recipes.filterTestMissing", { text: draft.text_contains })
+                  : t("recipes.filterTestExcluded", { text: draft.text_excludes })}
+              </p>
+            ) : null}
+            <span className="recipe-hint">{t("recipes.filterTestSafe")}</span>
+          </div>
+        ) : null}
+      </div>
+    </RecipeRow>
+  );
+}
 
 export function SwitchRow({
   checked,
@@ -70,7 +229,10 @@ export function MatchPreview({
       <p className="recipe-preview-body">{body}</p>
       {samples ? <p className="recipe-preview-samples">{samples}</p> : null}
       {preview.ready ? (
-        <p className="recipe-hint">{t("recipes.previewPartial")}</p>
+        <p className="recipe-hint">
+          {t(draft.trigger_kind === "push" && (draft.text_contains.trim() || draft.text_excludes.trim())
+            ? "recipes.filterPreviewHint" : "recipes.previewPartial")}
+        </p>
       ) : null}
       {preview.preempted_by ? (
         <p className="recipe-preview-conflict">

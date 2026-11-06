@@ -5,6 +5,8 @@ import {
   overlappingPriorityGroup,
   previewRecipeMatch,
   recipeMatches,
+  recipesCanShareSubject,
+  recipeTextMatches,
   shouldConfirmRecipeSave,
   subjectFromConversation,
 } from "../src/renderer/src/recipe-preview.ts";
@@ -37,6 +39,37 @@ const otherChannel: RecipeConversationOption = {
 };
 
 describe("recipe match preview", () => {
+  it("uses the same literal AND semantics in the local text tester and coverage preview", () => {
+    const match = { text_contains: "Report", text_excludes: "Draft" };
+    assert.equal(recipeTextMatches(match, "weekly REPORT"), true);
+    assert.equal(recipeTextMatches(match, "weekly REPORT DRAFT"), false);
+    assert.equal(recipeTextMatches(match, "weekly update"), false);
+    assert.equal(recipeTextMatches(match, undefined), false);
+    assert.equal(recipeTextMatches({ text_excludes: "Draft" }, ""), true);
+    assert.equal(recipeTextMatches({ text_contains: "a.b" }, "a-b"), false);
+    assert.equal(recipeTextMatches({ text_contains: "a.b" }, "a.b"), true);
+    assert.equal(recipeTextMatches({ text_contains: "报告" }, "周报告"), true);
+    assert.equal(recipeTextMatches({}, undefined), true);
+  });
+
+  it("previews both filters against message bodies, not conversation names", () => {
+    const match = { record_class: "task" as const, text_contains: "approve", text_excludes: "draft" };
+    const preview = previewRecipeMatch({
+      match,
+      recipes: [],
+      conversations: [
+        { ...task, id: "ok", body_text: "please APPROVE release" },
+        { ...task, id: "draft", body_text: "please APPROVE DRAFT" },
+        { ...task, id: "missing", label: "approve release" },
+        { ...task, id: "other", body_text: "release" },
+      ],
+    });
+    assert.deepEqual(preview.sample_ids, ["ok"]);
+    assert.equal(preview.count, 1);
+    assert.equal(recipeMatches({ record_class: "task", text_excludes: "draft" },
+      subjectFromConversation(task)!), false);
+  });
+
   it("matches a bound chat by thread id", () => {
     const subject = subjectFromConversation(chat);
     assert.ok(subject);
@@ -48,6 +81,25 @@ describe("recipe match preview", () => {
       recipeMatches({ thread_id: "feishu:other" }, subject),
       false,
     );
+  });
+
+  it("ignores retained body conditions in pull/manual coverage and sample choices", () => {
+    const match = { thread_id: task.id, text_contains: "approve", text_excludes: "draft" };
+    for (const triggerKind of ["pull", "manual"] as const) {
+      const conversations = [{ ...task, body_text: "draft" }, chat];
+      assert.deepEqual(previewRecipeMatch({
+        match, triggerKind, conversations, recipes: [],
+      }).sample_ids, [task.id]);
+      assert.deepEqual(matchingConversations(match, conversations, triggerKind)?.map(item => item.id), [task.id]);
+      assert.equal(recipeMatches(match, subjectFromConversation(task)!, triggerKind), true);
+    }
+    assert.equal(previewRecipeMatch({
+      match, triggerKind: "push", conversations: [task], recipes: [],
+    }).count, 0);
+    const conflicting = { thread_id: task.id, text_excludes: "approve" };
+    assert.equal(recipesCanShareSubject(match, conflicting), false);
+    assert.equal(recipesCanShareSubject(match, conflicting, "push", "manual"), true);
+    assert.equal(recipesCanShareSubject(match, conflicting, "manual", "push"), true);
   });
 
   it("counts Current-work tasks for an all-tasks rule", () => {

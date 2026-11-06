@@ -247,6 +247,20 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
         }),
       });
       assert.equal(sourceOnly.status, 400);
+      for (const key of ["text_contains", "text_excludes"]) {
+        for (const value of [42, null, "", "   "]) {
+          const invalidFilter = await fetch(`${origin}/v1/me/recipes`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              name: "Invalid filter",
+              match: { record_class: "task", [key]: value },
+              executor_type: "dsh",
+            }),
+          });
+          assert.equal(invalidFilter.status, 400);
+        }
+      }
       const invalidWriteBackDestination = await fetch(`${origin}/v1/me/recipes`, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -274,7 +288,7 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
             name: "Feishu tasks",
-            match: { record_class: "task", source: "feishu" },
+            match: { record_class: "task", source: "feishu", text_contains: "confirm", text_excludes: "draft" },
             executor_type: "dsh",
             executor_config: { skill: "review", prompt: "Reply with a decision." },
             can_write_back: true,
@@ -289,6 +303,8 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
       assert.equal(created.include_context, true);
       assert.equal(created.trigger.kind, "push");
       assert.equal(created.trigger.coalesce, true);
+      assert.equal(created.match.text_contains, "confirm");
+      assert.equal(created.match.text_excludes, "draft");
       assert.equal(created.executor_config.skill, "review");
       const typed = await (
         await fetch(`${origin}/v1/me/recipes`, {
@@ -337,10 +353,26 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
       const listed = recipes.find((recipe) => recipe.name === "Feishu tasks");
       assert.equal(listed.executor_config.prompt, "Reply with a decision.");
       assert.equal(listed.include_context, true);
+      assert.equal(listed.match.text_contains, "confirm");
+      assert.equal(listed.match.text_excludes, "draft");
       assert.equal(
         recipes.find((recipe) => recipe.name === "CRM order review")?.match.unit_kind,
         "crm.order_review",
       );
+      const renamed = await fetch(`${origin}/v1/me/recipes/${created.id}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "Renamed filtered rule" }),
+      });
+      assert.equal(renamed.status, 201);
+      assert.deepEqual((await renamed.json()).match, created.match);
+      const cleared = await fetch(`${origin}/v1/me/recipes/${created.id}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ match: { record_class: "task", source: "feishu" } }),
+      });
+      assert.equal(cleared.status, 201);
+      assert.deepEqual((await cleared.json()).match, { record_class: "task", source: "feishu" });
       const prefs = await (
         await fetch(`${origin}/v1/me/prefs`, {
           method: "POST",

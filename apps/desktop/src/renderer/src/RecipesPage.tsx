@@ -12,6 +12,7 @@ import {
   MoreOptions,
   PriorityPanel,
   SwitchRow,
+  TextFilterConditions,
   unitKindField,
 } from "./RecipeEditor";
 import { RecipeParams } from "./RecipeParams";
@@ -97,6 +98,7 @@ export function RecipesPage({
   const [busy, setBusy] = useState(false);
   const [returnToWork, setReturnToWork] = useState(() => Boolean(seed));
   const [trySample, setTrySample] = useState("");
+  const [filterEditorVersion, setFilterEditorVersion] = useState(0);
   const importRef = useRef<HTMLInputElement>(null);
   const [draft, setDraft] = useState<RecipeDraft>(() =>
     seed ? applySeed(emptyDraft(), seed, "") : emptyDraft(),
@@ -151,6 +153,7 @@ export function RecipesPage({
     }
     setReturnToWork(true);
     setDraft((current) => applySeed(current, seed, current.executor_type));
+    setFilterEditorVersion((current) => current + 1);
     setError(null);
     onSeedConsumed?.();
   }, [seed, onSeedConsumed]);
@@ -220,7 +223,7 @@ export function RecipesPage({
     if (bound) {
       return [{ id: bound, label: draft.thread_title || bound }];
     }
-    return matchingConversations(match, conversations) ?? [];
+    return matchingConversations(match, conversations, draft.trigger_kind) ?? [];
   }, [draft, conversations]);
   const tryThreadId = tryChoices.some((item) => item.id === trySample)
     ? trySample
@@ -258,6 +261,9 @@ export function RecipesPage({
 
   const runTryOnce = async (writeBack: boolean) => {
     if (!draft.id || !tryThreadId) {
+      return;
+    }
+    if (formRef.current?.querySelector("form")?.reportValidity() === false) {
       return;
     }
     const confirmCopy = t(
@@ -379,9 +385,11 @@ export function RecipesPage({
     setError(null);
     setNotice(null);
     setDraft(emptyDraftFrom(executors, sources));
+    setFilterEditorVersion((current) => current + 1);
   };
 
   const editRecipe = (recipe: RecipeView) => {
+    setFilterEditorVersion((current) => current + 1);
     setReturnToWork(false);
     setError(null);
     setTrySample("");
@@ -431,6 +439,7 @@ export function RecipesPage({
   const applyStarter = (kind: StarterKind) => {
     setReturnToWork(false);
     setError(null);
+    setFilterEditorVersion((current) => current + 1);
     setDraft(
       withSuggestedName(
         starterDraft(kind, emptyDraftFrom(executors, sources), sources, conversations),
@@ -443,6 +452,9 @@ export function RecipesPage({
 
   /** Validate and, for broad rules, confirm coverage. False means do not save. */
   const readyToSave = (): boolean => {
+    if (formRef.current?.querySelector("form")?.reportValidity() === false) {
+      return false;
+    }
     if (!draft.executor_type) {
       return false;
     }
@@ -834,9 +846,11 @@ export function RecipesPage({
                         setDraft((current) => ({ ...current, ...patch }))
                       }
                     />
+                    <p className="recipe-hint">{t("recipes.scheduleInstructionsHint")}</p>
                   </RecipeRow>
                 ) : null}
 
+                <TextFilterConditions key={`${draft.id ?? "new"}:${filterEditorVersion}`} draft={draft} setDraft={setDraft} t={t} />
                 <RecipeRow label={t("recipes.previewTitle")}>
                   <MatchPreview
                     preview={matchPreview}

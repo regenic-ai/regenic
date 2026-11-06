@@ -136,6 +136,8 @@ interface Recipe {
       source?: string;
       thread_id?: string;
       unit_kind?: string;
+      text_contains?: string;
+      text_excludes?: string;
     };
   trigger: {
     kind: "push" | "pull" | "manual";
@@ -166,6 +168,18 @@ Identity is three objects (POSIX session / job / inferior):
 | Inferior (`WorkRun`) | One execution; sysout stays off the list by default | A user-opened agent chat |
 
 `match` must be specific (`thread_id`, or `unit_kind`, or `record_class=task`, or `source` plus a non-utterance class). Empty, source-only, utterance-only, and facet-only matches cannot be saved. `unit_kind` is string equality only. Specificity is `thread_id` > `unit_kind` > `source` > `record_class` > `thread_facet`. The connector declares the vocabulary with `subjectCatalog()`. Ids follow `{source}.{native}`; the kernel does not parse them. A connector must not stamp `recipe_id` on a record.
+
+Optional `match.text_contains` and `match.text_excludes` narrow **push rules only** with literal, case-insensitive message-body substrings (`Report` also matches `report`). Both conditions must pass when both are set; they do not add specificity or allow a scope-free rule. Omit either field to remove that restriction. Invalid or whitespace-only values are rejected by the API and bundle import rather than silently discarding a filter. Stored values retain meaningful surrounding spaces. Rules without these fields retain their existing behavior. Filters live in the existing `match_json`, so no schema migration is required.
+
+Push selection checks the triggering event body, and queued starts/retries recheck the same event before invoking an executor. Filtering does not block ingestion or remove tasks from Current work. A rejected rule does not prevent another eligible rule from matching. The editor previews filters against the latest available message body, not the conversation name or executor instructions; missing body content cannot pass a configured filter. Export/import and editing preserve both conditions.
+
+Trigger kind, not how execution is requested, controls applicability. Manually starting an existing **push** work item still checks its fixed `head_event_id`; trying a push rule checks the latest message as a sample trigger and anchors the trial to that event. A filtered push start without a fixed triggering event fails closed rather than checking a different message. Filters never scan conversation history, even when `include_context` is enabled.
+
+**Pull and manual rules ignore stored message-body conditions** in selection, starts, retries, trials, coverage and priority previews. Existing saved/imported conditions remain round-trippable but inactive until the rule becomes push again. Scheduled work opens and drains normally regardless of missing/nonmatching latest messages; an already queued occurrence must not remain open because its message changed. Task instructions should specify the reading scope, selection requirements and no-result behavior. Reading is limited to the executor's available tools and supplied context, not a capability the filter editor grants.
+
+The editor adds conditions on demand only for push rules. Each row reads **Message body → contains / does not contain → text**, can be removed, and belongs to a fixed **all conditions match** group. Added rows require a value before saving or running a push rule; removal clears that restriction. Switching to pull/manual retains the draft internally but completely hides the condition section, with no inactive notices or hidden required inputs. Saving/editing and import/export preserve valid inactive values; non-push cards omit all filter summaries. Switching back to push restores the conditions. **Test conditions** checks a pasted sample locally, explains a failed match and never invokes an executor or sends a message. Detailed matching help is expandable; the live coverage preview remains separate from the sample test.
+
+Interaction references: [Zapier filters](https://help.zapier.com/hc/en-us/articles/8496276332557-Add-conditions-to-Zaps-with-filters) (field/rule/value, explicit AND, test feedback), [Linear filters](https://linear.app/docs/filters) (add only needed criteria, immediate results) and [Intercom branches](https://www.intercom.com/help/en/articles/7846212-how-to-use-branches-in-workflows) (explicit condition creation and logical relationships). These are interaction references, not additional supported operators: this editor does not add OR, patterns, regex or branching.
 
 `trigger` is first-class and separate from match:
 

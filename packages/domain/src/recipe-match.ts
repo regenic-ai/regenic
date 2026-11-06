@@ -1,6 +1,6 @@
 import type { RecordClass } from "./record-class";
 import type { ThreadFacet } from "./thread-facet";
-import type { Recipe, RecipeMatch } from "./work";
+import type { Recipe, RecipeMatch, RecipeTriggerKind } from "./work";
 
 export interface RecipeSubject {
   record_class: RecordClass;
@@ -8,6 +8,7 @@ export interface RecipeSubject {
   source: string;
   thread_id: string;
   unit_kind?: string;
+  body_text?: string;
 }
 
 export const RECIPE_MATCH_WEIGHTS = {
@@ -38,7 +39,11 @@ export function recipeSpecificity(match: RecipeMatch): number {
   return score;
 }
 
-export function recipeMatches(match: RecipeMatch, subject: RecipeSubject): boolean {
+export function recipeMatches(
+  match: RecipeMatch,
+  subject: RecipeSubject,
+  triggerKind: RecipeTriggerKind = "push",
+): boolean {
   if (recipeSpecificity(match) === 0) {
     return false;
   }
@@ -57,13 +62,38 @@ export function recipeMatches(match: RecipeMatch, subject: RecipeSubject): boole
   if (match.thread_facet && match.thread_facet !== subject.thread_facet) {
     return false;
   }
-  return true;
+  return triggerKind !== "push" || recipeTextMatches(match, subject.body_text);
+}
+
+export function recipeTextMatches(match: RecipeMatch, text: string | undefined): boolean {
+  if (!match.text_contains && !match.text_excludes) {
+    return true;
+  }
+  // Missing content is not proof that an exclusion passes.
+  if (text === undefined) {
+    return false;
+  }
+  const folded = text.toLowerCase();
+  return (
+    (!match.text_contains || folded.includes(match.text_contains.toLowerCase())) &&
+    (!match.text_excludes || !folded.includes(match.text_excludes.toLowerCase()))
+  );
 }
 
 export function recipesCanShareSubject(
   left: RecipeMatch,
   right: RecipeMatch,
+  leftKind: RecipeTriggerKind = "push",
+  rightKind: RecipeTriggerKind = "push",
 ): boolean {
+  if (
+    leftKind === "push" &&
+    rightKind === "push" &&
+    ((left.text_contains && right.text_excludes && left.text_contains.toLowerCase().includes(right.text_excludes.toLowerCase())) ||
+      (right.text_contains && left.text_excludes && right.text_contains.toLowerCase().includes(left.text_excludes.toLowerCase())))
+  ) {
+    return false;
+  }
   if (left.thread_id && right.thread_id && left.thread_id !== right.thread_id) {
     return false;
   }
@@ -101,7 +131,7 @@ export function recipePreemptedBy(
     (other) =>
       other.id !== recipe.id &&
       other.enabled &&
-      recipesCanShareSubject(recipe.match, other.match) &&
+      recipesCanShareSubject(recipe.match, other.match, recipe.trigger.kind, other.trigger.kind) &&
       recipeRanksBefore(other, recipe),
   );
 }
@@ -119,7 +149,7 @@ export function matchRecipe(
   subject: RecipeSubject,
 ): Recipe | undefined {
   const hits = recipes
-    .filter((recipe) => recipe.enabled && recipeMatches(recipe.match, subject))
+    .filter((recipe) => recipe.enabled && recipeMatches(recipe.match, subject, recipe.trigger.kind))
     .sort((left, right) => {
       const bySpec = recipeSpecificity(right.match) - recipeSpecificity(left.match);
       if (bySpec !== 0) {

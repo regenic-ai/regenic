@@ -110,6 +110,18 @@ export function normalizeRecipe(
 }
 
 function normalizeMatch(match: RecipeMatch): RecipeMatch {
+  for (const key of ["text_contains", "text_excludes"] as const) {
+    if (
+      match[key] !== undefined &&
+      (typeof match[key] !== "string" || !match[key]?.trim())
+    ) {
+      throw new PersonalConnectorError(
+        "invalid_config",
+        `${key} must be a non-empty string`,
+        400,
+      );
+    }
+  }
   const record_class = match.record_class;
   if (record_class !== undefined && !isRecordClass(record_class)) {
     throw new PersonalConnectorError(
@@ -133,5 +145,7 @@ function normalizeMatch(match: RecipeMatch): RecipeMatch {
     ...(match.source?.trim() ? { source: match.source.trim() } : {}),
     ...(match.thread_id?.trim() ? { thread_id: match.thread_id.trim() } : {}),
     ...(unit_kind ? { unit_kind } : {}),
+    ...(match.text_contains !== undefined ? { text_contains: match.text_contains } : {}),
+    ...(match.text_excludes !== undefined ? { text_excludes: match.text_excludes } : {}),
   };
 }

@@ -21,6 +21,7 @@ export interface RecipePreviewSubject {
   source: string;
   thread_id: string;
   unit_kind?: string;
+  body_text?: string;
 }
 
 export interface RecipeMatchPreview {
@@ -41,7 +42,11 @@ export function recipeSpecificity(match: RecipeMatch): number {
   return score;
 }
 
-export function recipeMatches(match: RecipeMatch, subject: RecipePreviewSubject): boolean {
+export function recipeMatches(
+  match: RecipeMatch,
+  subject: RecipePreviewSubject,
+  triggerKind: TriggerKind = "push",
+): boolean {
   if (recipeSpecificity(match) === 0) {
     return false;
   }
@@ -60,7 +65,22 @@ export function recipeMatches(match: RecipeMatch, subject: RecipePreviewSubject)
   if (match.thread_facet && match.thread_facet !== subject.thread_facet) {
     return false;
   }
-  return true;
+  return triggerKind !== "push" || recipeTextMatches(match, subject.body_text);
+}
+
+/** Mirrors the kernel's literal, case-insensitive body filter for previews and local tests. */
+export function recipeTextMatches(match: RecipeMatch, text: string | undefined): boolean {
+  if (!match.text_contains && !match.text_excludes) {
+    return true;
+  }
+  if (text === undefined) {
+    return false;
+  }
+  const folded = text.toLowerCase();
+  return (
+    (!match.text_contains || folded.includes(match.text_contains.toLowerCase())) &&
+    (!match.text_excludes || !folded.includes(match.text_excludes.toLowerCase()))
+  );
 }
 
 export function subjectFromConversation(
@@ -82,6 +102,7 @@ export function subjectFromConversation(
     thread_facet,
     source,
     thread_id,
+    body_text: conversation.body_text,
     ...(conversation.unit_kind?.trim()
       ? { unit_kind: conversation.unit_kind.trim() }
       : {}),
@@ -119,7 +140,20 @@ export function recipeOutranks(
   return left.id < right.id;
 }
 
-export function recipesCanShareSubject(left: RecipeMatch, right: RecipeMatch): boolean {
+export function recipesCanShareSubject(
+  left: RecipeMatch,
+  right: RecipeMatch,
+  leftKind: TriggerKind = "push",
+  rightKind: TriggerKind = "push",
+): boolean {
+  if (
+    leftKind === "push" &&
+    rightKind === "push" &&
+    ((left.text_contains && right.text_excludes && left.text_contains.toLowerCase().includes(right.text_excludes.toLowerCase())) ||
+      (right.text_contains && left.text_excludes && right.text_contains.toLowerCase().includes(left.text_excludes.toLowerCase())))
+  ) {
+    return false;
+  }
   if (left.thread_id && right.thread_id && left.thread_id !== right.thread_id) {
     return false;
   }
@@ -155,12 +189,12 @@ export function previewRecipeMatch(input: {
   sampleLimit?: number;
 }): RecipeMatchPreview {
   const sampleLimit = input.sampleLimit ?? 3;
-  const hits = matchingConversations(input.match, input.conversations);
+  const triggerKind = input.triggerKind ?? "push";
+  const hits = matchingConversations(input.match, input.conversations, triggerKind);
   if (!hits) {
     return { ready: false, count: 0, samples: [], sample_ids: [] };
   }
 
-  const triggerKind = input.triggerKind ?? "push";
   const draftFace = {
     id: input.draftId ?? "~draft",
     match: input.match,
@@ -172,7 +206,7 @@ export function previewRecipeMatch(input: {
           other.id !== input.draftId &&
           other.enabled &&
           competesForChat(triggerKindOf(other)) &&
-          recipesCanShareSubject(input.match, other.match) &&
+          recipesCanShareSubject(input.match, other.match, triggerKind, triggerKindOf(other)) &&
           recipeOutranks(other, draftFace),
       )
     : undefined;
@@ -191,6 +225,7 @@ export function previewRecipeMatch(input: {
 export function matchingConversations(
   match: RecipeMatch,
   conversations: RecipeConversationOption[],
+  triggerKind: TriggerKind = "push",
 ): RecipeConversationOption[] | null {
   if (recipeSpecificity(match) === 0) {
     return null;
@@ -203,7 +238,7 @@ export function matchingConversations(
   }
   return conversations.filter((conversation) => {
     const subject = subjectFromConversation(conversation);
-    return subject ? recipeMatches(match, subject) : false;
+    return subject ? recipeMatches(match, subject, triggerKind) : false;
   });
 }
 
@@ -267,7 +302,7 @@ export function overlappingPriorityGroup(
     }
     if (
       competesForChat(triggerKindOf(recipe)) &&
-      recipesCanShareSubject(focus.match, recipe.match)
+      recipesCanShareSubject(focus.match, recipe.match, triggerKindOf(focus), triggerKindOf(recipe))
     ) {
       members.set(recipe.id, recipe);
     }

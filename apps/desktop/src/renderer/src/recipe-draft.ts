@@ -144,6 +144,8 @@ export interface RecipeDraft {
   thread_title: string;
   thread_facet: ThreadFacet | "";
   unit_kind: string;
+  text_contains: string;
+  text_excludes: string;
   executor_type: string;
   config: Record<string, string>;
   can_write_back: boolean;
@@ -176,6 +178,8 @@ export function emptyDraft(executorType = ""): RecipeDraft {
     thread_title: "",
     thread_facet: "",
     unit_kind: "",
+    text_contains: "",
+    text_excludes: "",
     executor_type: executorType,
     config: {},
     can_write_back: true,
@@ -318,6 +322,8 @@ export function draftFromRecipe(
       "",
     thread_facet: recipe.match.thread_facet ?? "",
     unit_kind: recipe.match.unit_kind ?? "",
+    text_contains: recipe.match.text_contains ?? "",
+    text_excludes: recipe.match.text_excludes ?? "",
     executor_type: recipe.executor_type,
     config: configFromCatalog(catalog, config),
     can_write_back: recipe.can_write_back,
@@ -355,6 +361,14 @@ function hiddenMatch(draft: RecipeDraft): RecipeMatch | null {
 }
 
 export function draftMatch(draft: RecipeDraft): RecipeMatch {
+  return {
+    ...draftScopeMatch(draft),
+    ...(draft.text_contains.trim() ? { text_contains: draft.text_contains } : {}),
+    ...(draft.text_excludes.trim() ? { text_excludes: draft.text_excludes } : {}),
+  };
+}
+
+function draftScopeMatch(draft: RecipeDraft): RecipeMatch {
   const hidden = hiddenMatch(draft);
   if (draft.trigger_kind === "pull") {
     return {
@@ -548,7 +562,13 @@ export function recipeCardLine(
   return t("recipes.cardLine", {
     when: whenCopy(recipe, sources, conversations, t),
     executor,
-    outcome: `${outcome}${concurrent}`,
+    outcome: [
+      `${outcome}${concurrent}`,
+      ...((recipe.trigger?.kind ?? "push") === "push" ? [
+       ...(recipe.match.text_contains ? [t("recipes.filterContainsSummary", { text: recipe.match.text_contains })] : []),
+       ...(recipe.match.text_excludes ? [t("recipes.filterExcludesSummary", { text: recipe.match.text_excludes })] : []),
+      ] : []),
+    ].join(" · "),
   });
 }
 
@@ -606,7 +626,7 @@ export function conflictCopy(
       item.id !== recipe.id &&
       item.enabled &&
       competesForChat(item.trigger?.kind ?? "push") &&
-      recipesCanShareSubject(recipe.match, item.match) &&
+      recipesCanShareSubject(recipe.match, item.match, recipe.trigger?.kind ?? "push", item.trigger?.kind ?? "push") &&
       recipeOutranks(item, recipe),
   );
   if (!other) {
