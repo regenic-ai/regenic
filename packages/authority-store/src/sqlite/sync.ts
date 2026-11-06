@@ -27,6 +27,7 @@ import type {
   UnassignedSyncWorkQuery,
   SyncWorkIdentity,
   WakeUnassignedSyncWork,
+  ReleaseFinishedExecutorPolls,
   SyncCatalogView,
   SyncCatalogHead,
   ApplySyncCatalogPageInput,
@@ -1299,6 +1300,54 @@ export async function wakeUnassignedSyncWork(db: Database.Database, input: WakeU
       .run(input.now, input.now, input.installation_id, ...streamKeys);
     return result.changes;
   }
+
+export async function releaseFinishedExecutorPolls(
+  db: Database.Database,
+  input: ReleaseFinishedExecutorPolls,
+): Promise<number> {
+  const result = db
+    .prepare(
+      `
+        UPDATE connector_sync_work
+        SET next_due_at = ?,
+            priority = ?,
+            lane = CASE
+              WHEN lane = 'interactive' AND NOT EXISTS (
+                SELECT 1 FROM connector_sync_work AS live
+                WHERE live.installation_id = connector_sync_work.installation_id
+                  AND live.stream_key = connector_sync_work.stream_key
+                  AND live.generation = connector_sync_work.generation
+                  AND live.lane = 'live'
+              ) THEN 'live'
+              ELSE lane
+            END,
+            updated_at = ?
+        WHERE stream_key LIKE 'session:%'
+          AND status = 'pending'
+          AND run_id IS NULL
+          AND next_due_at < ?
+          AND EXISTS (
+            SELECT 1 FROM work_runs AS r
+            JOIN work_items AS wi ON wi.id = r.work_item_id
+            WHERE r.agent_thread_id = replace(connector_sync_work.stream_key, 'session:', 'dsh:')
+              AND wi.status = 'done'
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM work_runs AS r
+            JOIN work_items AS wi ON wi.id = r.work_item_id
+            WHERE r.agent_thread_id = replace(connector_sync_work.stream_key, 'session:', 'dsh:')
+              AND wi.status IN ('open', 'running', 'waiting_human', 'failed')
+          )
+      `,
+    )
+    .run(
+      input.next_due_at,
+      syncWorkPriority("live"),
+      input.now,
+      input.parked_before,
+    );
+  return result.changes;
+}
 
 export async function getSyncCatalog(db: Database.Database, installationId: string): Promise<SyncCatalogView> {
     return loadSyncCatalog(db, installationId);
