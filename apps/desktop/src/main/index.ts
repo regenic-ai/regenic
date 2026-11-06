@@ -1157,6 +1157,20 @@ app.whenReady().then(async () => {
     broadcastLocale(next);
     return next;
   });
+  ipcMain.handle("regenic:pick-directory", async () => {
+    const options = {
+      properties: ["openDirectory", "createDirectory"] as Array<
+        "openDirectory" | "createDirectory"
+      >,
+    };
+    const picked = mainWindow
+      ? await dialog.showOpenDialog(mainWindow, options)
+      : await dialog.showOpenDialog(options);
+    if (picked.canceled || !picked.filePaths[0]) {
+      return null;
+    }
+    return picked.filePaths[0];
+  });
   ipcMain.handle("regenic:pick-data-directory", async () => {
     const options = {
       properties: ["openDirectory", "createDirectory"] as Array<

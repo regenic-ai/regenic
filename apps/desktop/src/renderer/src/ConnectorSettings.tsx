@@ -22,6 +22,7 @@ import {
   syncProgressSummary,
 } from "./format";
 import { openExternal } from "./CatalogDocs";
+import { pickDirectory } from "./api";
 import { useLocale } from "./LocaleContext";
 import type {
   ConnectorCatalogItem,
@@ -440,6 +441,33 @@ function ConnectorSettingsForm({
               </option>
             ))}
           </select>
+        ) : field.widget === "directory" ? (
+          <span className="directory-field">
+            <input
+              type="text"
+              value={values[field.key] ?? ""}
+              placeholder={field.placeholder}
+              required={field.required}
+              onChange={(event) =>
+                setValues((current) => ({
+                  ...current,
+                  [field.key]: event.target.value,
+                }))
+              }
+            />
+            <button
+              type="button"
+              className="ghost"
+              onClick={() => {
+                void pickDirectory().then((picked) => {
+                  if (!picked) return;
+                  setValues((current) => ({ ...current, [field.key]: picked }));
+                });
+              }}
+            >
+              {t("connector.chooseDirectory")}
+            </button>
+          </span>
         ) : (
           <input
             type={field.secret ? "password" : "text"}
@@ -782,6 +810,9 @@ function ConnectorRow({
       : installation.status === "needs_attention"
         ? "stopped"
         : "";
+  const syncUnavailableHint = installation.status === "enabled" && !installation.syncable
+    ? kind.sync_unavailable_hint
+    : undefined;
   return (
     <div id={id} className="install-block">
       <div className="install install-instance">
@@ -798,6 +829,9 @@ function ConnectorRow({
             ) : null}
           </div>
           <div className="muted">{attemptSummary(installation.last_attempt)}</div>
+          {syncUnavailableHint ? (
+            <p className="muted connector-next">{syncUnavailableHint}</p>
+          ) : null}
           {installation.sync ? (
             <div className="muted">{syncProgressSummary(installation.sync)}</div>
           ) : null}
@@ -810,26 +844,30 @@ function ConnectorRow({
           ) : null}
         </div>
         <div className="install-actions">
-          <select
-            value={syncMode}
-            disabled={busy || !installation.syncable}
-            aria-label={t("sync.mode")}
-            onChange={(event) =>
-              setSyncMode(event.target.value as SyncRunMode)
-            }
-          >
-            <option value="quick_start">{t("sync.mode.quick")}</option>
-            <option value="continuous">{t("sync.mode.continuous")}</option>
-            <option value="archive">{t("sync.mode.archive")}</option>
-          </select>
-          <button
-            type="button"
-            className="primary"
-            disabled={busy || !installation.syncable}
-            onClick={() => onSync(syncMode)}
-          >
-            {busy ? t("engine.syncing") : t("connector.sync")}
-          </button>
+          {syncUnavailableHint ? null : (
+            <>
+              <select
+                value={syncMode}
+                disabled={busy || !installation.syncable}
+                aria-label={t("sync.mode")}
+                onChange={(event) =>
+                  setSyncMode(event.target.value as SyncRunMode)
+                }
+              >
+                <option value="quick_start">{t("sync.mode.quick")}</option>
+                <option value="continuous">{t("sync.mode.continuous")}</option>
+                <option value="archive">{t("sync.mode.archive")}</option>
+              </select>
+              <button
+                type="button"
+                className="primary"
+                disabled={busy || !installation.syncable}
+                onClick={() => onSync(syncMode)}
+              >
+                {busy ? t("engine.syncing") : t("connector.sync")}
+              </button>
+            </>
+          )}
           {(installation.last_attempt?.quarantined_count ?? 0) > 0 ? (
             <button
               type="button"

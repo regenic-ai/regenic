@@ -709,6 +709,7 @@ export interface ConnectorField {
   label: string;
   required: boolean;
   placeholder?: string;
+  widget?: "directory";
   default?: string;
   multiple?: boolean;
   secret?: boolean;
@@ -756,6 +757,7 @@ export interface ConnectorCatalogItem {
   title: string;
   description: string;
   credential_hint: string;
+  sync_unavailable_hint?: string;
   installed: boolean;
   instance_count: number;
   setup_ready: boolean;

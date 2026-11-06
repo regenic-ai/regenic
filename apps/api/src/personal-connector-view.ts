@@ -35,6 +35,7 @@ export interface ConnectorField {
   label: string;
   required: boolean;
   placeholder?: string;
+  widget?: "directory";
   default?: string;
   multiple?: boolean;
   secret?: boolean;
@@ -75,6 +76,7 @@ export interface ConnectorCatalogItem {
   title: string;
   description: string;
   credential_hint: string;
+  sync_unavailable_hint?: string;
   installed: boolean;
   instance_count: number;
   setup_ready: boolean;
@@ -111,6 +113,7 @@ interface CatalogDefinition {
   title: string;
   description: string;
   credential_hint: string;
+  sync_unavailable_hint?: string;
   singleton?: boolean;
   fields: ConnectorField[];
   prerequisites: Omit<ConnectorPrerequisite, "ready">[];
@@ -150,6 +153,7 @@ function catalogDefinitionFromDriver(
     title: resolved.title,
     description: resolved.description,
     credential_hint: resolved.credential_hint,
+    sync_unavailable_hint: resolved.sync_unavailable_hint,
     singleton: resolved.singleton,
     unit_kinds: resolveSubjectKinds(driver.subjectCatalog?.(), tables, locale),
     fields: (resolved.fields ?? []).map((field) => ({
@@ -157,6 +161,7 @@ function catalogDefinitionFromDriver(
       label: field.label,
       required: field.required === true,
       placeholder: field.placeholder,
+      widget: field.widget,
       default: field.default,
       multiple: field.multiple,
       secret: field.secret === true,

@@ -617,6 +617,126 @@ function ConnectorMarketplace({
   const [changingVersion, setChangingVersion] = useState<string | null>(null);
   const [retryingRegistration, setRetryingRegistration] = useState<string | null>(null);
   const [visibleCount, setVisibleCount] = useState(30);
+  const [confirm, setConfirm] = useState<MarketConfirm | null>(null);
+
+  const startInstall = (packageName: string, version: string) => {
+    void (async () => {
+      setInstalling(packageName);
+      setInstallNotice((current) => ({
+        ...current,
+        [packageName]: { message: "" },
+      }));
+      try {
+        const job = await installConnectorFromMarket(packageName, version);
+        setInstallJob(job);
+        localStorage.setItem("regenic.connector-market.install", JSON.stringify(job));
+      } catch (caught) {
+        setInstalling(null);
+        setInstallNotice((current) => ({
+          ...current,
+          [packageName]: {
+            message: caught instanceof Error && caught.message.endsWith("409")
+              ? t("market.installAlreadyRunning")
+              : t("market.installFailed"),
+            error: true,
+          },
+        }));
+      }
+    })();
+  };
+
+  const startUpdate = (packageName: string, version: string) => {
+    void (async () => {
+      setChangingVersion(packageName);
+      try {
+        const job = await updateConnectorFromMarket(packageName, version);
+        setInstallJob(job);
+        setInstalling(packageName);
+        localStorage.setItem("regenic.connector-market.install", JSON.stringify(job));
+      } catch {
+        setInstallNotice((current) => ({
+          ...current,
+          [packageName]: { message: t("market.updateFailed"), error: true },
+        }));
+      } finally {
+        setChangingVersion(null);
+      }
+    })();
+  };
+
+  const startRollback = (packageName: string) => {
+    void (async () => {
+      setChangingVersion(packageName);
+      try {
+        const rollback = await rollbackConnectorFromMarket(packageName);
+        setInstallNotice((current) => ({
+          ...current,
+          [packageName]: {
+            message: t("market.rollbackStaged", { version: rollback.version }),
+          },
+        }));
+        try {
+          await onChanged();
+        } catch {
+          setInstallNotice((current) => ({
+            ...current,
+            [packageName]: {
+              ...current[packageName],
+              message: t("market.rollbackRefreshFailed"),
+              refresh: true,
+            },
+          }));
+        }
+      } catch {
+        setInstallNotice((current) => ({
+          ...current,
+          [packageName]: { message: t("market.rollbackFailed"), error: true },
+        }));
+      } finally {
+        setChangingVersion(null);
+      }
+    })();
+  };
+
+  const startUninstall = (packageName: string, instanceCount: number) => {
+    void (async () => {
+      setUninstalling(packageName);
+      try {
+        await uninstallConnectorFromMarket(packageName);
+        setInstallNotice((current) => ({
+          ...current,
+          [packageName]: {
+            message: t("market.uninstallPendingNotice"),
+            error: false,
+          },
+        }));
+        try {
+          await onChanged();
+        } catch {
+          setInstallNotice((current) => ({
+            ...current,
+            [packageName]: {
+              ...current[packageName],
+              message: t("market.uninstallRefreshFailed"),
+              refresh: true,
+            },
+          }));
+        }
+      } catch (caught) {
+        setInstallNotice((current) => ({
+          ...current,
+          [packageName]: {
+            message: caught instanceof Error && caught.message.endsWith("409")
+              ? t("market.uninstallInstancesFirst", { count: instanceCount })
+              : t("market.uninstallFailed"),
+            error: true,
+          },
+        }));
+      } finally {
+        setUninstalling(null);
+      }
+    })();
+  };
 
   const loadMarket = useCallback(async (refresh = false, quiet = false) => {
     if (!quiet) {
@@ -791,8 +911,7 @@ function ConnectorMarketplace({
         </button>
       </div>
       <p className="muted">{t("market.lead")}</p>
-      <p className="action-hint">{t("market.readOnly")}</p>
-      {loading ? <p className="muted">{t("market.loading")}</p> : null}
+      {loading && !market ? <p className="muted">{t("market.loading")}</p> : null}
       {error ? <p className="action-error">{error}</p> : null}
       {!loading && !error && !market?.configured ? (
         <>
@@ -800,20 +919,22 @@ function ConnectorMarketplace({
           <p className="muted">{t("market.setupSteps")}</p>
         </>
       ) : null}
-      {!loading && !error && market?.configured ? (
+      {!error && market?.configured ? (
         <>
-          <label className="field">
-            <span>{t("market.search")}</span>
-            <input
-              type="search"
-              value={search}
-              placeholder={t("market.searchPlaceholder")}
-              onChange={(event) => {
-                setSearch(event.currentTarget.value);
-                setVisibleCount(30);
-              }}
-            />
-          </label>
+          {market.connectors.length > 3 ? (
+            <label className="field market-search">
+              <span className="sr-only">{t("market.search")}</span>
+              <input
+                type="search"
+                value={search}
+                placeholder={t("market.searchPlaceholder")}
+                onChange={(event) => {
+                  setSearch(event.currentTarget.value);
+                  setVisibleCount(30);
+                }}
+              />
+            </label>
+          ) : null}
           {connectors.length === 0 ? (
             <p className="muted">
               {market.connectors.length > 0
@@ -843,81 +964,170 @@ function ConnectorMarketplace({
                   plugin.drivers.includes(installation.connector_type),
                 )
               : [];
+            const job = installJob?.package_name === item.name ? installJob : null;
+            const source = item.repository ?? item.homepage ?? `https://www.npmjs.com/package/${item.name}`;
+            const publisher = item.author ?? t("market.unknownPublisher");
+            const status: { tone: string; label: string } = job || installing === item.name
+              ? { tone: "syncing", label: t("market.statusInstalling") }
+              : plugin
+                ? plugin.status === "loaded"
+                  ? { tone: "running", label: t("market.pluginLoaded") }
+                  : plugin.status === "uninstall_pending"
+                    ? { tone: "stopped", label: t("market.uninstallPendingRestart") }
+                    : plugin.status === "update_pending"
+                      ? {
+                          tone: "stopped",
+                          label: t("market.versionChangePendingRestart", {
+                            version: plugin.pending_version ?? "",
+                          }),
+                        }
+                      : plugin.status === "skipped"
+                        ? { tone: "stopped", label: t("market.pluginSkipped") }
+                        : { tone: "error", label: t("market.pluginLoadFailed") }
+                : installedPackages.has(item.name)
+                  ? { tone: "syncing", label: t("market.installedRefreshPending") }
+                  : { tone: "", label: t("market.pluginNotFound") };
+            const capabilities: Array<{ key: string; label: string; detail: string }> = plugin
+              ? [
+                  ...plugin.drivers.map((type) => ({
+                    key: `driver:${type}`,
+                    label: t("market.capabilityDriver"),
+                    detail: type,
+                  })),
+                  ...plugin.executors.map((executorSource) => ({
+                    key: `executor:${executorSource}`,
+                    label: t("market.capabilityExecutor"),
+                    detail: executorSource,
+                  })),
+                ]
+              : [
+                  ...(latest?.driver_exports.length
+                    ? [{
+                        key: "driver",
+                        label: t("market.capabilityDriver"),
+                        detail: latest.driver_exports.join(", "),
+                      }]
+                    : []),
+                  ...(latest?.executor_exports.length
+                    ? [{
+                        key: "executor",
+                        label: t("market.capabilityExecutor"),
+                        detail: latest.executor_exports.join(", "),
+                      }]
+                    : []),
+                ];
+            const facts = [
+              plugin?.version
+                ? t("market.localVersion", { version: plugin.version })
+                : latest
+                  ? t("market.latestVersion", { version: latest.version })
+                  : null,
+              plugin?.version && installRelease && plugin.version !== installRelease.version
+                ? t("market.availableVersion", { version: installRelease.version })
+                : null,
+              t("market.releaseCount", { count: item.versions.length }),
+              latest?.compatible ? t("market.supportedProtocol") : null,
+              item.author ? t("market.author", { name: item.author }) : null,
+              plugin
+                ? plugin.install_source === "market"
+                  ? t("market.sourceMarket")
+                  : plugin.install_source === "local"
+                    ? t("market.sourceLocal")
+                    : t("market.sourceBuiltIn")
+                : null,
+              plugin?.pending_operation
+                ? plugin.pending_operation === "rollback"
+                  ? t("market.rollbackPending")
+                  : t("market.updatePending")
+                : null,
+            ].filter((fact): fact is string => fact !== null);
+            const confirmHere = confirm?.packageName === item.name ? confirm : null;
             return (
-              <article className="connector-kind" key={item.name}>
-                <div className="card-head">
-                  <div>
+              <article
+                className={`connector-kind market-card${plugin?.status === "loaded" ? " is-installed" : ""}`}
+                key={item.name}
+              >
+                <div className="market-card-head">
+                  <div className="market-card-title">
                     <h3>{item.title}</h3>
                     <code>{item.name}</code>
                   </div>
-                  {latest ? (
-                    <span className="chip">{t("market.latestVersion", { version: latest.version })}</span>
-                  ) : null}
-                </div>
-                {item.description ? <p>{item.description}</p> : null}
-                <div className="install-meta">
-                  <span className={`chip ${plugin?.status === "loaded" ? "running" : "stopped"}`}>
-                    {plugin?.status === "loaded"
-                      ? t("market.pluginLoaded")
-                      : plugin
-                        ? plugin.status === "uninstall_pending"
-                          ? t("market.uninstallPendingRestart")
-                          : plugin.status === "update_pending"
-                            ? t("market.versionChangePendingRestart", {
-                                version: plugin.pending_version ?? "",
-                              })
-                          : plugin.status === "skipped"
-                            ? t("market.pluginSkipped")
-                            : t("market.pluginLoadFailed")
-                        : t("market.pluginNotFound")}
+                  <span className={`chip${status.tone ? ` ${status.tone}` : ""}`}>
+                    {status.tone ? <span className="dot" /> : null}
+                    {status.label}
                   </span>
-                  {plugin ? (
-                    <span>{plugin.install_source === "market"
-                      ? t("market.sourceMarket")
-                      : plugin.install_source === "local"
-                        ? t("market.sourceLocal")
-                        : t("market.sourceBuiltIn")}</span>
-                  ) : null}
-                  {plugin?.version ? (
-                    <span>{t("market.localVersion", { version: plugin.version })}</span>
-                  ) : null}
-                  {plugin?.drivers.length ? (
-                    <span>{t("market.driverTypes", { types: plugin.drivers.join(", ") })}</span>
-                  ) : null}
-                  {plugin?.executors.length ? (
-                    <span>{t("market.executorSources", { sources: plugin.executors.join(", ") })}</span>
-                  ) : latest?.executor_exports.length ? (
-                    <span>{t("market.executorExports", {
-                      exports: latest.executor_exports.join(", "),
-                    })}</span>
-                  ) : null}
-                  {plugin?.version && installRelease && plugin.version !== installRelease.version ? (
-                    <span>{t("market.availableVersion", { version: installRelease.version })}</span>
-                  ) : null}
-                  {plugin?.pending_operation ? (
-                    <span>{plugin.pending_operation === "rollback"
-                      ? t("market.rollbackPending")
-                      : t("market.updatePending")}</span>
-                  ) : null}
-                  {item.author ? <span>{t("market.author", { name: item.author })}</span> : null}
-                  {latest ? (
-                    <span className={`chip ${latest.compatible ? "running" : "stopped"}`}>
-                      {latest.compatible
-                        ? t("market.supportedProtocol")
-                        : t("market.unsupportedProtocol", {
-                            version: latest.engines_regenic,
-                          })}
-                    </span>
-                  ) : null}
-                  {!plugin && !installedPackages.has(item.name) && installRelease ? (
-                    <span>{t("market.installTargetVersion", { version: installRelease.version })}</span>
-                  ) : null}
-                  <span>{t("market.releaseCount", { count: item.versions.length })}</span>
                 </div>
+                {item.description ? <p className="market-card-desc">{item.description}</p> : null}
+                {capabilities.length ? (
+                  <div className="market-capabilities">
+                    {capabilities.map((capability) => (
+                      <span className="market-capability" key={capability.key} title={capability.detail}>
+                        <strong>{capability.label}</strong>
+                        <code>{capability.detail}</code>
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+                <p className="market-facts">
+                  {facts.map((fact, index) => (
+                    <span key={fact}>{index > 0 ? " · " : ""}{fact}</span>
+                  ))}
+                </p>
+                {latest && !latest.compatible ? (
+                  <p className="action-error">
+                    {t("market.unsupportedProtocol", { version: latest.engines_regenic })}
+                  </p>
+                ) : null}
                 {plugin?.error ? (
                   <p className="action-error">{plugin.error}</p>
                 ) : null}
-                <div className="install-actions">
+                {job ? (
+                  <div className="market-progress" role="status" aria-live="polite">
+                    <div className="market-progress-bar"><span /></div>
+                    <p className="muted">
+                      {t(`market.phase.${job.phase}`, {
+                        name: job.package_name,
+                        version: job.version,
+                      })}
+                    </p>
+                  </div>
+                ) : null}
+                {confirmHere ? (
+                  <div className={`market-confirm${confirmHere.danger ? " is-danger" : ""}`}>
+                    <strong>{confirmHere.title}</strong>
+                    {confirmHere.facts?.length ? (
+                      <dl>
+                        {confirmHere.facts.map(([label, value]) => (
+                          <div key={label}>
+                            <dt>{label}</dt>
+                            <dd>
+                              {value.startsWith("https://") ? (
+                                <a href={value} target="_blank" rel="noreferrer">{value}</a>
+                              ) : value}
+                            </dd>
+                          </div>
+                        ))}
+                      </dl>
+                    ) : null}
+                    <p>{confirmHere.body}</p>
+                    <div className="market-confirm-actions">
+                      <button
+                        type="button"
+                        className={`primary${confirmHere.danger ? " danger" : ""}`}
+                        onClick={() => {
+                          setConfirm(null);
+                          confirmHere.run();
+                        }}
+                      >
+                        {confirmHere.confirmLabel}
+                      </button>
+                      <button type="button" className="ghost" onClick={() => setConfirm(null)}>
+                        {t("market.cancel")}
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+                <div className="market-actions">
                   {(!plugin || plugin.install_source === "market") &&
                     plugin?.status !== "update_pending" &&
                     plugin?.status !== "uninstall_pending" &&
@@ -942,47 +1152,23 @@ function ConnectorMarketplace({
                   {!plugin && !installedPackages.has(item.name) && installRelease ? (
                     <button
                       type="button"
-                      disabled={installing !== null || installJob !== null}
-                      onClick={() => {
-                        if (
-                          !window.confirm(
-                            t("market.installConfirm", {
-                              name: item.name,
-                              version: installRelease.version,
-                              publisher: item.author ?? t("market.unknownPublisher"),
-                              source: item.repository ?? item.homepage ?? `https://www.npmjs.com/package/${item.name}`,
-                            }),
-                          )
-                        ) {
-                          return;
-                        }
-                        void (async () => {
-                          setInstalling(item.name);
-                          setInstallNotice((current) => ({
-                            ...current,
-                            [item.name]: { message: "" },
-                          }));
-                          try {
-                            const job = await installConnectorFromMarket(
-                              item.name,
-                              installRelease.version,
-                            );
-                            setInstallJob(job);
-                            localStorage.setItem("regenic.connector-market.install", JSON.stringify(job));
-                          } catch (caught) {
-                            setInstalling(null);
-                            setInstallNotice((current) => ({
-                              ...current,
-                              [item.name]: {
-                                message: caught instanceof Error && caught.message.endsWith("409")
-                                  ? t("market.installAlreadyRunning")
-                                  : t("market.installFailed"),
-                                error: true,
-                              },
-                            }));
-                          }
-                        })();
-                      }}
+                      className="primary"
+                      disabled={installing !== null || installJob !== null || confirmHere !== null}
+                      onClick={() => setConfirm({
+                        packageName: item.name,
+                        title: t("market.confirmInstallTitle", {
+                          name: item.title,
+                          version: installRelease.version,
+                        }),
+                        facts: [
+                          [t("market.confirmPackage"), `${item.name}@${installRelease.version}`],
+                          [t("market.confirmPublisher"), publisher],
+                          [t("market.confirmSource"), source],
+                        ],
+                        body: t("market.confirmInstallRisk"),
+                        confirmLabel: t("market.confirmInstall"),
+                        run: () => startInstall(item.name, installRelease.version),
+                      })}
                     >
                       {installing === item.name
                         ? t("market.installing")
@@ -998,32 +1184,26 @@ function ConnectorMarketplace({
                     installRelease ? (
                     <button
                       type="button"
-                      disabled={installing !== null || installJob !== null || changingVersion !== null}
-                      onClick={() => {
-                        if (!window.confirm(t("market.updateConfirm", {
+                      className="primary"
+                      disabled={
+                        installing !== null ||
+                        installJob !== null ||
+                        changingVersion !== null ||
+                        confirmHere !== null
+                      }
+                      onClick={() => setConfirm({
+                        packageName: item.name,
+                        title: t("market.updateVersionButton", { version: installRelease.version }),
+                        body: t("market.updateConfirm", {
                           name: item.name,
                           from: plugin.version ?? "",
                           to: installRelease.version,
-                          publisher: item.author ?? t("market.unknownPublisher"),
-                          source: item.repository ?? item.homepage ?? `https://www.npmjs.com/package/${item.name}`,
-                        }))) return;
-                        void (async () => {
-                          setChangingVersion(item.name);
-                          try {
-                            const job = await updateConnectorFromMarket(item.name, installRelease.version);
-                            setInstallJob(job);
-                            setInstalling(item.name);
-                            localStorage.setItem("regenic.connector-market.install", JSON.stringify(job));
-                          } catch {
-                            setInstallNotice((current) => ({
-                              ...current,
-                              [item.name]: { message: t("market.updateFailed"), error: true },
-                            }));
-                          } finally {
-                            setChangingVersion(null);
-                          }
-                        })();
-                      }}
+                          publisher,
+                          source,
+                        }),
+                        confirmLabel: t("market.updateVersionButton", { version: installRelease.version }),
+                        run: () => startUpdate(item.name, installRelease.version),
+                      })}
                     >
                       {changingVersion === item.name
                         ? t("market.updating")
@@ -1037,44 +1217,17 @@ function ConnectorMarketplace({
                     <button
                       type="button"
                       className="ghost"
-                      disabled={changingVersion !== null || installJob !== null}
-                      onClick={() => {
-                        if (!window.confirm(t("market.rollbackConfirm", {
+                      disabled={changingVersion !== null || installJob !== null || confirmHere !== null}
+                      onClick={() => setConfirm({
+                        packageName: item.name,
+                        title: t("market.rollbackButton", { version: plugin.previous_version ?? "" }),
+                        body: t("market.rollbackConfirm", {
                           name: item.name,
                           version: plugin.previous_version ?? "",
-                        }))) return;
-                        void (async () => {
-                          setChangingVersion(item.name);
-                          try {
-                            const rollback = await rollbackConnectorFromMarket(item.name);
-                            setInstallNotice((current) => ({
-                              ...current,
-                              [item.name]: {
-                                message: t("market.rollbackStaged", { version: rollback.version }),
-                              },
-                            }));
-                            try {
-                              await onChanged();
-                            } catch {
-                              setInstallNotice((current) => ({
-                                ...current,
-                                [item.name]: {
-                                  ...current[item.name],
-                                  message: t("market.rollbackRefreshFailed"),
-                                  refresh: true,
-                                },
-                              }));
-                            }
-                          } catch {
-                            setInstallNotice((current) => ({
-                              ...current,
-                              [item.name]: { message: t("market.rollbackFailed"), error: true },
-                            }));
-                          } finally {
-                            setChangingVersion(null);
-                          }
-                        })();
-                      }}
+                        }),
+                        confirmLabel: t("market.rollbackButton", { version: plugin.previous_version ?? "" }),
+                        run: () => startRollback(item.name),
+                      })}
                     >
                       {t("market.rollbackButton", { version: plugin.previous_version })}
                     </button>
@@ -1082,64 +1235,53 @@ function ConnectorMarketplace({
                   {!plugin && !installedPackages.has(item.name) && compatibleReleases.length === 0 ? (
                     <span className="muted">{t("market.noCompatibleRelease")}</span>
                   ) : null}
-                  {installedPackages.has(item.name) && !plugin ? (
-                    <span className="chip stopped">{t("market.installedRefreshPending")}</span>
-                  ) : null}
                   {plugin?.install_source === "market" &&
                     plugin.status !== "uninstall_pending" &&
                     plugin.status !== "update_pending" ? (
                     <button
                       type="button"
                       className="ghost"
-                      disabled={uninstalling !== null || installedInstanceCount > 0 || installJob !== null}
-                      onClick={() => {
-                        if (!window.confirm(t("market.uninstallConfirm", { name: item.name }))) return;
-                        void (async () => {
-                          setUninstalling(item.name);
-                          try {
-                            await uninstallConnectorFromMarket(item.name);
-                            setInstallNotice((current) => ({
-                              ...current,
-                              [item.name]: {
-                                message: t("market.uninstallPendingNotice"),
-                                error: false,
-                              },
-                            }));
-                            try {
-                              await onChanged();
-                            } catch {
-                              setInstallNotice((current) => ({
-                                ...current,
-                                [item.name]: {
-                                  ...current[item.name],
-                                  message: t("market.uninstallRefreshFailed"),
-                                  refresh: true,
-                                },
-                              }));
-                            }
-                          } catch (caught) {
-                            setInstallNotice((current) => ({
-                              ...current,
-                              [item.name]: {
-                                message: caught instanceof Error && caught.message.endsWith("409")
-                                  ? t("market.uninstallInstancesFirst", { count: installedInstanceCount })
-                                  : t("market.uninstallFailed"),
-                                error: true,
-                              },
-                            }));
-                          } finally {
-                            setUninstalling(null);
-                          }
-                        })();
-                      }}
+                      disabled={
+                        uninstalling !== null ||
+                        installedInstanceCount > 0 ||
+                        installJob !== null ||
+                        confirmHere !== null
+                      }
+                      onClick={() => setConfirm({
+                        packageName: item.name,
+                        title: t("market.uninstall"),
+                        body: t("market.uninstallConfirm", { name: item.name }),
+                        confirmLabel: t("market.uninstall"),
+                        danger: true,
+                        run: () => startUninstall(item.name, installedInstanceCount),
+                      })}
                     >
                       {uninstalling === item.name
                         ? t("market.uninstalling")
                         : t("market.uninstall")}
                     </button>
                   ) : null}
+                  <span className="market-links">
+                    {item.homepage ? (
+                      <a href={item.homepage} target="_blank" rel="noreferrer">
+                        {t("market.homepage")}
+                      </a>
+                    ) : null}
+                    {item.repository ? (
+                      <a href={item.repository} target="_blank" rel="noreferrer">
+                        {t("market.repository")}
+                      </a>
+                    ) : null}
+                    <a
+                      href={`https://www.npmjs.com/package/${item.name}`}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      {t("market.npm")}
+                    </a>
+                  </span>
                   {plugin?.install_source === "market" && installedInstanceCount > 0 ? (
-                    <div className="muted">
+                    <div className="muted market-blockers">
                       <p>{t("market.uninstallInstancesFirst", { count: installedInstanceCount })}</p>
                       <p>{t("market.uninstallBlockedInstances")}</p>
                       <ul>
@@ -1153,23 +1295,6 @@ function ConnectorMarketplace({
                       </ul>
                     </div>
                   ) : null}
-                  {item.homepage ? (
-                    <a href={item.homepage} target="_blank" rel="noreferrer">
-                      {t("market.homepage")}
-                    </a>
-                  ) : null}
-                  {item.repository ? (
-                    <a href={item.repository} target="_blank" rel="noreferrer">
-                      {t("market.repository")}
-                    </a>
-                  ) : null}
-                  <a
-                    href={`https://www.npmjs.com/package/${encodeURIComponent(item.name)}`}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    {t("market.npm")}
-                  </a>
                 </div>
                 {installNotice[item.name]?.message ? (
                   <p className={installNotice[item.name].error ? "action-error" : "action-hint"}>
@@ -1297,7 +1422,8 @@ function ConnectorMarketplace({
               {t("market.showMore", { count: connectors.length - visibleCount })}
             </button>
           ) : null}
-          {installJob ? (
+          {installJob &&
+            !visibleConnectors.some((item) => item.name === installJob.package_name) ? (
             <p className="action-hint" role="status" aria-live="polite">
               {t(`market.phase.${installJob.phase}`, {
                 name: installJob.package_name,
@@ -1310,6 +1436,16 @@ function ConnectorMarketplace({
     </section>
   );
 }
+
+type MarketConfirm = {
+  packageName: string;
+  title: string;
+  body: string;
+  facts?: Array<[string, string]>;
+  confirmLabel: string;
+  danger?: boolean;
+  run: () => void;
+};
 
 function ConnectorReleaseDetails({
   releases,

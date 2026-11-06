@@ -225,6 +225,14 @@ export async function applyKernelSettings(input: {
   return withKernelLocale(settings);
 }
 
+export async function pickDirectory(): Promise<string | null> {
+  if (!window.regenic?.pickDirectory) {
+    return null;
+  }
+  const picked = await window.regenic.pickDirectory();
+  return typeof picked === "string" && picked.trim() ? picked : null;
+}
+
 export async function pickDataDirectory(): Promise<DataDirectoryPlan | null> {
   if (!window.regenic?.pickDataDirectory) {
     throw new Error("Desktop settings are not available");

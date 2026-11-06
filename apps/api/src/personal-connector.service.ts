@@ -23,6 +23,7 @@ import {
   type EngineInstallationView,
 } from "./personal-connector-view";
 import { PersonalConnectorError, storeBusyError } from "./personal-errors";
+import { PersonalExecutorService } from "./personal-executor.service";
 import { PersonalInboxService } from "./personal-inbox.service";
 import { KernelRuntimeService } from "./kernel-runtime.service";
 import {
@@ -105,6 +106,8 @@ export class PersonalConnectorService implements OnModuleDestroy {
     private readonly drivers: ChannelDriverRegistry,
     @Inject(KernelRuntimeService)
     private readonly kernelRuntime: KernelRuntimeService,
+    @Inject(PersonalExecutorService)
+    private readonly executors?: PersonalExecutorService,
   ) {
     this.state = createConnectorState({
       runtime, inbox, drivers, kernelRuntime,
@@ -370,14 +373,18 @@ export class PersonalConnectorService implements OnModuleDestroy {
   }
 
   async install(input: ConnectorInstallInput): Promise<EngineInstallationView> {
-    return this.changeInstallation(() => connectorInstall.install(this.connectorState(), input));
+    const view = await this.changeInstallation(() => connectorInstall.install(this.connectorState(), input));
+    await this.executors?.ensureDeclaredExecutor(view.id);
+    return view;
   }
 
   async updateConfig(
     installationId: string,
     config: Record<string, unknown>,
   ): Promise<EngineInstallationView> {
-    return this.changeInstallation(() => connectorInstall.updateConfig(this.connectorState(), installationId, config));
+    const view = await this.changeInstallation(() => connectorInstall.updateConfig(this.connectorState(), installationId, config));
+    await this.executors?.ensureDeclaredExecutor(view.id);
+    return view;
   }
 
   async uninstall(installationId: string): Promise<{ id: string; removed: true }> {
