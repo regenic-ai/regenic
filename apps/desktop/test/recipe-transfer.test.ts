@@ -25,6 +25,22 @@ const sample: RecipeView = {
 };
 
 describe("recipe transfer", () => {
+  it("preserves the result destination through export and import", () => {
+    const recipe = { ...sample, write_back_thread_id: "feishu:results" };
+    const parsed = parseRecipeBundle(stringifyRecipeBundle(buildRecipeBundle([recipe])));
+    assert.equal(parsed.recipes[0]?.write_back_thread_id, "feishu:results");
+    assert.equal(parsed.recipes[0]?.can_write_back, true);
+  });
+
+  it("rejects malformed destinations instead of silently reverting to the source", () => {
+    for (const destination of [42, null, "", "   "]) {
+      assert.throws(() => parseRecipeBundle(JSON.stringify({
+        version: 1,
+        recipes: [{ ...recipeToTransferItem(sample), write_back_thread_id: destination }],
+      })), /invalid_recipe/);
+    }
+  });
+
   it("round-trips a recipe bundle without ids", () => {
     const bundle = buildRecipeBundle([sample], "2026-09-05T12:00:00.000Z");
     assert.equal(bundle.version, 1);

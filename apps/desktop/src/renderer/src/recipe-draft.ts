@@ -147,6 +147,7 @@ export interface RecipeDraft {
   executor_type: string;
   config: Record<string, string>;
   can_write_back: boolean;
+  write_back_thread_id: string;
   include_context: boolean;
   max_concurrent: string;
   enabled: boolean;
@@ -178,7 +179,8 @@ export function emptyDraft(executorType = ""): RecipeDraft {
     executor_type: executorType,
     config: {},
     can_write_back: true,
-    include_context: false,
+    write_back_thread_id: "",
+    include_context: true,
     max_concurrent: "",
     enabled: true,
   };
@@ -233,7 +235,7 @@ export function starterDraft(
       thread_id: "",
       thread_title: "",
       can_write_back: true,
-      include_context: false,
+      include_context: true,
     };
   }
   const first = conversations[0];
@@ -245,7 +247,7 @@ export function starterDraft(
     thread_title: first?.label ?? "",
     source: first?.source ?? base.source,
     can_write_back: first?.can_send !== false,
-    include_context: false,
+    include_context: true,
   };
 }
 
@@ -319,6 +321,7 @@ export function draftFromRecipe(
     executor_type: recipe.executor_type,
     config: configFromCatalog(catalog, config),
     can_write_back: recipe.can_write_back,
+    write_back_thread_id: recipe.write_back_thread_id ?? "",
     include_context: recipe.include_context,
     max_concurrent:
       recipe.max_concurrent && recipe.max_concurrent > 0
@@ -550,10 +553,11 @@ export function recipeCardLine(
 }
 
 export function writeBackAvailable(
-  draft: Pick<RecipeDraft, "thread_id">,
+  draft: Pick<RecipeDraft, "thread_id" | "write_back_thread_id">,
   conversations: RecipeConversationOption[],
 ): boolean {
-  const picked = conversations.find((item) => item.id === draft.thread_id);
+  const destination = draft.write_back_thread_id || draft.thread_id;
+  const picked = conversations.find((item) => item.id === destination);
   return picked?.can_send !== false;
 }
 

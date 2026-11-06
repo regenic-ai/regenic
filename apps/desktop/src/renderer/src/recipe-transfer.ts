@@ -13,6 +13,7 @@ export interface RecipeTransferItem {
   executor_type: string;
   executor_config: Record<string, string>;
   can_write_back: boolean;
+  write_back_thread_id?: string;
   include_context: boolean;
   max_concurrent?: number | null;
   enabled: boolean;
@@ -38,6 +39,7 @@ export function recipeToTransferItem(recipe: RecipeView): RecipeTransferItem {
     executor_type: recipe.executor_type,
     executor_config: config,
     can_write_back: recipe.can_write_back,
+    ...(recipe.write_back_thread_id ? { write_back_thread_id: recipe.write_back_thread_id } : {}),
     include_context: recipe.include_context,
     max_concurrent: recipe.max_concurrent ?? null,
     enabled: recipe.enabled,
@@ -143,6 +145,12 @@ function parseTransferItem(value: unknown): RecipeTransferItem | null {
   if (typeof value.executor_type !== "string" || !value.executor_type.trim()) {
     return null;
   }
+  if (
+    value.write_back_thread_id !== undefined &&
+    (typeof value.write_back_thread_id !== "string" || !value.write_back_thread_id.trim())
+  ) {
+    return null;
+  }
   const match = parseMatch(value.match);
   const trigger = parseTrigger(value.trigger);
   if (!match || !trigger) {
@@ -171,6 +179,9 @@ function parseTransferItem(value: unknown): RecipeTransferItem | null {
     executor_type: value.executor_type.trim(),
     executor_config,
     can_write_back: value.can_write_back === true,
+    ...(typeof value.write_back_thread_id === "string"
+      ? { write_back_thread_id: value.write_back_thread_id.trim() }
+      : {}),
     include_context: value.include_context === true,
     max_concurrent: max,
     enabled: value.enabled !== false,

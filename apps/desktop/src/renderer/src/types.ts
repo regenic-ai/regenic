@@ -408,6 +408,7 @@ export interface RecipeView {
   executor_type: string;
   executor_config: Record<string, string>;
   can_write_back: boolean;
+  write_back_thread_id?: string;
   include_context: boolean;
   max_concurrent?: number;
   enabled: boolean;

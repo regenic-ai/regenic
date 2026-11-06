@@ -160,6 +160,13 @@ export function RecipesPage({
     [executors, draft.executor_type],
   );
   const suggestedName = suggestedRecipeName(draft, sources, catalog, t);
+  const saveBlocker = !draft.executor_type
+    ? t("recipes.saveNeedExecutor")
+    : (draft.scope === "thread" || draft.trigger_kind === "pull") && !draft.thread_id
+      ? t("recipes.saveNeedConversation")
+      : draft.trigger_kind !== "pull" && draft.scope === "source" && !draft.source.trim()
+        ? t("recipes.saveNeedSource")
+        : null;
   const executorByType = useMemo(
     () => new Map(executors.map((item) => [item.executor_type, item])),
     [executors],
@@ -168,6 +175,16 @@ export function RecipesPage({
   const conversationOptions = useMemo(
     () => conversationChoices(conversations, draft),
     [conversations, draft.thread_id, draft.thread_title],
+  );
+  const writeBackOptions = useMemo(
+    () => [
+      { value: "", label: t("recipes.writeBackOriginal") },
+      ...conversationChoices(conversations, {
+        thread_id: draft.write_back_thread_id,
+        thread_title: draft.write_back_thread_id,
+      }),
+    ],
+    [conversations, draft.write_back_thread_id, t],
   );
   const matchPreview = useMemo(
     () =>
@@ -217,6 +234,7 @@ export function RecipesPage({
     executor_config: next.config,
     can_write_back:
       writeBackAvailable(next, conversations) && next.can_write_back,
+    write_back_thread_id: next.write_back_thread_id || null,
     include_context: next.include_context,
     max_concurrent:
       next.trigger_kind === "pull" ? null : parseMaxConcurrent(next.max_concurrent),
@@ -333,6 +351,7 @@ export function RecipesPage({
           executor_type: item.executor_type,
           executor_config: item.executor_config,
           can_write_back: item.can_write_back,
+          write_back_thread_id: item.write_back_thread_id ?? null,
           include_context: item.include_context,
           max_concurrent: item.max_concurrent ?? null,
           enabled: item.enabled,
@@ -798,10 +817,6 @@ export function RecipesPage({
                               thread_id,
                               thread_title: picked?.label ?? thread_id,
                               source: picked?.source ?? current.source,
-                              can_write_back:
-                                picked?.can_send === false
-                                  ? false
-                                  : current.can_write_back,
                             }),
                           );
                         }}
@@ -880,6 +895,23 @@ export function RecipesPage({
                     }
                   />
                 ) : null}
+                <RecipeRow label={t("recipes.includeContextCheck")}>
+                  {draft.trigger_kind === "pull" ? (
+                    <p className="recipe-hint">{t("recipes.includeContextHintPull")}</p>
+                  ) : (
+                    <>
+                      <SwitchRow
+                        checked={draft.include_context}
+                        onChange={(include_context) =>
+                          setDraft((current) => ({ ...current, include_context }))
+                        }
+                      >
+                        {""}
+                      </SwitchRow>
+                      <p className="recipe-hint">{t("recipes.includeContextHint")}</p>
+                    </>
+                  )}
+                </RecipeRow>
                 <MoreOptions
                   key={draft.id ?? "new"}
                   draft={draft}
@@ -895,13 +927,16 @@ export function RecipesPage({
                 </header>
                 <div className="recipe-rows">
                 <RecipeRow label={t("recipes.result")}>
-                  <div className="seg">
+                  <div className="seg" role="group" aria-label={t("recipes.result")}>
                     <button
                       type="button"
                       className={
                         writeBackAvailable(draft, conversations) && draft.can_write_back
                           ? "active"
                           : undefined
+                      }
+                      aria-pressed={
+                        writeBackAvailable(draft, conversations) && draft.can_write_back
                       }
                       disabled={!writeBackAvailable(draft, conversations)}
                       onClick={() =>
@@ -917,6 +952,9 @@ export function RecipesPage({
                           ? "active"
                           : undefined
                       }
+                      aria-pressed={
+                        !draft.can_write_back || !writeBackAvailable(draft, conversations)
+                      }
                       onClick={() =>
                         setDraft((current) => ({ ...current, can_write_back: false }))
                       }
@@ -926,16 +964,38 @@ export function RecipesPage({
                   </div>
                   {!writeBackAvailable(draft, conversations) ? (
                     <p className="recipe-hint">{t("recipes.writeBackUnavailable")}</p>
-                  ) : draft.can_write_back ? (
-                    <p className="recipe-hint">
-                      {t(
-                        draft.trigger_kind === "pull"
-                          ? "recipes.writeBackHintPull"
-                          : "recipes.writeBackHint",
-                      )}
-                    </p>
                   ) : null}
                 </RecipeRow>
+                  <RecipeRow label={t("recipes.writeBackTo")}>
+                    <MenuSelect
+                      value={draft.write_back_thread_id}
+                      options={writeBackOptions}
+                      placeholder={t("recipes.searchConversation")}
+                      searchable
+                      ariaLabel={t("recipes.writeBackTo")}
+                      onChange={(write_back_thread_id) =>
+                        setDraft((current) => ({
+                          ...current,
+                          write_back_thread_id,
+                        }))
+                      }
+                    />
+                    {!draft.can_write_back && draft.write_back_thread_id ? (
+                      <p className="recipe-hint">
+                        {t("recipes.writeBackHintKeepConfigured")}
+                      </p>
+                    ) : draft.can_write_back && writeBackAvailable(draft, conversations) ? (
+                      <p className="recipe-hint">
+                        {t(
+                          draft.write_back_thread_id
+                            ? "recipes.writeBackHintSelected"
+                            : draft.trigger_kind === "pull"
+                              ? "recipes.writeBackHintPull"
+                              : "recipes.writeBackHint",
+                        )}
+                      </p>
+                    ) : null}
+                  </RecipeRow>
                 <RecipeRow label={t("recipes.enabledCheck")}>
                   <SwitchRow
                     checked={draft.enabled}
@@ -1007,8 +1067,7 @@ export function RecipesPage({
               {draft.id &&
               draft.can_write_back &&
               tryThreadId &&
-              conversations.find((item) => item.id === tryThreadId)?.can_send !==
-                false ? (
+              writeBackAvailable(draft, conversations) ? (
                 <button
                   type="button"
                   className="ghost"
@@ -1024,15 +1083,8 @@ export function RecipesPage({
               <button
                 type="submit"
                 className="primary"
-                disabled={
-                  busy ||
-                  !draft.executor_type ||
-                  ((draft.scope === "thread" || draft.trigger_kind === "pull") &&
-                    !draft.thread_id) ||
-                  (draft.trigger_kind !== "pull" &&
-                    draft.scope === "source" &&
-                    !draft.source.trim())
-                }
+                disabled={busy || Boolean(saveBlocker)}
+                title={saveBlocker ?? undefined}
               >
                 {busy
                   ? t("recipes.saving")
@@ -1043,7 +1095,11 @@ export function RecipesPage({
                       : t("recipes.save")}
               </button>
             </div>
-            {!draft.id || !tryThreadId ? (
+            {saveBlocker ? (
+              <p className="muted recipe-try-hint is-blocking" role="status">
+                {saveBlocker}
+              </p>
+            ) : !draft.id || !tryThreadId ? (
               <p className="muted recipe-try-hint">
                 {!draft.id ? t("recipes.tryNeedSave") : t("recipes.tryNeedChat")}
               </p>
