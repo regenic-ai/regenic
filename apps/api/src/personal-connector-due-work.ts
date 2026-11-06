@@ -26,8 +26,12 @@ import {
   historyPolicyFromConfig,
   historySyncClaimLanes,
   messageDuty,
+  liveWorkAfterInteractiveRelease,
+  nextDueAfterPoll,
   planSyncWorkGaps,
   sameLaneContinues,
+  shouldReleaseInteractiveWork,
+  threadIdOf,
   type SyncLane,
   type SyncPhase,
   type SyncWorkRecord,
@@ -502,6 +506,17 @@ async function pollClaimedDueWorkStreams(
         });
         return;
       }
+      const threadId = threadIdOf(thread);
+      if (
+        shouldReleaseInteractiveWork({
+          lane: item.lane,
+          threadId,
+          preferredThreadId: preferredThreadId(),
+        })
+      ) {
+        await releaseStaleInteractiveClaim(state, store, item, catalogSize);
+        return;
+      }
       let stream: ConnectorStream;
       try {
         stream = await driver.resolveThreadStream(
@@ -630,14 +645,30 @@ async function pollClaimedDueWorkStreams(
           state.inbox.publishThreadUpdated(stream.thread_id);
         }
         const settledAt = new Date().toISOString();
+        if (
+          shouldReleaseInteractiveWork({
+            lane: item.lane,
+            threadId: stream.thread_id ?? threadId,
+            preferredThreadId: preferredThreadId(),
+          })
+        ) {
+          await releaseStaleInteractiveClaim(state, store, item, catalogSize);
+          return;
+        }
         const syncState = await store.getSyncState(
           installation.id,
           stream.stream_key,
         );
-        const nextDueAt =
-          syncState?.idle_until && syncState.idle_until > settledAt
-            ? syncState.idle_until
-            : settledAt;
+        const nextDueAt = nextDueAfterPoll({
+          now: settledAt,
+          idleUntil: syncState?.idle_until,
+          idleMs,
+          heat,
+          coldIdleMs: coldIdleMsForCatalogSize(
+            catalogSize,
+            streamIdleTiersFromEnv().coldIdleMs,
+          ),
+        });
         recordDueWorkFreshness({
           installationId: installation.id,
           lane: item.lane,
@@ -723,6 +754,33 @@ async function catalogSizeFor(
   const head = await store.getSyncCatalogHead(installationId);
   state.catalogSizeByInstall.set(installationId, head.member_count);
   return head.member_count;
+}
+
+async function releaseStaleInteractiveClaim(
+  state: ConnectorState,
+  store: ConnectorRuntimeStore,
+  item: SyncWorkRecord,
+  catalogSize: number,
+): Promise<void> {
+  const now = new Date().toISOString();
+  await store.settleSyncWork({
+    id: item.id,
+    owner: state.dueWorkOwner,
+    now,
+    outcome: "cancelled",
+  });
+  await store.enqueueSyncWork(
+    liveWorkAfterInteractiveRelease({
+      installation_id: item.installation_id,
+      stream_key: item.stream_key,
+      generation: item.generation,
+      now,
+      coldIdleMs: coldIdleMsForCatalogSize(
+        catalogSize,
+        streamIdleTiersFromEnv().coldIdleMs,
+      ),
+    }),
+  );
 }
 
 async function settleDueWork(
