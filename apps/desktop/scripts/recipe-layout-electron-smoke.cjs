@@ -26,6 +26,18 @@ async function rendererSmoke() {
       assert.ok(attempt < 100, "Real recipe editor did not render");
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
+    await window.webContents.executeJavaScript(`(() => {
+      const buttons = [...document.querySelectorAll(".seg button")];
+      const keepHere = buttons.find(button => button.textContent.trim() === "Keep here");
+      if (!keepHere) throw new Error("Missing local-result option");
+      keepHere.click();
+    })()`);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(await window.webContents.executeJavaScript(`(() => {
+      const row = [...document.querySelectorAll(".recipe-row")]
+        .find(row => row.textContent.includes("Send result to"));
+      return Boolean(row?.querySelector(".menu-select-btn"));
+    })()`), true, "Destination picker must remain reachable when results stay local");
     for (const [width, height] of [[800, 800], [1000, 800], [1099, 800], [1100, 800],
       [1186, 800], [1440, 800], [1920, 800], [1186, 600]]) {
       window.setContentSize(width, height);

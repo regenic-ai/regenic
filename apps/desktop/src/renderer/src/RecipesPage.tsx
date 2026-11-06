@@ -351,6 +351,7 @@ export function RecipesPage({
           executor_type: item.executor_type,
           executor_config: item.executor_config,
           can_write_back: item.can_write_back,
+          write_back_thread_id: item.write_back_thread_id ?? null,
           include_context: item.include_context,
           max_concurrent: item.max_concurrent ?? null,
           enabled: item.enabled,
@@ -816,10 +817,6 @@ export function RecipesPage({
                               thread_id,
                               thread_title: picked?.label ?? thread_id,
                               source: picked?.source ?? current.source,
-                              can_write_back:
-                                picked?.can_send === false
-                                  ? false
-                                  : current.can_write_back,
                             }),
                           );
                         }}
@@ -969,7 +966,6 @@ export function RecipesPage({
                     <p className="recipe-hint">{t("recipes.writeBackUnavailable")}</p>
                   ) : null}
                 </RecipeRow>
-                {draft.can_write_back || draft.write_back_thread_id ? (
                   <RecipeRow label={t("recipes.writeBackTo")}>
                     <MenuSelect
                       value={draft.write_back_thread_id}
@@ -988,7 +984,7 @@ export function RecipesPage({
                       <p className="recipe-hint">
                         {t("recipes.writeBackHintKeepConfigured")}
                       </p>
-                    ) : writeBackAvailable(draft, conversations) ? (
+                    ) : draft.can_write_back && writeBackAvailable(draft, conversations) ? (
                       <p className="recipe-hint">
                         {t(
                           draft.write_back_thread_id
@@ -1000,7 +996,6 @@ export function RecipesPage({
                       </p>
                     ) : null}
                   </RecipeRow>
-                ) : null}
                 <RecipeRow label={t("recipes.enabledCheck")}>
                   <SwitchRow
                     checked={draft.enabled}
