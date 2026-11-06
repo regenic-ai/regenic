@@ -21,6 +21,7 @@ export interface RecipePreviewSubject {
   source: string;
   thread_id: string;
   unit_kind?: string;
+  body_text?: string;
 }
 
 export interface RecipeMatchPreview {
@@ -60,6 +61,12 @@ export function recipeMatches(match: RecipeMatch, subject: RecipePreviewSubject)
   if (match.thread_facet && match.thread_facet !== subject.thread_facet) {
     return false;
   }
+  if (match.text_contains || match.text_excludes) {
+    if (subject.body_text === undefined) return false;
+    const folded = subject.body_text.toLowerCase();
+    if (match.text_contains && !folded.includes(match.text_contains.toLowerCase())) return false;
+    if (match.text_excludes && folded.includes(match.text_excludes.toLowerCase())) return false;
+  }
   return true;
 }
 
@@ -82,6 +89,7 @@ export function subjectFromConversation(
     thread_facet,
     source,
     thread_id,
+    body_text: conversation.body_text,
     ...(conversation.unit_kind?.trim()
       ? { unit_kind: conversation.unit_kind.trim() }
       : {}),
@@ -120,6 +128,12 @@ export function recipeOutranks(
 }
 
 export function recipesCanShareSubject(left: RecipeMatch, right: RecipeMatch): boolean {
+  if (
+    (left.text_contains && right.text_excludes && left.text_contains.toLowerCase().includes(right.text_excludes.toLowerCase())) ||
+    (right.text_contains && left.text_excludes && right.text_contains.toLowerCase().includes(left.text_excludes.toLowerCase()))
+  ) {
+    return false;
+  }
   if (left.thread_id && right.thread_id && left.thread_id !== right.thread_id) {
     return false;
   }

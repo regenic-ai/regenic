@@ -136,6 +136,8 @@ interface Recipe {
       source?: string;
       thread_id?: string;
       unit_kind?: string;
+      text_contains?: string;
+      text_excludes?: string;
     };
   trigger: {
     kind: "push" | "pull" | "manual";
@@ -166,6 +168,12 @@ Identity is three objects (POSIX session / job / inferior):
 | Inferior (`WorkRun`) | One execution; sysout stays off the list by default | A user-opened agent chat |
 
 `match` must be specific (`thread_id`, or `unit_kind`, or `record_class=task`, or `source` plus a non-utterance class). Empty, source-only, utterance-only, and facet-only matches cannot be saved. `unit_kind` is string equality only. Specificity is `thread_id` > `unit_kind` > `source` > `record_class` > `thread_facet`. The connector declares the vocabulary with `subjectCatalog()`. Ids follow `{source}.{native}`; the kernel does not parse them. A connector must not stamp `recipe_id` on a record.
+
+Optional `match.text_contains` and `match.text_excludes` narrow that scope with literal, case-insensitive message-body substrings (`Report` also matches `report`). Both conditions must pass when both are set; they do not add specificity or allow a scope-free rule. Omit either field to remove that restriction. Invalid or whitespace-only values are rejected by the API and bundle import rather than silently discarding a filter. Stored values retain meaningful surrounding spaces. Rules without these fields retain their existing behavior. Filters live in the existing `match_json`, so no schema migration is required.
+
+Push selection checks the triggering event body, and queued starts/retries recheck the same event before invoking an executor. Filtering does not block ingestion or remove tasks from Current work. A rejected rule does not prevent another eligible rule from matching. The editor previews filters against the latest available message body, not the conversation name or executor instructions; missing body content cannot pass a configured filter. Export/import and editing preserve both conditions.
+
+For a manual start of an existing work item, filters check its fixed `head_event_id`; scheduled runs and rule trials check the latest message. They never scan conversation history, even when `include_context` is enabled. A rejected scheduled occurrence advances `next_run_at` without opening a work item. A filtered trial anchors a new item to the tested latest message instead of reusing an older item with different evidence.
 
 `trigger` is first-class and separate from match:
 

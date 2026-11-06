@@ -44,6 +44,9 @@ export interface RecipeMatch {
   thread_id?: string;
   /** Opaque connector stamp. Equality only. Not conversation_kind. */
   unit_kind?: string;
+  /** Literal, case-insensitive substrings of the triggering message body. Both must pass. */
+  text_contains?: string;
+  text_excludes?: string;
 }
 
 export const RECIPE_TRIGGER_KINDS = ["push", "pull", "manual"] as const;

@@ -37,6 +37,24 @@ const otherChannel: RecipeConversationOption = {
 };
 
 describe("recipe match preview", () => {
+  it("previews both filters against message bodies, not conversation names", () => {
+    const match = { record_class: "task" as const, text_contains: "approve", text_excludes: "draft" };
+    const preview = previewRecipeMatch({
+      match,
+      recipes: [],
+      conversations: [
+        { ...task, id: "ok", body_text: "please APPROVE release" },
+        { ...task, id: "draft", body_text: "please APPROVE DRAFT" },
+        { ...task, id: "missing", label: "approve release" },
+        { ...task, id: "other", body_text: "release" },
+      ],
+    });
+    assert.deepEqual(preview.sample_ids, ["ok"]);
+    assert.equal(preview.count, 1);
+    assert.equal(recipeMatches({ record_class: "task", text_excludes: "draft" },
+      subjectFromConversation(task)!), false);
+  });
+
   it("matches a bound chat by thread id", () => {
     const subject = subjectFromConversation(chat);
     assert.ok(subject);

@@ -36,6 +36,19 @@ const rule: RecipeView = {
 };
 
 describe("recipe draft", () => {
+  it("preserves filters through editing and scope changes, and clears blank fields", () => {
+    const saved = { ...rule, match: { ...rule.match, text_contains: " approve ", text_excludes: "draft" } };
+    const draft = draftFromRecipe(saved);
+    assert.deepEqual(draftMatch(draft), saved.match);
+    assert.equal(draftMatch({ ...draft, scope: "tasks" }).text_contains, " approve ");
+    assert.equal(draftMatch({ ...draft, trigger_kind: "pull" }).text_excludes, "draft");
+    const cleared = draftMatch({ ...draft, text_contains: "", text_excludes: "   " });
+    assert.equal(cleared.text_contains, undefined);
+    assert.equal(cleared.text_excludes, undefined);
+    assert.match(recipeCardLine(saved, [], [], "Test", t), /filterContainsSummary/);
+    assert.match(recipeCardLine(saved, [], [], "Test", t), /filterExcludesSummary/);
+  });
+
   it("enables context for new rules and starters without changing saved rules", () => {
     assert.equal(emptyDraft().include_context, true);
     for (const kind of ["chat", "channel", "schedule"] as const) {

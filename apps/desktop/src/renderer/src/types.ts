@@ -377,6 +377,8 @@ export interface RecipeMatch {
   source?: string;
   thread_id?: string;
   unit_kind?: string;
+  text_contains?: string;
+  text_excludes?: string;
 }
 
 export type RecipeTriggerKind = "push" | "pull" | "manual";
@@ -446,6 +448,7 @@ export interface RecipeConversationOption {
   unit_kind?: string;
   /** True when Current work already has an open/running work face. */
   has_work?: boolean;
+  body_text?: string;
 }
 
 export interface UiPrefsView {

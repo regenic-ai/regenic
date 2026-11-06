@@ -38,6 +38,33 @@ async function rendererSmoke() {
         .find(row => row.textContent.includes("Send result to"));
       return Boolean(row?.querySelector(".menu-select-btn"));
     })()`), true, "Destination picker must remain reachable when results stay local");
+    const setFilters = async (contains, excludes) => {
+      await window.webContents.executeJavaScript(`(() => {
+        const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+        for (const [label, value] of ${JSON.stringify([
+          ["Body contains", contains], ["Body does not contain", excludes],
+        ])}) {
+          const input = document.querySelector('input[aria-label="' + label + '"]');
+          if (!input) throw new Error("Missing filter input: " + label);
+          set.call(input, value);
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+        }
+      })()`);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    };
+    await setFilters("APPROVE", "RELEASE");
+    assert.match(await window.webContents.executeJavaScript(
+      'document.querySelector(".recipe-preview-body").textContent',
+    ), /No matching chats/, "Exclusion must update the real editor preview");
+    await setFilters("APPROVE", "DRAFT");
+    assert.match(await window.webContents.executeJavaScript(
+      'document.querySelector(".recipe-preview-body").textContent',
+    ), /Filter smoke chat/, "Matching body must appear in the real editor preview");
+    await window.webContents.executeJavaScript(
+      'document.querySelector(\'input[aria-label="Body contains"]\').scrollIntoView({ block: "start" })',
+    );
+    writeFileSync(join(process.env.REGENIC_SMOKE_OUTPUT, "filters.png"),
+      (await window.webContents.capturePage()).toPNG());
     for (const [width, height] of [[800, 800], [1000, 800], [1099, 800], [1100, 800],
       [1186, 800], [1440, 800], [1920, 800], [1186, 600]]) {
       window.setContentSize(width, height);
@@ -75,6 +102,38 @@ async function rendererSmoke() {
       assert.ok(measurement.hintBottom <= measurement.cardBottom,
         `Hint escapes editor at ${width}x${height}`);
     }
+    await window.webContents.executeJavaScript(
+      'document.querySelector(".recipe-form").requestSubmit()',
+    );
+    for (let attempt = 0; ; attempt++) {
+      const saved = await window.webContents.executeJavaScript(
+        'window.__savedRecipe ?? null',
+      );
+      if (saved) {
+        assert.equal(saved.match.text_contains, "APPROVE");
+        assert.equal(saved.match.text_excludes, "DRAFT");
+        break;
+      }
+      assert.ok(attempt < 50, "Filtered recipe was not saved");
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    for (let attempt = 0; ; attempt++) {
+      const edited = await window.webContents.executeJavaScript(`(() => {
+        const card = document.querySelector(".recipe-card-hit");
+        if (!card) return false;
+        card.click();
+        return true;
+      })()`);
+      if (edited) break;
+      assert.ok(attempt < 50, "Saved recipe card did not render");
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.deepEqual(await window.webContents.executeJavaScript(`[
+      document.querySelector('input[aria-label="Body contains"]').value,
+      document.querySelector('input[aria-label="Body does not contain"]').value
+    ]`), ["APPROVE", "DRAFT"], "Editing must restore saved filters");
+    console.log("Recipe filter preview, save and edit smoke passed");
   } finally {
     window.destroy();
     app.quit();
@@ -106,8 +165,15 @@ async function launchSmoke() {
         ]
       }]
     };
-    window.fetch = async (input) => {
+    window.fetch = async (input, init) => {
       const path = new URL(String(input), location.href).pathname;
+      if (path === "/v1/me/recipes" && init?.method === "POST") {
+        const recipe = { ...JSON.parse(init.body), id: "smoke-rule", org_id: "local-owner",
+          created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+        window.__savedRecipe = recipe;
+        fixtures[path] = [recipe];
+        return new Response(JSON.stringify(recipe), { headers: { "content-type": "application/json" } });
+      }
       if (!(path in fixtures)) throw new Error("Unexpected smoke request: " + path);
       return new Response(JSON.stringify(fixtures[path]), { headers: { "content-type": "application/json" } });
     };
@@ -115,7 +181,10 @@ async function launchSmoke() {
       <div className="shell">
         <header className="titlebar">Recipe layout smoke</header>
         <nav className="rail" />
-        <div className="workspace"><RecipesPage sources={[]} conversations={[]} /></div>
+        <div className="workspace"><RecipesPage sources={[]} conversations={[{
+          id: "smoke:room", label: "Filter smoke chat", source: "smoke",
+          record_class: "utterance", thread_facet: "chat", body_text: "approve release"
+        }]} seed={{ thread_id: "smoke:room", title: "Filter smoke chat" }} /></div>
       </div>
     );
   `;

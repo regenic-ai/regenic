@@ -72,6 +72,9 @@ export function MatchPreview({
       {preview.ready ? (
         <p className="recipe-hint">{t("recipes.previewPartial")}</p>
       ) : null}
+      {draft.text_contains.trim() || draft.text_excludes.trim() ? (
+        <p className="recipe-hint">{t("recipes.filterPreviewHint")}</p>
+      ) : null}
       {preview.preempted_by ? (
         <p className="recipe-preview-conflict">
           {t("recipes.previewConflict", { name: preview.preempted_by })}

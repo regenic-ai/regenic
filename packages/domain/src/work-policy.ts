@@ -47,6 +47,7 @@ export function workSubjectFromEvent(input: {
   prompts?: boolean;
   hint?: ThreadFacet;
   prior_facet?: ThreadFacet;
+  body_text?: string;
 }): RecipeSubject | undefined {
   const record_class = recordClassFromType(input.type);
   if (!record_class) {
@@ -64,6 +65,7 @@ export function workSubjectFromEvent(input: {
     thread_facet: mergeThreadFacet(input.prior_facet, projected),
     source: input.source,
     thread_id: input.thread_id,
+    body_text: input.body_text,
     ...(unit_kind ? { unit_kind } : {}),
   };
 }

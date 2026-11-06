@@ -21,6 +21,7 @@ import {
   recipeHasStartCapacity,
   recipeStartInflight,
   recipeWantsContext,
+  recipeTextMatches,
   isOccupiedRecipeSlot,
   isTaskInboxItem,
   selectRecipeForSubject,
@@ -37,7 +38,7 @@ import {
   type WorkRun,
   type WorkContextAccess,
 } from "@regenic/domain";
-import { resolveInboxBodies, type InboxBody } from "./inbox-body";
+import { resolveInboxBodies, resolveInboxBody, type InboxBody } from "./inbox-body";
 import { PersonalConnectorError } from "./personal-errors";
 import { PersonalWorkChannel } from "./personal-work-channel";
 import { PersonalWorkWait } from "./personal-work-wait";
@@ -267,6 +268,16 @@ export class PersonalWorkDispatch {
         }
       }
       const fireAt = recipe.next_run_at ?? nowIso;
+      if (
+        (recipe.match.text_contains || recipe.match.text_excludes) &&
+        !recipeTextMatches(recipe.match, await this.filterBodyText(threadId))
+      ) {
+        await authority.putRecipe({
+          ...recipe,
+          next_run_at: advanceRecipePull(recipe.trigger, fireAt, nowIso),
+        });
+        continue;
+      }
       const unit_key = pullUnitKey(recipe.id, fireAt);
       const existing = await authority.getWorkItemByUnitKey(
         orgId,
@@ -433,6 +444,22 @@ export class PersonalWorkDispatch {
     mode: "auto" | "manual" | "auxiliary" = "auto",
   ): Promise<WorkRun | undefined> {
     const host = this.runtime.requireHost();
+    if (
+      (recipe.match.text_contains || recipe.match.text_excludes) &&
+      !recipeTextMatches(
+        recipe.match,
+        await this.filterBodyText(item.thread_id, item.head_event_id),
+      )
+    ) {
+      if (mode !== "auto") {
+        throw new PersonalConnectorError(
+          "invalid_config",
+          "This message does not match the rule's text filters",
+          400,
+        );
+      }
+      return undefined;
+    }
     const executor = host.get("executors").get(recipe.executor_type);
     if (!executor) {
       await this.noteStartFailed(item, recipe, "Unknown executor", mode);
@@ -782,6 +809,16 @@ export class PersonalWorkDispatch {
     });
   }
 
+  private async filterBodyText(threadId: string, eventId?: string): Promise<string | undefined> {
+    const host = this.runtime.requireHost();
+    const authority = host.get("authority");
+    const orgId = this.runtime.orgId();
+    const event = eventId
+      ? await authority.getEvent(orgId, eventId)
+      : (await authority.listInbox(orgId, { heads: true, thread_ids: [threadId] }))[0]?.event;
+    return (await resolveInboxBody(authority, host.get("blobs"), event?.content_hash, "meta")).body_text;
+  }
+
   private async observeHead(input: {
     event: EventRecord;
     threadId: string;
@@ -815,6 +852,7 @@ export class PersonalWorkDispatch {
       source: input.event.source,
       thread_id: input.threadId,
       unit_kind: surface?.unit_kind,
+      body_text: input.body.body_text,
       prompts: false,
       hint: surface?.thread_facet,
       prior_facet:
@@ -831,10 +869,20 @@ export class PersonalWorkDispatch {
       input.threadId,
       input.event.id,
     );
-      if (byUnit) {
+    if (byUnit) {
       if (recipe && recipeAllowsPushDispatch(recipe)) {
+        const bound =
+          (recipe.match.text_contains || recipe.match.text_excludes) &&
+          (byUnit.status === "open" || byUnit.status === "failed") &&
+          byUnit.recipe_id !== recipe.id
+            ? await authority.putWorkItem({
+                ...byUnit,
+                recipe_id: recipe.id,
+                updated_at: new Date().toISOString(),
+              })
+            : byUnit;
         await this.retryOrResume(
-          byUnit,
+          bound,
           recipe,
           input.body.body_text,
           recipe.max_concurrent !== undefined,
@@ -842,8 +890,18 @@ export class PersonalWorkDispatch {
       }
       return;
     }
+    // An unstarted older unit must not absorb a matching trigger if its own body fails.
+    const reuseExisting =
+      existing &&
+      !isOccupiedRecipeSlot(existing.status) &&
+      existing.head_event_id !== input.event.id &&
+      recipe &&
+      (recipe.match.text_contains || recipe.match.text_excludes) &&
+      !recipeTextMatches(recipe.match, await this.filterBodyText(existing.thread_id, existing.head_event_id))
+        ? null
+        : existing;
     const next = openOrUpdateWorkItem({
-      existing,
+      existing: reuseExisting,
       org_id: orgId,
       subject,
       head_event_id: input.event.id,

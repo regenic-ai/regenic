@@ -837,6 +837,27 @@ export function RecipesPage({
                   </RecipeRow>
                 ) : null}
 
+                <RecipeRow label={t("recipes.filterContains")}>
+                  <input
+                    aria-label={t("recipes.filterContains")}
+                    value={draft.text_contains}
+                    placeholder={t("recipes.filterOptional")}
+                    onChange={(event) =>
+                      setDraft((current) => ({ ...current, text_contains: event.target.value }))
+                    }
+                  />
+                </RecipeRow>
+                <RecipeRow label={t("recipes.filterExcludes")}>
+                  <input
+                    aria-label={t("recipes.filterExcludes")}
+                    value={draft.text_excludes}
+                    placeholder={t("recipes.filterOptional")}
+                    onChange={(event) =>
+                      setDraft((current) => ({ ...current, text_excludes: event.target.value }))
+                    }
+                  />
+                  <p className="recipe-hint">{t("recipes.filterHint")}</p>
+                </RecipeRow>
                 <RecipeRow label={t("recipes.previewTitle")}>
                   <MatchPreview
                     preview={matchPreview}

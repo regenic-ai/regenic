@@ -1798,6 +1798,7 @@ export function ConsoleApp() {
               thread_facet: thread.thread_facet,
               unit_kind: thread.unit_kind ?? undefined,
               has_work: Boolean(thread.work),
+              body_text: thread.messages[thread.messages.length - 1]?.body_text,
             }))}
             seed={recipeSeed}
             onSeedConsumed={consumeRecipeSeed}

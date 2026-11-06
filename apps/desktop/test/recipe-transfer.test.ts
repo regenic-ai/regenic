@@ -25,6 +25,23 @@ const sample: RecipeView = {
 };
 
 describe("recipe transfer", () => {
+  it("round-trips both text filters without trimming literal whitespace", () => {
+    const recipe = { ...sample, match: { ...sample.match, text_contains: " approve ", text_excludes: "draft" } };
+    const parsed = parseRecipeBundle(stringifyRecipeBundle(buildRecipeBundle([recipe])));
+    assert.deepEqual(parsed.recipes[0]?.match, recipe.match);
+  });
+
+  it("rejects malformed text filters rather than importing an unfiltered rule", () => {
+    for (const key of ["text_contains", "text_excludes"]) {
+      for (const value of [42, null, [], {}, true, "", "   "]) {
+        assert.throws(() => parseRecipeBundle(JSON.stringify({
+          version: 1,
+          recipes: [{ ...recipeToTransferItem(sample), match: { ...sample.match, [key]: value } }],
+        })), /invalid_recipe/);
+      }
+    }
+  });
+
   it("preserves the result destination through export and import", () => {
     const recipe = { ...sample, write_back_thread_id: "feishu:results" };
     const parsed = parseRecipeBundle(stringifyRecipeBundle(buildRecipeBundle([recipe])));

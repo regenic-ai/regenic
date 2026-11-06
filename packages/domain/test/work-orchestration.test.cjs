@@ -23,6 +23,9 @@ const {
   selectThreadEvidenceLines,
   hiddenExecutorThreadIds,
   matchRecipe,
+  recipeMatches,
+  recipeTextMatches,
+  recipesCanShareSubject,
   MemoryExecutorRegistry,
   MemoryWorkStore,
   normalizeInboxSort,
@@ -110,6 +113,36 @@ describe("recipe match", () => {
     source: "chat-src",
     thread_id: "chat-src:t1",
   };
+
+  it("requires both literal body filters and preserves legacy scope-only behavior", () => {
+    const match = { thread_id: subject.thread_id, text_contains: "approve", text_excludes: "draft" };
+    assert.equal(recipeMatches(match, { ...subject, body_text: "approve release" }), true);
+    assert.equal(recipeMatches(match, { ...subject, body_text: "approve draft" }), false);
+    assert.equal(recipeMatches(match, { ...subject, body_text: "release" }), false);
+    assert.equal(recipeMatches(match, subject), false);
+    assert.equal(recipeMatches({ thread_id: subject.thread_id }, subject), true);
+    assert.equal(recipeTextMatches({ text_excludes: "draft" }, undefined), false);
+    assert.equal(recipeTextMatches({ text_excludes: "draft" }, ""), true);
+    assert.equal(recipeTextMatches({ text_contains: "a.b" }, "a-b"), false);
+    assert.equal(recipeTextMatches({ text_contains: "a.b" }, "a.b"), true);
+    assert.equal(recipeTextMatches({ text_contains: "Report" }, "weekly REPORT"), true);
+    assert.equal(recipeTextMatches({ text_excludes: "Draft" }, "DRAFT report"), false);
+    assert.equal(recipeTextMatches({ text_contains: "报告" }, "本周报告"), true);
+    assert.equal(recipeSpecificity(match), recipeSpecificity({ thread_id: subject.thread_id }));
+    assert.equal(recipeMatches({ text_contains: "approve" }, { ...subject, body_text: "approve" }), false);
+  });
+
+  it("falls back to the next eligible rule when a more-specific filter fails", () => {
+    const specific = makeRecipe("specific", { thread_id: subject.thread_id, text_contains: "approve" });
+    const fallback = makeRecipe("fallback", { record_class: "task" });
+    const task = { ...subject, record_class: "task", body_text: "release" };
+    assert.equal(selectRecipeForSubject([specific, fallback], task)?.id, fallback.id);
+    assert.equal(matchRecipe([specific, fallback], { ...task, body_text: "approve" })?.id, specific.id);
+    assert.equal(recipesCanShareSubject(
+      { thread_id: subject.thread_id, text_contains: "approve DRAFT" },
+      { thread_id: subject.thread_id, text_excludes: "Draft" },
+    ), false);
+  });
 
   it("prefers the most specific enabled recipe", () => {
     const recipes = [

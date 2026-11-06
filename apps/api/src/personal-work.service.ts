@@ -826,6 +826,7 @@ export class PersonalWorkService implements OnModuleDestroy {
       thread_facet,
       source: head?.event.source ?? threadId.split(":")[0] ?? "",
       thread_id: threadId,
+      body_text: body?.body_text,
       ...(unit_kind ? { unit_kind } : {}),
     };
     if (!recipeMatches(recipe.match, subject)) {
@@ -836,8 +837,10 @@ export class PersonalWorkService implements OnModuleDestroy {
       );
     }
     const now = new Date().toISOString();
+    const filtered = Boolean(recipe.match.text_contains || recipe.match.text_excludes);
     const item =
       existing &&
+      (!filtered || existing.head_event_id === head?.event.id) &&
       (existing.status === "open" ||
         existing.status === "failed" ||
         existing.status === "done" ||
@@ -855,6 +858,7 @@ export class PersonalWorkService implements OnModuleDestroy {
             org_id: orgId,
             thread_id: threadId,
             unit_key: `try:${recipe.id}:${now}`,
+            ...(filtered && head ? { head_event_id: head.event.id } : {}),
             record_class: subject.record_class,
             thread_facet: subject.thread_facet,
             status: "open",

@@ -136,6 +136,8 @@ interface Recipe {
       source?: string;
       thread_id?: string;
       unit_kind?: string;
+      text_contains?: string;
+      text_excludes?: string;
     };
   trigger: {
     kind: "push" | "pull" | "manual";
@@ -166,6 +168,12 @@ interface ResultEnvelope {
 | Inferior (`WorkRun`) | 一次执行；sysout 默认不进列表 | 用户自己开的 Agent 闲聊 |
 
 `match` 必须具体（`thread_id`，或 `unit_kind`，或 `record_class=task`，或 `source` + 非 utterance 的 class）。空 match、只写 source、只写 utterance、只写 facet 不能保存。`unit_kind` 只做字符串相等；特异性为 `thread_id` > `unit_kind` > `source` > `record_class` > `thread_facet`。词表由连接器 `subjectCatalog()` 声明，id 约定 `{source}.{native}`，内核不解析。连接器不得在记录上写 `recipe_id`。
+
+可选的 `match.text_contains` 和 `match.text_excludes` 用消息正文字面量子串缩小覆盖范围，不区分大小写（`Report` 也匹配 `report`）。同时设置时，两项必须都满足；它们不增加特异性，也不能代替具体范围。省略字段即可移除对应限制。API 和规则导入会拒绝非法或纯空白值，不会悄悄丢弃过滤条件；有意义的首尾空格原样保留。未配置过滤的旧规则保持原行为。过滤条件存入现有 `match_json`，无需数据库迁移。
+
+Push 选规则时检查触发事件正文，排队开跑和失败重试前再次检查同一事件。过滤不阻止采集，也不从当前工作移除任务；一个规则不匹配时，仍可匹配其他合格规则。编辑器预览使用最新可用的消息正文，而非会话标题或执行器指令；缺少正文时不能通过已配置的过滤条件。编辑及导入导出均保留两项条件。
+
+手动执行已有待处理项时，过滤检查其固定的 `head_event_id`；定时和规则试运行检查最新消息。即使开启 `include_context`，过滤也不扫描历史上下文。不匹配的定时触发直接推进 `next_run_at`，不新建工作项。带过滤的试运行把新工作项锚定到刚检查的最新消息，不复用证据不同的旧工作项。
 
 `trigger` 是一等字段，和 match 分开：
 

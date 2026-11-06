@@ -8,6 +8,7 @@ export interface RecipeSubject {
   source: string;
   thread_id: string;
   unit_kind?: string;
+  body_text?: string;
 }
 
 export const RECIPE_MATCH_WEIGHTS = {
@@ -57,13 +58,34 @@ export function recipeMatches(match: RecipeMatch, subject: RecipeSubject): boole
   if (match.thread_facet && match.thread_facet !== subject.thread_facet) {
     return false;
   }
-  return true;
+  return recipeTextMatches(match, subject.body_text);
+}
+
+export function recipeTextMatches(match: RecipeMatch, text: string | undefined): boolean {
+  if (!match.text_contains && !match.text_excludes) {
+    return true;
+  }
+  // Missing content is not proof that an exclusion passes.
+  if (text === undefined) {
+    return false;
+  }
+  const folded = text.toLowerCase();
+  return (
+    (!match.text_contains || folded.includes(match.text_contains.toLowerCase())) &&
+    (!match.text_excludes || !folded.includes(match.text_excludes.toLowerCase()))
+  );
 }
 
 export function recipesCanShareSubject(
   left: RecipeMatch,
   right: RecipeMatch,
 ): boolean {
+  if (
+    (left.text_contains && right.text_excludes && left.text_contains.toLowerCase().includes(right.text_excludes.toLowerCase())) ||
+    (right.text_contains && left.text_excludes && right.text_contains.toLowerCase().includes(left.text_excludes.toLowerCase()))
+  ) {
+    return false;
+  }
   if (left.thread_id && right.thread_id && left.thread_id !== right.thread_id) {
     return false;
   }

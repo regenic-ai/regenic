@@ -70,6 +70,14 @@ function parseMatch(value: unknown): RecipeMatch | null {
     return null;
   }
   const match: RecipeMatch = {};
+  for (const key of ["text_contains", "text_excludes"] as const) {
+    if (value[key] !== undefined) {
+      if (typeof value[key] !== "string" || !value[key].trim()) {
+        return null;
+      }
+      match[key] = value[key];
+    }
+  }
   if (typeof value.record_class === "string") {
     match.record_class = value.record_class as RecipeMatch["record_class"];
   }
