@@ -696,7 +696,14 @@ export class PersonalWorkService implements OnModuleDestroy {
         400,
       );
     }
-    const threadId = recipe.match.thread_id?.trim();
+    const threadId = recipe.write_back_thread_id ?? recipe.match.thread_id?.trim();
+    if (recipe.write_back_thread_id) {
+      try {
+        parseConversationThread(recipe.write_back_thread_id);
+      } catch {
+        throw new PersonalConnectorError("invalid_config", "Invalid write-back chat id", 400);
+      }
+    }
     if (recipe.can_write_back && threadId) {
       const canReply = await this.channel.canReplyThread(threadId);
       if (canReply === false) {

@@ -29,6 +29,8 @@ export function MenuSelect({
   const rootRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const [open, setOpen] = useState(false);
+  const [placement, setPlacement] = useState<"above" | "below">("below");
+  const [popupMaxHeight, setPopupMaxHeight] = useState(280);
   const [query, setQuery] = useState("");
   const selected = options.find((item) => item.value === value);
   const filtered = useMemo(() => {
@@ -39,6 +41,42 @@ export function MenuSelect({
     return options.filter((item) => item.label.toLowerCase().includes(needle));
   }, [options, query]);
   const [active, setActive] = useState(0);
+
+  const openMenu = () => {
+    const root = rootRef.current;
+    if (root) {
+      const bounds = root.getBoundingClientRect();
+      let clipTop = 0;
+      let clipBottom = window.innerHeight;
+      for (
+        let parent = root.parentElement;
+        parent && parent !== document.body;
+        parent = parent.parentElement
+      ) {
+        const overflowY = getComputedStyle(parent).overflowY;
+        if (overflowY === "auto" || overflowY === "scroll") {
+          const clip = parent.getBoundingClientRect();
+          clipTop = Math.max(clipTop, clip.top);
+          clipBottom = Math.min(clipBottom, clip.bottom);
+          break;
+        }
+      }
+      const above = Math.max(0, bounds.top - clipTop - 8);
+      const below = Math.max(0, clipBottom - bounds.bottom - 8);
+      const placeAbove = below < 280 && above > below;
+      setPlacement(placeAbove ? "above" : "below");
+      setPopupMaxHeight(Math.max(100, placeAbove ? above : below));
+    }
+    setOpen(true);
+  };
+
+  const toggleMenu = () => {
+    if (open) {
+      setOpen(false);
+    } else {
+      openMenu();
+    }
+  };
 
   useEffect(() => {
     if (!open) {
@@ -99,7 +137,7 @@ export function MenuSelect({
         onClick={(event) => {
           event.preventDefault();
           event.stopPropagation();
-          setOpen((current) => !current);
+          toggleMenu();
         }}
         onKeyDown={(event) => {
           if (event.key === "Escape" && open) {
@@ -110,7 +148,7 @@ export function MenuSelect({
           if (event.key === "ArrowDown") {
             event.preventDefault();
             if (!open) {
-              setOpen(true);
+              openMenu();
               return;
             }
             move(1);
@@ -119,7 +157,7 @@ export function MenuSelect({
           if (event.key === "ArrowUp") {
             event.preventDefault();
             if (!open) {
-              setOpen(true);
+              openMenu();
               return;
             }
             move(-1);
@@ -139,12 +177,18 @@ export function MenuSelect({
       </button>
       {open ? (
         <div
-          className="menu-select-pop"
+          className={`menu-select-pop${placement === "above" ? " is-above" : ""}`}
+          style={{ maxHeight: `${popupMaxHeight}px` }}
           onMouseDown={(event) => event.preventDefault()}
         >
           {searchable ? (
             <input
               ref={searchRef}
+              type="search"
+              name="conversation-filter"
+              autoComplete="off"
+              autoCorrect="off"
+              spellCheck={false}
               className="menu-select-search"
               value={query}
               placeholder={placeholder}
@@ -176,6 +220,7 @@ export function MenuSelect({
                   }
                 }
               }}
+              aria-label={placeholder}
             />
           ) : null}
           <ul id={listId} className="menu-select-menu" role="listbox">

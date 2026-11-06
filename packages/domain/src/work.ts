@@ -96,6 +96,8 @@ export interface Recipe {
   executor_type: string;
   executor_config: Record<string, JsonValue>;
   can_write_back: boolean;
+  /** Optional fixed destination; omitted means the conversation that triggered the work. */
+  write_back_thread_id?: string;
   /** Kernel evidence: send visible thread history, not just the head. */
   include_context: boolean;
   /**

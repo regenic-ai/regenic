@@ -5,7 +5,10 @@ import {
   conflictCopy,
   draftFromRecipe,
   draftMatch,
+  emptyDraft,
+  starterDraft,
   recipeCardLine,
+  writeBackAvailable,
 } from "../src/renderer/src/recipe-draft.ts";
 import type { RecipeView } from "../src/renderer/src/types.ts";
 
@@ -33,12 +36,43 @@ const rule: RecipeView = {
 };
 
 describe("recipe draft", () => {
+  it("enables context for new rules and starters without changing saved rules", () => {
+    assert.equal(emptyDraft().include_context, true);
+    for (const kind of ["chat", "channel", "schedule"] as const) {
+      assert.equal(starterDraft(kind, emptyDraft(), [], []).include_context, true);
+    }
+    assert.equal(draftFromRecipe(rule).include_context, false);
+  });
+
   it("keeps match fields the form does not show when editing", () => {
     const draft = draftFromRecipe(rule, undefined, [
       { id: "feishu:chat-1", label: "Design review" },
     ]);
     assert.deepEqual(draftMatch(draft), rule.match);
     assert.equal(draft.thread_title, "Design review");
+  });
+
+  it("preserves a selected result destination and checks its sendability", () => {
+    const saved: RecipeView = {
+      ...rule,
+      can_write_back: true,
+      write_back_thread_id: "feishu:chat-results",
+    };
+    const conversations = [
+      { id: "feishu:chat-1", label: "Source", can_send: true },
+      { id: "feishu:chat-results", label: "Results", can_send: false },
+    ];
+    const draft = draftFromRecipe(saved, undefined, conversations);
+
+    assert.equal(draft.write_back_thread_id, "feishu:chat-results");
+    assert.equal(writeBackAvailable(draft, conversations), false);
+    assert.equal(
+      writeBackAvailable(
+        { ...draft, write_back_thread_id: "" },
+        conversations,
+      ),
+      true,
+    );
   });
 
   it("keeps a saved source rule's record class", () => {

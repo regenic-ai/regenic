@@ -24,6 +24,7 @@ export interface RecipeInput {
   executor_type?: string;
   executor_config?: Record<string, JsonValue>;
   can_write_back?: boolean;
+  write_back_thread_id?: string | null;
   include_context?: boolean;
   max_concurrent?: number | null;
   enabled?: boolean;
@@ -68,6 +69,21 @@ export function normalizeRecipe(
   const max_concurrent = normalizeRecipeMaxConcurrent(
     input.max_concurrent === undefined ? existing?.max_concurrent : input.max_concurrent,
   );
+  if (
+    input.write_back_thread_id !== undefined &&
+    input.write_back_thread_id !== null &&
+    typeof input.write_back_thread_id !== "string"
+  ) {
+    throw new PersonalConnectorError(
+      "invalid_config",
+      "write_back_thread_id must be a conversation id",
+      400,
+    );
+  }
+  const writeBackThreadId =
+    input.write_back_thread_id === undefined
+      ? existing?.write_back_thread_id
+      : input.write_back_thread_id?.trim() || undefined;
   return {
     id: existing?.id ?? input.id?.trim() ?? `recipe-${randomUUID()}`,
     org_id: orgId,
@@ -77,6 +93,7 @@ export function normalizeRecipe(
     executor_type,
     executor_config: input.executor_config ?? existing?.executor_config ?? {},
     can_write_back: input.can_write_back ?? existing?.can_write_back ?? pull,
+    ...(writeBackThreadId ? { write_back_thread_id: writeBackThreadId } : {}),
     include_context: input.include_context ?? existing?.include_context ?? pull,
     enabled: input.enabled ?? existing?.enabled ?? true,
     ...(max_concurrent ? { max_concurrent } : {}),

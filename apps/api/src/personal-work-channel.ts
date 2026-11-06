@@ -240,7 +240,8 @@ export class PersonalWorkChannel {
     if (isAbandonedWorkItem(latest?.status)) {
       return "skipped";
     }
-    const thread = parseConversationThread(item.thread_id);
+    const destinationId = recipe.write_back_thread_id ?? item.thread_id;
+    const thread = parseConversationThread(destinationId);
     const text =
       content
         ?.map((part) => ("text" in part && part.text ? part.text : ""))
@@ -262,7 +263,9 @@ export class PersonalWorkChannel {
     if (found && driverCanReply(found.driver, found.installation)) {
       await this.sendText(thread, text, {
         writeBack: true,
-        headEventId: item.head_event_id,
+        ...(destinationId === item.thread_id
+          ? { headEventId: item.head_event_id }
+          : {}),
         idempotency_key: delivery?.idempotency_key,
         receipt: recorded,
         onReceipt,

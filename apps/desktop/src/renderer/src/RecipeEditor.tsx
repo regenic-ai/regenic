@@ -183,7 +183,6 @@ export function MoreOptions({
 }) {
   const advancedDirty =
     (draft.trigger_kind === "push" && !draft.coalesce) ||
-    (draft.trigger_kind !== "pull" && draft.include_context) ||
     (draft.trigger_kind !== "pull" && Boolean(draft.max_concurrent.trim()));
   const [open, setOpen] = useState(advancedDirty);
   return (
@@ -194,26 +193,20 @@ export function MoreOptions({
         aria-expanded={open}
         onClick={() => setOpen((current) => !current)}
       >
+        <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+          <path
+            d="M3.5 2 6.5 5l-3 3"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
         {t("recipes.advanced")}
-        <span aria-hidden="true">{open ? "−" : "+"}</span>
       </button>
       {open ? (
       <div className="recipe-more-body">
-        {draft.trigger_kind === "pull" ? (
-          <p className="recipe-hint">{t("recipes.includeContextHintPull")}</p>
-        ) : (
-          <RecipeRow label={t("recipes.includeContextCheck")}>
-            <SwitchRow
-              checked={draft.include_context}
-              onChange={(include_context) =>
-                setDraft((current) => ({ ...current, include_context }))
-              }
-            >
-              {""}
-            </SwitchRow>
-            <p className="recipe-hint">{t("recipes.includeContextHint")}</p>
-          </RecipeRow>
-        )}
         {draft.trigger_kind === "push" ? (
           <RecipeRow label={t("recipes.coalesceCheck")}>
             <SwitchRow

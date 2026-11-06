@@ -1379,6 +1379,7 @@ export async function saveRecipe(
     executor_type: string;
     executor_config?: Record<string, string>;
     can_write_back: boolean;
+    write_back_thread_id?: string | null;
     include_context: boolean;
     max_concurrent?: number | null;
     enabled: boolean;

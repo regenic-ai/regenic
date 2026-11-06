@@ -247,6 +247,17 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
         }),
       });
       assert.equal(sourceOnly.status, 400);
+      const invalidWriteBackDestination = await fetch(`${origin}/v1/me/recipes`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "Invalid destination",
+          match: { record_class: "task", source: "feishu" },
+          executor_type: "dsh",
+          write_back_thread_id: "not-a-conversation",
+        }),
+      });
+      assert.equal(invalidWriteBackDestination.status, 400);
       const missingComplete = await fetch(
         `${origin}/v1/me/work-items/work-missing/complete`,
         { method: "POST" },
@@ -267,12 +278,14 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
             executor_type: "dsh",
             executor_config: { skill: "review", prompt: "Reply with a decision." },
             can_write_back: true,
+            write_back_thread_id: "feishu:oc_results",
             include_context: true,
           }),
         })
       ).json();
       assert.equal(created.executor_type, "dsh");
       assert.equal(created.can_write_back, true);
+      assert.equal(created.write_back_thread_id, "feishu:oc_results");
       assert.equal(created.include_context, true);
       assert.equal(created.trigger.kind, "push");
       assert.equal(created.trigger.coalesce, true);
