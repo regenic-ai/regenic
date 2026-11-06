@@ -223,7 +223,7 @@ export function RecipesPage({
     if (bound) {
       return [{ id: bound, label: draft.thread_title || bound }];
     }
-    return matchingConversations(match, conversations) ?? [];
+    return matchingConversations(match, conversations, draft.trigger_kind) ?? [];
   }, [draft, conversations]);
   const tryThreadId = tryChoices.some((item) => item.id === trySample)
     ? trySample
@@ -846,6 +846,7 @@ export function RecipesPage({
                         setDraft((current) => ({ ...current, ...patch }))
                       }
                     />
+                    <p className="recipe-hint">{t("recipes.scheduleInstructionsHint")}</p>
                   </RecipeRow>
                 ) : null}
 

@@ -189,26 +189,91 @@ describe("recipe text filters", () => {
     assert.equal(result.work_item.recipe_id, f.recipe.id);
   });
 
-  it("advances a rejected schedule without opening work, then starts on a matching head", async (t) => {
+  it("starts scheduled work regardless of stored text conditions and advances the schedule", async (t) => {
     const f = await fixture(t, { trigger: { kind: "pull", interval_ms: 60_000 } });
     await f.ingest("approve draft");
     await f.dispatch.dispatchPullRecipes();
-    assert.equal(f.starts(), 0);
-    assert.equal((await f.authority.listWorkItems(ORG)).length, 0);
+    assert.equal(f.starts(), 1);
+    assert.equal((await f.authority.listWorkItems(ORG)).length, 1);
     assert.ok((await f.authority.getRecipe(ORG, f.recipe.id)).next_run_at > f.now);
+    assert.deepEqual((await f.authority.getRecipe(ORG, f.recipe.id)).match, f.recipe.match);
+  });
+
+  it("resumes a queued scheduled occurrence when the latest message stops matching", async (t) => {
+    const f = await fixture(t, { trigger: { kind: "pull", interval_ms: 60_000 } });
     await f.ingest("approve release");
-    await f.authority.putRecipe({ ...f.recipe, next_run_at: f.now });
+    const queued = t.mock.method(f.dispatch, "startItem", async () => undefined);
     await f.dispatch.dispatchPullRecipes();
+    assert.equal(f.starts(), 0);
+    const [item] = await f.authority.listWorkItems(ORG);
+    assert.equal(item.status, "open");
+    assert.equal(item.head_event_id, undefined);
+    queued.mock.restore();
+    await f.ingest("approve draft");
+    // The active occurrence prevents opening a second one; the queue must still drain.
+    await f.dispatch.dispatchPullRecipes();
+    await f.dispatch.fillOpenSlots();
+    assert.equal(f.starts(), 1);
+    assert.equal((await f.authority.getWorkItem(ORG, item.id)).status, "running");
+    assert.equal((await f.authority.listWorkItems(ORG)).length, 1);
+    await f.dispatch.fillOpenSlots();
     assert.equal(f.starts(), 1);
   });
 
-  it("does not pass exclusion-only filters when no message content is available", async (t) => {
+  it("runs a scheduled rule with stored conditions even without any message", async (t) => {
     const f = await fixture(t, {
       match: { thread_id: "test-chat:room", text_excludes: "draft" },
       trigger: { kind: "pull", interval_ms: 60_000 },
     });
     await f.dispatch.dispatchPullRecipes();
+    assert.equal(f.starts(), 1);
+  });
+
+  for (const kind of ["pull", "manual"]) {
+    it(`preserves inactive conditions on API edits and allows ${kind} trials with a rejected message`, async (t) => {
+      const f = await fixture(t, { trigger: { kind, ...(kind === "pull" ? { interval_ms: 60_000 } : {}) } });
+      const edited = normalizeRecipe({ name: "Renamed" }, ORG, f.now, f.recipe);
+      assert.deepEqual(edited.match, f.recipe.match);
+      await f.authority.putRecipe(edited);
+      await f.ingest("approve draft");
+      t.mock.method(f.service, "runWorkItem", async (id) => {
+        const item = await f.authority.getWorkItem(ORG, id);
+        await f.dispatch.startItem(item, edited, undefined, "manual");
+        return { work_item: await f.authority.getWorkItem(ORG, id) };
+      });
+      const result = await f.service.tryRecipe(f.recipe.id, {});
+      assert.equal(result.work_item.head_event_id, undefined);
+      assert.equal(result.work_item.status, "running");
+      assert.equal(f.starts(), 1);
+    });
+  }
+
+  it("binds a manual rule despite its inactive filters, but does not auto-start it", async (t) => {
+    const f = await fixture(t, { trigger: { kind: "manual" } });
+    const eventId = await f.ingest("approve draft");
+    await f.dispatch.reconcileInbox();
+    const [item] = await f.authority.listWorkItems(ORG);
+    assert.equal(item.recipe_id, f.recipe.id);
+    assert.equal(item.head_event_id, eventId);
     assert.equal(f.starts(), 0);
-    assert.equal((await f.authority.listWorkItems(ORG)).length, 0);
+    await f.dispatch.startItem(item, f.recipe, undefined, "manual");
+    assert.equal(f.starts(), 1);
+  });
+
+  it("rechecks push filters on failed retries and refuses a missing triggering event", async (t) => {
+    const f = await fixture(t);
+    const eventId = await f.ingest("approve draft");
+    const item = await f.authority.putWorkItem({
+      id: "retry", org_id: ORG, recipe_id: f.recipe.id,
+      thread_id: "test-chat:room", unit_key: eventId, head_event_id: eventId,
+      record_class: "task", thread_facet: "ticket", status: "failed",
+      created_at: f.now, updated_at: "2020-01-01T00:00:00.000Z",
+    });
+    await f.dispatch.fillOpenSlots();
+    assert.equal(f.starts(), 0);
+    await f.ingest("approve release");
+    await f.dispatch.startItem({ ...item, head_event_id: undefined }, f.recipe);
+    assert.equal(f.starts(), 0);
+    assert.equal((await f.authority.listWorkRuns(ORG)).length, 0);
   });
 });

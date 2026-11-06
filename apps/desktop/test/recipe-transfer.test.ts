@@ -42,6 +42,19 @@ describe("recipe transfer", () => {
     }
   });
 
+  it("preserves inactive filters and trigger kind through pull/manual import and export", () => {
+    for (const kind of ["pull", "manual"] as const) {
+      const recipe = {
+        ...sample,
+        trigger: { kind, ...(kind === "pull" ? { interval_ms: 60_000 } : {}) },
+        match: { thread_id: "feishu:chat-1", text_contains: "Report", text_excludes: "draft" },
+      };
+      const [parsed] = parseRecipeBundle(stringifyRecipeBundle(buildRecipeBundle([recipe]))).recipes;
+      assert.deepEqual(parsed?.match, recipe.match);
+      assert.equal(parsed?.trigger?.kind, kind);
+    }
+  });
+
   it("preserves the result destination through export and import", () => {
     const recipe = { ...sample, write_back_thread_id: "feishu:results" };
     const parsed = parseRecipeBundle(stringifyRecipeBundle(buildRecipeBundle([recipe])));

@@ -564,8 +564,11 @@ export function recipeCardLine(
     executor,
     outcome: [
       `${outcome}${concurrent}`,
-      ...(recipe.match.text_contains ? [t("recipes.filterContainsSummary", { text: recipe.match.text_contains })] : []),
-      ...(recipe.match.text_excludes ? [t("recipes.filterExcludesSummary", { text: recipe.match.text_excludes })] : []),
+      ...((recipe.trigger?.kind ?? "push") === "push" ? [
+       ...(recipe.match.text_contains ? [t("recipes.filterContainsSummary", { text: recipe.match.text_contains })] : []),
+       ...(recipe.match.text_excludes ? [t("recipes.filterExcludesSummary", { text: recipe.match.text_excludes })] : []),
+      ] : recipe.match.text_contains || recipe.match.text_excludes
+       ? [t("recipes.filterInactiveSummary")] : []),
     ].join(" · "),
   });
 }
@@ -624,7 +627,7 @@ export function conflictCopy(
       item.id !== recipe.id &&
       item.enabled &&
       competesForChat(item.trigger?.kind ?? "push") &&
-      recipesCanShareSubject(recipe.match, item.match) &&
+      recipesCanShareSubject(recipe.match, item.match, recipe.trigger?.kind ?? "push", item.trigger?.kind ?? "push") &&
       recipeOutranks(item, recipe),
   );
   if (!other) {

@@ -51,6 +51,16 @@ export function TextFilterConditions({
       requestAnimationFrame(() => addControl.current?.querySelector("button")?.focus());
     }
   };
+  if (draft.trigger_kind !== "push") {
+    return (
+      <RecipeRow label={t("recipes.filterConditions")}>
+        <p className="recipe-hint recipe-conditions-inactive" role="status">
+          {t("recipes.filterInactive")}
+          {shown.length ? ` ${t("recipes.filterRetained")}` : ""}
+        </p>
+      </RecipeRow>
+    );
+  }
   return (
     <RecipeRow label={t("recipes.filterConditions")}>
       <div className={`recipe-conditions${shown.length ? " has-conditions" : ""}`}>
@@ -73,6 +83,7 @@ export function TextFilterConditions({
                       id={`${id}-${key}`}
                       ref={(node) => {
                         inputs.current[key] = node;
+                        node?.setCustomValidity(draft[key] && !draft[key].trim() ? t("recipes.filterNeedValue") : "");
                         if (node && nextFocus.current === key) {
                           node.focus();
                           nextFocus.current = null;
@@ -226,7 +237,7 @@ export function MatchPreview({
       {samples ? <p className="recipe-preview-samples">{samples}</p> : null}
       {preview.ready ? (
         <p className="recipe-hint">
-          {t(draft.text_contains.trim() || draft.text_excludes.trim()
+          {t(draft.trigger_kind === "push" && (draft.text_contains.trim() || draft.text_excludes.trim())
             ? "recipes.filterPreviewHint" : "recipes.previewPartial")}
         </p>
       ) : null}

@@ -144,6 +144,26 @@ describe("recipe match", () => {
     ), false);
   });
 
+  it("ignores stored message filters for manual selection and scheduled matching", () => {
+    const match = { thread_id: subject.thread_id, text_contains: "approve", text_excludes: "draft" };
+    const rejected = { ...subject, body_text: "draft" };
+    const manual = { ...makeRecipe("manual", match), trigger: { kind: "manual" } };
+    const push = makeRecipe("push", match);
+    for (const kind of ["pull", "manual"]) {
+      assert.equal(recipeMatches(match, rejected, kind), true);
+      assert.equal(recipeMatches(match, subject, kind), true);
+      assert.equal(recipeMatches(match, { ...subject, thread_id: "other" }, kind), false);
+    }
+    assert.equal(selectRecipeForSubject([push, manual], rejected)?.id, manual.id);
+    assert.equal(matchRecipe([manual], subject)?.id, manual.id);
+    const exclusion = { thread_id: subject.thread_id, text_excludes: "approve" };
+    assert.equal(recipesCanShareSubject(match, exclusion), false);
+    assert.equal(recipesCanShareSubject(match, exclusion, "push", "manual"), true);
+    assert.equal(recipesCanShareSubject(match, exclusion, "manual", "push"), true);
+    const narrow = { ...manual, id: "a", match: exclusion };
+    assert.equal(recipePreemptedBy(push, [push, narrow])?.id, narrow.id);
+  });
+
   it("prefers the most specific enabled recipe", () => {
     const recipes = [
       makeRecipe("broad", { record_class: "utterance" }),

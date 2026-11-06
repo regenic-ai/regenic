@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   canAutoStart,
+  applyTriggerKind,
   conflictCopy,
   draftFromRecipe,
   draftMatch,
@@ -55,6 +56,26 @@ describe("recipe draft", () => {
       assert.equal(starterDraft(kind, emptyDraft(), [], []).include_context, true);
     }
     assert.equal(draftFromRecipe(rule).include_context, false);
+  });
+
+  it("keeps inactive conditions through trigger switching, save/edit and list summaries", () => {
+    const saved = { ...rule, match: { ...rule.match, text_contains: " approve ", text_excludes: "draft" } };
+    let draft = draftFromRecipe(saved);
+    for (const kind of ["pull", "manual", "push"] as const) {
+      draft = applyTriggerKind(draft, kind);
+      assert.equal(draft.text_contains, " approve ");
+      assert.equal(draft.text_excludes, "draft");
+      const reloaded = { ...saved, trigger: { kind }, match: draftMatch(draft) };
+      draft = draftFromRecipe(reloaded);
+      const summary = recipeCardLine(reloaded, [], [], "Test", t);
+      if (kind === "push") {
+        assert.match(summary, /filterContainsSummary/);
+        assert.doesNotMatch(summary, /filterInactiveSummary/);
+      } else {
+        assert.match(summary, /filterInactiveSummary/);
+        assert.doesNotMatch(summary, /filterContainsSummary|filterExcludesSummary/);
+      }
+    }
   });
 
   it("keeps match fields the form does not show when editing", () => {

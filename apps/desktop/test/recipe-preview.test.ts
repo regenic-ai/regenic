@@ -5,6 +5,7 @@ import {
   overlappingPriorityGroup,
   previewRecipeMatch,
   recipeMatches,
+  recipesCanShareSubject,
   recipeTextMatches,
   shouldConfirmRecipeSave,
   subjectFromConversation,
@@ -80,6 +81,25 @@ describe("recipe match preview", () => {
       recipeMatches({ thread_id: "feishu:other" }, subject),
       false,
     );
+  });
+
+  it("ignores retained body conditions in pull/manual coverage and sample choices", () => {
+    const match = { thread_id: task.id, text_contains: "approve", text_excludes: "draft" };
+    for (const triggerKind of ["pull", "manual"] as const) {
+      const conversations = [{ ...task, body_text: "draft" }, chat];
+      assert.deepEqual(previewRecipeMatch({
+        match, triggerKind, conversations, recipes: [],
+      }).sample_ids, [task.id]);
+      assert.deepEqual(matchingConversations(match, conversations, triggerKind)?.map(item => item.id), [task.id]);
+      assert.equal(recipeMatches(match, subjectFromConversation(task)!, triggerKind), true);
+    }
+    assert.equal(previewRecipeMatch({
+      match, triggerKind: "push", conversations: [task], recipes: [],
+    }).count, 0);
+    const conflicting = { thread_id: task.id, text_excludes: "approve" };
+    assert.equal(recipesCanShareSubject(match, conflicting), false);
+    assert.equal(recipesCanShareSubject(match, conflicting, "push", "manual"), true);
+    assert.equal(recipesCanShareSubject(match, conflicting, "manual", "push"), true);
   });
 
   it("counts Current-work tasks for an all-tasks rule", () => {

@@ -829,7 +829,7 @@ export class PersonalWorkService implements OnModuleDestroy {
       body_text: body?.body_text,
       ...(unit_kind ? { unit_kind } : {}),
     };
-    if (!recipeMatches(recipe.match, subject)) {
+    if (!recipeMatches(recipe.match, subject, recipe.trigger.kind)) {
       throw new PersonalConnectorError(
         "invalid_config",
         "This rule does not match that chat",
@@ -837,7 +837,8 @@ export class PersonalWorkService implements OnModuleDestroy {
       );
     }
     const now = new Date().toISOString();
-    const filtered = Boolean(recipe.match.text_contains || recipe.match.text_excludes);
+    const filtered = recipe.trigger.kind === "push" &&
+      Boolean(recipe.match.text_contains || recipe.match.text_excludes);
     const item =
       existing &&
       (!filtered || existing.head_event_id === head?.event.id) &&

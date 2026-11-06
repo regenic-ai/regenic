@@ -268,7 +268,121 @@ async function rendererSmoke() {
     assert.equal(await window.webContents.executeJavaScript(
       'window.__confirmCalls',
     ), 0, "A new blank condition must block trial before confirmation, even when the persisted payload is unchanged");
-    console.log("Recipe filter preview, save and edit smoke passed");
+    const switchTrigger = async (label) => {
+      await window.webContents.executeJavaScript(`(() => {
+        const button = [...document.querySelectorAll(".recipe-form .seg button")]
+          .find(item => item.textContent.trim() === ${JSON.stringify(label)});
+        if (!button) throw new Error("Missing trigger option");
+        button.click();
+      })()`);
+      await new Promise((resolve) => setTimeout(resolve, 75));
+    };
+    const tryOnce = async () => {
+      const before = await window.webContents.executeJavaScript('window.__tryCalls ?? 0');
+      await window.webContents.executeJavaScript(`(() => {
+        const button = [...document.querySelectorAll(".recipe-form-foot button")]
+          .find(item => item.textContent.trim() === "Try once");
+        if (!button || button.disabled) throw new Error("Trial action is disabled");
+        button.click();
+      })()`);
+      for (let attempt = 0; ; attempt++) {
+        if (await window.webContents.executeJavaScript(`(window.__tryCalls ?? 0) > ${before} &&
+          ![...document.querySelectorAll(".recipe-form-foot button")].find(item => item.textContent.trim() === "Try once").disabled`)) break;
+        assert.ok(attempt < 50, "Trial request was blocked or failed to settle");
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+    };
+    const assertInactive = async () => {
+      assert.equal(await window.webContents.executeJavaScript(
+        'document.querySelectorAll(".recipe-condition input, .recipe-conditions textarea").length',
+      ), 0, "Inactive condition editor must not leave hidden required inputs");
+      assert.match(await window.webContents.executeJavaScript(
+        'document.querySelector(".recipe-conditions-inactive").textContent',
+      ), /apply only.*Scheduled and manual.*kept/s);
+      assert.match(await window.webContents.executeJavaScript(
+        'document.querySelector(".recipe-preview-body").textContent',
+      ), /Filter smoke chat/, "Inactive filters must not restrict scope preview");
+    };
+    await switchTrigger("Only when I ask");
+    await assertInactive();
+    await tryOnce();
+    assert.equal(await window.webContents.executeJavaScript(
+      'document.querySelector(".recipe-form").checkValidity()',
+    ), true, "A retained empty condition must not invalidate a manual trial");
+    await switchTrigger("On a new message");
+    assert.equal(await window.webContents.executeJavaScript(
+      'document.querySelector(\'input[aria-label="Body contains"]\').value',
+    ), "", "Switching back must preserve an unfinished added row");
+    await addCondition("Body does not contain");
+    await setFilters("MISSING", "RELEASE");
+    for (const [kind, label] of [["pull", "On a schedule"], ["manual", "Only when I ask"], ["push", "On a new message"]]) {
+      await switchTrigger(label);
+      if (kind === "push") {
+        assert.deepEqual(await window.webContents.executeJavaScript(`[
+          document.querySelector('input[aria-label="Body contains"]').value,
+          document.querySelector('input[aria-label="Body does not contain"]').value
+        ]`), ["MISSING", "RELEASE"]);
+        assert.match(await window.webContents.executeJavaScript(
+          'document.querySelector(".recipe-preview-body").textContent',
+        ), /No matching chats/);
+      } else {
+        await assertInactive();
+        if (kind === "pull") {
+          assert.match(await window.webContents.executeJavaScript(
+            'document.querySelector(".recipe-form").textContent',
+          ), /what to read.*what to select.*nothing matches.*available tools/s);
+        }
+      }
+      const count = await window.webContents.executeJavaScript('window.__saveCount');
+      await window.webContents.executeJavaScript('document.querySelector(".recipe-form").requestSubmit()');
+      for (let attempt = 0; ; attempt++) {
+        const saved = await window.webContents.executeJavaScript(`window.__saveCount > ${count} &&
+          document.querySelector('.recipe-form button[type="submit"]').textContent.trim() !== "Saving…"`);
+        if (saved) break;
+        assert.ok(attempt < 50, "Trigger-aware rule was not saved");
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      const payload = await window.webContents.executeJavaScript('window.__savedRecipe');
+      assert.equal(payload.trigger.kind, kind);
+      assert.equal(payload.match.text_contains, "MISSING");
+      assert.equal(payload.match.text_excludes, "RELEASE");
+      await window.webContents.executeJavaScript('document.querySelector(".recipe-card-hit").click()');
+      await new Promise((resolve) => setTimeout(resolve, 75));
+      if (kind !== "push") {
+        await assertInactive();
+        assert.match(await window.webContents.executeJavaScript(
+          'document.querySelector(".recipe-card-hit").textContent',
+        ), /Message conditions inactive/);
+      }
+      await tryOnce();
+      for (const [width, height] of [[1186, 800], [480, 800]]) {
+        window.setContentSize(width, height);
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        const gap = await window.webContents.executeJavaScript(`(async () => {
+          const page = document.querySelector(".page-recipes");
+          page.scrollTop = page.scrollHeight;
+          await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+          const cards = page.querySelectorAll(":scope > section.card");
+          const editor = document.querySelector(".recipe-editor").getBoundingClientRect();
+          const footer = document.querySelector(".recipe-form-foot").getBoundingClientRect();
+          if (footer.bottom > editor.bottom + 1) throw new Error("Footer escapes editor");
+          return page.getBoundingClientRect().bottom - Math.max(...[...cards].map(card => card.getBoundingClientRect().bottom));
+        })()`);
+        assert.ok(Math.abs(gap - 28) <= 1, `${kind} footer must keep its 28px gap at ${width}x${height}: ${gap}`);
+        writeFileSync(join(process.env.REGENIC_SMOKE_OUTPUT, `${kind}-${width}x${height}.png`),
+          (await window.webContents.capturePage()).toPNG());
+      }
+    }
+    await setFilters("   ", "RELEASE");
+    await switchTrigger("Only when I ask");
+    assert.equal(await window.webContents.executeJavaScript(
+      'document.querySelector(".recipe-form").checkValidity()',
+    ), true, "Inactive whitespace must not create hidden validation");
+    await switchTrigger("On a new message");
+    assert.equal(await window.webContents.executeJavaScript(
+      'document.querySelector(\'input[aria-label="Body contains"]\').checkValidity()',
+    ), false, "Switching back must restore whitespace validation along with its draft value");
+    console.log("Recipe filter trigger switching, trial, preview, save and edit smoke passed");
   } finally {
     window.destroy();
     app.quit();
@@ -302,10 +416,15 @@ async function launchSmoke() {
     };
     window.fetch = async (input, init) => {
       const path = new URL(String(input), location.href).pathname;
+      if (path === "/v1/me/recipes/smoke-rule/try" && init?.method === "POST") {
+        window.__tryCalls = (window.__tryCalls ?? 0) + 1;
+        return new Response(JSON.stringify({ thread_id: "smoke:room" }), { headers: { "content-type": "application/json" } });
+      }
       if ((path === "/v1/me/recipes" || path === "/v1/me/recipes/smoke-rule") && init?.method === "POST") {
         const recipe = { ...JSON.parse(init.body), id: "smoke-rule", org_id: "local-owner",
           created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
         window.__savedRecipe = recipe;
+        window.__saveCount = (window.__saveCount ?? 0) + 1;
         fixtures["/v1/me/recipes"] = [recipe];
         return new Response(JSON.stringify(recipe), { headers: { "content-type": "application/json" } });
       }

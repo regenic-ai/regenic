@@ -268,16 +268,6 @@ export class PersonalWorkDispatch {
         }
       }
       const fireAt = recipe.next_run_at ?? nowIso;
-      if (
-        (recipe.match.text_contains || recipe.match.text_excludes) &&
-        !recipeTextMatches(recipe.match, await this.filterBodyText(threadId))
-      ) {
-        await authority.putRecipe({
-          ...recipe,
-          next_run_at: advanceRecipePull(recipe.trigger, fireAt, nowIso),
-        });
-        continue;
-      }
       const unit_key = pullUnitKey(recipe.id, fireAt);
       const existing = await authority.getWorkItemByUnitKey(
         orgId,
@@ -445,6 +435,7 @@ export class PersonalWorkDispatch {
   ): Promise<WorkRun | undefined> {
     const host = this.runtime.requireHost();
     if (
+      recipe.trigger.kind === "push" &&
       (recipe.match.text_contains || recipe.match.text_excludes) &&
       !recipeTextMatches(
         recipe.match,
@@ -810,12 +801,14 @@ export class PersonalWorkDispatch {
   }
 
   private async filterBodyText(threadId: string, eventId?: string): Promise<string | undefined> {
+    if (!eventId) return undefined;
     const host = this.runtime.requireHost();
     const authority = host.get("authority");
     const orgId = this.runtime.orgId();
-    const event = eventId
-      ? await authority.getEvent(orgId, eventId)
-      : (await authority.listInbox(orgId, { heads: true, thread_ids: [threadId] }))[0]?.event;
+    const event = await authority.getEvent(orgId, eventId);
+    if (event && conversationId(event.source, event.external_id, event.id) !== threadId) {
+      return undefined;
+    }
     return (await resolveInboxBody(authority, host.get("blobs"), event?.content_hash, "meta")).body_text;
   }
 
@@ -896,6 +889,7 @@ export class PersonalWorkDispatch {
       !isOccupiedRecipeSlot(existing.status) &&
       existing.head_event_id !== input.event.id &&
       recipe &&
+      recipe.trigger.kind === "push" &&
       (recipe.match.text_contains || recipe.match.text_excludes) &&
       !recipeTextMatches(recipe.match, await this.filterBodyText(existing.thread_id, existing.head_event_id))
         ? null

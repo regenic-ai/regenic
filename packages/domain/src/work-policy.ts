@@ -147,7 +147,7 @@ export function selectRecipeForSubject(
 ): Recipe | undefined {
   const hits = recipes
     .filter(
-      (recipe) => recipeAllowsBind(recipe) && recipeMatches(recipe.match, subject),
+      (recipe) => recipeAllowsBind(recipe) && recipeMatches(recipe.match, subject, recipe.trigger.kind),
     )
     .sort((left, right) => {
       const bySpec =
