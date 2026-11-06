@@ -296,9 +296,11 @@ async function rendererSmoke() {
       assert.equal(await window.webContents.executeJavaScript(
         'document.querySelectorAll(".recipe-condition input, .recipe-conditions textarea").length',
       ), 0, "Inactive condition editor must not leave hidden required inputs");
-      assert.match(await window.webContents.executeJavaScript(
-        'document.querySelector(".recipe-conditions-inactive").textContent',
-      ), /apply only.*Scheduled and manual.*kept/s);
+      assert.equal(await window.webContents.executeJavaScript(`(() => {
+        return Boolean(document.querySelector(".recipe-conditions, .recipe-conditions-inactive")) ||
+          [...document.querySelectorAll(".recipe-row-label")].some(item => item.textContent.trim() === "Conditions") ||
+          /conditions apply only|conditions are kept|Message conditions inactive/.test(document.querySelector(".recipe-form").textContent);
+      })()`), false, "Non-push modes must omit the entire condition section and explanatory copy");
       assert.match(await window.webContents.executeJavaScript(
         'document.querySelector(".recipe-preview-body").textContent',
       ), /Filter smoke chat/, "Inactive filters must not restrict scope preview");
@@ -350,9 +352,9 @@ async function rendererSmoke() {
       await new Promise((resolve) => setTimeout(resolve, 75));
       if (kind !== "push") {
         await assertInactive();
-        assert.match(await window.webContents.executeJavaScript(
+        assert.doesNotMatch(await window.webContents.executeJavaScript(
           'document.querySelector(".recipe-card-hit").textContent',
-        ), /Message conditions inactive/);
+        ), /Message conditions inactive|contains “|excludes “/);
       }
       await tryOnce();
       for (const [width, height] of [[1186, 800], [480, 800]]) {

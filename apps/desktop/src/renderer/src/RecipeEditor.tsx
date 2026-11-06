@@ -52,14 +52,7 @@ export function TextFilterConditions({
     }
   };
   if (draft.trigger_kind !== "push") {
-    return (
-      <RecipeRow label={t("recipes.filterConditions")}>
-        <p className="recipe-hint recipe-conditions-inactive" role="status">
-          {t("recipes.filterInactive")}
-          {shown.length ? ` ${t("recipes.filterRetained")}` : ""}
-        </p>
-      </RecipeRow>
-    );
+    return null;
   }
   return (
     <RecipeRow label={t("recipes.filterConditions")}>

@@ -72,8 +72,7 @@ describe("recipe draft", () => {
         assert.match(summary, /filterContainsSummary/);
         assert.doesNotMatch(summary, /filterInactiveSummary/);
       } else {
-        assert.match(summary, /filterInactiveSummary/);
-        assert.doesNotMatch(summary, /filterContainsSummary|filterExcludesSummary/);
+        assert.doesNotMatch(summary, /filterInactiveSummary|filterContainsSummary|filterExcludesSummary/);
       }
     }
   });

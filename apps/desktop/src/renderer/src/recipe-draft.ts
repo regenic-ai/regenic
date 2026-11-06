@@ -567,8 +567,7 @@ export function recipeCardLine(
       ...((recipe.trigger?.kind ?? "push") === "push" ? [
        ...(recipe.match.text_contains ? [t("recipes.filterContainsSummary", { text: recipe.match.text_contains })] : []),
        ...(recipe.match.text_excludes ? [t("recipes.filterExcludesSummary", { text: recipe.match.text_excludes })] : []),
-      ] : recipe.match.text_contains || recipe.match.text_excludes
-       ? [t("recipes.filterInactiveSummary")] : []),
+      ] : []),
     ].join(" · "),
   });
 }
