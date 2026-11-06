@@ -1067,8 +1067,7 @@ export function RecipesPage({
               {draft.id &&
               draft.can_write_back &&
               tryThreadId &&
-              conversations.find((item) => item.id === tryThreadId)?.can_send !==
-                false ? (
+              writeBackAvailable(draft, conversations) ? (
                 <button
                   type="button"
                   className="ghost"
