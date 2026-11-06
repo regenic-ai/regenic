@@ -35,11 +35,13 @@ async function main() {
   const { values } = parseArgs({ args, options: {
     samples: { type: "string", default: "20" },
     "document-workers": { type: "string", default: "12" },
+    "document-batch-size": { type: "string", default: "1" },
     "document-words": { type: "string", default: "80" },
     output: { type: "string" },
   } });
   const samples = positiveInteger(values.samples, "--samples");
   const documentWorkers = positiveInteger(values["document-workers"], "--document-workers");
+  const documentBatchSize = positiveInteger(values["document-batch-size"], "--document-batch-size");
   const documentWords = positiveInteger(values["document-words"], "--document-words");
   const baseUrl = process.env.REGENIC_EMBEDDING_BASE_URL;
   if (!baseUrl) throw new Error("REGENIC_EMBEDDING_BASE_URL is required");
@@ -59,10 +61,10 @@ async function main() {
     let index = 0;
     while (!stop) {
       try {
-        await provider.embed([
-          `background document ${worker}-${index++} ${"content ".repeat(documentWords)}`,
-        ], "document");
-        documentCompleted++;
+        await provider.embed(Array.from({ length: documentBatchSize }, (_, batch) =>
+          `background document ${worker}-${index}-${batch} ${"content ".repeat(documentWords)}`), "document");
+        index++;
+        documentCompleted += documentBatchSize;
       } catch (error) {
         const code = error && typeof error === "object" && "code" in error ? error.code : "unexpected";
         documentFailures[code] = (documentFailures[code] ?? 0) + 1;
@@ -94,7 +96,10 @@ async function main() {
       platform: platform(), node: process.version, cpu: cpus()[0].model,
       logical_cpus: cpus().length, total_memory_bytes: totalmem(),
     },
-    workload: { samples, document_workers: documentWorkers, document_words: documentWords },
+    workload: {
+      samples, document_workers: documentWorkers,
+      document_batch_size: documentBatchSize, document_words: documentWords,
+    },
     idle_query: idleStats,
     continuous_document_load: loadedStats,
     p95_ratio: loadedStats.p95_ms / idleStats.p95_ms,

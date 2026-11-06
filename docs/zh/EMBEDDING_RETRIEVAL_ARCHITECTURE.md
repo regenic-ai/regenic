@@ -887,7 +887,17 @@ query 直接 `429`。query 与 document 各自按 FIFO 调度；有 document 等
 8 个 query 后至少放行一个 document，防止后台索引永久饥饿。超额或等待超过 30 秒仍
 显式返回 `429/503`。`/tokens` 只跑 tokenizer，不进入这把推理锁，因此切块计数可以和
 正在进行的前向重叠，也不会把 document 队列占满。同一次 tokenizer 计数仍然串行。
-文档切块先按原规则确定边界，再最多 8 段合成一次 `/embed`。
+文档切块先按原规则确定边界，再最多 8 段合成一次 `/embed`。Python 服务保持这个 HTTP
+批次，但 document 每段单独执行 model forward，并在段间回到优先队列；等待的 query
+可以在同一请求的两段之间运行。query 批次不拆分，响应中的 counts/vectors 顺序与输入一致；
+任何一段失败都会使整个请求失败，不返回部分结果。
+
+同机固定 BF16、14 threads、每段约 129 tokens 的 batch 1/2/4/8 对比中，原 batch-8
+吞吐为 0.965 chunks/s，query 最大等待 8.62 秒；可让步后吞吐为 0.910 chunks/s
+（下降约 5.7%），query 最大等待为 1.49 秒（约 5.8 倍改善）。提交版 batch-8 持续负载
+基准中，20/20 query 成功，空载 p95 231.0 ms、负载 p95 1631.9 ms，同时完成 24 个
+document chunk 且无失败。最终复跑的空载/负载 p95 为 211.6/1560.9 ms，24 个 document
+chunk 同样全部完成。PyTorch 单段 forward 仍不可抢占，因此负载延迟不会等同空载。
 
 2026-11-04 在 AMD EPYC 7763、固定 BF16 模型上，以 12 个持续 document worker 和
 20 个不同 query 交替压测：空载 query mean/p50/p95 为 196.7/194.9/211.7 ms；
@@ -925,7 +935,7 @@ pnpm --filter @regenic/local-cli bench:semantic --split holdout --output regress
 pnpm --filter @regenic/local-cli bench:semantic --split confirmation --output confirmation.json
 pnpm --filter @regenic/local-cli bench:semantic --split pipeline --output pipeline.json
 pnpm --filter @regenic/local-cli bench:semantic --split development --chunk-tokens 128 --output chunk128.json
-pnpm --filter @regenic/embedding-provider bench:latency -- --samples 20 --document-workers 12 --document-words 80 --output latency.json
+pnpm --filter @regenic/embedding-provider bench:latency -- --samples 20 --document-workers 1 --document-batch-size 8 --document-words 120 --output latency.json
 ```
 
 development 的阈值矩阵只在开发集运行；其它集合不调参。报告保存模型 manifest、profile、
