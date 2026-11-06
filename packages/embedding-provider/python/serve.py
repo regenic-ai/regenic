@@ -480,7 +480,7 @@ class TextEncoder:
 class PriorityEncoder:
     def __init__(
         self, encoder, max_pending=16, wait_seconds=30,
-        reserved_queries=2, max_query_burst=8,
+        reserved_queries=2, max_query_burst=8, max_document_batch=1,
     ):
         self.encoder = encoder
         self.visual_enabled = getattr(encoder, "visual_enabled", False)
@@ -488,6 +488,7 @@ class PriorityEncoder:
         self.wait_seconds = wait_seconds
         self.reserved_queries = max(0, min(reserved_queries, max(0, max_pending - 1)))
         self.max_query_burst = max(1, max_query_burst)
+        self.max_document_batch = max(1, max_document_batch)
         self.condition = threading.Condition()
         self.busy = False
         self.pending = 0
@@ -497,12 +498,12 @@ class PriorityEncoder:
         self.query_queue = []
         self.document_queue = []
 
-    def call(self, method, texts, mode):
+    def call(self, method, texts, mode, continuation=False):
         query = mode == "query"
         token = object()
         with self.condition:
             limit = self.max_pending if query else self.max_pending - self.reserved_queries
-            if self.pending >= limit:
+            if not continuation and self.pending >= limit:
                 raise InputError(429)
             queue = self.query_queue if query else self.document_queue
             queue.append(token)
@@ -548,10 +549,25 @@ class PriorityEncoder:
         return self.encoder.count(texts, mode)
 
     def embed(self, texts, mode):
-        return self.call("embed", texts, mode)
+        vectors = []
+        for index, batch in enumerate(self.batches(texts, mode)):
+            vectors.extend(self.call("embed", batch, mode, index > 0))
+        return vectors
 
     def embed_with_counts(self, texts, mode):
-        return self.call("embed_with_counts", texts, mode)
+        counts = []
+        vectors = []
+        for index, batch in enumerate(self.batches(texts, mode)):
+            batch_counts, batch_vectors = self.call(
+                "embed_with_counts", batch, mode, index > 0,
+            )
+            counts.extend(batch_counts)
+            vectors.extend(batch_vectors)
+        return counts, vectors
+
+    def batches(self, texts, mode):
+        size = len(texts) if mode == "query" else self.max_document_batch
+        return [texts[start:start + size] for start in range(0, len(texts), size)]
 
     def attachment(self, value):
         return process_attachment(self, value)
