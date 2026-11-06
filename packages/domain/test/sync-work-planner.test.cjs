@@ -9,9 +9,11 @@ const {
   membersMissingLane,
   membersMissingLatestWork,
   needsCatalogDueWork,
+  liveWorkAfterInteractiveRelease,
   owedSyncLanes,
   planDueSyncWork,
   planSyncWorkGaps,
+  shouldReleaseInteractiveWork,
   selectQuickStartStreamKeys,
   syncWorkEnsurePlan,
   selectSyncRunWakeKeys,
@@ -499,6 +501,37 @@ describe("owed sync lanes", () => {
       existing: [{ lane: "interactive", status: "pending", run_id: null }],
     });
     assert.deepEqual(covered, { enqueue: [], cancel: [] });
+
+    const stale = syncWorkEnsurePlan({
+      state: { phase: "live", media_pending: false },
+      existing: [{ lane: "interactive", status: "pending", run_id: null }],
+      preferred: false,
+    });
+    assert.deepEqual(stale, { enqueue: ["live"], cancel: ["interactive"] });
+    assert.equal(
+      shouldReleaseInteractiveWork({
+        lane: "interactive",
+        threadId: "dsh:done",
+        preferredThreadId: null,
+      }),
+      true,
+    );
+    assert.equal(
+      shouldReleaseInteractiveWork({
+        lane: "interactive",
+        threadId: "dsh:open",
+        preferredThreadId: "dsh:open",
+      }),
+      false,
+    );
+    const live = liveWorkAfterInteractiveRelease({
+      installation_id: "dsh-1",
+      stream_key: "session:done",
+      generation: 1,
+      now: "2026-09-21T00:00:00.000Z",
+    });
+    assert.equal(live.lane, "live");
+    assert.equal(live.next_due_at, "2026-09-21T01:00:00.000Z");
   });
 
   it("cancels pending history and media once the phase no longer owes them", () => {

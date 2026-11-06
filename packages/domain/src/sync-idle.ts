@@ -2,8 +2,10 @@
  * Core-owned stream idle tiers. Connectors may hint via `pace.idle_ms`;
  * they must not encode active/inactive — Core classifies from thread focus.
  *
- * No hint ⇒ caller should leave idle unset (every tick). DSH omits `pace`;
- * Feishu declares `idle_ms` and gets active/inactive floors.
+ * No hint and a cold poll waits out the cold idle. DSH omits `pace`, so a
+ * finished session must not become due again on the next tick. The open
+ * thread and a hot poll stay due now. Feishu declares `idle_ms` and gets
+ * active/inactive floors.
  *
  * Due-work heat is not a new lane: interactive/hot/cold share live (or
  * interactive) work and differ only in `next_due_at` / `idle_ms`.
@@ -43,6 +45,16 @@ export function pacedStreamIdleMs(input: {
   }
   const fromHint = hint != null ? hint * 4 : inactiveFloor;
   return Math.max(inactiveFloor, fromHint);
+}
+
+/** Open / working thread id must match exactly. Empty sides never match. */
+export function streamIsPreferredThread(
+  preferredThreadId?: string | null,
+  threadId?: string | null,
+): boolean {
+  const preferred = preferredThreadId?.trim() || "";
+  const thread = threadId?.trim() || "";
+  return Boolean(preferred && thread && preferred === thread);
 }
 
 /**
@@ -89,6 +101,33 @@ export function dueWorkIdleMs(input: {
   );
   const fromHint = hint != null ? hint * 4 : floor;
   return Math.max(floor, fromHint);
+}
+
+/**
+ * When to claim this stream again after a poll.
+ * A future idle_until from a connector hint still wins.
+ * No hint and a cold poll (not the open thread, nothing new) waits out the
+ * cold idle, so a finished DSH session cannot become due again immediately.
+ * Hot and interactive polls stay due now.
+ */
+export function nextDueAfterPoll(input: {
+  now: string;
+  idleUntil?: string | null;
+  idleMs?: number;
+  heat: DueWorkHeat;
+  coldIdleMs?: number;
+}): string {
+  if (input.idleUntil && input.idleUntil > input.now) {
+    return input.idleUntil;
+  }
+  if (input.idleMs == null && input.heat === "cold") {
+    return nextDueAtForDueWork({
+      now: input.now,
+      heat: "cold",
+      coldIdleMs: input.coldIdleMs,
+    });
+  }
+  return input.now;
 }
 
 export function nextDueAtForDueWork(input: {

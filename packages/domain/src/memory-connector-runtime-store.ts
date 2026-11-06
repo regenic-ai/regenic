@@ -730,6 +730,10 @@ export class MemoryConnectorRuntimeStore implements ConnectorRuntimeStore {
       }));
   }
 
+  async releaseFinishedExecutorPolls(): Promise<number> {
+    return 0;
+  }
+
   async wakeUnassignedSyncWork(
     input: WakeUnassignedSyncWork,
   ): Promise<number> {

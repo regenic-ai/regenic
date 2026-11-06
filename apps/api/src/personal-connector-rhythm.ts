@@ -3,6 +3,7 @@ import {
   connectorSyncTimeoutMs,
   pacedStreamIdleMs,
   streamIdleTiersFromEnv,
+  streamIsPreferredThread,
   syncModeFromConfig,
   syncModePreset,
   type ConnectorStream,
@@ -143,14 +144,10 @@ export function streamIdleMs(
 }
 
 export function dueWorkStreamPreferred(
-  lane: SyncLane,
+  _lane: SyncLane,
   threadId?: string | null,
 ): boolean {
-  if (lane === "interactive") {
-    return true;
-  }
-  const preferred = preferredThreadId();
-  return Boolean(preferred && threadId && threadId === preferred);
+  return streamIsPreferredThread(preferredThreadId(), threadId);
 }
 
 export function dueWorkStreamIdleMs(

@@ -175,6 +175,7 @@ export const AUTHORITY_WRITE_METHODS = [
   "renewSyncWork",
   "settleSyncWork",
   "wakeUnassignedSyncWork",
+  "releaseFinishedExecutorPolls",
   "applySyncCatalogPage",
   "putSyncState",
   "pruneIngestAttempts",

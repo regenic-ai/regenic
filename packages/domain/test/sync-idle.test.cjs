@@ -9,7 +9,9 @@ const {
   classifyDueWorkHeat,
   coldIdleMsForCatalogSize,
   dueWorkIdleMs,
+  nextDueAfterPoll,
   nextDueAtForDueWork,
+  streamIsPreferredThread,
   pacedStreamIdleMs,
   streamIdleTiersFromEnv,
 } = require("../dist");
@@ -55,6 +57,13 @@ describe("sync idle tiers", () => {
 });
 
 describe("due-work heat", () => {
+  it("matches the open thread exactly and ignores empty ids", () => {
+    assert.equal(streamIsPreferredThread("dsh:sess-1", "dsh:sess-1"), true);
+    assert.equal(streamIsPreferredThread("dsh:sess-1", "dsh:sess-2"), false);
+    assert.equal(streamIsPreferredThread(null, "dsh:sess-1"), false);
+    assert.equal(streamIsPreferredThread("dsh:sess-1", null), false);
+  });
+
   it("keeps preferred interactive and first seed hot", () => {
     assert.equal(classifyDueWorkHeat({ preferred: true }), "interactive");
     assert.equal(
@@ -75,6 +84,31 @@ describe("due-work heat", () => {
     );
     assert.equal(dueWorkIdleMs({ heat: "hot" }), DEFAULT_HOT_STREAM_IDLE_MS);
     assert.equal(dueWorkIdleMs({ heat: "cold" }), DEFAULT_COLD_STREAM_IDLE_MS);
+  });
+
+  it("keeps a quiet poll with no idle hint off the next tick", () => {
+    assert.equal(
+      nextDueAfterPoll({
+        now: "2026-09-21T00:00:00.000Z",
+        heat: "cold",
+      }),
+      "2026-09-21T01:00:00.000Z",
+    );
+    assert.equal(
+      nextDueAfterPoll({
+        now: "2026-09-21T00:00:00.000Z",
+        heat: "hot",
+      }),
+      "2026-09-21T00:00:00.000Z",
+    );
+    assert.equal(
+      nextDueAfterPoll({
+        now: "2026-09-21T00:00:00.000Z",
+        heat: "cold",
+        idleUntil: "2026-09-21T00:03:00.000Z",
+      }),
+      "2026-09-21T00:03:00.000Z",
+    );
   });
 
   it("defers first plan of seeded live streams instead of due-now", () => {
