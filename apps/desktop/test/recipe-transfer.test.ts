@@ -31,6 +31,23 @@ describe("recipe transfer", () => {
     assert.deepEqual(parsed.recipes[0]?.match, recipe.match);
   });
 
+  it("round-trips the shared and legacy task-instruction config keys", () => {
+    const recipe = {
+      ...sample,
+      executor_config: { prompt: "New instruction", skill: "review" },
+    };
+    const [exported] = parseRecipeBundle(
+      stringifyRecipeBundle(buildRecipeBundle([recipe])),
+    ).recipes;
+    assert.deepEqual(exported?.executor_config, recipe.executor_config);
+
+    const legacy = { ...recipe, executor_config: { instruction: "Old instruction" } };
+    const [legacyExport] = parseRecipeBundle(
+      stringifyRecipeBundle(buildRecipeBundle([legacy])),
+    ).recipes;
+    assert.deepEqual(legacyExport?.executor_config, legacy.executor_config);
+  });
+
   it("rejects malformed text filters rather than importing an unfiltered rule", () => {
     for (const key of ["text_contains", "text_excludes"]) {
       for (const value of [42, null, [], {}, true, "", "   "]) {

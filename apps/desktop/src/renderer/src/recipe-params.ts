@@ -1,17 +1,30 @@
 import type { ExecutorCatalogEntry } from "./types";
 
+const SHARED_INSTRUCTION_KEYS = new Set(["prompt", "instruction"]);
+
+export function taskInstructionValue(
+  config: Record<string, string> | undefined,
+): string {
+  for (const key of ["prompt", "instruction"]) {
+    const value = config?.[key];
+    if (value?.trim()) {
+      return value;
+    }
+  }
+  return config?.prompt ?? config?.instruction ?? "";
+}
+
 export function invokeCopy(
   catalog: ExecutorCatalogEntry | undefined,
   config: Record<string, string> | undefined,
 ): string {
   const values = config ?? {};
   const bits = (catalog?.fields ?? [])
+    .filter((field) => !SHARED_INSTRUCTION_KEYS.has(field.key))
     .map((field) => values[field.key]?.trim())
     .filter((value): value is string => Boolean(value));
-  if (bits.length > 0) {
-    return bits.join(" · ");
-  }
-  return (values.prompt ?? values.instruction ?? values.skill ?? "").trim();
+  const instruction = taskInstructionValue(values).trim();
+  return [...bits, instruction].filter(Boolean).join(" · ");
 }
 
 export function missingRequiredField(
@@ -19,6 +32,9 @@ export function missingRequiredField(
   config: Record<string, string> | undefined,
 ): string | undefined {
   for (const field of catalog?.fields ?? []) {
+    if (SHARED_INSTRUCTION_KEYS.has(field.key)) {
+      continue;
+    }
     if (field.required && !(config?.[field.key] ?? "").trim()) {
       return field.label;
     }
@@ -31,14 +47,19 @@ export function configFromCatalog(
   existing?: Record<string, string>,
 ): Record<string, string> {
   if (!catalog) {
-    const next = { ...(existing ?? {}) };
-    if (!next.prompt?.trim() && next.instruction?.trim()) {
-      next.prompt = next.instruction;
-    }
-    return next;
+    return { ...(existing ?? {}) };
   }
   const next: Record<string, string> = {};
+  for (const key of SHARED_INSTRUCTION_KEYS) {
+    const value = existing?.[key];
+    if (value !== undefined) {
+      next[key] = value;
+    }
+  }
   for (const field of catalog.fields) {
+    if (SHARED_INSTRUCTION_KEYS.has(field.key)) {
+      continue;
+    }
     const current = existing?.[field.key];
     if (current?.trim()) {
       next[field.key] = current;
@@ -46,12 +67,22 @@ export function configFromCatalog(
       next[field.key] = field.default;
     }
   }
-  if (
-    !next.prompt?.trim() &&
-    existing?.instruction?.trim() &&
-    catalog.fields.some((field) => field.key === "prompt")
-  ) {
-    next.prompt = existing.instruction;
+  return next;
+}
+
+export function configForRecipeEdit(
+  catalog: ExecutorCatalogEntry | undefined,
+  existing: Record<string, string>,
+): Record<string, string> {
+  const next = { ...existing };
+  for (const field of catalog?.fields ?? []) {
+    if (
+      !SHARED_INSTRUCTION_KEYS.has(field.key) &&
+      !Object.hasOwn(next, field.key) &&
+      field.default
+    ) {
+      next[field.key] = field.default;
+    }
   }
   return next;
 }

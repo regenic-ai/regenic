@@ -7,6 +7,7 @@ import {
   WORK_EVIDENCE_GAP,
   WORK_EVIDENCE_OMITTED,
   WORK_EVIDENCE_SPLIT_HINT,
+  taskInstructionOf,
   wrapEvidenceSection,
 } from "@regenic/connector-contract";
 import { selectContextIndexes } from "./context-selection";
@@ -58,6 +59,7 @@ export {
   formatWorkEvidence,
   handleFromWait,
   stageConversationWorkspace,
+  taskInstructionOf,
 } from "@regenic/connector-contract";
 
 export interface ExecutorRegistry {

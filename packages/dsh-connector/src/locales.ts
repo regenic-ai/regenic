@@ -65,13 +65,9 @@ export const dshLocaleTables = defineLocaleTables({
     "probe.cliReady": "dsh is on PATH.",
     "executor.label": "DSH",
     "executor.description":
-      "Skill and prompt go on stdin ahead of the work evidence.",
+      "The optional skill and shared task instruction go on stdin ahead of the work evidence.",
     "executor.field.skill": "Skill",
     "executor.field.skill.hint": "Optional DSH skill or preset for this run.",
-    "executor.field.prompt": "Prompt",
-    "executor.field.prompt.hint":
-      "Optional. Tell the assistant what to do. If it should pick a choice, put that on the first line and the reason below.",
-    "executor.field.prompt.placeholder": "What this run should do.",
   },
   zh: {
     "catalog.title": "DSH",
@@ -133,12 +129,8 @@ export const dshLocaleTables = defineLocaleTables({
     "probe.cliMissing": "终端里的 dsh 必须能用。",
     "probe.cliReady": "dsh 已在 PATH 上。",
     "executor.label": "DSH",
-    "executor.description": "Skill 和 Prompt 会写在工作材料前面，从 stdin 送进去。",
+    "executor.description": "可选的 Skill 和公共任务说明会写在工作材料前面，从 stdin 送进去。",
     "executor.field.skill": "Skill",
     "executor.field.skill.hint": "这次运行可选的 DSH skill 或预设。",
-    "executor.field.prompt": "Prompt",
-    "executor.field.prompt.hint":
-      "可选。告诉助手这次做什么。若要回复一个选项，写在第一行，原因写在后面。",
-    "executor.field.prompt.placeholder": "这次要做什么。",
   },
 });

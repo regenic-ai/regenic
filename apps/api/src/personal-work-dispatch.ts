@@ -27,6 +27,7 @@ import {
   selectRecipeForSubject,
   shouldAcceptPushRecord,
   shouldRetryFailedPush,
+  taskInstructionOf,
   workSubjectFromEvent,
   type ExecutorContext,
   type ConnectorInstallation,
@@ -594,6 +595,7 @@ export class PersonalWorkDispatch {
           run_id: run.id,
           work_item: item,
           recipe,
+          task_instruction: taskInstructionOf(recipe.executor_config),
           evidence_text: formatWorkEvidence({
             thread_id: item.thread_id,
             record_class: item.record_class,

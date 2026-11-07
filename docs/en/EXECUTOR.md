@@ -121,8 +121,8 @@ There is no end-to-end exactly-once guarantee across the database and executor.
 
 Each executor must:
 
-- Implement `catalog()`. The Recipes page only renders those fields. The
-  kernel stores `executor_config` as an opaque bag.
+- Implement `catalog()` for executor-specific invoke fields. The shared task
+  instruction is always configured separately; it is not an invoke field.
 - Touch a channel only through `ExecutorContext`. A local binding must not
   ship a private HTTP client.
 - Use `WaitStatus` (wait / notify) as the completion contract. Words in a
@@ -206,7 +206,7 @@ A remote executor implements these three calls. The kernel forwards
 
 | Method | Path | Request | Success |
 | --- | --- | --- | --- |
-| POST | `/v1/runs` | `run_id`, `work_item_id`, `thread_id`, `recipe_id`, `evidence_text`, `executor_config` | `external_run_id`, `status`, optional `agent_thread_id` / `prompts` / `result` |
+| POST | `/v1/runs` | `run_id`, `work_item_id`, `thread_id`, `recipe_id`, `task_instruction`, `evidence_text`, `executor_config` | `external_run_id`, `status`, optional `agent_thread_id` / `prompts` / `result` |
 | GET | `/v1/runs/:id` | — | Same |
 | POST | `/v1/runs/:id/resume` | `work_item_id`, `recipe_id`, `answer` | Same |
 
@@ -246,10 +246,16 @@ interface ExecutorCatalogEntry {
 }
 ```
 
-Building stdin, HTTP, or an agent target is the plugin's job. DSH uses
-`skill` / `prompt`. Cursor and a private Agent OS declare their own
-fields. An old DSH `instruction` maps to `prompt` only inside the DSH
-plugin.
+The Recipes page always provides a shared task instruction, stored in the
+existing `executor_config.prompt` key and passed to `TaskExecutor.start` as
+`task_instruction`. For compatibility, `executor_config.instruction` is read
+when `prompt` is absent; the stored recipe is not rewritten automatically.
+New recipes require a non-empty instruction, while existing recipes without
+one remain editable and executable. Executor-specific options stay in
+`catalog().fields`; DSH exposes its optional `skill` there. A local executor
+must use `input.task_instruction`; the HTTP adapter sends the same value as
+the top-level `task_instruction` request property and still forwards the
+original `executor_config`.
 
 ## Catalog
 

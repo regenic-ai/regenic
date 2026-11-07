@@ -9,6 +9,7 @@ import type {
   TaskExecutor,
 } from "./executor";
 import { normalizeExecutorHttpUrl } from "./executor-installation";
+import { taskInstructionOf } from "./executor";
 import type { ResultEnvelope, WorkRun, WorkRunStatus } from "./work";
 import type { ThreadPrompt } from "./thread-surface";
 
@@ -35,15 +36,7 @@ export function httpExecutorCatalog(
       : "http.description",
     attach: "absentee",
     kind: "http",
-    fields: [
-      {
-        key: "prompt",
-        label: "http.field.prompt",
-        kind: "textarea",
-        hint: "http.field.prompt.hint",
-        placeholder: "http.field.prompt.placeholder",
-      },
-    ],
+    fields: [],
   };
 }
 
@@ -77,6 +70,8 @@ export function createHttpTaskExecutor(options: HttpExecutorOptions): TaskExecut
           work_item_id: input.work_item.id,
           thread_id: input.work_item.thread_id,
           recipe_id: input.recipe.id,
+          task_instruction:
+            input.task_instruction ?? taskInstructionOf(input.recipe.executor_config),
           evidence_text: input.evidence_text,
           executor_config: input.recipe.executor_config,
           ...(input.run_id ? { run_id: input.run_id } : {}),

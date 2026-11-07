@@ -39,7 +39,7 @@ async function fixture(t, maxConcurrent) {
   };
   await ports.authority.putRecipe(recipe);
   await ports.authority.putWorkItem(item);
-  const calls = { spawn: 0, stdin: 0, status: 0, attach: 0 };
+  const calls = { spawn: 0, stdin: 0, stdinText: "", status: 0, attach: 0 };
   const hooks = {};
   let executor = createSessionTaskExecutor({ executor_type: "session", source: "dsh" });
   ports.executors = { get: () => executor };
@@ -53,6 +53,7 @@ async function fixture(t, maxConcurrent) {
     },
     async writeStdin(thread, text) {
       calls.stdin += 1;
+      calls.stdinText = text;
       if (hooks.stdin) await hooks.stdin(thread, text);
     },
     listPrompts: async () => [],
@@ -132,6 +133,19 @@ describe("durable executor start", () => {
     assert.equal(f.calls.spawn, 1);
     assert.equal(f.calls.stdin, 1);
     assert.equal((await f.ports.authority.listWorkRuns(ORG, f.item.id)).length, 1);
+  });
+
+  it("passes the shared instruction to the executor, including the legacy config alias", async (t) => {
+    const f = await fixture(t);
+    await f.dispatch().startItem(
+      f.item,
+      { ...f.recipe, executor_config: { instruction: "Handle this carefully." } },
+      "evidence",
+    );
+    assert.match(
+      f.calls.stdinText,
+      /^Handle this carefully\.\n\nWORK\nWork item[\s\S]*\nevidence$/,
+    );
   });
 
   it("does not invoke the executor if the atomic claim cannot be persisted", async (t) => {

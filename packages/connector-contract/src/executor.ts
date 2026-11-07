@@ -87,10 +87,8 @@ export interface ExecutorCapabilities {
 }
 
 /**
- * Invoke schema owned by one TaskExecutor. The kernel stores values in
- * Recipe.executor_config and never reads the keys. The desktop only renders
- * this catalog. DSH, Cursor, and a connector-mounted agent each declare
- * their own fields.
+ * Executor-specific invoke schema. The shared task instruction is configured
+ * separately and is not declared as a catalog field.
  */
 export interface ExecutorCatalogField {
   key: string;
@@ -222,8 +220,22 @@ export interface ExecutorStartInput {
   run_id?: string;
   work_item: ExecutorWorkRef;
   recipe: ExecutorRecipeRef;
+  /** Shared rule instruction; falls back to executor_config.prompt/instruction for old callers. */
+  task_instruction?: string;
   evidence_text: string;
   conversation?: WorkConversationEvidence;
+}
+
+export function taskInstructionOf(
+  config: Record<string, JsonValue> | undefined,
+): string | undefined {
+  for (const key of ["prompt", "instruction"]) {
+    const value = config?.[key];
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return undefined;
 }
 
 export interface ExecutorResumeInput {

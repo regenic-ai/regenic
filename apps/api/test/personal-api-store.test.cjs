@@ -23,6 +23,7 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
             name: "Keep me",
             match: { record_class: "task" },
             executor_type: "dsh",
+            executor_config: { prompt: "Triage each task." },
             can_write_back: false,
             enabled: true,
           }),

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  configForRecipeEdit,
   configFromCatalog,
   invokeCopy,
   missingRequiredField,
@@ -28,21 +29,21 @@ const cursor: ExecutorCatalogEntry = {
 };
 
 describe("recipe invoke catalog", () => {
-  it("keeps existing catalog values and maps a legacy DSH instruction", () => {
+  it("preserves the shared instruction and legacy instruction key outside executor fields", () => {
     assert.deepEqual(
       configFromCatalog(dsh, { skill: "review", instruction: "Reply in three lines." }),
-      { skill: "review", prompt: "Reply in three lines." },
+      { skill: "review", instruction: "Reply in three lines." },
     );
   });
 
-  it("seeds defaults when switching executor and drops foreign keys", () => {
+  it("seeds defaults when switching executor and preserves the shared instruction", () => {
     assert.deepEqual(configFromCatalog(cursor, { skill: "review", prompt: "Ship it." }), {
       repo: ".",
       prompt: "Ship it.",
     });
   });
 
-  it("previews values in catalog field order, not hardcoded skill/prompt", () => {
+  it("previews catalog values and the shared instruction without duplicate prompt fields", () => {
     assert.equal(
       invokeCopy(cursor, { repo: "regenic", model: "auto", prompt: "Fix the test." }),
       "regenic · auto · Fix the test.",
@@ -50,8 +51,15 @@ describe("recipe invoke catalog", () => {
     assert.equal(invokeCopy(dsh, { instruction: "legacy" }), "legacy");
   });
 
-  it("blocks a missing required catalog field", () => {
-    assert.equal(missingRequiredField(dsh, { skill: "review" }), "Prompt");
-    assert.equal(missingRequiredField(dsh, { skill: "review", prompt: "同意" }), undefined);
+  it("does not treat a catalog prompt as an executor-specific required field", () => {
+    assert.equal(missingRequiredField(dsh, { skill: "review" }), undefined);
+    assert.equal(missingRequiredField(dsh, {}), undefined);
+  });
+
+  it("keeps legacy recipe config untouched while editing", () => {
+    assert.deepEqual(
+      configForRecipeEdit(dsh, { instruction: "legacy", hidden: "preserve" }),
+      { instruction: "legacy", hidden: "preserve" },
+    );
   });
 });

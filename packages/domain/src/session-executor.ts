@@ -1,5 +1,9 @@
 import { executorLocaleTables } from "./executor-copy";
-import { handleFromWait, prepareLocalAgentStart } from "./executor";
+import {
+  handleFromWait,
+  prepareLocalAgentStart,
+  taskInstructionOf,
+} from "./executor";
 import type {
   ExecutorContext,
   ExecutorResumeInput,
@@ -62,15 +66,7 @@ export function createSessionTaskExecutor(meta?: {
         source: meta?.source,
         attach: "absentee",
         kind: "local_connector",
-        fields: [
-          {
-            key: "prompt",
-            label: "session.field.prompt",
-            kind: "textarea",
-            hint: "session.field.prompt.hint",
-            placeholder: "session.field.prompt.placeholder",
-          },
-        ],
+        fields: [],
       };
     },
 
@@ -81,9 +77,7 @@ export function createSessionTaskExecutor(meta?: {
       );
       const sysoutId = `${thread.source}:${thread.target}`;
       const prompt =
-        typeof input.recipe.executor_config.prompt === "string"
-          ? input.recipe.executor_config.prompt
-          : "";
+        input.task_instruction ?? taskInstructionOf(input.recipe.executor_config) ?? "";
       const evidence_text = prepared.evidence_text;
       await ctx.writeStdin(
         thread,

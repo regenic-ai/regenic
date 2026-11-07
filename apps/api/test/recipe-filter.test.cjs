@@ -29,10 +29,15 @@ async function fixture(t, options = {}) {
   }, ORG, now);
   await authority.putRecipe(recipe);
   let starts = 0;
+  let lastTaskInstruction;
   const executor = {
     executor_type: "test",
     capabilities: () => ({}),
-    async start() { starts++; return { status: "running" }; },
+    async start(input) {
+      starts++;
+      lastTaskInstruction = input.task_instruction;
+      return { status: "running" };
+    },
   };
   const runtime = {
     orgId: () => ORG,
@@ -64,7 +69,16 @@ async function fixture(t, options = {}) {
   const service = new PersonalWorkService(
     runtime, {}, { ensureMounted: async () => {} }, { touchInboxDigest() {} }, {}, {},
   );
-  return { authority, recipe, dispatch, service, ingest, starts: () => starts, now };
+  return {
+    authority,
+    recipe,
+    dispatch,
+    service,
+    ingest,
+    starts: () => starts,
+    taskInstruction: () => lastTaskInstruction,
+    now,
+  };
 }
 
 describe("recipe text filters", () => {
@@ -231,7 +245,10 @@ describe("recipe text filters", () => {
 
   for (const kind of ["pull", "manual"]) {
     it(`preserves inactive conditions on API edits and allows ${kind} trials with a rejected message`, async (t) => {
-      const f = await fixture(t, { trigger: { kind, ...(kind === "pull" ? { interval_ms: 60_000 } : {}) } });
+      const f = await fixture(t, {
+        executor_config: { prompt: "Handle this as a trial." },
+        trigger: { kind, ...(kind === "pull" ? { interval_ms: 60_000 } : {}) },
+      });
       const edited = normalizeRecipe({ name: "Renamed" }, ORG, f.now, f.recipe);
       assert.deepEqual(edited.match, f.recipe.match);
       await f.authority.putRecipe(edited);
@@ -245,6 +262,7 @@ describe("recipe text filters", () => {
       assert.equal(result.work_item.head_event_id, undefined);
       assert.equal(result.work_item.status, "running");
       assert.equal(f.starts(), 1);
+      assert.equal(f.taskInstruction(), "Handle this as a trial.");
     });
   }
 

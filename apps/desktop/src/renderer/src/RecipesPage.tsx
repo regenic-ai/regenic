@@ -50,7 +50,12 @@ import {
   type RecipeDraft,
   type StarterKind,
 } from "./recipe-draft";
-import { configFromCatalog, invokeCopy, missingRequiredField } from "./recipe-params";
+import {
+  configFromCatalog,
+  invokeCopy,
+  missingRequiredField,
+  taskInstructionValue,
+} from "./recipe-params";
 import {
   matchingConversations,
   overlappingPriorityGroup,
@@ -162,14 +167,28 @@ export function RecipesPage({
     () => executors.find((item) => item.executor_type === draft.executor_type),
     [executors, draft.executor_type],
   );
+  const savedRecipe = draft.id
+    ? recipes.find((item) => item.id === draft.id)
+    : undefined;
+  const taskInstructionRequired =
+    !draft.id ||
+    Boolean(
+      savedRecipe && taskInstructionValue(savedRecipe.executor_config).trim(),
+    );
+  const taskInstruction = taskInstructionValue(draft.config);
   const suggestedName = suggestedRecipeName(draft, sources, catalog, t);
   const saveBlocker = !draft.executor_type
     ? t("recipes.saveNeedExecutor")
-    : (draft.scope === "thread" || draft.trigger_kind === "pull") && !draft.thread_id
-      ? t("recipes.saveNeedConversation")
-      : draft.trigger_kind !== "pull" && draft.scope === "source" && !draft.source.trim()
-        ? t("recipes.saveNeedSource")
-        : null;
+    : taskInstructionRequired && !taskInstruction.trim()
+      ? t("recipes.saveNeedInstruction")
+      : (draft.scope === "thread" || draft.trigger_kind === "pull") &&
+          !draft.thread_id
+        ? t("recipes.saveNeedConversation")
+        : draft.trigger_kind !== "pull" &&
+            draft.scope === "source" &&
+            !draft.source.trim()
+          ? t("recipes.saveNeedSource")
+          : null;
   const executorByType = useMemo(
     () => new Map(executors.map((item) => [item.executor_type, item])),
     [executors],
@@ -243,9 +262,6 @@ export function RecipesPage({
       next.trigger_kind === "pull" ? null : parseMaxConcurrent(next.max_concurrent),
     enabled: next.enabled,
   });
-  const savedRecipe = draft.id
-    ? recipes.find((item) => item.id === draft.id)
-    : undefined;
   const dirty =
     !savedRecipe ||
     JSON.stringify(payloadFor(draft)) !==
@@ -456,6 +472,10 @@ export function RecipesPage({
       return false;
     }
     if (!draft.executor_type) {
+      return false;
+    }
+    if (taskInstructionRequired && !taskInstructionValue(draft.config).trim()) {
+      setError(t("recipes.saveNeedInstruction"));
       return false;
     }
     const match = draftMatch(draft);
@@ -886,6 +906,7 @@ export function RecipesPage({
                             executor_type,
                             config: configFromCatalog(
                               executors.find((item) => item.executor_type === executor_type),
+                              current.config,
                             ),
                           }),
                         )
@@ -895,6 +916,25 @@ export function RecipesPage({
                   {catalog?.description ? (
                     <p className="recipe-hint">{catalog.description}</p>
                   ) : null}
+                </RecipeRow>
+                <RecipeRow label={t("recipes.instruction")}>
+                  <textarea
+                    value={taskInstruction}
+                    placeholder={t("recipes.instructionPlaceholder")}
+                    required={taskInstructionRequired}
+                    rows={5}
+                    onChange={(event) =>
+                      setDraft((current) => {
+                        const config: Record<string, string> = {
+                          ...current.config,
+                          prompt: event.target.value,
+                        };
+                        delete config.instruction;
+                        return { ...current, config };
+                      })
+                    }
+                  />
+                  <p className="recipe-hint">{t("recipes.instructionHint")}</p>
                 </RecipeRow>
                 {catalog?.fields.length ? (
                   <RecipeParams
