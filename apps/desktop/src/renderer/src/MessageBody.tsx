@@ -1,9 +1,15 @@
-import { memo, type ReactNode } from "react";
+import { memo, useState, type ReactNode } from "react";
 import { stripAttachmentLines } from "./copy-message";
 import { imagePreviewSrc } from "./image-preview";
 import { useLocale } from "./LocaleContext";
 import { parseRichBlocks } from "./message-view";
 import type { InboxAttachment } from "./types";
+
+const MAIL_FOLD_LINES = 20;
+
+function looksLikeMail(text: string): boolean {
+  return /^(发件人：|收件人：|主题：)/m.test(text);
+}
 
 export const MessageBody = memo(function MessageBody({
   text,
@@ -16,10 +22,14 @@ export const MessageBody = memo(function MessageBody({
 }) {
   const { t } = useLocale();
   const visible = stripAttachmentLines(text);
+  const lines = visible.replace(/\n+$/, "").split("\n");
+  const canFold = lines.length > MAIL_FOLD_LINES && looksLikeMail(visible);
+  const [open, setOpen] = useState(false);
+  const shown = canFold && !open ? lines.slice(0, MAIL_FOLD_LINES).join("\n") : visible;
   return (
     <div className="rich-body">
-      {visible
-        ? parseRichBlocks(visible).map((block, index) => {
+      {shown
+        ? parseRichBlocks(shown).map((block, index) => {
             if (block.type === "heading") {
               const Tag = block.level === 1 ? "h2" : block.level === 2 ? "h3" : "h4";
               return (
@@ -83,6 +93,13 @@ export const MessageBody = memo(function MessageBody({
             );
           })
         : null}
+      {canFold ? (
+        <button type="button" className="rich-more" onClick={() => setOpen((current) => !current)}>
+          {open
+            ? t("thread.hideMail")
+            : t("thread.showMail", { count: String(lines.length - MAIL_FOLD_LINES) })}
+        </button>
+      ) : null}
       {attachments && attachments.length > 0 ? (
         <div className="msg-files">
           {attachments.map((file, index) => {
