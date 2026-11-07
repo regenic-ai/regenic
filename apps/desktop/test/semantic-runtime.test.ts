@@ -6,7 +6,12 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { embeddingLaunchPlan, type EmbeddingHardware } from "../src/main/embedding-launch.ts";
 import { SemanticRuntime } from "../src/main/semantic-runtime.ts";
-import { semanticAction, semanticVisualPreference } from "../src/shared/semantic-runtime.ts";
+import {
+  DEFAULT_SEMANTIC_LAUNCH_SETTINGS,
+  semanticAction,
+  semanticLaunchSettings,
+  semanticVisualPreference,
+} from "../src/shared/semantic-runtime.ts";
 import { loadDesktopPreference, saveDesktopPreference, saveKernelPreference, saveLocalePreference } from "../src/main/kernel-settings.ts";
 import {
   SEARCH_CONTEXT,
@@ -29,7 +34,12 @@ import { en, zh, type MessageKey } from "../src/shared/messages.ts";
 const revision = "914f7f89142e33e77833254d9c9b90c3cef7303b";
 const descriptor = { model_id: "google/embeddinggemma-2", model_revision: revision, dimensions: 768 };
 
-function fixture(hardware: EmbeddingHardware = { cpus: 8, totalMemoryBytes: 8 * 1024 ** 3 }, visualEnabled = false) {
+function fixture(
+  hardware: EmbeddingHardware = { cpus: 8, totalMemoryBytes: 8 * 1024 ** 3 },
+  visualEnabled = false,
+  launchSettings = DEFAULT_SEMANTIC_LAUNCH_SETTINGS,
+  cudaAvailable = false,
+) {
   const root = mkdtempSync(join(tmpdir(), "regenic-semantic-"));
   const assets = join(root, "assets");
   mkdirSync(assets);
@@ -47,6 +57,8 @@ function fixture(hardware: EmbeddingHardware = { cpus: 8, totalMemoryBytes: 8 * 
     root, assets, startupMs: 30,
     hardware: () => hardware,
     visualEnabled: () => visualEnabled,
+    launchSettings: () => launchSettings,
+    cudaProbe: async () => ({ available: cudaAvailable, ...(cudaAvailable ? { deviceName: "NVIDIA Test GPU" } : {}) }),
     spawn(binary, args, options) {
       calls.push({ binary, args, options });
       if (args.includes("venv")) {
@@ -65,6 +77,7 @@ function fixture(hardware: EmbeddingHardware = { cpus: 8, totalMemoryBytes: 8 * 
     },
   });
   return { runtime, root, assets, calls, fail: () => { fail = true; }, hold: () => { hold = true; },
+    launchSettings: (value: typeof launchSettings) => { launchSettings = value; },
     wrongHealth: () => { health = { ...descriptor, dimensions: 1 }; },
     correctHealth: () => { health = descriptor; },
     execution: (value: Record<string, unknown>) => { execution = { visual_enabled: visualEnabled, ...value }; },
@@ -81,6 +94,12 @@ function fixture(hardware: EmbeddingHardware = { cpus: 8, totalMemoryBytes: 8 * 
 test("semantic actions and search input are bounded and literal", () => {
   for (const action of ["install", "start", "stop"]) assert.equal(semanticAction(action), action);
   for (const action of [null, {}, "exec", "START"]) assert.throws(() => semanticAction(action));
+  assert.deepEqual(semanticLaunchSettings(DEFAULT_SEMANTIC_LAUNCH_SETTINGS), DEFAULT_SEMANTIC_LAUNCH_SETTINGS);
+  assert.throws(() => semanticLaunchSettings({ ...DEFAULT_SEMANTIC_LAUNCH_SETTINGS, threads: 0 }, 8));
+  assert.throws(() => semanticLaunchSettings({ ...DEFAULT_SEMANTIC_LAUNCH_SETTINGS, threads: 9 }, 8));
+  assert.throws(() => semanticLaunchSettings({ ...DEFAULT_SEMANTIC_LAUNCH_SETTINGS, device: "mps" }, 8, false));
+  assert.throws(() => semanticLaunchSettings({ ...DEFAULT_SEMANTIC_LAUNCH_SETTINGS, device: "cuda" }, 8, true));
+  assert.equal(semanticLaunchSettings({ ...DEFAULT_SEMANTIC_LAUNCH_SETTINGS, device: "cuda" }, 8, true, true).device, "cuda");
   assert.deepEqual(contextSearchInput(" query ", " mail ", " literal/thread ", 20), {
     query: "query", limit: 20, kind: "all", filters: { sources: ["mail"], thread_ids: ["literal/thread"] },
     context: SEARCH_CONTEXT,
@@ -235,6 +254,56 @@ test("Apple Silicon verifies acceleration and Mac CPU work leaves room for inter
   assert.equal(embeddingLaunchPlan({ ...hardware, platform: "linux" }).device, "cpu");
   assert.equal(embeddingLaunchPlan({ ...hardware, cpus: 1 }).threads, 1);
   assert.equal(embeddingLaunchPlan({ ...hardware, totalMemoryBytes: 12 * 1024 ** 3 }).device, "auto-mps");
+  assert.deepEqual(embeddingLaunchPlan(hardware, {
+    device: "mps", precision: "bfloat16", threads: 3, priority: "normal",
+  }), { device: "mps", precision: "bfloat16", threads: 3, nice: 0 });
+  assert.equal(embeddingLaunchPlan({ ...hardware, platform: "linux" }, undefined, true).device, "auto-cuda");
+  assert.equal(embeddingLaunchPlan({ ...hardware, platform: "win32" }, undefined, true).device, "auto-cuda");
+  assert.deepEqual(embeddingLaunchPlan({ ...hardware, platform: "linux" }, {
+    device: "cuda", precision: "float32", threads: 4, priority: "normal",
+  }, true), { device: "cuda", precision: "float32", threads: 4, nice: 0 });
+});
+
+test("runtime recommends detected CUDA and launches explicit NVIDIA GPU selection", async () => {
+  const settings = { device: "cuda", precision: "bfloat16", threads: 4, priority: "normal" } as const;
+  const f = fixture({ cpus: 16, totalMemoryBytes: 32 * 1024 ** 3, platform: "linux", arch: "x64" },
+    false, settings, true);
+  try {
+    await f.runtime.install();
+    const view = f.runtime.view(false, true);
+    assert.equal(view.canUseCuda, true);
+    assert.equal(view.cudaDeviceName, "NVIDIA Test GPU");
+    assert.equal(view.recommendedSettings?.device, "auto-cuda");
+    assert.deepEqual(view.detectedHardware, {
+      platform: "linux", arch: "x64", cpus: 16, totalMemoryBytes: 32 * 1024 ** 3,
+    });
+    f.execution({ device: "cuda", precision: "bfloat16", threads: 4 });
+    await f.runtime.start();
+    const serving = f.calls.find((call) => call.args.includes("--port"));
+    assert.ok(serving);
+    assert.deepEqual(serving.args.slice(-4), ["--device", "cuda", "--precision", "bfloat16"]);
+  } finally { f.cleanup(); }
+});
+
+test("runtime uses user-selected device, precision, threads and scheduling priority at install and start", async () => {
+  const settings = { device: "mps", precision: "bfloat16", threads: 3, priority: "normal" } as const;
+  const f = fixture({ cpus: 15, totalMemoryBytes: 24 * 1024 ** 3, platform: "darwin", arch: "arm64" }, false, settings);
+  try {
+    await f.runtime.install();
+    const download = f.calls.find((call) => call.args.includes("--download-only"));
+    assert.ok(download);
+    assert.deepEqual(download.args.slice(-4), ["--device", "cpu", "--precision", "bfloat16"]);
+    assert.equal(download.options.env?.OMP_NUM_THREADS, "3");
+    f.execution({ device: "mps", precision: "bfloat16", threads: 3 });
+    await f.runtime.start();
+    const serving = f.calls.find((call) => call.args.includes("--port"));
+    assert.ok(serving);
+    assert.deepEqual(serving.args.slice(-4), ["--device", "mps", "--precision", "bfloat16"]);
+    assert.equal(serving.options.env?.OMP_NUM_THREADS, "3");
+    assert.deepEqual(embeddingLaunchPlan(
+      { cpus: 15, totalMemoryBytes: 24 * 1024 ** 3, platform: "darwin", arch: "arm64" }, settings,
+    ), { device: "mps", precision: "bfloat16", threads: 3, nice: 0 });
+  } finally { f.cleanup(); }
 });
 
 test("runtime reports verified backend and CPU fallback, never just the requested device", async () => {
@@ -298,15 +367,21 @@ test("semantic preference is optional and survives locale and kernel changes", (
   try {
     const file = join(f.root, "preferences.json");
     assert.equal(loadDesktopPreference(file).semanticEnabled, undefined);
+    assert.deepEqual(loadDesktopPreference(file).semanticLaunchSettings, DEFAULT_SEMANTIC_LAUNCH_SETTINGS);
     assert.equal(semanticVisualPreference(false), false);
     assert.equal(semanticVisualPreference(true), true);
     for (const value of [undefined, null, "true", 1, {}]) assert.throws(() => semanticVisualPreference(value));
     assert.equal(loadDesktopPreference(file).semanticVisualEnabled, undefined);
-    saveDesktopPreference(file, { mode: "local", locale: "en", semanticEnabled: true, semanticVisualEnabled: true });
+    const customSettings = { device: "cuda", precision: "float32", threads: 4, priority: "background" } as const;
+    saveDesktopPreference(file, {
+      mode: "local", locale: "en", semanticEnabled: true, semanticVisualEnabled: true,
+      semanticLaunchSettings: customSettings,
+    });
     saveLocalePreference(file, "zh");
     saveKernelPreference(file, { mode: "custom", origin: "https://example.com" });
     assert.equal(loadDesktopPreference(file).semanticEnabled, true);
     assert.equal(loadDesktopPreference(file).semanticVisualEnabled, true);
+    assert.deepEqual(loadDesktopPreference(file).semanticLaunchSettings, customSettings);
     saveDesktopPreference(file, { ...loadDesktopPreference(file), semanticEnabled: false });
     assert.equal(loadDesktopPreference(file).semanticEnabled, false);
   } finally { f.cleanup(); }

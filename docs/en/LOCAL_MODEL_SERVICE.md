@@ -45,6 +45,12 @@ The desktop-managed service configures itself without tuning controls:
   verification raises an inference error, it releases GPU allocations and retries
   on CPU. The fallback reason appears in Settings and logs; CPU failures still fail
   startup. Later request failures remain visible rather than silently switching devices.
+- If the managed Python environment already has a CUDA-enabled PyTorch build and a
+  compatible NVIDIA driver, Settings detects CUDA with `torch.cuda.is_available()`
+  and a model inference readiness check. Recommended startup tries CUDA and falls
+  back to CPU if verification fails; explicit CUDA selection fails visibly instead.
+  The app does not install or replace CUDA-enabled PyTorch packages, so a CPU-only
+  PyTorch build cannot use an NVIDIA GPU.
 - CPU weights use BF16 below 12 GiB of total memory and FP32 otherwise. This is a
   total-memory heuristic, not a guarantee of available RAM. BF16 reduces resident
   memory but may be slower on CPUs without native BF16 instructions.
@@ -54,6 +60,14 @@ The desktop-managed service configures itself without tuning controls:
   cores or cap GPU utilization. Other platforms retain the existing CPU policy:
   at most two threads below 12 GiB; otherwise all available CPUs minus two, at least one.
 
+Settings preselects hardware-based recommendations for the compute device, weight
+precision, CPU thread limit and process priority. Review or override every parameter
+before installation or startup; the last selection is remembered and applied at model
+startup. Installation verification runs on CPU. Changes made while running are applied
+only after an explicit restart. The fixed model revision preserves index compatibility.
+An explicitly selected MPS device
+does not silently fall back to CPU; **Recommended** mode retains the verified fallback.
+The same explicit-versus-recommended behavior applies to CUDA.
 Settings shows the **actual** ready backend, not just the requested device, with
 precision and CPU thread limits under **Technical details**. Startup verification
 is a compatibility check, not a cross-hardware performance certification. Text is
@@ -61,8 +75,10 @@ always loaded; vision is loaded only with explicit consent, and audio is never l
 All paths return float32, re-normalized vectors; the model
 descriptor and generation identity do not change. Manual services retain the CPU/BF16
 default; `--precision float32` selects FP32, and `--device auto-mps --precision float32`
-opts into the same verified MPS/CPU fallback. Install-time `--download-only` uses CPU
-for `auto-mps`; offline startup verifies acceleration on the current machine.
+opts into the same verified MPS/CPU fallback. `--device auto-cuda` opts into verified
+CUDA/CPU fallback when the installed PyTorch build supports CUDA. Install-time
+`--download-only` uses CPU for automatic acceleration modes; offline startup verifies
+acceleration on the current machine.
 
 ### Content processing permissions
 

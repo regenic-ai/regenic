@@ -3,6 +3,7 @@ import { fetchSemanticIndexStatus, indexSemanticOnce, retrySemanticJobs } from "
 import { useLocale } from "./LocaleContext";
 import { isMessageKey } from "../../shared/messages";
 import type { SemanticAction, SemanticRuntimeView, SemanticStage } from "../../shared/semantic-runtime";
+import { DEFAULT_SEMANTIC_LAUNCH_SETTINGS, type SemanticLaunchSettings } from "../../shared/semantic-runtime";
 import type { SemanticIndexStatus } from "./types";
 
 type Generation = SemanticIndexStatus["generations"][number];
@@ -141,6 +142,7 @@ export function SemanticSettings() {
   const [serverOffset, setServerOffset] = useState(0);
   const [visualDraft, setVisualDraft] = useState<boolean | null>(null);
   const [visualApplying, setVisualApplying] = useState(false);
+  const [launchDraft, setLaunchDraft] = useState<SemanticLaunchSettings | null>(null);
   const operation = useRef<AbortController | null>(null);
 
   useEffect(() => {
@@ -191,6 +193,7 @@ export function SemanticSettings() {
 
   async function action(next: SemanticAction) {
     const visualEnabled = visualDraft ?? Boolean(runtime?.visualEnabled);
+    const launchSettings = launchDraft ?? runtime?.launchSettings ?? DEFAULT_SEMANTIC_LAUNCH_SETTINGS;
     if (next !== "stop" && runtime?.visualEnabled && !visualEnabled &&
       !window.confirm(t("semantic.visual.disableConfirm"))) return;
     const controller = new AbortController();
@@ -198,10 +201,11 @@ export function SemanticSettings() {
     setBusy(true); setError(null);
     try {
       if (!window.regenic?.semanticAction) throw new Error(t("semantic.localOnly"));
-      const nextRuntime = await window.regenic.semanticAction(next, next === "stop" ? undefined : visualEnabled);
+      const nextRuntime = await window.regenic.semanticAction(next,
+        next === "stop" ? undefined : visualEnabled, next === "stop" ? undefined : launchSettings);
       if (!controller.signal.aborted) {
         setRuntime(nextRuntime);
-        if (!nextRuntime.error) { setConsent(false); setVisualDraft(null); }
+        if (!nextRuntime.error) { setConsent(false); setVisualDraft(null); setLaunchDraft(null); }
       }
     } catch (caught) {
       if (!controller.signal.aborted) setError(caught instanceof Error ? message(caught.message) : t("semantic.failed"));
@@ -258,6 +262,9 @@ export function SemanticSettings() {
 
   const disabled = busy || visualApplying || Boolean(runtime?.busy);
   const running = runtime?.stage === "running";
+  const launchSettings = launchDraft ?? runtime?.launchSettings ?? DEFAULT_SEMANTIC_LAUNCH_SETTINGS;
+  const launchDirty = launchDraft !== null &&
+    JSON.stringify(launchDraft) !== JSON.stringify(runtime?.launchSettings ?? DEFAULT_SEMANTIC_LAUNCH_SETTINGS);
   const working = runtime ? transitional.includes(runtime.stage) : false;
   const tone = stageTone(runtime, index);
   const statusLabel = runtime
@@ -269,6 +276,23 @@ export function SemanticSettings() {
   const vectorsReady = index?.vector_status === "ready";
   const canRetry = Boolean(index?.healthy) && vectorsReady;
   const serverNow = clockNow + serverOffset;
+  const recommendedDevice = runtime?.recommendedSettings?.device;
+  const recommendedDeviceLabel = recommendedDevice === "auto-cuda"
+    ? runtime?.cudaDeviceName ? `${runtime.cudaDeviceName} (CUDA)` : "NVIDIA GPU (CUDA)"
+    : recommendedDevice === "auto-mps" ? "Apple GPU (MPS)" : "CPU";
+  const platform = runtime?.detectedHardware?.platform;
+  const osLabel = platform === "darwin" ? "macOS" : platform === "win32" ? "Windows" :
+    platform === "linux" ? "Linux" : platform ?? "Unknown OS";
+  const arch = runtime?.detectedHardware?.arch;
+  const archLabel = arch === "arm64" ? "ARM64" : arch === "x64" ? "x64" : arch ?? "unknown";
+  const detectedHardwareLabel = runtime?.detectedHardware
+    ? t("semantic.launch.detectedHardware", {
+      os: osLabel,
+      arch: archLabel,
+      cpus: runtime.detectedHardware.cpus,
+      memory: Math.max(1, Math.round(runtime.detectedHardware.totalMemoryBytes / 1024 ** 3)),
+    })
+    : null;
 
   const consentBox = (
     <label className="semantic-consent">
@@ -295,39 +319,143 @@ export function SemanticSettings() {
 
       {runtime?.canManage || visualApplying ? (
         <div className="semantic-setup">
-          <h3>{t("semantic.content.title")}</h3>
-          <p className="muted semantic-note">{t(running ? "semantic.content.hint" : "semantic.content.setupHint")}</p>
-          <label className="semantic-consent">
-            <input type="checkbox" checked disabled />
-            <span>{t("semantic.content.text")}</span>
-          </label>
-          <label className="semantic-consent">
-            <input type="checkbox" checked={visualDraft ?? Boolean(runtime?.visualEnabled)}
-              disabled={disabled || !runtime?.canManage}
-              onChange={(event) => setVisualDraft(event.target.checked)} />
-            <span>{t("semantic.content.visual")}</span>
-          </label>
-          <p className="muted semantic-note">{t("semantic.visual.cost")}</p>
-          <label className="semantic-consent">
-            <input type="checkbox" checked={false} disabled />
-            <span>{t("semantic.content.audio")}</span>
-          </label>
-          <p className="muted semantic-note">{t("semantic.visual.removal")}</p>
-          {visualApplying ? <p className="muted semantic-note" role="status">{t("semantic.visual.applying")}</p> : null}
-          {(visualDraft !== null && visualDraft !== Boolean(runtime?.visualEnabled)) || runtime?.error ? (
-            <div className="semantic-actions">
-              <button type="button" className={running ? "primary" : "ghost"} disabled={disabled}
-                onClick={() => void applyVisual()}>{t(running || runtime?.error ? "semantic.visual.apply" : "semantic.visual.save")}</button>
-              {visualDraft !== null ? (
+          <section className="semantic-config-section" aria-labelledby="semantic-content-heading">
+            <div className="semantic-section-head">
+              <h3 id="semantic-content-heading">{t("semantic.content.title")}</h3>
+              <p className="muted">{t("semantic.content.hint")}</p>
+            </div>
+            <div className="semantic-consent-list">
+              <label className="semantic-consent">
+                <input type="checkbox" checked disabled />
+                <span className="semantic-consent-copy">
+                  <strong>{t("semantic.content.text")}</strong>
+                  <span className="muted">{t("semantic.content.textHint")}</span>
+                </span>
+              </label>
+              <label className="semantic-consent">
+                <input type="checkbox" checked={visualDraft ?? Boolean(runtime?.visualEnabled)}
+                  disabled={disabled || !runtime?.canManage}
+                  onChange={(event) => setVisualDraft(event.target.checked)} />
+                <span className="semantic-consent-copy">
+                  <strong>{t("semantic.content.visual")}</strong>
+                  <span className="muted">{t("semantic.content.visualHint")}</span>
+                </span>
+              </label>
+              <label className="semantic-consent is-unavailable">
+                <input type="checkbox" checked={false} disabled />
+                <span className="semantic-consent-copy">
+                  <strong>{t("semantic.content.audio")}</strong>
+                  <span className="muted">{t("semantic.content.audioHint")}</span>
+                </span>
+              </label>
+            </div>
+            {visualApplying ? <p className="muted semantic-note" role="status">{t("semantic.visual.applying")}</p> : null}
+            {(visualDraft !== null && visualDraft !== Boolean(runtime?.visualEnabled)) || runtime?.error ? (
+              <div className="semantic-actions">
+                <button type="button" className={running ? "primary" : "ghost"} disabled={disabled}
+                  onClick={() => void applyVisual()}>{t(running || runtime?.error ? "semantic.visual.apply" : "semantic.visual.save")}</button>
+                {visualDraft !== null ? (
+                  <button type="button" className="ghost" disabled={disabled}
+                    onClick={() => setVisualDraft(null)}>{t("semantic.visual.cancel")}</button>
+                ) : null}
+              </div>
+            ) : null}
+          </section>
+
+          <section className="semantic-config-section" aria-labelledby="semantic-launch-heading">
+            <div className="semantic-section-head">
+              <h3 id="semantic-launch-heading">{t("semantic.launch.title")}</h3>
+              <p className="muted">{t("semantic.launch.hint")}</p>
+            </div>
+            <div className="semantic-recommendation">
+              <span>{t("semantic.launch.recommendationLabel")}</span>
+              <strong>{t("semantic.launch.recommendationSummary", {
+                device: recommendedDeviceLabel,
+                precision: runtime?.recommendedSettings?.precision === "bfloat16" ? "BF16" : "FP32",
+                threads: runtime?.recommendedSettings?.threads ?? 1,
+                priority: runtime?.recommendedSettings?.nice ? t("semantic.launch.background") : t("semantic.launch.normal"),
+              })}</strong>
+              {detectedHardwareLabel ? <span>{detectedHardwareLabel}</span> : null}
+            </div>
+            <div className="semantic-launch-grid">
+              <label className="field semantic-launch-field">{t("semantic.launch.device")}
+                <select aria-describedby="semantic-device-hint"
+                  value={launchSettings.device} disabled={disabled || !runtime?.canManage}
+                  onChange={(event) => setLaunchDraft({ ...launchSettings, device: event.target.value as SemanticLaunchSettings["device"] })}>
+                  <option value="recommended">{t("semantic.launch.recommendedDevice", {
+                    device: recommendedDeviceLabel,
+                  })}</option>
+                  <option value="cpu">{t("semantic.launch.cpu")}</option>
+                  {runtime?.canUseMps || launchSettings.device === "mps"
+                    ? <option value="mps" disabled={!runtime?.canUseMps}>{t("semantic.launch.mps")}</option> : null}
+                  {runtime?.canUseCuda || launchSettings.device === "cuda"
+                    ? <option value="cuda" disabled={!runtime?.canUseCuda}>
+                      {runtime?.cudaDeviceName ? `${runtime.cudaDeviceName} (CUDA)` : t("semantic.launch.cuda")}
+                    </option> : null}
+                </select>
+                <span id="semantic-device-hint" className="semantic-field-hint">{t(`semantic.launch.deviceHint.${launchSettings.device}`)}</span>
+              </label>
+              <label className="field semantic-launch-field">{t("semantic.launch.precision")}
+                <select aria-describedby="semantic-precision-hint"
+                  value={launchSettings.precision} disabled={disabled || !runtime?.canManage}
+                  onChange={(event) => setLaunchDraft({ ...launchSettings, precision: event.target.value as SemanticLaunchSettings["precision"] })}>
+                  <option value="recommended">{t("semantic.launch.recommendedPrecision", {
+                    precision: runtime?.recommendedSettings?.precision === "bfloat16" ? "BF16" : "FP32",
+                  })}</option>
+                  <option value="bfloat16">BF16</option>
+                  <option value="float32">FP32</option>
+                </select>
+                <span id="semantic-precision-hint" className="semantic-field-hint">{t("semantic.launch.precisionHint")}</span>
+              </label>
+              <label className="field semantic-launch-field">{t("semantic.launch.threads")}
+                <span className="semantic-thread-control">
+                  <input type="range" aria-describedby="semantic-threads-hint"
+                    min={1} max={runtime?.maxThreads ?? 1} step={1}
+                    value={launchSettings.threads === "recommended"
+                      ? runtime?.recommendedSettings?.threads ?? 1
+                      : launchSettings.threads}
+                    disabled={disabled || !runtime?.canManage}
+                    onChange={(event) => setLaunchDraft({ ...launchSettings, threads: Number(event.target.value) })} />
+                  <output>{launchSettings.threads === "recommended"
+                    ? runtime?.recommendedSettings?.threads ?? 1
+                    : launchSettings.threads}</output>
+                </span>
+                <span id="semantic-threads-hint" className="semantic-field-hint">{t("semantic.launch.threadsHint")}</span>
+              </label>
+              <label className="field semantic-launch-field">{t("semantic.launch.priority")}
+                <select aria-describedby="semantic-priority-hint"
+                  value={launchSettings.priority} disabled={disabled || !runtime?.canManage}
+                  onChange={(event) => setLaunchDraft({ ...launchSettings, priority: event.target.value as SemanticLaunchSettings["priority"] })}>
+                  <option value="recommended">{t("semantic.launch.recommendedPriority", {
+                    priority: runtime?.recommendedSettings?.nice ? t("semantic.launch.background") : t("semantic.launch.normal"),
+                  })}</option>
+                  <option value="normal">{t("semantic.launch.normal")}</option>
+                  <option value="background">{t("semantic.launch.background")}</option>
+                </select>
+                <span id="semantic-priority-hint" className="semantic-field-hint">{t("semantic.launch.priorityHint")}</span>
+              </label>
+            </div>
+            <div className="semantic-launch-footer">
+              <p className="muted semantic-note">{t("semantic.launch.compatibility")}</p>
+              {launchDirty || (launchDraft === null &&
+                JSON.stringify(launchSettings) !== JSON.stringify(DEFAULT_SEMANTIC_LAUNCH_SETTINGS)) ? (
                 <button type="button" className="ghost" disabled={disabled}
-                  onClick={() => setVisualDraft(null)}>{t("semantic.visual.cancel")}</button>
+                  onClick={() => setLaunchDraft(DEFAULT_SEMANTIC_LAUNCH_SETTINGS)}>{t("semantic.launch.reset")}</button>
               ) : null}
+            </div>
+            {launchDirty && !running ? (
+              <p className="muted semantic-note" role="status">{t("semantic.launch.savedOnStart")}</p>
+            ) : null}
+          </section>
+          {launchDirty && running ? (
+            <div className="semantic-actions">
+              <button type="button" className="primary" disabled={disabled}
+                onClick={() => void action("start")}>{t("semantic.launch.apply")}</button>
+              <button type="button" className="ghost" disabled={disabled}
+                onClick={() => setLaunchDraft(null)}>{t("semantic.visual.cancel")}</button>
             </div>
           ) : null}
         </div>
-      ) : null}
-      {runtime?.canManage ? (
-        <p className="muted semantic-note">{t("semantic.automatic")}</p>
       ) : null}
       {runtime?.stage === "starting" ? (
         <p className="muted semantic-note" role="status">{t("semantic.checkingAcceleration")}</p>
@@ -335,7 +463,9 @@ export function SemanticSettings() {
       {runtime?.execution ? (
         <div>
           <p className="semantic-note" role="status">
-            {t(runtime.execution.device === "mps" ? "semantic.execution.mps" : "semantic.execution.cpu")}
+            {t(runtime.execution.device === "mps" ? "semantic.execution.mps" :
+              runtime.execution.device === "cuda" ? "semantic.execution.cuda" : "semantic.execution.cpu",
+            runtime.execution.device === "cuda" && runtime.cudaDeviceName ? { device: runtime.cudaDeviceName } : {})}
           </p>
           {runtime.execution.fallbackReason ? (
             <p className="action-hint" role="status">{t(`semantic.fallback.${runtime.execution.fallbackReason}`)}</p>
@@ -343,7 +473,8 @@ export function SemanticSettings() {
           <details className="semantic-details">
             <summary>{t("semantic.execution.details")}</summary>
             <p className="muted semantic-note">{t("semantic.execution.parameters", {
-              device: runtime.execution.device === "mps" ? "Metal / MPS" : "CPU",
+              device: runtime.execution.device === "mps" ? "Metal / MPS" :
+                runtime.execution.device === "cuda" ? "NVIDIA CUDA" : "CPU",
               precision: runtime.execution.precision === "float32" ? "FP32" : "BF16",
               threads: runtime.execution.threads,
             })}</p>
@@ -379,7 +510,7 @@ export function SemanticSettings() {
             </details>
           </>
         ) : (
-          <div className="semantic-setup">
+          <div className="semantic-setup semantic-install-prompt">
             <p className="semantic-note">{t("semantic.prerequisite")}</p>
             {consentBox}
             <div className="semantic-actions">{installButton(true)}</div>

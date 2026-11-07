@@ -264,7 +264,8 @@ async function main() {
 const {createServer} = require("node:http");
 const args = process.argv.slice(2);
 const descriptor = ${JSON.stringify(EMBEDDINGGEMMA_2)};
-const runtime = {device:"cpu",precision:"float32",threads:Number(process.env.OMP_NUM_THREADS),visual_enabled:args.includes("--visual")};
+const runtime = {device:args[args.indexOf("--device")+1] === "auto-mps" ? "mps" : args[args.indexOf("--device")+1],
+  precision:args[args.indexOf("--precision")+1],threads:Number(process.env.OMP_NUM_THREADS),visual_enabled:args.includes("--visual")};
 const server = createServer(async (request, response) => {
   let body = "";
   for await (const chunk of request) body += chunk;
@@ -278,13 +279,43 @@ process.on("SIGTERM",() => server.close(() => process.exit(0)));
 `, { mode: 0o755 });
       await waitFor(async () => (await evaluate("window.regenic.getSemanticRuntime()")).installed, "synthetic managed installation");
       await toggleVisual();
-      await waitFor(() => evaluate('Array.from(document.querySelectorAll(".semantic-settings button")).some(button => button.textContent === "Save permissions and start")'), "combined permission startup");
-      await evaluate('Array.from(document.querySelectorAll(".semantic-settings button")).find(button => button.textContent === "Save permissions and start").click()');
+      await waitFor(() => evaluate('Array.from(document.querySelectorAll(".semantic-settings button")).some(button => button.textContent === "Save settings and start")'), "combined permission startup");
+      await evaluate(`(() => {
+        const choose = (labelText, value) => {
+          const label = Array.from(document.querySelectorAll("label.field")).find(item => item.textContent.includes(labelText));
+          const select = label?.querySelector("select");
+          if (!select || !Array.from(select.options).some(option => option.value === value && !option.disabled)) {
+            throw new Error("Missing model parameter option: " + labelText + "=" + value);
+          }
+          Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value").set.call(select, value);
+          select.dispatchEvent(new Event("change", { bubbles: true }));
+        };
+        const setRange = (labelText, value) => {
+          const label = Array.from(document.querySelectorAll("label.field")).find(item => item.textContent.includes(labelText));
+          const input = label?.querySelector('input[type="range"]');
+          if (!input || Number(value) < Number(input.min) || Number(value) > Number(input.max)) {
+            throw new Error("Missing model parameter range: " + labelText + "=" + value);
+          }
+          Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(input, value);
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+          input.dispatchEvent(new Event("change", { bubbles: true }));
+        };
+        choose("Compute device", "cpu");
+        choose("Weight precision", "bfloat16");
+        setRange("CPU thread limit", "1");
+        choose("Process priority", "normal");
+      })()`);
+      await evaluate('Array.from(document.querySelectorAll(".semantic-settings button")).find(button => button.textContent === "Save settings and start").click()');
       await waitFor(async () => {
         const runtime = await evaluate("window.regenic.getSemanticRuntime()");
         assert.equal(runtime.error, undefined);
         return runtime.healthy && runtime.visualEnabled && !runtime.busy;
       }, "start using the unapplied visual selection");
+      const selectedRuntime = await evaluate("window.regenic.getSemanticRuntime()");
+      assert.deepEqual(selectedRuntime.launchSettings, {
+        device: "cpu", precision: "bfloat16", threads: 1, priority: "normal",
+      });
+      assert.deepEqual(selectedRuntime.execution, { device: "cpu", precision: "bfloat16", threads: 1 });
       await waitFor(() => evaluate('Array.from(document.querySelectorAll(".semantic-consent")).find(label => label.textContent.includes("Visual analysis"))?.querySelector("input")?.checked'), "running visual selection");
       await toggleVisual();
       await waitFor(() => evaluate('Array.from(document.querySelectorAll(".semantic-settings button")).some(button => button.textContent === "Apply permissions and restart")'), "running permission change");
@@ -295,7 +326,7 @@ process.on("SIGTERM",() => server.close(() => process.exit(0)));
         return runtime.healthy && !runtime.visualEnabled && !runtime.busy;
       }, "text-only reload after running opt-out", 90_000);
       assert.equal(confirmed, 4);
-      console.log("PASS: combined startup uses the selected permission; running opt-out reloads text-only inference (synthetic managed model)");
+      console.log("PASS: combined startup applies selected permission and all launch parameters; running opt-out reloads text-only inference (synthetic managed model)");
     }
     console.log("PASS: actual Electron search source navigation/highlight, bounded recovery, stale-source rejection and origin reset (synthetic inference)");
   } catch (error) {

@@ -75,7 +75,12 @@ import {
 } from "./conversation-presence";
 import { SemanticRuntime } from "./semantic-runtime";
 import { applySemanticPermission } from "./semantic-permissions";
-import { semanticAction, semanticVisualPreference } from "../shared/semantic-runtime";
+import { currentEmbeddingHardware } from "./embedding-launch";
+import {
+  semanticAction,
+  semanticLaunchSettings,
+  semanticVisualPreference,
+} from "../shared/semantic-runtime";
 
 const TRAY_SIZE = { width: 360, height: 480 };
 const DEFAULT_PORT = Number(process.env.REGENIC_DESKTOP_API_PORT ?? 4370);
@@ -106,26 +111,35 @@ function managedSemantic(): SemanticRuntime {
     root: join(app.getPath("userData"), "semantic-runtime"),
     assets: join(__dirname, "embedding"),
     visualEnabled: () => loadDesktopPreference(settingsFile()).semanticVisualEnabled === true,
+    launchSettings: () => loadDesktopPreference(settingsFile()).semanticLaunchSettings!,
   });
 }
 
 function semanticView() {
   const preference = loadDesktopPreference(settingsFile());
+  const hardware = currentEmbeddingHardware();
   return {
     ...managedSemantic().view(preference.semanticEnabled === true, !kernelMutation && preference.mode === "local" && (sidecar !== null || Boolean(semanticActionError))),
     visualEnabled: preference.semanticVisualEnabled === true,
+    launchSettings: preference.semanticLaunchSettings,
+    maxThreads: Math.max(1, Math.floor(hardware.cpus)),
+    canUseMps: hardware.platform === "darwin" && hardware.arch === "arm64",
     ...(semanticActionError ? { error: semanticActionError } : {}),
     busy: Boolean(semanticJob),
   };
 }
 
-async function changeSemantic(action: "install" | "start" | "stop", visualEnabled?: boolean): Promise<void> {
+async function changeSemantic(
+  action: "install" | "start" | "stop",
+  visualEnabled?: boolean,
+  launchSettings?: ReturnType<typeof semanticLaunchSettings>,
+): Promise<void> {
   if (semanticJob) throw new Error("semantic.busy");
   if (!semanticView().canManage) throw new Error("semantic.localOnly");
   semanticActionError = undefined;
   const run = async () => {
-    if (visualEnabled !== undefined && action !== "stop") {
-      await applySemanticVisual(visualEnabled, false);
+    if (action !== "stop" && (visualEnabled !== undefined || launchSettings !== undefined)) {
+      await saveSemanticStartupSettings(visualEnabled, launchSettings);
     }
     if (action === "install") { await managedSemantic().install(); return; }
     if (action === "start") await managedSemantic().start();
@@ -143,13 +157,22 @@ async function changeSemantic(action: "install" | "start" | "stop", visualEnable
   }).finally(() => { semanticJob = undefined; });
 }
 
-async function applySemanticVisual(enabled: boolean, restartRunning: boolean): Promise<void> {
+async function saveSemanticStartupSettings(visualEnabled?: boolean, launchSettings?: ReturnType<typeof semanticLaunchSettings>): Promise<void> {
   const preference = loadDesktopPreference(settingsFile());
-  await applySemanticPermission(enabled, restartRunning, {
+  const visual = visualEnabled ?? preference.semanticVisualEnabled === true;
+  const launchChanged = launchSettings !== undefined &&
+    JSON.stringify(launchSettings) !== JSON.stringify(preference.semanticLaunchSettings);
+  const running = managedSemantic().endpoint() !== undefined;
+  const permissionChanged = (preference.semanticVisualEnabled === true) !== visual;
+  if (launchChanged && running && !permissionChanged) await managedSemantic().stop();
+  await applySemanticPermission(visual, false, {
     visualEnabled: preference.semanticVisualEnabled === true,
-    running: managedSemantic().endpoint() !== undefined,
+    running: running && permissionChanged,
     kernelAvailable: sidecar !== null,
-    save: (value) => saveDesktopPreference(settingsFile(), { ...preference, semanticVisualEnabled: value }),
+    save: (value) => saveDesktopPreference(settingsFile(), {
+      ...preference, semanticVisualEnabled: value,
+      ...(launchSettings ? { semanticLaunchSettings: launchSettings } : {}),
+    }),
     stopModel: () => managedSemantic().stop(),
     startModel: () => managedSemantic().start(),
     restartKernel: async () => {
@@ -159,6 +182,10 @@ async function applySemanticVisual(enabled: boolean, restartRunning: boolean): P
       broadcastOrigin();
     },
   });
+  if (launchChanged && !permissionChanged && launchSettings) {
+    const current = loadDesktopPreference(settingsFile());
+    saveDesktopPreference(settingsFile(), { ...current, semanticLaunchSettings: launchSettings });
+  }
 }
 
 async function changeSemanticVisual(enabled: boolean): Promise<void> {
@@ -175,8 +202,8 @@ async function changeSemanticVisual(enabled: boolean): Promise<void> {
       await startLocalKernel({ forceSpawn: true });
       broadcastOrigin();
     }
-    await applySemanticVisual(enabled, true);
-    if (retrying && preference.semanticEnabled && managedSemantic().view(true, true).installed &&
+    await saveSemanticStartupSettings(enabled);
+    if (preference.semanticEnabled && managedSemantic().view(true, true).installed &&
       !managedSemantic().endpoint()) {
       await managedSemantic().start();
       await stopOwnedSidecarAndWait();
@@ -1093,11 +1120,17 @@ app.whenReady().then(async () => {
   ipcMain.handle("regenic:get-semantic-runtime", async (event) => {
     if (event.sender !== mainWindow?.webContents) throw new Error("semantic.localOnly");
     await managedSemantic().refreshHealth();
+    await managedSemantic().refreshCudaSupport();
     return semanticView();
   });
-  ipcMain.handle("regenic:semantic-action", async (event, action: unknown, visualEnabled: unknown) => {
+  ipcMain.handle("regenic:semantic-action", async (event, action: unknown, visualEnabled: unknown, launchValue: unknown) => {
     if (event.sender !== mainWindow?.webContents) throw new Error("semantic.localOnly");
-    await changeSemantic(semanticAction(action), visualEnabled === undefined ? undefined : semanticVisualPreference(visualEnabled));
+    const view = semanticView();
+    const launchSettings = launchValue === undefined ? undefined : semanticLaunchSettings(
+      launchValue, view.maxThreads, view.canUseMps, view.canUseCuda,
+    );
+    await changeSemantic(semanticAction(action),
+      visualEnabled === undefined ? undefined : semanticVisualPreference(visualEnabled), launchSettings);
     return semanticView();
   });
   ipcMain.handle("regenic:semantic-visual", async (event, value: unknown) => {

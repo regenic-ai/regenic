@@ -1,4 +1,4 @@
-import type { SemanticAction, SemanticRuntimeView } from "../shared/semantic-runtime";
+import type { SemanticAction, SemanticLaunchSettings, SemanticRuntimeView } from "../shared/semantic-runtime";
 
 export type KernelMode = "local" | "custom";
 export type Locale = "en" | "zh";
@@ -82,7 +82,7 @@ export interface RegenicDesktop {
   getKernelSettings: () => Promise<KernelSettingsView>;
   getSemanticRuntime: () => Promise<SemanticRuntimeView>;
   setSemanticVisual: (enabled: boolean) => Promise<SemanticRuntimeView>;
-  semanticAction: (action: SemanticAction, visualEnabled?: boolean) => Promise<SemanticRuntimeView>;
+  semanticAction: (action: SemanticAction, visualEnabled?: boolean, launchSettings?: SemanticLaunchSettings) => Promise<SemanticRuntimeView>;
   setKernelSettings: (input: {
     mode: KernelMode;
     origin?: string;

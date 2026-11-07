@@ -387,7 +387,7 @@ class TextEncoder:
             device=device,
             trust_remote_code=False,
             config_kwargs={"audio_config": None, **({"vision_config": None} if not visual_enabled else {})},
-            model_kwargs={"dtype": precision} if device in ("cpu", "mps") else None,
+            model_kwargs={"dtype": precision} if device in ("cpu", "mps", "cuda") else None,
         )
         self.model.max_seq_length = DESCRIPTOR["max_input_tokens"]
         self.token_lock = threading.Lock()
@@ -608,16 +608,68 @@ class BoundedHTTPServer(ThreadingHTTPServer):
 
 
 def initialize_encoder(device, precision, visual_enabled=False):
-    if device != "auto-mps":
+    if device == "cpu":
         return TextEncoder(device, precision, visual_enabled), {"device": device, "precision": precision}
 
     import torch
+
+    if device == "cuda":
+        if not torch.cuda.is_available():
+            raise RuntimeError("NVIDIA GPU (CUDA) was selected but is unavailable in this Python runtime")
+        encoder = TextEncoder("cuda", precision, visual_enabled)
+        encoder.embed(["Readiness check"], "query")
+        encoder.embed(["Readiness check"], "document")
+        if visual_enabled:
+            from PIL import Image
+            with Image.new("RGB", (32, 32), "white") as image:
+                encoder.image(image)
+                encoder.video([image, image])
+        return encoder, {"device": "cuda", "precision": precision}
+
+    if device == "auto-cuda":
+        fallback_reason = "cuda_unavailable"
+        if torch.cuda.is_available():
+            candidate = None
+            try:
+                candidate = TextEncoder("cuda", precision, visual_enabled)
+                candidate.embed(["Readiness check"], "query")
+                candidate.embed(["Readiness check"], "document")
+                if visual_enabled:
+                    from PIL import Image
+                    with Image.new("RGB", (32, 32), "white") as image:
+                        candidate.image(image)
+                        candidate.video([image, image])
+            except (RuntimeError, NotImplementedError):
+                logging.exception("embedding_cuda_verification_failed; retrying on CPU")
+                fallback_reason = "cuda_failed"
+                candidate = None
+            else:
+                return candidate, {"device": "cuda", "precision": precision}
+            gc.collect()
+            torch.cuda.empty_cache()
+        logging.warning("embedding_cpu_fallback reason=%s", fallback_reason)
+        return TextEncoder("cpu", precision, visual_enabled), {
+            "device": "cpu", "precision": precision, "fallback_reason": fallback_reason,
+        }
+
+    if device == "mps":
+        if not torch.backends.mps.is_available():
+            raise RuntimeError("Apple GPU (MPS) was selected but is unavailable in this Python runtime")
+        encoder = TextEncoder("mps", precision, visual_enabled)
+        encoder.embed(["Readiness check"], "query")
+        encoder.embed(["Readiness check"], "document")
+        if visual_enabled:
+            from PIL import Image
+            with Image.new("RGB", (32, 32), "white") as image:
+                encoder.image(image)
+                encoder.video([image, image])
+        return encoder, {"device": "mps", "precision": precision}
 
     fallback_reason = "mps_unavailable"
     if torch.backends.mps.is_available():
         candidate = None
         try:
-            candidate = TextEncoder("mps", "float32", visual_enabled)
+            candidate = TextEncoder("mps", precision, visual_enabled)
             candidate.embed(["Readiness check"], "query")
             candidate.embed(["Readiness check"], "document")
             if visual_enabled:
@@ -630,7 +682,7 @@ def initialize_encoder(device, precision, visual_enabled=False):
             fallback_reason = "mps_failed"
             candidate = None
         else:
-            return candidate, {"device": "mps", "precision": "float32"}
+            return candidate, {"device": "mps", "precision": precision}
         gc.collect()
         torch.mps.empty_cache()
 
@@ -723,7 +775,7 @@ def main():
     signal.signal(signal.SIGTERM, stop_requested)
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=8765)
-    parser.add_argument("--device", default="cpu")
+    parser.add_argument("--device", choices=("cpu", "mps", "cuda", "auto-mps", "auto-cuda"), default="cpu")
     parser.add_argument("--precision", choices=("bfloat16", "float32"), default="bfloat16")
     parser.add_argument("--download-only", action="store_true")
     parser.add_argument("--visual", action="store_true", help="Opt in to image and video analysis; audio is not supported")
@@ -735,7 +787,7 @@ def main():
     Image.MAX_IMAGE_PIXELS = MAX_PIXELS
     warnings.simplefilter("error", Image.DecompressionBombWarning)
     # Installation verifies the portable CPU path; acceleration is checked offline at startup.
-    device = "cpu" if args.download_only and args.device == "auto-mps" else args.device
+    device = "cpu" if args.download_only and args.device in ("auto-mps", "auto-cuda") else args.device
     model, runtime = initialize_encoder(device, args.precision, args.visual)
     import torch
     runtime["threads"] = torch.get_num_threads()
