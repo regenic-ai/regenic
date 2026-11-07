@@ -98,7 +98,10 @@ export function loadDesktopPreference(file: string): DesktopPreference {
 
 function parseStoredSemanticLaunchSettings(value: unknown): SemanticLaunchSettings {
   if (value === undefined) return DEFAULT_SEMANTIC_LAUNCH_SETTINGS;
-  try { return semanticLaunchSettings(value); } catch { return DEFAULT_SEMANTIC_LAUNCH_SETTINGS; }
+  try {
+    // Preserve valid explicit GPU choices across restarts; current hardware support is checked at launch.
+    return semanticLaunchSettings(value, 256, true, true);
+  } catch { return DEFAULT_SEMANTIC_LAUNCH_SETTINGS; }
 }
 
 export function loadKernelPreference(file: string): KernelPreference {

@@ -372,7 +372,7 @@ test("semantic preference is optional and survives locale and kernel changes", (
     assert.equal(semanticVisualPreference(true), true);
     for (const value of [undefined, null, "true", 1, {}]) assert.throws(() => semanticVisualPreference(value));
     assert.equal(loadDesktopPreference(file).semanticVisualEnabled, undefined);
-    const customSettings = { device: "cpu", precision: "float32", threads: 4, priority: "background" } as const;
+    const customSettings = { device: "cuda", precision: "float32", threads: 4, priority: "background" } as const;
     saveDesktopPreference(file, {
       mode: "local", locale: "en", semanticEnabled: true, semanticVisualEnabled: true,
       semanticLaunchSettings: customSettings,
