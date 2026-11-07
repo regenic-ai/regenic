@@ -269,7 +269,7 @@ interface ExecutorCatalogEntry {
 }
 ```
 
-Composing stdin, HTTP, or an agent goal is the plugin’s job. DSH uses `skill` / `prompt`. Cursor or bioby-agent declare their own repo, model, goal, or constraints. A legacy DSH `instruction` maps to `prompt` only inside the DSH plugin.
+The Recipes page provides one shared task instruction, passed to every executor as `task_instruction`; executor-specific options remain in the invoke catalog. DSH additionally exposes an optional `skill`. Existing `executor_config.instruction` values remain readable as a legacy alias.
 
 A connector is not an executor. One plugin package may register both an L0 `ChannelDriver` and an L6 `TaskExecutor` (DSH already does: Engine installs the channel, then an executor installation binds that channel or calls HTTP). Extra packages load in-process from `REGENIC_PLUGIN_DIR` / `REGENIC_CHANNEL_PLUGIN`; the kernel does not import their names. Out-of-process stays the generic HTTP executor — no extension host. bioby-agent attaches the same way. Private HTTP stays out of the kernel and the Recipes page.
 

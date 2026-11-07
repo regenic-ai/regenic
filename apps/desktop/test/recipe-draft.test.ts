@@ -85,6 +85,23 @@ describe("recipe draft", () => {
     assert.equal(draft.thread_title, "Design review");
   });
 
+  it("keeps old executor config intact when opening an existing recipe", () => {
+    const saved: RecipeView = {
+      ...rule,
+      executor_config: {
+        instruction: "Legacy playbook",
+        skill: "review",
+        retired_option: "keep me",
+      },
+    };
+    const draft = draftFromRecipe(saved, {
+      executor_type: "dsh",
+      label: "DSH",
+      fields: [{ key: "skill", label: "Skill" }],
+    });
+    assert.deepEqual(draft.config, saved.executor_config);
+  });
+
   it("preserves a selected result destination and checks its sendability", () => {
     const saved: RecipeView = {
       ...rule,

@@ -42,10 +42,7 @@ describe("dshTaskExecutor", () => {
     assert.equal(dshTaskExecutor.catalog().attach, "absentee");
     assert.equal(dshTaskExecutor.catalog().fields[0].key, "skill");
     assert.equal(dshTaskExecutor.catalog().fields[0].kind, "text");
-    assert.equal(dshTaskExecutor.catalog().fields[1].key, "prompt");
-    assert.equal(dshTaskExecutor.catalog().fields[1].kind, "textarea");
-    assert.equal(dshTaskExecutor.catalog().fields[1].required, undefined);
-    assert.equal(dshTaskExecutor.catalog().fields[1].hint, "executor.field.prompt.hint");
+    assert.equal(dshTaskExecutor.catalog().fields.some((field) => field.key === "prompt"), false);
     assert.equal(dshTaskExecutor.capabilities().prompts, true);
     assert.equal(dshTaskExecutor.capabilities().local_workspace, true);
     assert.equal(dshTaskExecutor.capabilities().wait, true);
@@ -147,8 +144,9 @@ describe("dshTaskExecutor", () => {
         recipe: {
           id: "r1",
           executor_type: "dsh",
-          executor_config: { skill: "review", prompt: "Reply with a decision." },
+          executor_config: { skill: "review" },
         },
+        task_instruction: "Reply with a decision.",
         evidence_text: "please handle the ticket",
       },
       ctx({

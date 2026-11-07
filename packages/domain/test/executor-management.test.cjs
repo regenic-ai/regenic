@@ -201,6 +201,7 @@ describe("http executor", () => {
           executor_type: "http-1",
           executor_config: { prompt: "go" },
         },
+        task_instruction: "go",
         evidence_text: "ticket",
       },
       { org_id: "o", env: { EXEC_TOKEN: "secret" } },
@@ -213,6 +214,7 @@ describe("http executor", () => {
     const body = JSON.parse(calls[0].init.body);
     assert.equal(body.run_id, "run-durable-1");
     assert.equal(body.evidence_text, "ticket");
+    assert.equal(body.task_instruction, "go");
     assert.equal(body.executor_config.prompt, "go");
   });
 

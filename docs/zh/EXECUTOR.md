@@ -76,7 +76,8 @@ start/resume/status/cancel 上一致填写该绑定；未固定安装及 HTTP �
 
 每个执行器必须：
 
-- 实现 `catalog()`。规则页只渲染这些字段。内核把 `executor_config` 当不透明袋。
+- 用 `catalog()` 声明执行器专属的调用参数。公共任务说明始终单独配置，
+  不属于调用参数字段。
 - 经 `ExecutorContext` 碰渠道。本机绑定不得自带私有 HTTP 客户端。
 - 完成协议是 `WaitStatus`（wait / notify）。气泡里的字不是退出。
 - 从环境变量读凭证，或从一个指向环境变量的名字读。安装表单不收 token。
@@ -164,7 +165,7 @@ WorkRun，同时把开放的 WorkItem 标记为运行中并占用自动执行名
 
 | 方法 | 路径 | 请求 | 成功响应 |
 | --- | --- | --- | --- |
-| POST | `/v1/runs` | `run_id`、`work_item_id`、`thread_id`、`recipe_id`、`evidence_text`、`executor_config` | `external_run_id`、`status`，可选 `agent_thread_id` / `prompts` / `result` |
+| POST | `/v1/runs` | `run_id`、`work_item_id`、`thread_id`、`recipe_id`、`task_instruction`、`evidence_text`、`executor_config` | `external_run_id`、`status`，可选 `agent_thread_id` / `prompts` / `result` |
 | GET | `/v1/runs/:id` | — | 同上 |
 | POST | `/v1/runs/:id/resume` | `work_item_id`、`recipe_id`、`answer` | 同上 |
 
@@ -203,9 +204,13 @@ interface ExecutorCatalogEntry {
 }
 ```
 
-拼 stdin / HTTP / Agent 目标是插件自己的事。DSH 用 `skill` / `prompt`。
-Cursor 与私有 Agent OS 各自声明字段。旧 DSH 配方里的 `instruction`
-只在 DSH 插件内映射为 `prompt`。
+规则页始终提供公共任务说明，保存在现有 `executor_config.prompt` 中，
+并作为 `task_instruction` 传给 `TaskExecutor.start`。为兼容旧配置，
+`prompt` 缺失时会读取 `executor_config.instruction`；不会自动改写已保存的规则。
+新建规则必须有非空说明；没有说明的历史规则仍可编辑和执行。执行器专属参数仍由
+`catalog().fields` 声明；DSH 在此提供可选 `skill`。本机执行器应使用
+`input.task_instruction`；HTTP 适配器会将同名值放在请求顶层，同时原样转发
+原有 `executor_config`。
 
 ## 目录
 

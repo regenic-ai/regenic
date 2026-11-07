@@ -1,5 +1,5 @@
 import { formatNextRunWhen, formatTime } from "./format.ts";
-import { configFromCatalog } from "./recipe-params.ts";
+import { configForRecipeEdit, configFromCatalog } from "./recipe-params.ts";
 import {
   competesForChat,
   previewRecipeMatch,
@@ -325,7 +325,7 @@ export function draftFromRecipe(
     text_contains: recipe.match.text_contains ?? "",
     text_excludes: recipe.match.text_excludes ?? "",
     executor_type: recipe.executor_type,
-    config: configFromCatalog(catalog, config),
+    config: configForRecipeEdit(catalog, config),
     can_write_back: recipe.can_write_back,
     write_back_thread_id: recipe.write_back_thread_id ?? "",
     include_context: recipe.include_context,

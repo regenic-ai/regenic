@@ -1,6 +1,8 @@
 import { MenuSelect } from "./MenuSelect";
 import type { ExecutorCatalogEntry } from "./types";
 
+const SHARED_INSTRUCTION_KEYS = new Set(["prompt", "instruction"]);
+
 export { configFromCatalog, invokeCopy } from "./recipe-params";
 
 export function RecipeParams({
@@ -13,12 +15,15 @@ export function RecipeParams({
   fallbackTitle: string;
   onChange: (key: string, value: string) => void;
 }) {
-  if (catalog.fields.length === 0) {
+  const fields = catalog.fields.filter(
+    (field) => !SHARED_INSTRUCTION_KEYS.has(field.key),
+  );
+  if (fields.length === 0) {
     return null;
   }
   return (
     <>
-      {catalog.fields.map((field) => {
+      {fields.map((field) => {
         const kind = field.kind ?? (field.options?.length ? "select" : "text");
         const value = values[field.key] ?? field.default ?? "";
         return (

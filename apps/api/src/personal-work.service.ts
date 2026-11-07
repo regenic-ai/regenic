@@ -27,6 +27,7 @@ import {
   recordClassFromType,
   shouldFlushDelivery,
   shouldRefreshActiveRun,
+  taskInstructionOf,
   workRunNeedsStartConfirmation,
   type ConversationThread,
   type InboxListView,
@@ -686,9 +687,21 @@ export class PersonalWorkService implements OnModuleDestroy {
         400,
       );
     }
+    if (
+      (!existing || taskInstructionOf(existing.executor_config)) &&
+      !taskInstructionOf(recipe.executor_config)
+    ) {
+      throw new PersonalConnectorError(
+        "invalid_config",
+        "Task instruction is required",
+        400,
+      );
+    }
     const missing = missingCatalogFields(
       resolveExecutorCatalog(executor.catalog(), executor.locales?.() ?? [])
-        .fields,
+        .fields.filter(
+          (field) => field.key !== "prompt" && field.key !== "instruction",
+        ),
       recipe.executor_config,
     );
     if (missing) {

@@ -267,7 +267,7 @@ interface ExecutorCatalogEntry {
 }
 ```
 
-拼 stdin / HTTP / Agent 目标是插件自己的事。DSH 用 `skill` / `prompt`；Cursor、bioby-agent 各自声明 repo、模型、目标或约束。旧 DSH 配方里的 `instruction` 只在 DSH 插件内映射为 `prompt`。
+规则页提供公共任务说明，并以 `task_instruction` 传给所有执行器；执行器专属参数仍由调用目录声明。DSH 另有可选 `skill`。旧配置 `executor_config.instruction` 继续作为兼容别名读取。
 
 连接器 ≠ 执行器。同一插件包可以同时挂 L0 `ChannelDriver` 和 L6 `TaskExecutor`（DSH 已如此：Engine 装渠道，执行器安装再绑这条渠道或走 HTTP）。额外包走 `REGENIC_PLUGIN_DIR` / `REGENIC_CHANNEL_PLUGIN` 进程内加载，内核不 import 包名。出进程只走通用 HTTP 执行器，不另起 extension host。bioby-agent 按同样方式接入，不把私有 HTTP 写进内核或规则页。
 

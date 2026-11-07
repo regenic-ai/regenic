@@ -225,8 +225,33 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
       assert.equal(executors[0].source, "dsh");
       assert.equal(executors[0].attach, "absentee");
       assert.equal(executors[0].fields[0].key, "skill");
-      assert.equal(executors[0].fields[1].key, "prompt");
-      assert.equal(executors[0].fields[1].kind, "textarea");
+      assert.equal(executors[0].fields.some((field) => field.key === "prompt"), false);
+      const missingInstruction = await fetch(`${origin}/v1/me/recipes`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "Missing instruction",
+          match: { record_class: "task", source: "feishu" },
+          executor_type: "dsh",
+        }),
+      });
+      assert.equal(missingInstruction.status, 400);
+      for (const executor_config of [
+        { prompt: "   " },
+        { instruction: "" },
+      ]) {
+        const blankInstruction = await fetch(`${origin}/v1/me/recipes`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            name: "Blank instruction",
+            match: { record_class: "task", source: "feishu" },
+            executor_type: "dsh",
+            executor_config,
+          }),
+        });
+        assert.equal(blankInstruction.status, 400);
+      }
       const emptyMatch = await fetch(`${origin}/v1/me/recipes`, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -306,6 +331,17 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
       assert.equal(created.match.text_contains, "confirm");
       assert.equal(created.match.text_excludes, "draft");
       assert.equal(created.executor_config.skill, "review");
+      const clearTaskInstruction = await fetch(
+        `${origin}/v1/me/recipes/${created.id}`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            executor_config: { skill: "review", prompt: "   " },
+          }),
+        },
+      );
+      assert.equal(clearTaskInstruction.status, 400);
       const typed = await (
         await fetch(`${origin}/v1/me/recipes`, {
           method: "POST",
@@ -314,6 +350,7 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
             name: "CRM order review",
             match: { unit_kind: "crm.order_review" },
             executor_type: "dsh",
+            executor_config: { instruction: "Review the order." },
           }),
         })
       ).json();
@@ -327,6 +364,7 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
           match: { record_class: "task" },
           trigger: { kind: "pull", interval_ms: 3_600_000 },
           executor_type: "dsh",
+          executor_config: { prompt: "Summarize updates." },
         }),
       });
       assert.equal(pullMissing.status, 400);
@@ -339,6 +377,7 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
             match: { thread_id: "feishu:oc_chat" },
             trigger: { kind: "pull", interval_ms: 3_600_000 },
             executor_type: "dsh",
+            executor_config: { prompt: "Summarize updates." },
           }),
         })
       ).json();
@@ -477,6 +516,7 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
           name: "Pinned local",
           match: { record_class: "task", source: "feishu" },
           executor_type: localBody.id,
+          executor_config: { prompt: "Review the task." },
         }),
       });
       const recipeBody = await recipe.json();

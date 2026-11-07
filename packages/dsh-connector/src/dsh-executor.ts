@@ -13,6 +13,7 @@ import {
   type TaskExecutor,
   type ThreadPrompt,
   type WorkRun,
+  taskInstructionOf,
 } from "@regenic/connector-contract";
 import { dshLocaleTables } from "./locales";
 import { resolveOperatorDshBaseUrl } from "./dsh-url";
@@ -106,13 +107,6 @@ export const dshTaskExecutor: TaskExecutor = {
           hint: "executor.field.skill.hint",
           placeholder: { literal: "review" },
         },
-        {
-          key: DSH_PROMPT_FIELD,
-          label: "executor.field.prompt",
-          kind: "textarea",
-          hint: "executor.field.prompt.hint",
-          placeholder: "executor.field.prompt.placeholder",
-        },
       ],
     };
   },
@@ -148,7 +142,8 @@ export const dshTaskExecutor: TaskExecutor = {
       thread,
       composeDshStdin({
         skill: dshSkillOf(input.recipe.executor_config),
-        prompt: dshPromptOf(input.recipe.executor_config),
+        prompt:
+          input.task_instruction ?? taskInstructionOf(input.recipe.executor_config),
         evidence_text,
       }),
     );

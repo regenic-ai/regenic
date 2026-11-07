@@ -26,6 +26,28 @@ async function rendererSmoke() {
       assert.ok(attempt < 100, "Real recipe editor did not render");
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
+    assert.equal(await window.webContents.executeJavaScript(`(() => {
+      const row = [...document.querySelectorAll(".recipe-row")]
+        .find(item => item.querySelector(".recipe-row-label")?.textContent.trim() === "Playbook");
+      return Boolean(row?.querySelector("textarea[required]"));
+    })()`), true, "The shared task instruction must appear even without a prompt catalog field");
+    assert.equal(await window.webContents.executeJavaScript(
+      'document.querySelector(\'.recipe-form button[type="submit"]\').disabled',
+    ), true, "A new rule without a task instruction must not be saveable");
+    await window.webContents.executeJavaScript(`(() => {
+      const row = [...document.querySelectorAll(".recipe-row")]
+        .find(item => item.querySelector(".recipe-row-label")?.textContent.trim() === "Playbook");
+      const textarea = row?.querySelector("textarea");
+      if (!textarea) throw new Error("Missing shared task instruction");
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set.call(
+        textarea, "Handle each matching task."
+      );
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    })()`);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(await window.webContents.executeJavaScript(
+      'document.querySelector(\'.recipe-form button[type="submit"]\').disabled',
+    ), false, "A non-empty shared task instruction must unblock saving");
     await window.webContents.executeJavaScript(`(() => {
       const buttons = [...document.querySelectorAll(".seg button")];
       const keepHere = buttons.find(button => button.textContent.trim() === "Keep here");
@@ -411,8 +433,7 @@ async function launchSmoke() {
       "/v1/me/executors": [{
         executor_type: "smoke", label: "Smoke assistant", description: "Layout smoke fixture",
         fields: [
-          { key: "skill", label: "Skill", kind: "text", hint: "Optional skill" },
-          { key: "prompt", label: "Prompt", kind: "textarea", hint: "Optional instructions" }
+          { key: "skill", label: "Skill", kind: "text", hint: "Optional skill" }
         ]
       }]
     };
