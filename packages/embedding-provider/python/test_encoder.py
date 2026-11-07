@@ -62,14 +62,69 @@ class EncoderTests(unittest.TestCase):
         self.assertEqual(constructor.call_args.kwargs["device"], "mps")
         self.assertEqual(constructor.call_args.kwargs["model_kwargs"], {"dtype": "float32"})
 
-    def test_auto_mps_requires_query_document_image_and_video_verification(self):
+    def test_explicit_cuda_precision_is_applied_to_model_weights(self):
+        model = FakeModel([1.0] + [0.0] * 767)
+        with patch("sentence_transformers.SentenceTransformer", return_value=model) as constructor, \
+                patch("transformers.AutoTokenizer.from_pretrained", return_value=FakeTokenizer()):
+            TextEncoder("cuda", "bfloat16")
+        self.assertEqual(constructor.call_args.kwargs["device"], "cuda")
+        self.assertEqual(constructor.call_args.kwargs["model_kwargs"], {"dtype": "bfloat16"})
+
+    def test_auto_cuda_verifies_inference_and_authorized_modalities(self):
+        model = Mock()
+        with patch("torch.cuda.is_available", return_value=True), \
+                patch("serve.TextEncoder", return_value=model) as constructor:
+            encoder, runtime = initialize_encoder("auto-cuda", "bfloat16", True)
+        constructor.assert_called_once_with("cuda", "bfloat16", True)
+        self.assertIs(encoder, model)
+        self.assertEqual(runtime, {"device": "cuda", "precision": "bfloat16"})
+        self.assertEqual([call.args[1] for call in model.embed.call_args_list], ["query", "document"])
+        model.image.assert_called_once()
+        model.video.assert_called_once()
+
+    def test_unavailable_cuda_uses_cpu_and_reports_reason(self):
+        with patch("torch.cuda.is_available", return_value=False), \
+                patch("serve.TextEncoder") as constructor, \
+                self.assertLogs(level="WARNING"):
+            _, runtime = initialize_encoder("auto-cuda", "float32")
+        constructor.assert_called_once_with("cpu", "float32", False)
+        self.assertEqual(runtime, {
+            "device": "cpu", "precision": "float32", "fallback_reason": "cuda_unavailable",
+        })
+
+    def test_explicit_cuda_fails_instead_of_silently_switching_to_cpu(self):
+        with patch("torch.cuda.is_available", return_value=False), \
+                patch("serve.TextEncoder") as constructor:
+            with self.assertRaisesRegex(RuntimeError, "NVIDIA GPU \\(CUDA\\) was selected but is unavailable"):
+                initialize_encoder("cuda", "float32")
+        constructor.assert_not_called()
+
+    def test_cuda_inference_failure_retries_cpu(self):
+        failed = Mock()
+        failed.embed.side_effect = RuntimeError("CUDA driver mismatch")
+        cpu = Mock()
+        with patch("torch.cuda.is_available", return_value=True), \
+                patch("torch.cuda.empty_cache") as empty_cache, \
+                patch("serve.TextEncoder", side_effect=[failed, cpu]) as constructor, \
+                self.assertLogs(level="WARNING"):
+            encoder, runtime = initialize_encoder("auto-cuda", "float32")
+        self.assertEqual([call.args for call in constructor.call_args_list], [
+            ("cuda", "float32", False), ("cpu", "float32", False),
+        ])
+        self.assertIs(encoder, cpu)
+        empty_cache.assert_called_once()
+        self.assertEqual(runtime, {
+            "device": "cpu", "precision": "float32", "fallback_reason": "cuda_failed",
+        })
+
+    def test_auto_mps_uses_selected_precision_and_verifies_authorized_modalities(self):
         model = Mock()
         with patch("torch.backends.mps.is_available", return_value=True), \
                 patch("serve.TextEncoder", return_value=model) as constructor:
             encoder, runtime = initialize_encoder("auto-mps", "bfloat16", True)
-        constructor.assert_called_once_with("mps", "float32", True)
+        constructor.assert_called_once_with("mps", "bfloat16", True)
         self.assertIs(encoder, model)
-        self.assertEqual(runtime, {"device": "mps", "precision": "float32"})
+        self.assertEqual(runtime, {"device": "mps", "precision": "bfloat16"})
         self.assertEqual([call.args[1] for call in model.embed.call_args_list], ["query", "document"])
         model.image.assert_called_once()
         model.video.assert_called_once()
@@ -81,6 +136,13 @@ class EncoderTests(unittest.TestCase):
             _, runtime = initialize_encoder("auto-mps", "float32")
         constructor.assert_called_once_with("cpu", "float32", False)
         self.assertEqual(runtime, {"device": "cpu", "precision": "float32", "fallback_reason": "mps_unavailable"})
+
+    def test_explicit_mps_fails_instead_of_silently_switching_to_cpu(self):
+        with patch("torch.backends.mps.is_available", return_value=False), \
+                patch("serve.TextEncoder") as constructor:
+            with self.assertRaisesRegex(RuntimeError, "selected but is unavailable"):
+                initialize_encoder("mps", "float32")
+        constructor.assert_not_called()
 
     def test_mps_load_and_inference_failures_retry_cpu_explicitly(self):
         for phase in ("load", "query", "document", "image", "video"):

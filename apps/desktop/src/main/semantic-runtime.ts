@@ -11,7 +11,13 @@ import {
   type EmbeddingHardware,
   type EmbeddingLaunchPlan,
 } from "./embedding-launch.ts";
-import type { SemanticExecution, SemanticRuntimeView, SemanticStage } from "../shared/semantic-runtime.ts";
+import {
+  DEFAULT_SEMANTIC_LAUNCH_SETTINGS,
+  type SemanticExecution,
+  type SemanticLaunchSettings,
+  type SemanticRuntimeView,
+  type SemanticStage,
+} from "../shared/semantic-runtime.ts";
 
 const REVISION = "914f7f89142e33e77833254d9c9b90c3cef7303b";
 
@@ -23,6 +29,13 @@ interface RuntimeOptions {
   startupMs?: number;
   hardware?: () => EmbeddingHardware;
   visualEnabled?: () => boolean;
+  launchSettings?: () => SemanticLaunchSettings;
+  cudaProbe?: () => Promise<{ available: boolean; deviceName?: string }>;
+}
+
+interface CudaCapability {
+  available: boolean;
+  deviceName?: string;
 }
 
 export class SemanticRuntime {
@@ -32,6 +45,8 @@ export class SemanticRuntime {
   private error: string | undefined;
   private healthy = false;
   private execution: SemanticExecution | undefined;
+  private cudaCapability: CudaCapability | undefined;
+  private cudaProbePromise: Promise<CudaCapability> | undefined;
   private origin: string | undefined;
   private working = false;
   private closing = false;
@@ -80,6 +95,18 @@ export class SemanticRuntime {
       installed, enabled, healthy: this.healthy, busy: this.working, canManage,
       ...(this.error ? { error: this.error } : {}),
       ...(this.healthy && this.execution ? { execution: this.execution } : {}),
+      launchSettings: this.options.launchSettings?.() ?? DEFAULT_SEMANTIC_LAUNCH_SETTINGS,
+      recommendedSettings: embeddingLaunchPlan(this.hardware(), undefined, this.cudaCapability?.available === true),
+      maxThreads: Math.max(1, Math.floor(this.hardware().cpus)),
+      canUseMps: this.hardware().platform === "darwin" && this.hardware().arch === "arm64",
+      canUseCuda: this.cudaCapability?.available === true,
+      detectedHardware: {
+        platform: this.hardware().platform ?? process.platform,
+        arch: this.hardware().arch ?? process.arch,
+        cpus: Math.max(1, Math.floor(this.hardware().cpus)),
+        totalMemoryBytes: this.hardware().totalMemoryBytes,
+      },
+      ...(this.cudaCapability?.deviceName ? { cudaDeviceName: this.cudaCapability.deviceName } : {}),
     };
   }
 
@@ -90,11 +117,88 @@ export class SemanticRuntime {
   }
 
   private plan(): EmbeddingLaunchPlan {
-    return embeddingLaunchPlan(this.hardware());
+    return embeddingLaunchPlan(this.hardware(), this.options.launchSettings?.(), this.cudaCapability?.available === true);
   }
 
-  private environment(): NodeJS.ProcessEnv {
-    const plan = this.plan();
+  async refreshCudaSupport(force = false): Promise<void> {
+    if (!force && !this.installed()) {
+      this.cudaCapability = undefined;
+      return;
+    }
+    if (this.cudaCapability) return;
+    if (!this.cudaProbePromise) {
+      this.cudaProbePromise = (this.options.cudaProbe?.() ?? this.detectCuda())
+        .then((capability) => {
+          this.cudaCapability = capability;
+          if (capability.available) {
+            console.info(`[semantic] CUDA available device=${capability.deviceName ?? "NVIDIA GPU"}`);
+          } else {
+            console.info("[semantic] CUDA unavailable in managed Python environment; using CPU/MPS recommendations");
+          }
+          return capability;
+        })
+        .catch((error: unknown) => {
+          console.warn("[semantic] CUDA capability probe failed; CUDA will not be offered", error);
+          this.cudaCapability = { available: false };
+          return this.cudaCapability;
+        })
+        .finally(() => { this.cudaProbePromise = undefined; });
+    }
+    await this.cudaProbePromise;
+  }
+
+  private detectCuda(): Promise<CudaCapability> {
+    const script = "import json, torch; available = torch.cuda.is_available() and torch.cuda.device_count() > 0; print(json.dumps({'available': available, 'device_name': torch.cuda.get_device_name(0) if available else None}))";
+    return new Promise((resolve) => {
+      let output = "";
+      let settled = false;
+      const child = this.launch(this.python(), ["-c", script], {
+        env: this.environment(), stdio: ["ignore", "pipe", "ignore"], windowsHide: true,
+      });
+      const timer = setTimeout(() => {
+        child.kill("SIGKILL");
+        finish({ available: false });
+      }, 10_000);
+      const finish = (capability: CudaCapability) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(capability);
+      };
+      child.stdout?.on("data", (chunk: Buffer | string) => {
+        output += chunk.toString();
+        if (output.length > 4096) {
+          child.kill("SIGKILL");
+          finish({ available: false });
+        }
+      });
+      child.once("error", () => finish({ available: false }));
+      child.once("exit", (code) => {
+        if (code !== 0 || settled) { finish({ available: false }); return; }
+        try {
+          const result: unknown = JSON.parse(output.trim());
+          if (!result || typeof result !== "object") {
+            finish({ available: false });
+            return;
+          }
+          const payload = result as Record<string, unknown>;
+          if (typeof payload.available !== "boolean" ||
+            (payload.device_name !== undefined && payload.device_name !== null && typeof payload.device_name !== "string")) {
+            finish({ available: false });
+            return;
+          }
+          finish({
+            available: payload.available,
+            ...(payload.available && typeof payload.device_name === "string" ? { deviceName: payload.device_name } : {}),
+          });
+        } catch {
+          finish({ available: false });
+        }
+      });
+    });
+  }
+
+  private environment(plan = this.plan()): NodeJS.ProcessEnv {
     return {
       ...process.env,
       HF_HOME: join(this.options.root, "cache"),
@@ -104,8 +208,7 @@ export class SemanticRuntime {
     };
   }
 
-  private modelArgs(prefix: string[]): string[] {
-    const plan = this.plan();
+  private modelArgs(prefix: string[], plan = this.plan()): string[] {
     return [...prefix, ...(this.options.visualEnabled?.() === true ? ["--visual"] : []),
       "--device", plan.device, "--precision", plan.precision];
   }
@@ -122,12 +225,12 @@ export class SemanticRuntime {
     } finally { this.working = false; }
   }
 
-  private run(binary: string, args: string[], failure: string, timeoutMs: number): Promise<void> {
+  private run(binary: string, args: string[], failure: string, timeoutMs: number, plan = this.plan()): Promise<void> {
     if (this.closing) return Promise.reject(new Error("semantic.cancelled"));
     return new Promise((resolve, reject) => {
-      const child = this.launch(binary, args, { env: this.environment(), stdio: "ignore", windowsHide: true });
+      const child = this.launch(binary, args, { env: this.environment(plan), stdio: "ignore", windowsHide: true });
       this.command = child;
-      if (args.includes("serve.py")) applyEmbeddingPriority(child, this.plan().nice);
+      if (args.includes("serve.py")) applyEmbeddingPriority(child, plan.nice);
       let settled = false;
       let timedOut = false;
       let drainTimer: ReturnType<typeof setTimeout> | undefined;
@@ -164,9 +267,12 @@ export class SemanticRuntime {
       this.stage = "installing";
       await this.run(this.python(), ["-m", "pip", "install", "--disable-pip-version-check", "-r",
         join(this.options.assets, "requirements.txt")], "semantic.installFailed", 30 * 60_000);
+      await this.refreshCudaSupport(true);
       this.stage = "downloading";
-      await this.run(this.python(), this.modelArgs(["-B", join(this.options.assets, "serve.py"), "--download-only"]),
-        "semantic.downloadFailed", 60 * 60_000);
+      const selected = this.plan();
+      const installPlan = { ...selected, device: "cpu" as const };
+      await this.run(this.python(), this.modelArgs(["-B", join(this.options.assets, "serve.py"), "--download-only"], installPlan),
+        "semantic.downloadFailed", 60 * 60_000, installPlan);
       writeFileSync(join(this.options.root, "installed.json"), JSON.stringify({ revision: REVISION, fingerprint: this.fingerprint() }));
       this.stage = "stopped";
     });
@@ -192,12 +298,13 @@ export class SemanticRuntime {
     return this.exclusive(async () => {
       if (this.child && this.healthy) { this.stage = "running"; return; }
       if (!this.installed()) throw new Error("semantic.installFirst");
+      await this.refreshCudaSupport();
       await this.stopChild();
       this.stage = "starting";
       const port = await freePort();
       const plan = this.plan();
       const child = this.launch(this.python(), this.modelArgs(["-B", join(this.options.assets, "serve.py"), "--port", String(port)]),
-        { env: { ...this.environment(), HF_HUB_OFFLINE: "1" }, stdio: ["ignore", "ignore", "pipe"], windowsHide: true });
+        { env: { ...this.environment(plan), HF_HUB_OFFLINE: "1" }, stdio: ["ignore", "ignore", "pipe"], windowsHide: true });
       this.child = child;
       child.stderr?.on("data", (chunk) => process.stderr.write(`[semantic] ${chunk}`));
       applyEmbeddingPriority(child, plan.nice);
@@ -206,7 +313,8 @@ export class SemanticRuntime {
       child.once("error", () => { exited = true; this.failedChild(child); });
       child.once("exit", () => { exited = true; this.failedChild(child); });
       const origin = `http://127.0.0.1:${port}`;
-      const deadline = Date.now() + (this.options.startupMs ?? (plan.device === "auto-mps" ? 300_000 : 180_000));
+      const deadline = Date.now() + (this.options.startupMs ??
+        (plan.device === "auto-mps" || plan.device === "auto-cuda" ? 300_000 : 180_000));
       while (!this.closing && !exited && Date.now() < deadline) {
         const execution = await this.probe(origin);
         if (execution && !exited && !this.closing && this.child === child) {
@@ -250,12 +358,14 @@ export class SemanticRuntime {
       if (!valid || !("runtime" in value) || !value.runtime || typeof value.runtime !== "object") return false;
       const runtime = value.runtime;
       if (!("visual_enabled" in runtime) || runtime.visual_enabled !== (this.options.visualEnabled?.() === true)) return false;
-      if (!("device" in runtime) || (runtime.device !== "cpu" && runtime.device !== "mps") ||
+      if (!("device" in runtime) || (runtime.device !== "cpu" && runtime.device !== "mps" && runtime.device !== "cuda") ||
+        (runtime.device === "cuda" && this.cudaCapability?.available !== true) ||
         !("precision" in runtime) || (runtime.precision !== "bfloat16" && runtime.precision !== "float32") ||
         !("threads" in runtime) || typeof runtime.threads !== "number" || !Number.isSafeInteger(runtime.threads) || runtime.threads < 1) return false;
       const fallbackReason = "fallback_reason" in runtime ? runtime.fallback_reason : undefined;
       if (fallbackReason !== undefined && (runtime.device !== "cpu" ||
-        (fallbackReason !== "mps_unavailable" && fallbackReason !== "mps_failed"))) return false;
+        (fallbackReason !== "mps_unavailable" && fallbackReason !== "mps_failed" &&
+          fallbackReason !== "cuda_unavailable" && fallbackReason !== "cuda_failed"))) return false;
       return {
         device: runtime.device, precision: runtime.precision, threads: runtime.threads,
         ...(fallbackReason ? { fallbackReason } : {}),

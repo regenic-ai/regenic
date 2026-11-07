@@ -11,7 +11,8 @@ contextBridge.exposeInMainWorld("regenic", {
   getKernelSettings: () => ipcRenderer.invoke("regenic:get-kernel-settings"),
   getSemanticRuntime: () => ipcRenderer.invoke("regenic:get-semantic-runtime"),
   setSemanticVisual: (enabled: boolean) => ipcRenderer.invoke("regenic:semantic-visual", enabled),
-  semanticAction: (action: "install" | "start" | "stop", visualEnabled?: boolean) => ipcRenderer.invoke("regenic:semantic-action", action, visualEnabled),
+  semanticAction: (action: "install" | "start" | "stop", visualEnabled?: boolean, launchSettings?: import("../shared/semantic-runtime").SemanticLaunchSettings) =>
+    ipcRenderer.invoke("regenic:semantic-action", action, visualEnabled, launchSettings),
   setKernelSettings: (input: {
     mode: "local" | "custom";
     origin?: string;

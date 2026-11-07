@@ -6,6 +6,11 @@ import {
   parseLocale,
   type Locale,
 } from "../shared/locale.ts";
+import {
+  DEFAULT_SEMANTIC_LAUNCH_SETTINGS,
+  semanticLaunchSettings,
+  type SemanticLaunchSettings,
+} from "../shared/semantic-runtime.ts";
 
 export const LOCAL_KERNEL_ORIGIN = "http://127.0.0.1:4370";
 
@@ -19,6 +24,7 @@ export interface KernelPreference {
 export interface DesktopPreference extends KernelPreference {
   semanticEnabled?: boolean;
   semanticVisualEnabled?: boolean;
+  semanticLaunchSettings?: SemanticLaunchSettings;
   locale: Locale;
   dataRoot?: string;
   previousDataRoot?: string;
@@ -53,6 +59,7 @@ export function loadDesktopPreference(file: string): DesktopPreference {
       personalApiKeys?: unknown;
       semanticEnabled?: unknown;
       semanticVisualEnabled?: unknown;
+      semanticLaunchSettings?: unknown;
     };
     const locale = parseLocale(raw.locale ?? DEFAULT_LOCALE);
     const dataRoot = tryParseDataRoot(raw.dataRoot);
@@ -65,6 +72,7 @@ export function loadDesktopPreference(file: string): DesktopPreference {
         locale,
         ...(typeof raw.semanticEnabled === "boolean" ? { semanticEnabled: raw.semanticEnabled } : {}),
         ...(typeof raw.semanticVisualEnabled === "boolean" ? { semanticVisualEnabled: raw.semanticVisualEnabled } : {}),
+        semanticLaunchSettings: parseStoredSemanticLaunchSettings(raw.semanticLaunchSettings),
         ...(dataRoot ? { dataRoot } : {}),
         ...(previousDataRoot ? { previousDataRoot } : {}),
         ...(personalApiKeys ? { personalApiKeys } : {}),
@@ -75,13 +83,22 @@ export function loadDesktopPreference(file: string): DesktopPreference {
       locale,
       ...(typeof raw.semanticEnabled === "boolean" ? { semanticEnabled: raw.semanticEnabled } : {}),
       ...(typeof raw.semanticVisualEnabled === "boolean" ? { semanticVisualEnabled: raw.semanticVisualEnabled } : {}),
+      semanticLaunchSettings: parseStoredSemanticLaunchSettings(raw.semanticLaunchSettings),
       ...(dataRoot ? { dataRoot } : {}),
       ...(previousDataRoot ? { previousDataRoot } : {}),
       ...(personalApiKeys ? { personalApiKeys } : {}),
     };
   } catch {
-    return { mode: "local", locale: DEFAULT_LOCALE };
+    return {
+      mode: "local", locale: DEFAULT_LOCALE,
+      semanticLaunchSettings: DEFAULT_SEMANTIC_LAUNCH_SETTINGS,
+    };
   }
+}
+
+function parseStoredSemanticLaunchSettings(value: unknown): SemanticLaunchSettings {
+  if (value === undefined) return DEFAULT_SEMANTIC_LAUNCH_SETTINGS;
+  try { return semanticLaunchSettings(value); } catch { return DEFAULT_SEMANTIC_LAUNCH_SETTINGS; }
 }
 
 export function loadKernelPreference(file: string): KernelPreference {
@@ -101,6 +118,7 @@ export function saveDesktopPreference(
   };
   if (preference.semanticEnabled !== undefined) body.semanticEnabled = preference.semanticEnabled;
   if (preference.semanticVisualEnabled !== undefined) body.semanticVisualEnabled = preference.semanticVisualEnabled;
+  if (preference.semanticLaunchSettings !== undefined) body.semanticLaunchSettings = preference.semanticLaunchSettings;
   if (preference.mode === "custom" && preference.origin) {
     body.origin = preference.origin;
   }
