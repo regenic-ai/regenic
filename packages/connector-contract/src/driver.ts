@@ -555,6 +555,8 @@ export interface ChannelDriver
    */
   listCatalogFieldOptions?(input: {
     env: NodeJS.ProcessEnv;
+    installation?: ConnectorInstallation;
+    host?: ConnectorHost;
   }): Promise<NonNullable<ConnectorCatalogProbe["field_options"]>>;
   resolveConversationLabels?(
     installation: ConnectorInstallation,

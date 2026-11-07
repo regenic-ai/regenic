@@ -7,6 +7,7 @@ import {
   sourceLabelFromCatalog,
   type ChannelDriver,
   type ConnectorInstallation,
+  type ConnectorSecrets,
   type ConnectorInstallationStatus,
   type CopyLocale,
   type CopyRef,
@@ -319,7 +320,7 @@ export function toInstallationView(
   lastAttempt: IngestAttempt | null,
   drivers: { get(connectorType: string): ChannelDriver | undefined },
   locale: CopyLocale = DEFAULT_COPY_LOCALE,
-  extras?: { sync?: SyncProgressView | null },
+  extras?: { sync?: SyncProgressView | null; secrets?: Record<string, string> },
 ): EngineInstallationView {
   const driver = drivers.get(installation.connector_type);
   const { label, detail } = connectorPresentation(
@@ -341,7 +342,10 @@ export function toInstallationView(
     status: installation.status,
     label,
     detail,
-    settings: installationSettings(installation.config),
+    settings: {
+      ...installationSettings(installation.config),
+      ...(extras?.secrets ?? {}),
+    },
     syncable: enabled && capabilities.sync,
     can_reply: enabled && capabilities.reply,
     can_create: enabled && capabilities.create,
@@ -457,6 +461,32 @@ const SECRET_SETTING_KEYS = new Set([
   "secret",
   "password",
 ]);
+
+export async function installationSecretSettings(
+  installation: ConnectorInstallation,
+  driver: ChannelDriver | undefined,
+  read: ConnectorSecrets | undefined,
+): Promise<Record<string, string>> {
+  if (!read || !driver?.installCatalog) {
+    return {};
+  }
+  const fields = driver.installCatalog({ env: process.env }).fields ?? [];
+  const settings: Record<string, string> = {};
+  for (const field of fields) {
+    if (!field.secret || !field.key.trim()) {
+      continue;
+    }
+    try {
+      const value = await read.read(installation.connector_type, installation.id, field.key);
+      if (value?.trim()) {
+        settings[field.key] = value;
+      }
+    } catch {
+      // 钥匙串读不到时，编辑框留空，不把整页设置弄失败。
+    }
+  }
+  return settings;
+}
 
 export function installationSettings(
   config: Record<string, unknown>,

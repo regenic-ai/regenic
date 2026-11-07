@@ -1,3 +1,13 @@
+.rich-more {
+  margin-top: 8px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-muted, #6b7280);
+  font: inherit;
+  cursor: pointer;
+}
+
 .rich-body {
   user-select: text;
   font-size: 14px;

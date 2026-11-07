@@ -339,6 +339,7 @@ function ConnectorSettingsForm({
     ...initialValues,
   }));
   const [installConfirmed, setInstallConfirmed] = useState(false);
+  const [shownSecrets, setShownSecrets] = useState<Record<string, boolean>>({});
   const installConfirm = catalogInstallConfirm(kind, values);
   const [remoteOptions, setRemoteOptions] = useState<
     Record<string, { value: string; label: string }[]>
@@ -468,13 +469,40 @@ function ConnectorSettingsForm({
               {t("connector.chooseDirectory")}
             </button>
           </span>
+        ) : field.secret ? (
+          <span className="directory-field">
+            <input
+              type={shownSecrets[field.key] ? "text" : "password"}
+              value={values[field.key] ?? ""}
+              placeholder={field.placeholder}
+              required={field.required}
+              autoComplete="off"
+              onChange={(event) =>
+                setValues((current) => ({
+                  ...current,
+                  [field.key]: event.target.value,
+                }))
+              }
+            />
+            <button
+              type="button"
+              className="ghost"
+              onClick={() =>
+                setShownSecrets((current) => ({
+                  ...current,
+                  [field.key]: !current[field.key],
+                }))
+              }
+            >
+              {shownSecrets[field.key] ? t("connector.hideSecret") : t("connector.showSecret")}
+            </button>
+          </span>
         ) : (
           <input
-            type={field.secret ? "password" : "text"}
+            type="text"
             value={values[field.key] ?? ""}
             placeholder={field.placeholder}
             required={field.required}
-            autoComplete={field.secret ? "off" : undefined}
             onChange={(event) =>
               setValues((current) => ({
                 ...current,
@@ -608,9 +636,9 @@ function CheckOptionList({
 }
 
 function filterCheckOptions(
-  options: { value: string; label: string }[],
+  options: { value: string; label: string; title?: string }[],
   query: string,
-): { value: string; label: string }[] {
+): { value: string; label: string; title?: string }[] {
   const needle = query.trim().toLowerCase();
   if (!needle) {
     return options;
@@ -618,7 +646,8 @@ function filterCheckOptions(
   return options.filter(
     (option) =>
       option.label.toLowerCase().includes(needle) ||
-      option.value.toLowerCase().includes(needle),
+      option.value.toLowerCase().includes(needle) ||
+      (option.title ?? "").toLowerCase().includes(needle),
   );
 }
 

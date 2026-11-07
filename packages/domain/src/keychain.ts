@@ -28,6 +28,8 @@ export type KeychainWriter = (
 
 let readOverride: KeychainReader | undefined;
 let writeOverride: KeychainWriter | undefined;
+const rememberedSecrets = new Map<string, string>();
+const readingSecrets = new Map<string, Promise<string | undefined>>();
 
 export function setKeychainStoreForTests(
   input: {
@@ -37,6 +39,8 @@ export function setKeychainStoreForTests(
 ): void {
   readOverride = input.read;
   writeOverride = input.write;
+  rememberedSecrets.clear();
+  readingSecrets.clear();
 }
 
 export function writeKeychainSecret(
@@ -52,6 +56,7 @@ export function writeKeychainSecret(
   if (!value) {
     throw new Error("keychain secret is empty");
   }
+  rememberedSecrets.delete(secretKey(service, account));
   if (writeOverride) {
     writeOverride(service, account, value);
     return;
@@ -83,27 +88,25 @@ export async function readKeychainSecret(
   if (readOverride) {
     return emptyToUndef(await readOverride(service, account));
   }
-  if (process.platform === "darwin") {
-    try {
-      return emptyToUndef(
-        await runSecurity([
-          "find-generic-password",
-          "-s",
-          service,
-          "-a",
-          account,
-          "-w",
-        ]),
-      );
-    } catch {
-      return undefined;
+  const key = secretKey(service, account);
+  const remembered = rememberedSecrets.get(key);
+  if (remembered) {
+    return remembered;
+  }
+  const pending = readingSecrets.get(key);
+  if (pending) {
+    return pending;
+  }
+  const reading = loadKeychainSecret(service, account).then((value) => {
+    if (value) {
+      rememberedSecrets.set(key, value);
     }
-  }
-  try {
-    return emptyToUndef(await readFile(credentialPath(service, account), "utf8"));
-  } catch {
-    return undefined;
-  }
+    return value;
+  }).finally(() => {
+    readingSecrets.delete(key);
+  });
+  readingSecrets.set(key, reading);
+  return reading;
 }
 
 export function persistInstallSecrets(input: {
@@ -168,18 +171,49 @@ function emptyToUndef(value: string | undefined): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
+function secretKey(service: string, account: string): string {
+  return `${service}\0${account}`;
+}
+
+async function loadKeychainSecret(
+  service: string,
+  account: string,
+): Promise<string | undefined> {
+  if (process.platform === "darwin") {
+    try {
+      return emptyToUndef(
+        await runSecurity([
+          "find-generic-password",
+          "-s",
+          service,
+          "-a",
+          account,
+          "-w",
+        ]),
+      );
+    } catch {
+      return undefined;
+    }
+  }
+  try {
+    return emptyToUndef(await readFile(credentialPath(service, account), "utf8"));
+  } catch {
+    return undefined;
+  }
+}
+
 function runSecurity(args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn("security", args, { stdio: ["ignore", "pipe", "pipe"] });
+    child.on("error", reject);
     let stdout = "";
     let stderr = "";
-    child.stdout.on("data", (chunk) => {
+    child.stdout?.on("data", (chunk) => {
       stdout += String(chunk);
     });
-    child.stderr.on("data", (chunk) => {
+    child.stderr?.on("data", (chunk) => {
       stderr += String(chunk);
     });
-    child.on("error", reject);
     child.on("close", (code) => {
       if (code === 0) {
         resolve(stdout.replace(/\n$/, ""));

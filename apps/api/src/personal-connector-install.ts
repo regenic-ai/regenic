@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   DEFAULT_COPY_LOCALE,
+  asConnectorHost,
   persistInstallSecrets,
   loadSyncProgress,
   type ConnectorInstallation,
@@ -15,6 +16,7 @@ import {
   catalogFromDrivers,
   connectorAllowsMultiple,
   toInstallationView,
+  installationSecretSettings,
   type EngineInstallationView,
 } from "./personal-connector-view";
 import type { ConnectorInstallState as ConnectorState } from "./personal-connector-state";
@@ -261,7 +263,13 @@ async function viewOf(
       hiddenThreadIds: new Set(hidden),
     }),
   ]);
+  const secrets = await installationSecretSettings(
+    installation,
+    state.drivers.get(installation.connector_type),
+    asConnectorHost(host).secrets,
+  );
   return toInstallationView(installation, attempt, state.drivers, DEFAULT_COPY_LOCALE, {
     sync,
+    secrets,
   });
 }

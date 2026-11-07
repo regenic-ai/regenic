@@ -5,6 +5,7 @@ import {
   DEFAULT_COPY_LOCALE,
   DEFAULT_CATALOG_OPTIONS_TIMEOUT_MS,
   resolveCopy,
+  asConnectorHost,
   type CopyLocale,
   arrangeMessage,
   collectFollowUpCandidates,
@@ -73,6 +74,7 @@ import {
   connectorCatalog,
   catalogFromDrivers,
   toInstallationView,
+  installationSecretSettings,
   type ConnectorCatalogItem,
   type EngineInstallationView,
 } from "./personal-connector-view";
@@ -391,8 +393,21 @@ export class PersonalInboxService {
     }
     const tables = driver.locales?.() ?? [];
     try {
+      const kernel = this.runtime.requireHost();
+      const installations = await kernel
+        .get("authority")
+        .listInstallations(this.runtime.orgId());
+      const installation =
+        installations.find(
+          (item) => item.connector_type === type && item.status === "enabled",
+        ) ?? installations.find((item) => item.connector_type === type);
       const raw = await withDeadline(
-        driver.listCatalogFieldOptions({ env: process.env }),
+        driver.listCatalogFieldOptions({
+          env: process.env,
+          ...(installation
+            ? { installation, host: asConnectorHost(kernel) }
+            : {}),
+        }),
         DEFAULT_CATALOG_OPTIONS_TIMEOUT_MS,
         `catalog options ${type}`,
       );
@@ -1030,12 +1045,17 @@ export class PersonalInboxService {
         if (attempt) {
           this.kernelRuntime.publishInstallAttempt(installation.id, attempt);
         }
+        const secretSettings = await installationSecretSettings(
+          installation,
+          this.drivers.get(installation.connector_type),
+          asConnectorHost(host).secrets,
+        );
         return toInstallationView(
           installation,
           attempt,
           this.drivers,
           query.locale,
-          { sync },
+          { sync, secrets: secretSettings },
         );
       }),
     );
