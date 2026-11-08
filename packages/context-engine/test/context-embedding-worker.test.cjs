@@ -53,6 +53,38 @@ async function fixture(t, embedding = provider(), gen = generation) {
 }
 
 describe("independent embedding indexing worker", () => {
+  it("covers three newest jobs before yielding one slot to the oldest backlog item", async t => {
+    const f = await fixture(t);
+    for (let index = 0; index < 3; index++) {
+      assert.deepEqual(
+        await f.worker.runOnce({ max_jobs: 1 }),
+        { processed: 0, failed: 0, superseded: 0 },
+      );
+    }
+    for (let index = 1; index <= 5; index++) {
+      await f.ingest.ingest(batch(
+        "create",
+        `message ${index}`,
+        `delivery-${index}`,
+        `message-${index}`,
+      ));
+    }
+    const completed = [];
+    for (let index = 0; index < 5; index++) {
+      assert.deepEqual(
+        await f.worker.runOnce({ max_jobs: 1 }),
+        { processed: 1, failed: 0, superseded: 0 },
+      );
+      const succeeded = (await f.index.listJobs("org", generation.id))
+        .filter((job) => job.status === "succeeded")
+        .map((job) => job.external_id);
+      completed.push(succeeded.find((id) => !completed.includes(id)));
+    }
+    assert.deepEqual(completed, [
+      "message-5", "message-4", "message-3", "message-1", "message-2",
+    ]);
+  });
+
   it("skips unauthorized images as completed empty work and rebuilds them only after opt-in", async t => {
     const embedding = provider({
       visualEnabled: false,

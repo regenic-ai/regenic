@@ -970,6 +970,81 @@ describe("personal context API", () => {
       ledger.close();
     }
   });
+  it("excludes expanded neighbor messages outside the answer time range", async () => {
+    const root = await createRoot();
+    const executor = await startExecutorStub("Recent evidence only [1].");
+    const { origin } = await startApi(
+      root,
+      { driver: "none" },
+      undefined,
+      ingestConversationEvidence,
+    );
+    const executorType = await installHttpExecutor(origin, executor.baseUrl);
+    const conversation = JSON.parse((await postJson(
+      `${origin}/v1/me/context/search/expand`,
+      {
+        query: "pending-answer-question",
+        limit: 1,
+        context: { before: 1, after: 1, reply_depth: 8, max_messages: 3 },
+      },
+    )).text).conversations[0];
+    const eventIds = conversation.messages.map((message) => message.event_id);
+    const started = await postJson(
+      `${origin}/v1/me/context/search/answers`,
+      {
+        query: "What happened in the recent period?",
+        conversations: [{
+          thread_id: conversation.thread_id,
+          event_ids: eventIds,
+        }],
+        executor_type: executorType,
+        filters: {
+          occurred_after: "2026-08-30T00:01:00.000Z",
+          occurred_before: "2026-08-30T00:02:00.000Z",
+        },
+      },
+    );
+    assert.equal(started.response.status, 202, started.text);
+    const run = executor.requests.find((request) =>
+      request.method === "POST" && request.url === "/v1/runs");
+    assert.match(
+      run.body.evidence_text,
+      /EVIDENCE TIME RANGE\n2026-08-30T00:01:00.000Z through 2026-08-30T00:02:00.000Z/,
+    );
+    assert.doesNotMatch(run.body.evidence_text, /selected Alice and Bob/);
+    assert.match(run.body.evidence_text, /pending-answer-question/);
+    assert.match(run.body.evidence_text, /identity-follow-up/);
+    const ledger = new SqliteAuthorityStore(join(root, "authority.db"));
+    try {
+      const record = await ledger.getSearchAnswer(
+        "local-owner",
+        JSON.parse(started.text).answer_id,
+      );
+      assert.deepEqual(record.event_ids, eventIds.slice(1));
+    } finally {
+      ledger.close();
+    }
+
+    for (const filters of [
+      { occurred_after: "not-a-date", occurred_before: "2026-08-30T00:02:00.000Z" },
+      { occurred_after: "2026-08-30T00:03:00.000Z", occurred_before: "2026-08-30T00:02:00.000Z" },
+      { occurred_after: "2026-08-30T00:01:00.000Z" },
+    ]) {
+      const invalid = await postJson(
+        `${origin}/v1/me/context/search/answers`,
+        {
+          query: "x",
+          conversations: [{
+            thread_id: conversation.thread_id,
+            event_ids: eventIds,
+          }],
+          executor_type: executorType,
+          filters,
+        },
+      );
+      assert.equal(invalid.response.status, 400, invalid.text);
+    }
+  });
   it("recovers an in-flight executor answer after the API restarts", async () => {
     const root = await createRoot();
     const executor = await startExecutorStub("Recovered answer [1].");

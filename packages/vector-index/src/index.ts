@@ -384,10 +384,16 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
   async claim(input: Parameters<EmbeddingJobStore["claim"]>[0]): Promise<EmbeddingJob[]> {
     required(input.org_id); required(input.generation); required(input.owner); timestamp(input.now);
     bounded(input.lease_ms, 1, 300000); bounded(input.limit, 1, 100);
+    if (input.order !== undefined && input.order !== "oldest" && input.order !== "newest") {
+      throw new Error("Invalid embedding job order");
+    }
+    const direction = input.order === "newest" ? "DESC" : "ASC";
     return this.db.transaction(() => {
       const rows = this.db.prepare(`SELECT * FROM jobs WHERE org_id=? AND generation=? AND (
         status='pending' OR (status='failed' AND retry_at<=?) OR (status='running' AND lease_until<=?)
-      ) ORDER BY id LIMIT ?`).all(input.org_id, input.generation, input.now, input.now, input.limit) as JobRow[];
+      ) ORDER BY id ${direction} LIMIT ?`).all(
+        input.org_id, input.generation, input.now, input.now, input.limit,
+      ) as JobRow[];
       const until = new Date(Date.parse(input.now) + input.lease_ms).toISOString();
       for (const row of rows) {
         const staleAttemptMs = row.started_at

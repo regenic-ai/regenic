@@ -38,6 +38,7 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
   private clearing = false;
   private running: ReturnType<ContextEmbeddingRunner["runOnce"]> | undefined;
   private generationCursor = 0;
+  private readonly claimSequences = new Map<string, number>();
 
   constructor(
     private readonly orgId: string,
@@ -155,13 +156,16 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
 
   private async run(generation: EmbeddingGeneration, previous?: ContextSourceRead) {
     let read = previous ?? await this.read(generation);
+    const claimSequence = this.claimSequences.get(generation.id) ?? 0;
     const claimed = await this.jobs.claim({
       org_id: this.orgId, generation: generation.id, owner: this.owner,
       now: new Date().toISOString(), lease_ms: 90000, limit: 1,
+      order: claimSequence % 4 === 3 ? "oldest" : "newest",
     });
     const result = { processed: 0, failed: 0, superseded: 0 };
     let yielded = false;
     if (claimed.length === 0) return { claimed: false, read, result };
+    this.claimSequences.set(generation.id, claimSequence + 1);
     for (const job of claimed) {
       if (this.abort.signal.aborted) break;
       let leaseLost = false;
