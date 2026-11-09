@@ -49,6 +49,8 @@ import { shouldDeferWorkForThread } from "./personal-sync-phase";
 
 /** How many inbox rows one dispatch tick may open. The next tick continues after them. */
 const INBOX_OBSERVE_PAGE = 16;
+/** Newest ordinary messages read from one conversation a push rule names. */
+const WATCHED_THREAD_OBSERVE_LIMIT = 200;
 /** Failed retries are a second pass so open work is not stuck behind them. */
 const FAILED_RETRY_PAGE = 20;
 
@@ -152,10 +154,22 @@ export class PersonalWorkDispatch {
       authority.listHiddenExecutorThreadIds(orgId),
       authority.listInbox(orgId, { tasks: true, needs_work: true }),
     ]);
-    if (taskRows.length === 0 && items.length === 0) {
+    const watchedThreadIds = pushWatchedThreadIds(recipes);
+    if (taskRows.length === 0 && items.length === 0 && watchedThreadIds.length === 0) {
       return;
     }
     const hidden = new Set(hiddenIds);
+    const watchedRows: InboxItem[] = [];
+    for (const threadId of watchedThreadIds) {
+      if (hidden.has(threadId)) {
+        continue;
+      }
+      watchedRows.push(...await authority.listInbox(orgId, {
+        thread_ids: [threadId],
+        needs_work: true,
+        limit: WATCHED_THREAD_OBSERVE_LIMIT,
+      }));
+    }
     const observeRows = uniqueInboxItems(taskRows).sort(compareInboxItems);
     const orderRows = observeRows.filter((row) => isOrderTask(row));
     const otherRows = observeRows.filter((row) => !isOrderTask(row));
@@ -163,7 +177,11 @@ export class PersonalWorkDispatch {
     const opsPage = takeInboxScanPage(otherRows, this.opsScan, INBOX_OBSERVE_PAGE);
     this.orderScan = orderPage.next;
     this.opsScan = opsPage.next;
-    const page = [...orderPage.page, ...opsPage.page];
+    const page = uniqueInboxItems([
+      ...orderPage.page,
+      ...opsPage.page,
+      ...watchedRows,
+    ]);
     const bodies = await resolveInboxBodies(
       authority,
       host.get("blobs"),
@@ -958,6 +976,23 @@ function failedRunCount(runs: WorkRun[]): number {
 
 function isOrderTask(row: InboxItem): boolean {
   return (row.event.thread_id ?? "").startsWith("crm:order:");
+}
+
+function pushWatchedThreadIds(recipes: Recipe[]): string[] {
+  const ids = new Set<string>();
+  for (const recipe of recipes) {
+    const threadId = recipe.match.thread_id?.trim();
+    if (!threadId || !recipeAllowsPushDispatch(recipe)) {
+      continue;
+    }
+    try {
+      parseConversationThread(threadId);
+    } catch {
+      continue;
+    }
+    ids.add(threadId);
+  }
+  return [...ids];
 }
 
 function compareInboxItems(left: InboxItem, right: InboxItem): number {
