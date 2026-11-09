@@ -88,6 +88,67 @@ export type WorkRunStartCheckpoint = {
   | { kind: "failed" | "uncertain"; error: string }
 );
 
+export interface WorkRunStartFailure {
+  expected_item: WorkItem;
+  run: WorkRun & { status: "failed" };
+  mode: "automatic" | "manual" | "auxiliary";
+  /** A trial may fail validation for a selected rule without changing the existing binding. */
+  rebind?: "manual";
+}
+
+export type WorkRunStartFailureResult =
+  | { outcome: "applied"; item: WorkItem; run: WorkRun }
+  | { outcome: "conflict"; reason: "missing_work" | "stale_failure" | "missing_recipe" | "active_run" | "unresolved_delivery" };
+
+export function prepareWorkRunStartFailure(input: WorkRunStartFailure, facts: {
+  item: WorkItem | null;
+  recipe_exists: boolean;
+  active_run: boolean;
+  unresolved_delivery: boolean;
+}): WorkRunStartFailureResult {
+  const { run, expected_item: expected, mode } = input;
+  if (mode !== "automatic" && mode !== "manual" && mode !== "auxiliary") {
+    throw new Error("Unknown work start failure mode");
+  }
+  assertWorkRunSnapshot(run);
+  if (typeof run.id !== "string" || !run.id.trim()
+    || typeof run.executor_type !== "string" || !run.executor_type.trim()
+    || run.status !== "failed" || run.start_state !== undefined
+    || run.external_run_id !== undefined || run.agent_thread_id !== undefined
+    || run.write_back_required !== false
+    || typeof run.result?.summary !== "string" || !run.result.summary.trim()
+    || !Number.isFinite(Date.parse(run.updated_at)) || run.created_at !== run.updated_at
+    || (run.version ?? 0) !== 0) {
+    throw new Error("Work start failure must describe a fresh, definitely unstarted attempt");
+  }
+  const claim: WorkRunStartClaim = {
+    run: { ...run, status: "running", start_state: "pending" },
+    expected_item: expected,
+    retry: mode === "manual" ? "manual" : expected.status === "failed" ? "automatic" : undefined,
+    rebind: input.rebind,
+  };
+  if (input.rebind !== undefined && (input.rebind !== "manual" || mode !== "manual")) {
+    throw new Error("Work start failure binding intent is only available to manual trials");
+  }
+  // Validate caller identity even when the item disappeared.
+  const eligible = canClaimWorkRunStartItem(claim, facts.item ?? expected);
+  if (!facts.item) return { outcome: "conflict", reason: "missing_work" };
+  if (!eligible) return { outcome: "conflict", reason: "stale_failure" };
+  if (!facts.recipe_exists) return { outcome: "conflict", reason: "missing_recipe" };
+  if (facts.active_run) return { outcome: "conflict", reason: "active_run" };
+  if (facts.unresolved_delivery) return { outcome: "conflict", reason: "unresolved_delivery" };
+  return {
+    outcome: "applied",
+    run: structuredClone({ ...run, version: 0 }),
+    item: structuredClone({
+      ...facts.item,
+      ...(mode === "automatic" ? { status: "failed" as const, current_run_id: run.id } : {}),
+      version: (facts.item.version ?? 0) + 1,
+      updated_at: run.updated_at,
+    }),
+  };
+}
+
 export type WorkRunStartCheckpointResult =
   | { outcome: "applied"; item: WorkItem; run: WorkRun }
   | {

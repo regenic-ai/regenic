@@ -127,6 +127,128 @@ async function startCheckpointFixture(t, driver) {
 
 for (const driver of drivers) {
   describe(`${driver.name} atomic work observation`, { skip: driver.skip }, () => {
+    for (const mode of ["automatic", "manual", "auxiliary"]) {
+      it(`commits a ${mode} preflight failure and item version together`, async (t) => {
+        const f = await fixture(t, driver);
+        const oldRun = await f.store.putWorkRun({ ...f.run, status: "failed", start_state: undefined });
+        const item = await f.store.putWorkItem({ ...f.item, status: "open" });
+        const run = {
+          id: "preflight-failure", org_id: ORG, work_item_id: item.id, recipe_id: item.recipe_id,
+          executor_type: "missing", status: "failed", result: { summary: "Unknown executor" },
+          write_back_required: false, trigger_kind: "push", created_at: LATER, updated_at: LATER,
+        };
+        const result = await f.store.recordWorkRunStartFailure({ expected_item: item, run, mode });
+        assert.equal(result.outcome, "applied");
+        assert.equal(result.item.status, mode === "automatic" ? "failed" : item.status);
+        assert.equal(result.item.current_run_id, mode === "automatic" ? run.id : item.current_run_id);
+        assert.equal(result.item.version, item.version + 1);
+        assert.deepEqual(await f.store.getWorkItem(ORG, item.id), result.item);
+        assert.deepEqual(await f.store.getWorkRun(ORG, run.id), result.run);
+        assert.deepEqual(await f.store.getWorkRun(ORG, oldRun.id), oldRun);
+        const saved = structuredClone(result);
+        result.item.unit_key = "changed";
+        result.run.result.summary = "changed";
+        await f.reopen();
+        assert.deepEqual(await f.store.getWorkItem(ORG, item.id), saved.item);
+        assert.deepEqual(await f.store.getWorkRun(ORG, run.id), saved.run);
+        assert.deepEqual(await f.store.recordWorkRunStartFailure({ expected_item: item, run, mode }),
+          { outcome: "conflict", reason: "stale_failure" });
+      });
+    }
+
+    it("does not insert failure history over active runs, ignored work or unresolved delivery", async (t) => {
+      const f = await fixture(t, driver);
+      const item = await f.store.putWorkItem({ ...f.item, status: "open" });
+      const run = {
+        id: "preflight-failure", org_id: ORG, work_item_id: item.id, recipe_id: item.recipe_id,
+        executor_type: "missing", status: "failed", result: { summary: "Unknown executor" },
+        write_back_required: false, created_at: LATER, updated_at: LATER,
+      };
+      const input = { expected_item: item, run, mode: "automatic" };
+      assert.deepEqual(await f.store.recordWorkRunStartFailure(input), { outcome: "conflict", reason: "active_run" });
+      await f.store.putWorkRun({ ...f.run, status: "failed", start_state: undefined });
+      const ignored = await f.store.putWorkItem({ ...item, status: "skipped" });
+      assert.deepEqual(await f.store.recordWorkRunStartFailure(input), { outcome: "conflict", reason: "stale_failure" });
+      assert.deepEqual(await f.store.getWorkItem(ORG, item.id), ignored);
+      const current = await f.store.putWorkItem({ ...ignored, status: "open" });
+      const delivery = await f.store.putWorkDelivery(enqueueWriteBack({
+        org_id: ORG, work_item_id: item.id, recipe_id: item.recipe_id, kind: "push",
+        unit_key: item.unit_key, payload: { summary: "Previous result" }, now: LATER,
+      }));
+      assert.deepEqual(await f.store.recordWorkRunStartFailure({ ...input, expected_item: current }),
+        { outcome: "conflict", reason: "unresolved_delivery" });
+      assert.deepEqual(await f.store.getWorkItem(ORG, item.id), current);
+      assert.deepEqual(await f.store.getWorkDelivery(ORG, delivery.id), delivery);
+      assert.equal(await f.store.getWorkRun(ORG, run.id), null);
+    });
+
+    it("allows only one failure or real start against a selected snapshot", async (t) => {
+      const f = await fixture(t, driver);
+      await f.store.putWorkRun({ ...f.run, status: "failed", start_state: undefined });
+      const item = await f.store.putWorkItem({ ...f.item, status: "open" });
+      const run = {
+        id: "preflight-failure", org_id: ORG, work_item_id: item.id, recipe_id: item.recipe_id,
+        executor_type: "missing", status: "failed", result: { summary: "Unknown executor" },
+        write_back_required: false, created_at: LATER, updated_at: LATER,
+      };
+      const [failure, started] = await Promise.all([
+        f.store.recordWorkRunStartFailure({ expected_item: item, run, mode: "manual" }),
+        f.store.claimWorkRunStart({
+          expected_item: item, run: { ...f.run, id: "real-start", status: "running", start_state: "pending" },
+        }),
+      ]);
+      assert.equal(Number(failure.outcome === "applied") + Number(started), 1);
+      assert.equal((await f.store.getWorkItem(ORG, item.id)).version, item.version + 1);
+      assert.equal((await f.store.listWorkRuns(ORG, item.id)).length, 2);
+    });
+
+    it("preserves a completed item and result when a trial's selected rule fails preflight", async (t) => {
+      const f = await fixture(t, driver);
+      const completed = await f.store.putWorkRun({
+        ...f.run, status: "completed", start_state: undefined, result: { summary: "Original result" },
+      });
+      const item = await f.store.putWorkItem({ ...f.item, status: "done" });
+      await f.store.putRecipe({ ...f.recipe, id: "trial-rule" });
+      const run = {
+        id: "preflight-failure", org_id: ORG, work_item_id: item.id, recipe_id: "trial-rule",
+        executor_type: "missing", status: "failed", result: { summary: "Unknown executor" },
+        write_back_required: false, created_at: LATER, updated_at: LATER,
+      };
+      const result = await f.store.recordWorkRunStartFailure({
+        expected_item: item, run, mode: "manual", rebind: "manual",
+      });
+      assert.equal(result.outcome, "applied");
+      assert.equal(result.item.status, "done");
+      assert.equal(result.item.recipe_id, f.recipe.id);
+      assert.equal(result.item.current_run_id, completed.id);
+      assert.equal(result.item.version, item.version + 1);
+      assert.deepEqual(await f.store.getWorkRun(ORG, completed.id), completed);
+      assert.deepEqual(await f.store.getWorkRun(ORG, run.id), result.run);
+    });
+
+    it("rejects deleted rules and reused failure identities without touching work history", async (t) => {
+      const f = await fixture(t, driver);
+      await f.store.putWorkRun({ ...f.run, status: "failed", start_state: undefined });
+      const item = await f.store.putWorkItem({ ...f.item, status: "open" });
+      const run = {
+        id: f.run.id, org_id: ORG, work_item_id: item.id, recipe_id: item.recipe_id,
+        executor_type: "missing", status: "failed", result: { summary: "Unknown executor" },
+        write_back_required: false, created_at: LATER, updated_at: LATER,
+      };
+      const input = { expected_item: item, run, mode: "automatic" };
+      await assert.rejects(f.store.recordWorkRunStartFailure(input), /already exists/);
+      assert.deepEqual(await f.store.getWorkItem(ORG, item.id), item);
+      await f.store.deleteRecipe(ORG, f.recipe.id);
+      const current = await f.store.getWorkItem(ORG, item.id);
+      const result = await f.store.recordWorkRunStartFailure({
+        ...input, expected_item: { ...current, recipe_id: f.recipe.id },
+        run: { ...run, id: "new-failure" },
+      });
+      assert.equal(result.outcome, "conflict");
+      assert.deepEqual(await f.store.getWorkItem(ORG, item.id), current);
+      assert.equal(await f.store.getWorkRun(ORG, "new-failure"), null);
+    });
+
     for (const [status, intent] of [
       ["failed", "manual"], ["done", "manual"], ["skipped", "manual"],
       ["open", "automatic"], ["failed", "automatic"],
@@ -1101,6 +1223,29 @@ for (const driver of drivers) {
 
 for (const driver of drivers.filter((d) => d.name.startsWith("sqlite"))) {
   describe(`${driver.name} observation rollback`, () => {
+    it("rolls back preflight failure history if the item write fails", async (t) => {
+      const f = await fixture(t, driver);
+      await f.store.putWorkRun({ ...f.run, status: "failed", start_state: undefined });
+      const item = await f.store.putWorkItem({ ...f.item, status: "open" });
+      const db = new Database(f.path);
+      try {
+        db.exec(`CREATE TRIGGER reject_preflight BEFORE UPDATE ON work_items
+          BEGIN SELECT RAISE(ABORT, 'preflight item write rejected'); END`);
+        await assert.rejects(f.store.recordWorkRunStartFailure({
+          expected_item: item, mode: "automatic",
+          run: {
+            id: "preflight-failure", org_id: ORG, work_item_id: item.id, recipe_id: item.recipe_id,
+            executor_type: "missing", status: "failed", result: { summary: "Unknown executor" },
+            write_back_required: false, created_at: LATER, updated_at: LATER,
+          },
+        }), /preflight item write rejected/);
+        assert.deepEqual(await f.store.getWorkItem(ORG, item.id), item);
+        assert.equal(await f.store.getWorkRun(ORG, "preflight-failure"), null);
+      } finally {
+        db.close();
+      }
+    });
+
     it("rolls back both rule rebinding and new run on failure", async (t) => {
       const f = await fixture(t, driver);
       await f.store.putWorkRun({ ...f.run, status: "failed", start_state: undefined });
@@ -1242,6 +1387,32 @@ it("fences competing startup checkpoints across independent SQLite writer worker
   const winner = results.find((result) => result.outcome === "applied");
   assert.deepEqual(await second.getWorkItem(ORG, winner.item.id), winner.item);
   assert.deepEqual(await second.getWorkRun(ORG, winner.run.id), winner.run);
+});
+
+it("fences preflight failures against a real start across independent SQLite writer workers", async (t) => {
+  const driver = drivers.find((d) => d.name === "sqlite writer RPC");
+  const f = await fixture(t, driver);
+  await f.store.putWorkRun({ ...f.run, status: "failed", start_state: undefined });
+  const item = await f.store.putWorkItem({ ...f.item, status: "open" });
+  const second = await SqliteSplitAuthorityStore.open(f.path);
+  t.after(() => second.close());
+  const [failure, started] = await Promise.all([
+    f.store.recordWorkRunStartFailure({
+      expected_item: item, mode: "manual",
+      run: {
+        id: "preflight-failure", org_id: ORG, work_item_id: item.id, recipe_id: item.recipe_id,
+        executor_type: "missing", status: "failed", result: { summary: "Unknown executor" },
+        write_back_required: false, created_at: LATER, updated_at: LATER,
+      },
+    }),
+    second.claimWorkRunStart({
+      expected_item: item,
+      run: { ...f.run, id: "real-start", status: "running", start_state: "pending" },
+    }),
+  ]);
+  assert.equal(Number(failure.outcome === "applied") + Number(started), 1);
+  assert.equal((await second.getWorkItem(ORG, item.id)).version, item.version + 1);
+  assert.equal((await second.listWorkRuns(ORG, item.id)).length, 2);
 });
 
 it("fences manual and automatic retries across independent SQLite writer workers", async (t) => {

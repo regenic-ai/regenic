@@ -11,6 +11,7 @@ import type { SearchAnswerRecord } from "./search-answer";
 import type {
   CommitWorkObservation, CommitWorkObservationResult,
   WorkRunStartCheckpoint, WorkRunStartCheckpointResult,
+  WorkRunStartFailure, WorkRunStartFailureResult,
 } from "./work-transition";
 
 export type { ResultEnvelope, WorkRun, WorkRunStatus };
@@ -270,6 +271,7 @@ export interface WorkStore {
   claimWorkRunStart(input: WorkRunStartClaim): Promise<boolean>;
   /** Atomically checkpoint a current reserved start and its matching item status. */
   checkpointWorkRunStart(input: WorkRunStartCheckpoint): Promise<WorkRunStartCheckpointResult>;
+  recordWorkRunStartFailure(input: WorkRunStartFailure): Promise<WorkRunStartFailureResult>;
   /** Atomically apply an observed run, work status and compatible delivery change. */
   commitWorkObservation(input: CommitWorkObservation): Promise<CommitWorkObservationResult>;
   listWorkDeliveries(orgId: string): Promise<WorkDelivery[]>;

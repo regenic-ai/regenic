@@ -69,6 +69,8 @@ import type {
   WorkRunStartClaim,
   WorkRunStartCheckpoint,
   WorkRunStartCheckpointResult,
+  WorkRunStartFailure,
+  WorkRunStartFailureResult,
   WorkDeliveryCommand,
   WorkDeliveryCommandResult,
   CommitWorkObservation,
@@ -280,6 +282,7 @@ import {
 import {
   claimWorkRunStart,
   checkpointWorkRunStart,
+  recordWorkRunStartFailure,
   transitionWorkDelivery,
   commitWorkObservation,
   deleteSearchAnswer,
@@ -1254,6 +1257,11 @@ export class SqliteAuthorityStore
   async checkpointWorkRunStart(input: WorkRunStartCheckpoint): Promise<WorkRunStartCheckpointResult> {
     this.assertWritable();
     return checkpointWorkRunStart(this.database, input);
+  }
+
+  async recordWorkRunStartFailure(input: WorkRunStartFailure): Promise<WorkRunStartFailureResult> {
+    this.assertWritable();
+    return recordWorkRunStartFailure(this.database, input);
   }
 
   async commitWorkObservation(input: CommitWorkObservation): Promise<CommitWorkObservationResult> {

@@ -73,6 +73,8 @@ import type {
   WorkRunStartClaim,
   WorkRunStartCheckpoint,
   WorkRunStartCheckpointResult,
+  WorkRunStartFailure,
+  WorkRunStartFailureResult,
   WorkDeliveryCommand,
   WorkDeliveryCommandResult,
   CommitWorkObservation,
@@ -324,6 +326,7 @@ import {
 import {
   claimWorkRunStart,
   checkpointWorkRunStart,
+  recordWorkRunStartFailure,
   transitionWorkDelivery,
   commitWorkObservation,
   deleteSearchAnswer,
@@ -1218,6 +1221,10 @@ export class PostgresAuthorityStore
 
   async checkpointWorkRunStart(input: WorkRunStartCheckpoint): Promise<WorkRunStartCheckpointResult> {
     return checkpointWorkRunStart(this.sql, input);
+  }
+
+  async recordWorkRunStartFailure(input: WorkRunStartFailure): Promise<WorkRunStartFailureResult> {
+    return recordWorkRunStartFailure(this.sql, input);
   }
 
   async commitWorkObservation(input: CommitWorkObservation): Promise<CommitWorkObservationResult> {

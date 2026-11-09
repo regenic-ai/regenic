@@ -452,7 +452,7 @@ export class PersonalWorkDispatch {
     }
     const executor = host.get("executors").get(recipe.executor_type);
     if (!executor) {
-      await this.noteStartFailed(item, recipe, "Unknown executor", mode);
+      await this.noteStartFailed(item, recipe, "Unknown executor", mode, options?.rebind);
       if (mode !== "auto") {
         throw new PersonalConnectorError("invalid_config", `Unknown executor: ${recipe.executor_type}`, 400);
       }
@@ -919,18 +919,27 @@ export class PersonalWorkDispatch {
     recipe: Recipe,
     error: string,
     mode: "auto" | "manual" | "auxiliary",
+    rebind = false,
   ): Promise<void> {
     const now = new Date().toISOString();
     const host = this.runtime.requireHost();
-    await host.get("authority").putWorkRun(
-      failedWorkStart({ item, recipe, error, now }),
-    );
+    const result = await host.get("authority").recordWorkRunStartFailure({
+      expected_item: item,
+      run: {
+        ...failedWorkStart({ item, recipe, error, now }),
+        status: "failed", write_back_required: false, trigger_kind: recipeTriggerOf(recipe).kind,
+      },
+      mode: mode === "auto" ? "automatic" : mode,
+      rebind: mode === "manual" && rebind ? "manual" : undefined,
+    });
+    if (result.outcome === "conflict") {
+      if (mode !== "auto") throw new PersonalConnectorError(
+        "execution_start_conflict", `Work start failure rejected: ${result.reason}. Refresh the work item.`, 409,
+      );
+      console.error("personal work start failure rejected", result.reason, error);
+      return;
+    }
     if (mode === "auto") {
-      await host.get("authority").putWorkItem({
-        ...item,
-        status: "failed",
-        updated_at: now,
-      });
       console.error("personal work start failed", error);
     }
   }

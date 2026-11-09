@@ -2,6 +2,7 @@ const assert = require("node:assert/strict");
 const { describe, it } = require("node:test");
 const {
   assertWorkRunWrite, planWorkObservation, prepareWorkRunStartCheckpoint, canClaimWorkRunStartItem,
+  prepareWorkRunStartFailure,
 } = require("../dist");
 
 const BEFORE = "2026-11-09T08:00:00.000Z";
@@ -44,6 +45,80 @@ function fixture() {
     now: NOW,
   };
 }
+
+describe("work preflight failure transitions", () => {
+  function failure() {
+    const { item } = fixture();
+    item.status = "open";
+    item.version = 2;
+    return {
+      expected_item: item, mode: "automatic",
+      run: {
+        id: "failed-start", org_id: item.org_id, work_item_id: item.id,
+        recipe_id: item.recipe_id, executor_type: "test", status: "failed",
+        result: { summary: "Unknown executor" }, write_back_required: false,
+        trigger_kind: "push", created_at: NOW, updated_at: NOW,
+      },
+    };
+  }
+  const facts = (input, overrides = {}) => ({
+    item: input.expected_item, recipe_exists: true, active_run: false, unresolved_delivery: false, ...overrides,
+  });
+
+  for (const mode of ["automatic", "manual", "auxiliary"]) {
+    it(`records ${mode} failure without creating an intermediate running state`, () => {
+      const input = { ...failure(), mode };
+      input.expected_item.current_run_id = "old-run";
+      const original = structuredClone(input);
+      const result = prepareWorkRunStartFailure(input, facts(input));
+      assert.equal(result.outcome, "applied");
+      assert.equal(result.item.status, mode === "automatic" ? "failed" : "open");
+      assert.equal(result.item.current_run_id, mode === "automatic" ? input.run.id : "old-run");
+      assert.equal(result.item.version, 3);
+      assert.equal(result.run.version, 0);
+      assert.equal(result.run.write_back_required, false);
+      assert.deepEqual(input, original);
+      result.item.unit_key = "changed";
+      result.run.result.summary = "changed";
+      assert.deepEqual(input, original);
+    });
+  }
+
+  it("rejects stale facts, protected work, active runs and unresolved deliveries", () => {
+    const input = failure();
+    for (const [overrides, reason] of [
+      [{ item: null }, "missing_work"],
+      [{ item: { ...input.expected_item, version: 3 } }, "stale_failure"],
+      [{ item: { ...input.expected_item, status: "skipped" } }, "stale_failure"],
+      [{ recipe_exists: false }, "missing_recipe"],
+      [{ active_run: true }, "active_run"],
+      [{ unresolved_delivery: true }, "unresolved_delivery"],
+    ]) {
+      assert.deepEqual(prepareWorkRunStartFailure(input, facts(input, overrides)), { outcome: "conflict", reason });
+    }
+    for (const status of ["running", "waiting_human", "done", "skipped"]) {
+      const protectedInput = failure();
+      protectedInput.expected_item.status = status;
+      assert.equal(prepareWorkRunStartFailure(protectedInput, facts(protectedInput)).outcome, "conflict");
+    }
+  });
+
+  it("rejects an external or ambiguous failure and cross-item identities", () => {
+    for (const changed of [
+      { id: "" }, { executor_type: 42 },
+      { status: "running" }, { external_run_id: "external" }, { agent_thread_id: "executor:thread" },
+      { start_state: "uncertain" }, { write_back_required: undefined }, { version: 1 },
+      { result: { summary: " " } }, { result: { summary: 42 } }, { updated_at: "invalid" },
+    ]) {
+      const input = failure();
+      input.run = { ...input.run, ...changed };
+      assert.throws(() => prepareWorkRunStartFailure(input, facts(input)), /definitely unstarted/);
+    }
+    const input = failure();
+    input.run.org_id = "other";
+    assert.throws(() => prepareWorkRunStartFailure(input, facts(input)), /same organization/);
+  });
+});
 
 describe("work retry start eligibility", () => {
   for (const status of ["open", "failed", "done", "skipped"]) {

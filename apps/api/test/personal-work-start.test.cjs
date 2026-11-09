@@ -539,7 +539,106 @@ describe("durable executor start", () => {
     const run = (await f.ports.authority.listWorkRuns(ORG, f.item.id))[0];
     assert.equal(run.status, "failed");
     assert.equal(run.start_state, undefined);
-    assert.equal((await f.ports.authority.getWorkItem(ORG, f.item.id)).status, "open");
+    assert.equal(run.write_back_required, false);
+    const item = await f.ports.authority.getWorkItem(ORG, f.item.id);
+    assert.equal(item.status, "open");
+    assert.equal(item.current_run_id, undefined);
+    assert.equal(item.version, 1);
+  });
+
+  it("atomically records automatic unknown-executor failure as the current failed attempt", async (t) => {
+    const f = await fixture(t);
+    f.setExecutor(undefined);
+    const result = await f.dispatch().startItem(f.item, f.recipe, "evidence");
+    assert.equal(result, undefined);
+    assert.equal(f.calls.spawn, 0);
+    const item = await f.ports.authority.getWorkItem(ORG, f.item.id);
+    const run = await f.ports.authority.getWorkRun(ORG, item.current_run_id);
+    assert.equal(item.status, "failed");
+    assert.equal(item.version, 1);
+    assert.equal(run.status, "failed");
+    assert.equal(run.write_back_required, false);
+    assert.equal(run.result.summary, "Unknown executor");
+    f.reopen();
+    assert.deepEqual(await f.ports.authority.getWorkItem(ORG, item.id), item);
+  });
+
+  for (const mode of ["auto", "manual"]) {
+    it(`does not record ${mode} config failure over a concurrent ignore`, async (t) => {
+      const f = await fixture(t);
+      f.setExecutor(undefined);
+      const record = f.ports.authority.recordWorkRunStartFailure.bind(f.ports.authority);
+      let ignored;
+      t.mock.method(f.ports.authority, "recordWorkRunStartFailure", async (input) => {
+        ignored = await f.ports.authority.putWorkItem({ ...f.item, status: "skipped" });
+        return record(input);
+      });
+      if (mode === "manual") {
+        await assert.rejects(f.dispatch().startItem(f.item, f.recipe, "evidence", mode), code("execution_start_conflict"));
+      } else {
+        await f.dispatch().startItem(f.item, f.recipe, "evidence", mode);
+      }
+      assert.deepEqual(await f.ports.authority.getWorkItem(ORG, f.item.id), ignored);
+      assert.equal((await f.ports.authority.listWorkRuns(ORG, f.item.id)).length, 0);
+      assert.equal(f.calls.spawn, 0);
+    });
+  }
+
+  it("does not insert a config failure when a real start wins its item snapshot", async (t) => {
+    const f = await fixture(t);
+    f.setExecutor(undefined);
+    const record = f.ports.authority.recordWorkRunStartFailure.bind(f.ports.authority);
+    let winner;
+    t.mock.method(f.ports.authority, "recordWorkRunStartFailure", async (input) => {
+      assert.equal(await f.ports.authority.claimWorkRunStart({
+        expected_item: input.expected_item,
+        run: { ...input.run, id: "real-start", status: "running", start_state: "pending", result: undefined },
+      }), true);
+      winner = await f.ports.authority.getWorkItem(ORG, f.item.id);
+      return record(input);
+    });
+    await assert.rejects(f.dispatch().startItem(f.item, f.recipe, "evidence", "manual"),
+      code("execution_start_conflict"));
+    assert.deepEqual(await f.ports.authority.getWorkItem(ORG, f.item.id), winner);
+    assert.equal((await f.ports.authority.listWorkRuns(ORG, f.item.id)).length, 1);
+    assert.equal(f.calls.spawn, 0);
+  });
+
+  it("keeps the existing trial binding and completed result on invalid executor configuration", async (t) => {
+    const f = await fixture(t);
+    const oldRecipe = await f.ports.authority.putRecipe({ ...f.recipe, id: "old-rule" });
+    const item = await f.ports.authority.putWorkItem({ ...f.item, recipe_id: oldRecipe.id, status: "done" });
+    const completed = await f.ports.authority.putWorkRun({
+      id: "original-result", org_id: ORG, work_item_id: item.id, recipe_id: oldRecipe.id,
+      executor_type: "session", status: "completed", result: { summary: "Original result" },
+      created_at: item.created_at, updated_at: item.updated_at,
+    });
+    f.setExecutor(undefined);
+    const service = f.service();
+    service.dispatch = f.dispatch();
+    await assert.rejects(service.tryRecipe(f.recipe.id, { thread_id: item.thread_id }),
+      code("invalid_config"));
+    const saved = await f.ports.authority.getWorkItem(ORG, item.id);
+    assert.equal(saved.recipe_id, oldRecipe.id);
+    assert.equal(saved.status, "done");
+    assert.equal(saved.current_run_id, item.current_run_id);
+    assert.equal(saved.version, item.version + 1);
+    const run = (await f.ports.authority.listWorkRuns(ORG, item.id)).find((row) => row.id !== completed.id);
+    assert.equal(run.recipe_id, f.recipe.id);
+    assert.equal(run.status, "failed");
+    assert.equal(run.write_back_required, false);
+    assert.deepEqual(await f.ports.authority.getWorkRun(ORG, completed.id), completed);
+    assert.equal(f.calls.spawn, 0);
+  });
+
+  it("does not bind an unbound automatic sample through an unknown-executor failure", async (t) => {
+    const f = await fixture(t);
+    const item = await f.ports.authority.putWorkItem({ ...f.item, recipe_id: undefined });
+    f.setExecutor(undefined);
+    await f.dispatch().startItem(item, f.recipe, "evidence");
+    assert.deepEqual(await f.ports.authority.getWorkItem(ORG, item.id), item);
+    assert.equal((await f.ports.authority.listWorkRuns(ORG, item.id)).length, 0);
+    assert.equal(f.calls.spawn, 0);
   });
 
   it("checkpoints the actual DSH executor's session before sending its task", async (t) => {

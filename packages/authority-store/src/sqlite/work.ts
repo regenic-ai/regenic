@@ -22,6 +22,9 @@ import {
   assertWorkRunWrite,
   canClaimWorkRunStartItem,
   prepareWorkRunStartCheckpoint,
+  prepareWorkRunStartFailure,
+  type WorkRunStartFailure,
+  type WorkRunStartFailureResult,
   type WorkRunStartCheckpoint,
   type WorkRunStartCheckpointResult,
   assertWorkDeliveryWrite,
@@ -363,6 +366,37 @@ function writeWorkRun(db: Database.Database, run: WorkRun, advanceVersion = fals
     if (!row) throw new Error("Work run identity and write-back snapshot are immutable");
     return toWorkRun(row);
   }
+
+export async function recordWorkRunStartFailure(
+  db: Database.Database, input: WorkRunStartFailure,
+): Promise<WorkRunStartFailureResult> {
+  return db.transaction((): WorkRunStartFailureResult => {
+    const { run } = input;
+    const item = db.prepare("SELECT * FROM work_items WHERE org_id = ? AND id = ?")
+      .get(run.org_id, run.work_item_id) as WorkItemRow | undefined;
+    const result = prepareWorkRunStartFailure(input, {
+      item: item ? toWorkItem(item) : null,
+      recipe_exists: Boolean(db.prepare("SELECT id FROM recipes WHERE org_id = ? AND id = ?")
+        .get(run.org_id, run.recipe_id)),
+      active_run: Boolean(db.prepare(`SELECT id FROM work_runs WHERE org_id = ? AND work_item_id = ?
+        AND status IN ('running', 'waiting_human') LIMIT 1`).get(run.org_id, run.work_item_id)),
+      unresolved_delivery: Boolean(db.prepare(`SELECT id FROM work_deliveries
+        WHERE org_id = ? AND work_item_id = ? AND status <> 'acked' LIMIT 1`).get(run.org_id, run.work_item_id)),
+    });
+    if (result.outcome !== "applied") return result;
+    if (db.prepare("SELECT id FROM work_runs WHERE id = ?").get(run.id)) {
+      throw new Error(`Work run already exists: ${run.id}`);
+    }
+    const savedRun = writeWorkRun(db, result.run);
+    const savedItem = db.prepare(`UPDATE work_items SET status = ?, current_run_id = ?, version = ?, updated_at = ?
+      WHERE org_id = ? AND id = ? RETURNING *`).get(
+      result.item.status, result.item.current_run_id ?? null, result.item.version,
+      result.item.updated_at, run.org_id, run.work_item_id,
+    ) as WorkItemRow | undefined;
+    if (!savedItem) throw new Error("Work start failure item disappeared inside its transaction");
+    return { outcome: "applied", item: toWorkItem(savedItem), run: savedRun };
+  }).immediate();
+}
 
 export async function claimWorkRunStart(db: Database.Database, input: WorkRunStartClaim): Promise<boolean> {
   const { run, max_concurrent } = input;

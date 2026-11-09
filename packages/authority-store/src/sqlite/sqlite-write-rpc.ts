@@ -150,6 +150,7 @@ export const AUTHORITY_WRITE_METHODS = [
   "putWorkRun",
   "claimWorkRunStart",
   "checkpointWorkRunStart",
+  "recordWorkRunStartFailure",
   "commitWorkObservation",
   "putSearchAnswer",
   "deleteSearchAnswer",

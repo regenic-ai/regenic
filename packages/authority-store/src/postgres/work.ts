@@ -22,6 +22,9 @@ import {
   assertWorkRunWrite,
   canClaimWorkRunStartItem,
   prepareWorkRunStartCheckpoint,
+  prepareWorkRunStartFailure,
+  type WorkRunStartFailure,
+  type WorkRunStartFailureResult,
   type WorkRunStartCheckpoint,
   type WorkRunStartCheckpointResult,
   assertWorkDeliveryWrite,
@@ -384,6 +387,42 @@ export async function commitWorkObservation(
       await putWorkItem(db, prepared.transition.item, client, false);
     }
     return { outcome: "applied", transition: prepared.transition };
+  });
+}
+
+export async function recordWorkRunStartFailure(
+  db: PgSql, input: WorkRunStartFailure,
+): Promise<WorkRunStartFailureResult> {
+  return db.withTx(async (client) => {
+    const { run } = input;
+    const recipe = await db.queryOne("SELECT id FROM recipes WHERE org_id = $1 AND id = $2 FOR UPDATE",
+      [run.org_id, run.recipe_id], client);
+    const item = await db.queryOne<WorkItemRow>(
+      "SELECT * FROM work_items WHERE org_id = $1 AND id = $2 FOR UPDATE",
+      [run.org_id, run.work_item_id], client,
+    );
+    const active = await db.queryOne(`SELECT id FROM work_runs WHERE org_id = $1 AND work_item_id = $2
+      AND status IN ('running', 'waiting_human') LIMIT 1`, [run.org_id, run.work_item_id], client);
+    const unresolved = await db.queryOne(`SELECT id FROM work_deliveries
+      WHERE org_id = $1 AND work_item_id = $2 AND status <> 'acked' LIMIT 1`,
+      [run.org_id, run.work_item_id], client);
+    const result = prepareWorkRunStartFailure(input, {
+      item: item ? toWorkItem(item) : null, recipe_exists: Boolean(recipe),
+      active_run: Boolean(active), unresolved_delivery: Boolean(unresolved),
+    });
+    if (result.outcome !== "applied") return result;
+    if (await db.queryOne("SELECT id FROM work_runs WHERE id = $1", [run.id], client)) {
+      throw new Error(`Work run already exists: ${run.id}`);
+    }
+    const savedRun = await putWorkRun(db, result.run, client, false);
+    const savedItem = await db.queryOne<WorkItemRow>(`UPDATE work_items
+      SET status = $1, current_run_id = $2, version = $3, updated_at = $4
+      WHERE org_id = $5 AND id = $6 RETURNING *`, [
+      result.item.status, result.item.current_run_id ?? null, result.item.version,
+      result.item.updated_at, run.org_id, run.work_item_id,
+    ], client);
+    if (!savedItem) throw new Error("Work start failure item disappeared inside its transaction");
+    return { outcome: "applied", item: toWorkItem(savedItem), run: savedRun };
   });
 }
 

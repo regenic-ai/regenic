@@ -20,6 +20,9 @@ import {
   assertWorkRunWrite,
   canClaimWorkRunStartItem,
   prepareWorkRunStartCheckpoint,
+  prepareWorkRunStartFailure,
+  type WorkRunStartFailure,
+  type WorkRunStartFailureResult,
   type WorkRunStartCheckpoint,
   type WorkRunStartCheckpointResult,
   type CommitWorkObservation,
@@ -189,6 +192,25 @@ export class MemoryWorkStore implements WorkStore, ExecutorStore {
     this.items.set(nextItem.id, nextItem);
     if (nextDelivery) this.deliveries.set(nextDelivery.id, nextDelivery);
     return { outcome: "applied", transition: prepared.transition };
+  }
+
+  async recordWorkRunStartFailure(input: WorkRunStartFailure): Promise<WorkRunStartFailureResult> {
+    const { run } = input;
+    const item = this.items.get(run.work_item_id);
+    const result = prepareWorkRunStartFailure(input, {
+      item: item?.org_id === run.org_id ? item : null,
+      recipe_exists: this.recipes.get(run.recipe_id)?.org_id === run.org_id,
+      active_run: [...this.runs.values()].some((row) =>
+        row.org_id === run.org_id && row.work_item_id === run.work_item_id
+        && (row.status === "running" || row.status === "waiting_human")),
+      unresolved_delivery: [...this.deliveries.values()].some((row) =>
+        row.org_id === run.org_id && row.work_item_id === run.work_item_id && row.status !== "acked"),
+    });
+    if (result.outcome !== "applied") return result;
+    if (this.runs.has(run.id)) throw new Error(`Work run already exists: ${run.id}`);
+    this.runs.set(run.id, cloneRun(result.run));
+    this.items.set(result.item.id, structuredClone(result.item));
+    return result;
   }
 
   async claimWorkRunStart(input: WorkRunStartClaim): Promise<boolean> {
