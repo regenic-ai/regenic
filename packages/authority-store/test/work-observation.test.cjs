@@ -135,8 +135,135 @@ async function timeoutFixture(t, driver) {
   return Object.assign(f, { record: saved, timeout: { expected_item: f.item, search_answer_timeout: saved, now: LATER } });
 }
 
+function creationInput(f, fields = {}) {
+  const recipe = { ...f.recipe, id: "created-recipe", trigger: { kind: "manual" }, created_at: LATER, updated_at: LATER };
+  return {
+    item: {
+      ...f.item, id: "created-work", unit_key: "created-unit", recipe_id: recipe.id,
+      status: "open", version: 0, current_run_id: undefined, created_at: LATER, updated_at: LATER,
+    },
+    recipe, expected_recipe: null, ...fields,
+  };
+}
+
 for (const driver of drivers) {
   describe(`${driver.name} atomic work observation`, { skip: driver.skip }, () => {
+    it("atomically creates a work item and its recipe and returns saved snapshots", async (t) => {
+      const f = await fixture(t, driver);
+      const input = creationInput(f);
+      const result = await f.store.createWorkItem(input);
+      assert.equal(result.outcome, "applied");
+      assert.equal(result.item.version, 0);
+      assert.equal(result.item.current_run_id, undefined);
+      assert.deepEqual(result.item, await f.store.getWorkItem(ORG, input.item.id));
+      assert.deepEqual(result.recipe, await f.store.getRecipe(ORG, input.recipe.id));
+      const saved = structuredClone(result);
+      result.recipe.executor_config.changed = true;
+      result.item.status = "skipped";
+      await f.reopen();
+      assert.deepEqual(await f.store.getWorkItem(ORG, input.item.id), saved.item);
+      assert.deepEqual(await f.store.getRecipe(ORG, input.recipe.id), saved.recipe);
+      assert.deepEqual(await f.store.listWorkRuns(ORG, input.item.id), []);
+    });
+
+    it("never overwrites existing work or its recipe when creation repeats", async (t) => {
+      const f = await fixture(t, driver);
+      const input = creationInput(f, {
+        item: { ...f.item, status: "open", current_run_id: undefined, version: 0 },
+      });
+      input.recipe.id = f.recipe.id;
+      input.expected_recipe = await f.store.getRecipe(ORG, f.recipe.id);
+      assert.deepEqual(await f.store.createWorkItem(input), { outcome: "conflict", reason: "work_exists" });
+      assert.deepEqual(await f.store.getWorkItem(ORG, f.item.id), f.item);
+      assert.deepEqual(await f.store.getWorkRun(ORG, f.run.id), f.run);
+      assert.deepEqual(await f.store.getRecipe(ORG, f.recipe.id), input.expected_recipe);
+    });
+
+    it("compares the recipe snapshot before applying a configuration change", async (t) => {
+      const f = await fixture(t, driver);
+      const expected = await f.store.getRecipe(ORG, f.recipe.id);
+      const input = creationInput(f, {
+        recipe: { ...expected, executor_config: { prompt: "New instruction" }, created_at: LATER, updated_at: LATER },
+        expected_recipe: expected,
+      });
+      input.item.recipe_id = f.recipe.id;
+      const result = await f.store.createWorkItem(input);
+      assert.equal(result.outcome, "applied");
+      assert.equal(result.recipe.created_at, expected.created_at);
+      assert.equal(result.recipe.updated_at, LATER);
+      assert.deepEqual(result.recipe.executor_config, { prompt: "New instruction" });
+      assert.deepEqual(result.recipe, await f.store.getRecipe(ORG, f.recipe.id));
+      const stale = { ...input, item: { ...input.item, id: "stale-work" } };
+      stale.recipe = { ...input.recipe, executor_config: { prompt: "Stale update" } };
+      assert.deepEqual(await f.store.createWorkItem(stale), { outcome: "conflict", reason: "stale_recipe" });
+      assert.equal(await f.store.getWorkItem(ORG, stale.item.id), null);
+      assert.deepEqual(await f.store.getRecipe(ORG, f.recipe.id), result.recipe);
+    });
+
+    it("does not create a replacement recipe when the requested item ID already exists", async (t) => {
+      const f = await fixture(t, driver);
+      const input = creationInput(f);
+      input.item.id = f.item.id;
+      assert.deepEqual(await f.store.createWorkItem(input), { outcome: "conflict", reason: "work_exists" });
+      assert.equal(await f.store.getRecipe(ORG, input.recipe.id), null);
+      assert.deepEqual(await f.store.getWorkItem(ORG, f.item.id), f.item);
+    });
+
+    it("reuses equivalent concurrent recipe creation without changing its timestamps", async (t) => {
+      const f = await fixture(t, driver);
+      const input = creationInput(f);
+      const first = await f.store.createWorkItem(input);
+      assert.equal(first.outcome, "applied");
+      const second = await f.store.createWorkItem({
+        ...input, item: { ...input.item, id: "another-created-work", unit_key: "another-created-unit" },
+        recipe: { ...input.recipe, created_at: NOW, updated_at: NOW },
+      });
+      assert.equal(second.outcome, "applied");
+      assert.deepEqual(second.recipe, first.recipe);
+      assert.deepEqual(second.recipe, await f.store.getRecipe(ORG, input.recipe.id));
+    });
+
+    it("rejects a conflicting newly created or removed recipe without leaving work", async (t) => {
+      const f = await fixture(t, driver);
+      const input = creationInput(f);
+      await f.store.putRecipe({ ...input.recipe, executor_config: { prompt: "Competing config" } });
+      const saved = await f.store.getRecipe(ORG, input.recipe.id);
+      assert.deepEqual(await f.store.createWorkItem(input), { outcome: "conflict", reason: "stale_recipe" });
+      assert.equal(await f.store.getWorkItem(ORG, input.item.id), null);
+      await f.store.deleteRecipe(ORG, input.recipe.id);
+      assert.deepEqual(await f.store.createWorkItem({ ...input, expected_recipe: saved }),
+        { outcome: "conflict", reason: "stale_recipe" });
+      assert.equal(await f.store.getWorkItem(ORG, input.item.id), null);
+      assert.equal(await f.store.getRecipe(ORG, input.recipe.id), null);
+    });
+
+    it("does not claim work or recipe IDs belonging to another organization", async (t) => {
+      const f = await fixture(t, driver);
+      const input = creationInput(f);
+      await f.store.putRecipe({ ...input.recipe, org_id: "other-org" });
+      assert.deepEqual(await f.store.createWorkItem(input), { outcome: "conflict", reason: "stale_recipe" });
+      assert.equal(await f.store.getWorkItem(ORG, input.item.id), null);
+      await f.store.putWorkItem({
+        ...input.item, recipe_id: undefined, org_id: "other-org",
+      });
+      const foreign = await f.store.getWorkItem("other-org", input.item.id);
+      assert.deepEqual(await f.store.createWorkItem(input), { outcome: "conflict", reason: "work_exists" });
+      assert.deepEqual(await f.store.getWorkItem("other-org", input.item.id), foreign);
+      assert.equal(await f.store.getWorkItem(ORG, input.item.id), null);
+    });
+
+    it("allows only one creation for the same item and keeps the winning recipe", async (t) => {
+      const f = await fixture(t, driver);
+      const input = creationInput(f);
+      const results = await Promise.all([input, {
+        ...input, recipe: { ...input.recipe, executor_config: { prompt: "Other instruction" } },
+      }].map((candidate) => f.store.createWorkItem(candidate)));
+      assert.equal(results.filter((result) => result.outcome === "applied").length, 1);
+      const winner = results.find((result) => result.outcome === "applied");
+      assert.deepEqual(await f.store.getRecipe(ORG, input.recipe.id), winner.recipe);
+      assert.deepEqual(await f.store.getWorkItem(ORG, input.item.id), winner.item);
+    });
+
     it("atomically persists a timeout cause with local dismissal and delivery stops", async (t) => {
       const f = await timeoutFixture(t, driver);
       const delivery = await f.store.putWorkDelivery(enqueueWriteBack({
@@ -1534,6 +1661,49 @@ for (const driver of drivers) {
 
 for (const driver of drivers.filter((d) => d.name.startsWith("sqlite"))) {
   describe(`${driver.name} observation rollback`, () => {
+    it("does not create work when its recipe update is rejected", async (t) => {
+      const f = await fixture(t, driver);
+      const expected = await f.store.getRecipe(ORG, f.recipe.id);
+      const input = creationInput(f, {
+        recipe: { ...expected, executor_config: { prompt: "New configuration" } },
+        expected_recipe: expected,
+      });
+      input.item.recipe_id = expected.id;
+      const db = new Database(f.path);
+      try {
+        db.exec(`CREATE TRIGGER reject_creation_recipe BEFORE UPDATE ON recipes
+          BEGIN SELECT RAISE(ABORT, 'recipe update rejected'); END`);
+        await assert.rejects(f.store.createWorkItem(input), /recipe update rejected/);
+        assert.equal(await f.store.getWorkItem(ORG, input.item.id), null);
+        assert.deepEqual(await f.store.getRecipe(ORG, expected.id), expected);
+      } finally {
+        db.close();
+      }
+    });
+
+    for (const existing of [false, true]) {
+      it(`rolls back ${existing ? "an updated" : "a new"} recipe if work creation fails`, async (t) => {
+        const f = await fixture(t, driver);
+        const input = creationInput(f);
+        if (existing) {
+          await f.store.putRecipe({ ...input.recipe, executor_config: { prompt: "Original" }, created_at: NOW, updated_at: NOW });
+          input.expected_recipe = await f.store.getRecipe(ORG, input.recipe.id);
+        }
+        const db = new Database(f.path);
+        try {
+          db.exec(`CREATE TRIGGER reject_creation BEFORE INSERT ON work_items
+            BEGIN SELECT RAISE(ABORT, 'creation rejected'); END`);
+          await assert.rejects(f.store.createWorkItem(input), /creation rejected/);
+          await f.reopen();
+          assert.equal(await f.store.getWorkItem(ORG, input.item.id), null);
+          assert.deepEqual(await f.store.getRecipe(ORG, input.recipe.id), input.expected_recipe);
+          assert.deepEqual(await f.store.getWorkItem(ORG, f.item.id), f.item);
+        } finally {
+          db.close();
+        }
+      });
+    }
+
     for (const table of ["search_answers", "work_items"]) {
       it(`rolls back the complete timeout when the ${table} write fails`, async (t) => {
         const f = await timeoutFixture(t, driver);
@@ -1758,6 +1928,42 @@ it("fences competing startup checkpoints across independent SQLite writer worker
   const winner = results.find((result) => result.outcome === "applied");
   assert.deepEqual(await second.getWorkItem(ORG, winner.item.id), winner.item);
   assert.deepEqual(await second.getWorkRun(ORG, winner.run.id), winner.run);
+});
+
+it("fences item creation across independent SQLite writer workers without leaking recipes", async (t) => {
+  const driver = drivers.find((d) => d.name === "sqlite writer RPC");
+  const f = await fixture(t, driver);
+  const input = creationInput(f);
+  const second = await SqliteSplitAuthorityStore.open(f.path);
+  t.after(() => second.close());
+  const competing = {
+    ...input, recipe: { ...input.recipe, id: "losing-recipe" },
+    item: { ...input.item, recipe_id: "losing-recipe" },
+  };
+  const results = await Promise.all([
+    f.store.createWorkItem(input), second.createWorkItem(competing),
+  ]);
+  assert.equal(results.filter((result) => result.outcome === "applied").length, 1);
+  const winner = results.find((result) => result.outcome === "applied");
+  const loser = results[0].outcome === "applied" ? competing : input;
+  assert.deepEqual(await second.getWorkItem(ORG, input.item.id), winner.item);
+  assert.deepEqual(await second.getRecipe(ORG, winner.recipe.id), winner.recipe);
+  assert.equal(await second.getRecipe(ORG, loser.recipe.id), null);
+});
+
+it("allows distinct work to share a concurrently created equivalent recipe across SQLite writers", async (t) => {
+  const driver = drivers.find((d) => d.name === "sqlite writer RPC");
+  const f = await fixture(t, driver);
+  const input = creationInput(f);
+  const second = await SqliteSplitAuthorityStore.open(f.path);
+  t.after(() => second.close());
+  const results = await Promise.all([
+    f.store.createWorkItem(input),
+    second.createWorkItem({ ...input, item: { ...input.item, id: "second-created-item", unit_key: "second-created-unit" } }),
+  ]);
+  assert.equal(results.every((result) => result.outcome === "applied"), true);
+  assert.deepEqual(results[0].recipe, results[1].recipe);
+  for (const result of results) assert.deepEqual(await second.getWorkItem(ORG, result.item.id), result.item);
 });
 
 it("fences timeout and human cancellation across independent SQLite writer workers", async (t) => {

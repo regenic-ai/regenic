@@ -22,6 +22,9 @@ import {
   prepareWorkRunStartCheckpoint,
   prepareWorkRunStartFailure,
   prepareWorkDismissal,
+  prepareWorkItemCreation,
+  type WorkItemCreation,
+  type WorkItemCreationResult,
   type WorkDismissal,
   type WorkDismissalResult,
   type WorkRunStartFailure,
@@ -119,6 +122,18 @@ export class MemoryWorkStore implements WorkStore, ExecutorStore {
     };
     this.items.set(item.id, saved);
     return { ...saved };
+  }
+
+  async createWorkItem(input: WorkItemCreation): Promise<WorkItemCreationResult> {
+    const result = prepareWorkItemCreation(input, {
+      item_exists: this.items.has(input.item.id),
+      recipe: this.recipes.get(input.recipe.id) ?? null,
+    });
+    if (result.outcome !== "applied") return result;
+    const saved = structuredClone(result);
+    this.recipes.set(saved.recipe.id, saved.recipe);
+    this.items.set(saved.item.id, saved.item);
+    return result;
   }
 
   async listWorkRuns(orgId: string, workItemId?: string): Promise<WorkRun[]> {

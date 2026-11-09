@@ -152,6 +152,7 @@ export const AUTHORITY_WRITE_METHODS = [
   "checkpointWorkRunStart",
   "recordWorkRunStartFailure",
   "dismissWorkItem",
+  "createWorkItem",
   "commitWorkObservation",
   "putSearchAnswer",
   "deleteSearchAnswer",

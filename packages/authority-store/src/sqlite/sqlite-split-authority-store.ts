@@ -101,6 +101,8 @@ import type {
   WorkRunStartFailureResult,
   WorkDismissal,
   WorkDismissalResult,
+  WorkItemCreation,
+  WorkItemCreationResult,
   SearchAnswerRecord,
   WorkStore,
   ExecutorInstallation,
@@ -835,6 +837,10 @@ export class SqliteSplitAuthorityStore
 
   async dismissWorkItem(input: WorkDismissal): Promise<WorkDismissalResult> {
     return this.writer.call("dismissWorkItem", [input]);
+  }
+
+  async createWorkItem(input: WorkItemCreation): Promise<WorkItemCreationResult> {
+    return this.writer.call("createWorkItem", [input]);
   }
 
   async commitWorkObservation(input: CommitWorkObservation): Promise<CommitWorkObservationResult> {

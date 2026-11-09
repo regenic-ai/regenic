@@ -77,6 +77,8 @@ import type {
   WorkRunStartFailureResult,
   WorkDismissal,
   WorkDismissalResult,
+  WorkItemCreation,
+  WorkItemCreationResult,
   WorkDeliveryCommand,
   WorkDeliveryCommandResult,
   CommitWorkObservation,
@@ -330,6 +332,7 @@ import {
   checkpointWorkRunStart,
   recordWorkRunStartFailure,
   dismissWorkItem,
+  createWorkItem,
   transitionWorkDelivery,
   commitWorkObservation,
   deleteSearchAnswer,
@@ -1232,6 +1235,10 @@ export class PostgresAuthorityStore
 
   async dismissWorkItem(input: WorkDismissal): Promise<WorkDismissalResult> {
     return dismissWorkItem(this.sql, input);
+  }
+
+  async createWorkItem(input: WorkItemCreation): Promise<WorkItemCreationResult> {
+    return createWorkItem(this.sql, input);
   }
 
   async commitWorkObservation(input: CommitWorkObservation): Promise<CommitWorkObservationResult> {

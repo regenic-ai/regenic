@@ -3,6 +3,7 @@ const { describe, it } = require("node:test");
 const {
   assertWorkRunWrite, planWorkObservation, prepareWorkRunStartCheckpoint, canClaimWorkRunStartItem,
   prepareWorkRunStartFailure,
+  prepareWorkItemCreation,
   prepareWorkDismissal, enqueueWriteBack, prepareWorkObservation,
 } = require("../dist");
 
@@ -46,6 +47,58 @@ function fixture() {
     now: NOW,
   };
 }
+
+describe("work item creation transitions", () => {
+  function creation() {
+    const { item } = fixture();
+    return {
+      item: { ...item, status: "open" },
+      recipe: {
+        id: item.recipe_id, org_id: item.org_id, name: "System work",
+        trigger: { kind: "manual" }, match: { unit_kind: "__system.test" },
+        executor_type: "test", executor_config: { prompt: "Instruction" },
+        can_write_back: false, include_context: false, enabled: true,
+        created_at: BEFORE, updated_at: BEFORE,
+      },
+      expected_recipe: null,
+    };
+  }
+  it("plans a fresh item and recipe without aliasing the input", () => {
+    const input = creation();
+    const result = prepareWorkItemCreation(input, { item_exists: false, recipe: null });
+    assert.equal(result.outcome, "applied");
+    assert.equal(result.item.version, 0);
+    result.recipe.executor_config.prompt = "Mutated";
+    result.item.status = "done";
+    assert.equal(input.item.status, "open");
+    assert.equal(input.recipe.executor_config.prompt, "Instruction");
+  });
+  for (const change of [
+    { status: "running" }, { version: 1 }, { current_run_id: "existing-run" },
+    { id: "" }, { thread_id: "" }, { org_id: "foreign" },
+    { recipe_id: "other" }, { updated_at: NOW }, { created_at: "invalid" },
+  ]) {
+    it(`rejects invalid new work ${JSON.stringify(change)}`, () => {
+      const input = creation();
+      assert.throws(() => prepareWorkItemCreation({
+        ...input, item: { ...input.item, ...change },
+      }, { item_exists: false, recipe: null }), /fresh open item/);
+    });
+  }
+  it("does not recreate a removed recipe from a stale expectation", () => {
+    const input = creation();
+    assert.deepEqual(prepareWorkItemCreation({
+      ...input, expected_recipe: input.recipe,
+    }, { item_exists: false, recipe: null }), { outcome: "conflict", reason: "stale_recipe" });
+  });
+  it("reuses equivalent configuration without changing timestamps, even for simultaneous creates", () => {
+    const input = creation();
+    const current = { ...input.recipe, created_at: NOW, updated_at: NOW };
+    const result = prepareWorkItemCreation(input, { item_exists: false, recipe: current });
+    assert.equal(result.outcome, "applied");
+    assert.deepEqual(result.recipe, current);
+  });
+});
 
 describe("work dismissal transitions", () => {
   function dismissal() {

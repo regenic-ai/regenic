@@ -104,6 +104,65 @@ describe("durable executor start", () => {
     return { ...f, service, prepared };
   }
 
+  it("does not overwrite active auxiliary work or change its recipe on repeated preparation", async (t) => {
+    const f = await preparedAuxiliary(t);
+    const started = await f.service.startPreparedAuxiliaryExecution(f.prepared, "Evidence");
+    const before = await f.ports.authority.getRecipe(ORG, f.prepared.recipe.id);
+    await assert.rejects(f.service.prepareAuxiliaryExecution({
+      id: f.prepared.work_item.id, purpose: "search-answer", executor_type: "session",
+      prompt: "A conflicting prompt", max_concurrent: 7,
+    }), code("execution_prepare_conflict"));
+    assert.deepEqual(await f.ports.authority.getWorkItem(ORG, started.work_item.id), started.work_item);
+    assert.deepEqual(await f.ports.authority.getRecipe(ORG, f.prepared.recipe.id), before);
+    assert.deepEqual(await f.ports.authority.getWorkRun(ORG, started.run.id), started.run);
+    assert.equal(f.calls.spawn, 1);
+  });
+
+  it("does not overwrite a concurrent recipe edit or create its prepared auxiliary item", async (t) => {
+    const f = await preparedAuxiliary(t);
+    const create = f.ports.authority.createWorkItem.bind(f.ports.authority);
+    let updated;
+    t.mock.method(f.ports.authority, "createWorkItem", async (input) => {
+      await f.ports.authority.putRecipe({ ...input.expected_recipe, executor_config: { prompt: "Concurrent instruction" } });
+      updated = await f.ports.authority.getRecipe(ORG, input.recipe.id);
+      return create(input);
+    });
+    await assert.rejects(f.service.prepareAuxiliaryExecution({
+      id: "new-auxiliary", purpose: "search-answer", executor_type: "session", prompt: "Answer safely",
+    }), code("execution_prepare_conflict"));
+    assert.equal(await f.ports.authority.getWorkItem(ORG, "new-auxiliary"), null);
+    assert.deepEqual(await f.ports.authority.getRecipe(ORG, f.prepared.recipe.id), updated);
+    assert.equal(f.calls.spawn, 0);
+  });
+
+  it("prepares distinct auxiliary items against one equivalent shared recipe concurrently", async (t) => {
+    const f = await fixture(t);
+    const service = f.service();
+    const prepared = await Promise.all(["first-auxiliary", "second-auxiliary"].map((id) =>
+      service.prepareAuxiliaryExecution({ id, purpose: "search-answer", executor_type: "session", prompt: "Answer safely" })));
+    assert.notEqual(prepared[0].work_item.id, prepared[1].work_item.id);
+    assert.deepEqual(prepared[0].recipe, prepared[1].recipe);
+    for (const result of prepared) {
+      assert.deepEqual(result.work_item, await f.ports.authority.getWorkItem(ORG, result.work_item.id));
+      assert.equal(result.work_item.version, 0);
+    }
+    assert.equal(f.calls.spawn, 0);
+  });
+
+  it("can change auxiliary configuration without resetting the shared recipe creation time", async (t) => {
+    const f = await preparedAuxiliary(t, 2);
+    const expected = await f.ports.authority.getRecipe(ORG, f.prepared.recipe.id);
+    const next = await f.service.prepareAuxiliaryExecution({
+      id: "new-configuration-item", purpose: "search-answer", executor_type: "session",
+      prompt: "Updated instruction", max_concurrent: 3,
+    });
+    assert.equal(next.recipe.created_at, expected.created_at);
+    assert.equal(next.recipe.max_concurrent, 3);
+    assert.deepEqual(next.recipe.executor_config, { prompt: "Updated instruction" });
+    assert.deepEqual(await f.ports.authority.getWorkItem(ORG, f.prepared.work_item.id), f.prepared.work_item);
+    assert.deepEqual(next.recipe, await f.ports.authority.getRecipe(ORG, next.recipe.id));
+  });
+
   it("does not rewrite a prepared auxiliary snapshot after a pre-reservation exception", async (t) => {
     const f = await preparedAuxiliary(t);
     const before = await f.ports.authority.putWorkItem({ ...f.prepared.work_item, status: "skipped" });
@@ -117,7 +176,18 @@ describe("durable executor start", () => {
   });
 
   it("leaves unstarted auxiliary work unchanged when capacity is unavailable", async (t) => {
-    const f = await preparedAuxiliary(t, 0);
+    const f = await preparedAuxiliary(t, 1);
+    const occupied = await f.ports.authority.putWorkItem({
+      ...f.prepared.work_item, id: "occupied-auxiliary", unit_key: "occupied-auxiliary",
+    });
+    assert.equal(await f.ports.authority.claimWorkRunStart({
+      expected_item: occupied,
+      run: {
+        id: "occupied-auxiliary-run", org_id: ORG, work_item_id: occupied.id, recipe_id: occupied.recipe_id,
+        executor_type: "session", status: "running", start_state: "pending",
+        created_at: occupied.created_at, updated_at: occupied.updated_at,
+      },
+    }), true);
     const put = t.mock.method(f.ports.authority, "putWorkItem");
     await assert.rejects(f.service.startPreparedAuxiliaryExecution(f.prepared, "evidence"), (error) =>
       error.code === "execution_start_conflict" && error.httpStatus === 429);

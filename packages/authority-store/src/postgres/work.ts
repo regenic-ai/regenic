@@ -24,6 +24,9 @@ import {
   prepareWorkRunStartCheckpoint,
   prepareWorkRunStartFailure,
   prepareWorkDismissal,
+  prepareWorkItemCreation,
+  type WorkItemCreation,
+  type WorkItemCreationResult,
   type WorkDismissal,
   type WorkDismissalResult,
   type WorkRunStartFailure,
@@ -64,9 +67,14 @@ export async function getRecipe(db: PgSql, orgId: string, id: string): Promise<R
   }
 
 export async function putRecipe(db: PgSql, recipe: Recipe): Promise<Recipe> {
+    await writeRecipe(db, recipe);
+    return recipe;
+  }
+
+async function writeRecipe(db: PgSql, recipe: Recipe, client?: PoolClient, insertOnly = false): Promise<number> {
     const trigger = recipeTriggerOf(recipe);
     const pull = pullScheduleColumns(trigger);
-    await db.execute(
+    return db.execute(
       `
         INSERT INTO recipes (
           id, org_id, name, match_json, executor_type, executor_config_json,
@@ -75,7 +83,7 @@ export async function putRecipe(db: PgSql, recipe: Recipe): Promise<Recipe> {
           trigger_coalesce, max_concurrent, next_run_at, created_at, updated_at,
           write_back_thread_id
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
-        ON CONFLICT (id) DO UPDATE SET
+        ON CONFLICT (id) DO ${insertOnly ? "NOTHING" : `UPDATE SET
           name = EXCLUDED.name,
           match_json = EXCLUDED.match_json,
           executor_type = EXCLUDED.executor_type,
@@ -92,7 +100,7 @@ export async function putRecipe(db: PgSql, recipe: Recipe): Promise<Recipe> {
           trigger_coalesce = EXCLUDED.trigger_coalesce,
           max_concurrent = EXCLUDED.max_concurrent,
           next_run_at = EXCLUDED.next_run_at,
-          updated_at = EXCLUDED.updated_at
+          updated_at = EXCLUDED.updated_at`}
       `,
       [
         recipe.id,
@@ -116,8 +124,8 @@ export async function putRecipe(db: PgSql, recipe: Recipe): Promise<Recipe> {
         recipe.updated_at,
         recipe.write_back_thread_id ?? null,
       ],
+      client,
     );
-    return recipe;
   }
 
 export async function deleteRecipe(db: PgSql, orgId: string, id: string): Promise<boolean> {
@@ -217,6 +225,46 @@ export async function putWorkItem(
     if (!advanceVersion) return item;
     return await getWorkItem(db, item.org_id, item.id) ?? item;
   }
+
+class WorkItemCreationConflict extends Error {}
+
+export async function createWorkItem(db: PgSql, input: WorkItemCreation): Promise<WorkItemCreationResult> {
+  try {
+    return await db.withTx(async (client): Promise<WorkItemCreationResult> => {
+      await db.execute("SELECT pg_advisory_xact_lock(hashtext($1))", [`work-recipe:${input.recipe.id}`], client);
+      let recipe = await db.queryOne<RecipeRow>("SELECT * FROM recipes WHERE id = $1 FOR UPDATE", [input.recipe.id], client);
+      const exists = await db.queryOne("SELECT id FROM work_items WHERE id = $1 FOR UPDATE", [input.item.id], client);
+      let result = prepareWorkItemCreation(input, { item_exists: Boolean(exists), recipe: recipe ? toRecipe(recipe) : null });
+      if (result.outcome !== "applied") return result;
+      if (!recipe) {
+        const inserted = await writeRecipe(db, result.recipe, client, true);
+        recipe = await db.queryOne<RecipeRow>("SELECT * FROM recipes WHERE id = $1 FOR UPDATE", [input.recipe.id], client);
+        if (!recipe) throw new Error("Created recipe disappeared inside its transaction");
+        if (!inserted) {
+          result = prepareWorkItemCreation(input, { item_exists: false, recipe: toRecipe(recipe) });
+          if (result.outcome !== "applied") return result;
+        }
+      }
+      const { item } = result;
+      const savedItem = await db.queryOne<WorkItemRow>(`INSERT INTO work_items (
+        id, org_id, thread_id, unit_key, head_event_id, record_class, thread_facet,
+        status, recipe_id, created_at, updated_at, current_run_id, version
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NULL, 0)
+      ON CONFLICT (id) DO NOTHING RETURNING *`, [
+        item.id, item.org_id, item.thread_id, item.unit_key, item.head_event_id ?? null,
+        item.record_class, item.thread_facet, item.status, item.recipe_id, item.created_at, item.updated_at,
+      ], client);
+      if (!savedItem) throw new WorkItemCreationConflict();
+      await writeRecipe(db, result.recipe, client);
+      const savedRecipe = await db.queryOne<RecipeRow>("SELECT * FROM recipes WHERE id = $1", [result.recipe.id], client);
+      if (!savedRecipe) throw new Error("Created work recipe disappeared inside its transaction");
+      return { outcome: "applied", item: toWorkItem(savedItem), recipe: toRecipe(savedRecipe) };
+    });
+  } catch (error) {
+    if (error instanceof WorkItemCreationConflict) return { outcome: "conflict", reason: "work_exists" };
+    throw error;
+  }
+}
 
 export async function listWorkRuns(db: PgSql, orgId: string, workItemId?: string): Promise<WorkRun[]> {
     const rows = workItemId

@@ -13,6 +13,7 @@ import type {
   WorkRunStartCheckpoint, WorkRunStartCheckpointResult,
   WorkRunStartFailure, WorkRunStartFailureResult,
   WorkDismissal, WorkDismissalResult,
+  WorkItemCreation, WorkItemCreationResult,
 } from "./work-transition";
 
 export type { ResultEnvelope, WorkRun, WorkRunStatus };
@@ -257,6 +258,8 @@ export interface WorkStore {
     unitKey: string,
   ): Promise<WorkItem | null>;
   putWorkItem(item: WorkItem): Promise<WorkItem>;
+  /** Create without overwriting existing work; compare-and-set its recipe in the same commit. */
+  createWorkItem(input: WorkItemCreation): Promise<WorkItemCreationResult>;
   listWorkRuns(orgId: string, workItemId?: string): Promise<WorkRun[]>;
   getWorkRun(orgId: string, id: string): Promise<WorkRun | null>;
   /** Resolves only current_run_id; NULL historical identity is never guessed from timestamps. */

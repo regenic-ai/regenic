@@ -8,6 +8,7 @@ import {
   type WorkDelivery,
   type RecipeTriggerKind,
   type WorkRunStartClaim,
+  type Recipe,
 } from "./work";
 import type { WorkDeliveryPayload } from "./work-delivery";
 import { planWorkDeliveryCommand, enqueueWriteBack } from "./work-delivery";
@@ -102,6 +103,43 @@ export interface WorkDismissal {
   now: string;
   /** Compare-and-set the timeout cause in the same commit as the local stop. */
   search_answer_timeout?: SearchAnswerRecord;
+}
+
+export interface WorkItemCreation {
+  item: WorkItem;
+  recipe: Recipe;
+  expected_recipe: Recipe | null;
+}
+
+export type WorkItemCreationResult =
+  | { outcome: "applied"; item: WorkItem; recipe: Recipe }
+  | { outcome: "conflict"; reason: "work_exists" | "stale_recipe" };
+
+export function prepareWorkItemCreation(input: WorkItemCreation, facts: {
+  item_exists: boolean;
+  recipe: Recipe | null;
+}): WorkItemCreationResult {
+  const { item, recipe, expected_recipe: expected } = input;
+  if (!item.id?.trim() || !item.org_id?.trim() || !item.thread_id?.trim() || !item.unit_key?.trim()
+    || !recipe.id?.trim() || item.org_id !== recipe.org_id || item.recipe_id !== recipe.id
+    || item.status !== "open" || item.current_run_id !== undefined || (item.version ?? 0) !== 0
+    || !Number.isFinite(Date.parse(item.created_at)) || item.created_at !== item.updated_at
+    || !Number.isFinite(Date.parse(recipe.created_at)) || !Number.isFinite(Date.parse(recipe.updated_at))
+    || (expected && (expected.id !== recipe.id || expected.org_id !== recipe.org_id))) {
+    throw new Error("Work creation requires a fresh open item and a matching recipe snapshot");
+  }
+  if (facts.item_exists) return { outcome: "conflict", reason: "work_exists" };
+  const current = facts.recipe;
+  const equivalent = current && sameJson(
+    { ...current, created_at: undefined, updated_at: undefined },
+    { ...recipe, created_at: undefined, updated_at: undefined },
+  );
+  if (!equivalent && !sameJson(current, expected)) return { outcome: "conflict", reason: "stale_recipe" };
+  return structuredClone({
+    outcome: "applied",
+    item: { ...item, version: 0 },
+    recipe: equivalent ? current : { ...recipe, created_at: current?.created_at ?? recipe.created_at },
+  });
 }
 
 export type WorkDismissalResult =

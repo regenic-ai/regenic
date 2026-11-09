@@ -24,6 +24,9 @@ import {
   prepareWorkRunStartCheckpoint,
   prepareWorkRunStartFailure,
   prepareWorkDismissal,
+  prepareWorkItemCreation,
+  type WorkItemCreation,
+  type WorkItemCreationResult,
   type WorkDismissal,
   type WorkDismissalResult,
   type WorkRunStartFailure,
@@ -54,7 +57,10 @@ export async function getRecipe(db: Database.Database, orgId: string, id: string
   }
 
 export async function putRecipe(db: Database.Database, recipe: Recipe): Promise<Recipe> {
-    
+    return writeRecipe(db, recipe);
+  }
+
+function writeRecipe(db: Database.Database, recipe: Recipe): Recipe {
     const trigger = recipeTriggerOf(recipe);
     const pull = pullScheduleColumns(trigger);
     db
@@ -170,6 +176,23 @@ export async function putWorkItem(db: Database.Database, item: WorkItem): Promis
     writeWorkItem(db, item, true);
     return (await getWorkItem(db, item.org_id, item.id)) ?? item;
   }
+
+export async function createWorkItem(db: Database.Database, input: WorkItemCreation): Promise<WorkItemCreationResult> {
+  return db.transaction((): WorkItemCreationResult => {
+    const recipe = db.prepare("SELECT * FROM recipes WHERE id = ?").get(input.recipe.id) as RecipeRow | undefined;
+    const result = prepareWorkItemCreation(input, {
+      item_exists: Boolean(db.prepare("SELECT id FROM work_items WHERE id = ?").get(input.item.id)),
+      recipe: recipe ? toRecipe(recipe) : null,
+    });
+    if (result.outcome !== "applied") return result;
+    writeRecipe(db, result.recipe);
+    writeWorkItem(db, result.item);
+    const savedItem = db.prepare("SELECT * FROM work_items WHERE id = ?").get(result.item.id) as WorkItemRow | undefined;
+    const savedRecipe = db.prepare("SELECT * FROM recipes WHERE id = ?").get(result.recipe.id) as RecipeRow | undefined;
+    if (!savedRecipe || !savedItem) throw new Error("Created work disappeared inside its transaction");
+    return { outcome: "applied", item: toWorkItem(savedItem), recipe: toRecipe(savedRecipe) };
+  }).immediate();
+}
 
 function writeWorkItem(db: Database.Database, item: WorkItem, advanceVersion = false): WorkItem {
     db

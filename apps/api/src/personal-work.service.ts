@@ -476,6 +476,7 @@ export class PersonalWorkService implements OnModuleDestroy {
     }
     const now = new Date().toISOString();
     const recipeId = systemRecipeId(input.purpose, executorType);
+    const expectedRecipe = await host.get("authority").getRecipe(orgId, recipeId);
     const recipe: Recipe = {
       id: recipeId,
       org_id: orgId,
@@ -490,10 +491,9 @@ export class PersonalWorkService implements OnModuleDestroy {
         ? {}
         : { max_concurrent: input.max_concurrent }),
       enabled: true,
-      created_at: now,
+      created_at: expectedRecipe?.created_at ?? now,
       updated_at: now,
     };
-    await host.get("authority").putRecipe(recipe);
     const item: WorkItem = {
       id: input.id,
       org_id: orgId,
@@ -506,8 +506,13 @@ export class PersonalWorkService implements OnModuleDestroy {
       created_at: now,
       updated_at: now,
     };
-    const saved = await host.get("authority").putWorkItem(item);
-    return { work_item: saved, recipe };
+    const created = await host.get("authority").createWorkItem({
+      item, recipe, expected_recipe: expectedRecipe,
+    });
+    if (created.outcome !== "applied") throw new PersonalConnectorError(
+      "execution_prepare_conflict", `Auxiliary preparation rejected: ${created.reason}. Refresh the execution.`, 409,
+    );
+    return { work_item: created.item, recipe: created.recipe };
   }
 
   async startPreparedAuxiliaryExecution(
