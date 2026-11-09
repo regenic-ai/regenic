@@ -380,9 +380,13 @@ export async function dismissWorkItem(db: Database.Database, input: WorkDismissa
         .get(orgId, item.current_run_id) as WorkRunRow | undefined : undefined;
     const deliveries = db.prepare(`SELECT * FROM work_deliveries
       WHERE org_id = ? AND work_item_id = ? AND status <> 'acked' ORDER BY id`).all(orgId, id) as WorkDeliveryRow[];
+    const searchAnswer = input.search_answer_timeout
+      ? db.prepare("SELECT * FROM search_answers WHERE org_id = ? AND id = ?")
+        .get(orgId, input.search_answer_timeout.id) as SearchAnswerRow | undefined : undefined;
     const result = prepareWorkDismissal(input, {
       item: item ? toWorkItem(item) : null, run: run ? toWorkRun(run) : null,
       deliveries: deliveries.map(toWorkDelivery),
+      search_answer: searchAnswer ? toSearchAnswer(searchAnswer) : null,
     });
     if (result.outcome !== "applied") return result;
     const savedDeliveries = result.deliveries.map((delivery) => writeWorkDelivery(db, delivery, true));
@@ -390,7 +394,15 @@ export async function dismissWorkItem(db: Database.Database, input: WorkDismissa
       WHERE org_id = ? AND id = ? RETURNING *`)
       .get(result.item.version, input.now, orgId, id) as WorkItemRow | undefined;
     if (!savedItem) throw new Error("Dismissed work item disappeared inside its transaction");
-    return { outcome: "applied", item: toWorkItem(savedItem), run: result.run, deliveries: savedDeliveries };
+    const savedAnswer = result.search_answer
+      ? db.prepare(`UPDATE search_answers SET outcome = 'timed_out', updated_at = ?
+        WHERE org_id = ? AND id = ? RETURNING *`)
+        .get(input.now, orgId, result.search_answer.id) as SearchAnswerRow | undefined : undefined;
+    if (result.search_answer && !savedAnswer) throw new Error("Timed out search answer disappeared inside its transaction");
+    return {
+      outcome: "applied", item: toWorkItem(savedItem), run: result.run, deliveries: savedDeliveries,
+      ...(savedAnswer ? { search_answer: toSearchAnswer(savedAnswer) } : {}),
+    };
   }).immediate();
 }
 

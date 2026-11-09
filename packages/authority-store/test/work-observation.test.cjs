@@ -125,8 +125,108 @@ async function startCheckpointFixture(t, driver) {
   return { f, input: { expected_item: f.item, expected_run: run, now: LATER } };
 }
 
+async function timeoutFixture(t, driver) {
+  const f = await fixture(t, driver);
+  const record = await f.store.putSearchAnswer({
+    id: "answer-1", org_id: ORG, work_item_id: f.item.id,
+    query: "Question", event_ids: ["event-1"], created_at: NOW, updated_at: NOW,
+  });
+  const saved = await f.store.getSearchAnswer(ORG, record.id);
+  return Object.assign(f, { record: saved, timeout: { expected_item: f.item, search_answer_timeout: saved, now: LATER } });
+}
+
 for (const driver of drivers) {
   describe(`${driver.name} atomic work observation`, { skip: driver.skip }, () => {
+    it("atomically persists a timeout cause with local dismissal and delivery stops", async (t) => {
+      const f = await timeoutFixture(t, driver);
+      const delivery = await f.store.putWorkDelivery(enqueueWriteBack({
+        org_id: ORG, work_item_id: f.item.id, recipe_id: f.recipe.id, kind: "push",
+        unit_key: f.item.unit_key, payload: { summary: "Previous result" }, now: NOW,
+      }));
+      const result = await f.store.dismissWorkItem(f.timeout);
+      assert.equal(result.outcome, "applied");
+      assert.equal(result.item.status, "skipped");
+      assert.equal(result.item.version, f.item.version + 1);
+      assert.equal(result.item.current_run_id, f.run.id);
+      assert.deepEqual(result.run, f.run);
+      assert.deepEqual(result.search_answer, { ...f.record, outcome: "timed_out", updated_at: LATER });
+      assert.equal(result.deliveries[0].id, delivery.id);
+      assert.equal(result.deliveries[0].cancel_requested_at, LATER);
+      const saved = structuredClone(result);
+      result.search_answer.event_ids.push("mutated");
+      result.item.status = "done";
+      await f.reopen();
+      assert.deepEqual(await f.store.getSearchAnswer(ORG, f.record.id), saved.search_answer);
+      assert.deepEqual(await f.store.getWorkItem(ORG, f.item.id), saved.item);
+      assert.deepEqual(await f.store.getWorkRun(ORG, f.run.id), f.run);
+      assert.deepEqual(await f.store.getWorkDelivery(ORG, delivery.id), saved.deliveries[0]);
+      assert.deepEqual(await f.store.dismissWorkItem({
+        ...f.timeout, expected_item: saved.item,
+      }), { outcome: "conflict", reason: "stale_search_answer" });
+      assert.deepEqual(await f.store.getWorkItem(ORG, f.item.id), saved.item);
+    });
+
+    for (const change of ["deleted", "query", "events", "outcome", "binding"]) {
+      it(`rejects a ${change} search answer snapshot without dismissing its work`, async (t) => {
+        const f = await timeoutFixture(t, driver);
+        if (change === "deleted") {
+          await f.store.deleteSearchAnswer(ORG, f.record.id);
+        } else {
+          if (change === "binding") await f.store.putWorkItem({
+            ...f.item, id: "another-item", unit_key: "another-unit", current_run_id: undefined, status: "open",
+          });
+          await f.store.putSearchAnswer({
+            ...f.record,
+            ...(change === "query" ? { query: "A new question" } : {}),
+            ...(change === "events" ? { event_ids: ["event-2"] } : {}),
+            ...(change === "outcome" ? { outcome: "timed_out" } : {}),
+            ...(change === "binding" ? { work_item_id: "another-item" } : {}),
+          });
+        }
+        const record = await f.store.getSearchAnswer(ORG, f.record.id);
+        assert.deepEqual(await f.store.dismissWorkItem(f.timeout), { outcome: "conflict", reason: "stale_search_answer" });
+        assert.deepEqual(await f.store.getWorkItem(ORG, f.item.id), f.item);
+        assert.deepEqual(await f.store.getWorkRun(ORG, f.run.id), f.run);
+        assert.deepEqual(await f.store.getSearchAnswer(ORG, f.record.id), record);
+      });
+    }
+
+    it("rejects foreign timeout metadata before any local write", async (t) => {
+      const f = await timeoutFixture(t, driver);
+      await assert.rejects(f.store.dismissWorkItem({
+        ...f.timeout, search_answer_timeout: { ...f.record, org_id: "other-org" },
+      }), /must belong/);
+      await assert.rejects(f.store.dismissWorkItem({
+        ...f.timeout, search_answer_timeout: { ...f.record, work_item_id: "other-item" },
+      }), /must belong/);
+      assert.deepEqual(await f.store.getWorkItem(ORG, f.item.id), f.item);
+      assert.deepEqual(await f.store.getSearchAnswer(ORG, f.record.id), f.record);
+    });
+
+    for (const status of ["completed", "failed", "cancelled"]) {
+      it(`does not timeout a current Run already observed as ${status}`, async (t) => {
+        const f = await timeoutFixture(t, driver);
+        const run = await f.store.putWorkRun({ ...f.run, status });
+        assert.deepEqual(await f.store.dismissWorkItem(f.timeout),
+          { outcome: "conflict", reason: "inactive_search_answer" });
+        assert.deepEqual(await f.store.getWorkItem(ORG, f.item.id), f.item);
+        assert.deepEqual(await f.store.getWorkRun(ORG, run.id), run);
+        assert.deepEqual(await f.store.getSearchAnswer(ORG, f.record.id), f.record);
+      });
+    }
+
+    it("fences a timeout against a concurrent human cancellation without rewriting its cause", async (t) => {
+      const f = await timeoutFixture(t, driver);
+      const [timeout, cancel] = await Promise.all([
+        f.store.dismissWorkItem(f.timeout),
+        f.store.dismissWorkItem({ expected_item: f.item, now: LATER }),
+      ]);
+      assert.equal(Number(timeout.outcome === "applied") + Number(cancel.outcome === "applied"), 1);
+      const answer = await f.store.getSearchAnswer(ORG, f.record.id);
+      assert.equal(answer.outcome, timeout.outcome === "applied" ? "timed_out" : undefined);
+      assert.deepEqual(await f.store.getWorkRun(ORG, f.run.id), f.run);
+    });
+
     it("atomically dismisses work and stops all unresolved deliveries without rewriting runs", async (t) => {
       const f = await fixture(t, driver);
       const delivery = await f.store.putWorkDelivery(enqueueWriteBack({
@@ -1434,6 +1534,29 @@ for (const driver of drivers) {
 
 for (const driver of drivers.filter((d) => d.name.startsWith("sqlite"))) {
   describe(`${driver.name} observation rollback`, () => {
+    for (const table of ["search_answers", "work_items"]) {
+      it(`rolls back the complete timeout when the ${table} write fails`, async (t) => {
+        const f = await timeoutFixture(t, driver);
+        const delivery = await f.store.putWorkDelivery(enqueueWriteBack({
+          org_id: ORG, work_item_id: f.item.id, recipe_id: f.recipe.id, kind: "push",
+          unit_key: f.item.unit_key, payload: { summary: "Previous result" }, now: NOW,
+        }));
+        const db = new Database(f.path);
+        try {
+          db.exec(`CREATE TRIGGER reject_timeout BEFORE UPDATE ON ${table}
+            BEGIN SELECT RAISE(ABORT, 'timeout rejected'); END`);
+          await assert.rejects(f.store.dismissWorkItem(f.timeout), /timeout rejected/);
+          await f.reopen();
+          assert.deepEqual(await f.store.getWorkItem(ORG, f.item.id), f.item);
+          assert.deepEqual(await f.store.getWorkRun(ORG, f.run.id), f.run);
+          assert.deepEqual(await f.store.getSearchAnswer(ORG, f.record.id), f.record);
+          assert.deepEqual(await f.store.getWorkDelivery(ORG, delivery.id), delivery);
+        } finally {
+          db.close();
+        }
+      });
+    }
+
     it("preserves ignored work and run facts when actual-outcome persistence fails", async (t) => {
       const f = await fixture(t, driver);
       const dismissed = await f.store.dismissWorkItem({ expected_item: f.item, now: LATER });
@@ -1635,6 +1758,24 @@ it("fences competing startup checkpoints across independent SQLite writer worker
   const winner = results.find((result) => result.outcome === "applied");
   assert.deepEqual(await second.getWorkItem(ORG, winner.item.id), winner.item);
   assert.deepEqual(await second.getWorkRun(ORG, winner.run.id), winner.run);
+});
+
+it("fences timeout and human cancellation across independent SQLite writer workers", async (t) => {
+  const driver = drivers.find((d) => d.name === "sqlite writer RPC");
+  const f = await timeoutFixture(t, driver);
+  const second = await SqliteSplitAuthorityStore.open(f.path);
+  t.after(() => second.close());
+  const [timeout, cancel] = await Promise.all([
+    f.store.dismissWorkItem(f.timeout),
+    second.dismissWorkItem({ expected_item: f.item, now: LATER }),
+  ]);
+  assert.equal(Number(timeout.outcome === "applied") + Number(cancel.outcome === "applied"), 1);
+  const item = await second.getWorkItem(ORG, f.item.id);
+  const record = await second.getSearchAnswer(ORG, f.record.id);
+  assert.equal(item.status, "skipped");
+  assert.equal(item.version, f.item.version + 1);
+  assert.equal(record.outcome, timeout.outcome === "applied" ? "timed_out" : undefined);
+  assert.deepEqual(await second.getWorkRun(ORG, f.run.id), f.run);
 });
 
 it("fences conflicting actual outcomes for ignored work across independent SQLite writer workers", async (t) => {

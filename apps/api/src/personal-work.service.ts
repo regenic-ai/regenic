@@ -34,6 +34,7 @@ import {
   type PersonalFollowUpPolicy,
   type PromptAnswer,
   type Recipe,
+  type SearchAnswerRecord,
   type ThreadPrompt,
   type WorkItem,
   type WorkRun,
@@ -385,18 +386,9 @@ export class PersonalWorkService implements OnModuleDestroy {
         ) {
           continue;
         }
-        const cancelled = await this.cancelAuxiliaryItem(item, {
-          emit: false,
+        await this.cancelAuxiliaryItem(item, {
+          timeout: { record, now: new Date(now).toISOString() },
         });
-        if (cancelled.work_item.status !== "skipped") {
-          continue;
-        }
-        await authority.putSearchAnswer({
-          ...record,
-          outcome: "timed_out",
-          updated_at: new Date(now).toISOString(),
-        });
-        this.events.workUpdated(item.id);
       } catch (error) {
         if (!isWorkTickShutdown(error)) {
           console.error("search answer timeout failed", {
@@ -604,7 +596,7 @@ export class PersonalWorkService implements OnModuleDestroy {
 
   private async cancelAuxiliaryItem(
     item: WorkItem,
-    options: { emit?: boolean },
+    options: { emit?: boolean; timeout?: { record: SearchAnswerRecord; now: string } },
   ): Promise<WorkRunView> {
     const host = this.runtime.requireHost();
     const authority = host.get("authority");
@@ -616,8 +608,11 @@ export class PersonalWorkService implements OnModuleDestroy {
           : undefined,
       };
     }
-    const now = new Date().toISOString();
-    const dismissed = await authority.dismissWorkItem({ expected_item: item, now });
+    const now = options.timeout?.now ?? new Date().toISOString();
+    const dismissed = await authority.dismissWorkItem({
+      expected_item: item, now,
+      ...(options.timeout ? { search_answer_timeout: options.timeout.record } : {}),
+    });
     if (dismissed.outcome !== "applied") throw new PersonalConnectorError(
       "work_dismissal_conflict", `Auxiliary cancellation rejected: ${dismissed.reason}. Refresh the execution.`, 409,
     );

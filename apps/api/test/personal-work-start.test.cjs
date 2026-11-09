@@ -456,6 +456,87 @@ describe("durable executor start", () => {
     assert.deepEqual(f.updates, []);
   });
 
+  it("commits the timeout cause before remote cancellation, even when cancellation fails", async (t) => {
+    const f = await auxiliary(t, { aged: true });
+    const record = await f.ports.authority.putSearchAnswer({
+      id: "auxiliary", org_id: ORG, work_item_id: f.item.id,
+      query: "Question", event_ids: [], created_at: f.item.created_at, updated_at: f.item.updated_at,
+    });
+    let cancelled = 0;
+    f.setExecutor({
+      executor_type: "session", capabilities: () => ({}),
+      cancel: async () => {
+        cancelled++;
+        const answer = await f.ports.authority.getSearchAnswer(ORG, record.id);
+        assert.equal(answer.outcome, "timed_out");
+        assert.equal((await f.ports.authority.getWorkItem(ORG, f.item.id)).status, "skipped");
+        throw new Error("Remote cancellation unavailable");
+      },
+    });
+    const put = t.mock.method(f.ports.authority, "putSearchAnswer");
+    await f.service.expireSearchAnswers(Date.now());
+    assert.equal(cancelled, 1);
+    assert.equal(put.mock.callCount(), 0);
+    assert.equal((await f.ports.authority.getSearchAnswer(ORG, record.id)).outcome, "timed_out");
+    assert.deepEqual(await f.ports.authority.getWorkRun(ORG, f.run.id), f.run);
+    assert.deepEqual(f.updates, [f.item.id]);
+    f.reopen();
+    assert.equal((await f.ports.authority.getSearchAnswer(ORG, record.id)).outcome, "timed_out");
+    await f.service.expireSearchAnswers(Date.now());
+    assert.equal(cancelled, 1);
+    assert.deepEqual(f.updates, [f.item.id]);
+    f.setExecutor({
+      executor_type: "session", capabilities: () => ({}),
+      status: async () => ({ status: "completed", external_run_id: f.run.external_run_id, result: { summary: "Late answer" } }),
+    });
+    const refreshed = await f.service.refreshAuxiliaryExecution(f.item.id);
+    assert.equal(refreshed.work_item.status, "skipped");
+    assert.equal(refreshed.run.status, "completed");
+    const answers = new PersonalSearchAnswerService(f.runtime, {}, {}, f.service);
+    const answer = await answers.get(record.id);
+    assert.equal(answer.status, "timed_out");
+    assert.equal(answer.answer, undefined);
+    assert.equal(answer.citations, undefined);
+    assert.deepEqual(await f.ports.authority.listWorkDeliveries(ORG), []);
+  });
+
+  it("does not cancel, drop waits or notify when timeout persistence fails", async (t) => {
+    const f = await auxiliary(t, { aged: true });
+    await f.ports.authority.putSearchAnswer({
+      id: "auxiliary", org_id: ORG, work_item_id: f.item.id,
+      query: "Question", event_ids: [], created_at: f.item.created_at, updated_at: f.item.updated_at,
+    });
+    const drop = t.mock.method(f.service.waits, "drop", () => {});
+    t.mock.method(f.ports.authority, "dismissWorkItem", async () => { throw new Error("Database unavailable"); });
+    await f.service.expireSearchAnswers(Date.now());
+    assert.deepEqual(await f.ports.authority.getWorkItem(ORG, f.item.id), f.item);
+    assert.equal((await f.ports.authority.getSearchAnswer(ORG, "auxiliary")).outcome, undefined);
+    assert.equal(drop.mock.callCount(), 0);
+    assert.equal(f.cancelCalls(), 0);
+    assert.deepEqual(f.updates, []);
+  });
+
+  it("rejects timeout metadata changed after the scan without touching local or remote execution", async (t) => {
+    const f = await auxiliary(t, { aged: true });
+    await f.ports.authority.putSearchAnswer({
+      id: "auxiliary", org_id: ORG, work_item_id: f.item.id,
+      query: "Question", event_ids: [], created_at: f.item.created_at, updated_at: f.item.updated_at,
+    });
+    const dismiss = f.ports.authority.dismissWorkItem.bind(f.ports.authority);
+    const drop = t.mock.method(f.service.waits, "drop", () => {});
+    let changed;
+    t.mock.method(f.ports.authority, "dismissWorkItem", async (input) => {
+      changed = await f.ports.authority.putSearchAnswer({ ...input.search_answer_timeout, event_ids: ["new-event"] });
+      return dismiss(input);
+    });
+    await f.service.expireSearchAnswers(Date.now());
+    assert.deepEqual(await f.ports.authority.getWorkItem(ORG, f.item.id), f.item);
+    assert.deepEqual(await f.ports.authority.getSearchAnswer(ORG, "auxiliary"), changed);
+    assert.equal(drop.mock.callCount(), 0);
+    assert.equal(f.cancelCalls(), 0);
+    assert.deepEqual(f.updates, []);
+  });
+
   it("does not dismiss or cancel work that changed after the human action loaded it", async (t) => {
     const f = await fixture(t);
     await f.dispatch().startItem(f.item, f.recipe, "evidence");

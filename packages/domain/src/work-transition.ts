@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import type { ExecutorRunHandle } from "./executor";
+import type { SearchAnswerRecord } from "./search-answer";
 import {
   isActiveWorkStatus,
   type WorkItem,
@@ -99,16 +100,19 @@ export interface WorkRunStartFailure {
 export interface WorkDismissal {
   expected_item: WorkItem;
   now: string;
+  /** Compare-and-set the timeout cause in the same commit as the local stop. */
+  search_answer_timeout?: SearchAnswerRecord;
 }
 
 export type WorkDismissalResult =
-  | { outcome: "applied"; item: WorkItem; run: WorkRun | null; deliveries: WorkDelivery[] }
-  | { outcome: "conflict"; reason: "missing_work" | "stale_dismissal" | "unknown_current_run" };
+  | { outcome: "applied"; item: WorkItem; run: WorkRun | null; deliveries: WorkDelivery[]; search_answer?: SearchAnswerRecord }
+  | { outcome: "conflict"; reason: "missing_work" | "stale_dismissal" | "unknown_current_run" | "stale_search_answer" | "inactive_search_answer" };
 
 export function prepareWorkDismissal(input: WorkDismissal, facts: {
   item: WorkItem | null;
   run: WorkRun | null;
   deliveries: WorkDelivery[];
+  search_answer?: SearchAnswerRecord | null;
 }): WorkDismissalResult {
   if (!Number.isFinite(Date.parse(input.now))) throw new Error("Work dismissal requires a valid timestamp");
   const { item, run } = facts;
@@ -117,6 +121,20 @@ export function prepareWorkDismissal(input: WorkDismissal, facts: {
   if (item.current_run_id && !run) return { outcome: "conflict", reason: "unknown_current_run" };
   if (run && (run.org_id !== item.org_id || run.work_item_id !== item.id || run.id !== item.current_run_id)) {
     throw new Error("Work dismissal run must belong to the current work item");
+  }
+  let searchAnswer: SearchAnswerRecord | undefined;
+  if (input.search_answer_timeout) {
+    const expected = input.search_answer_timeout;
+    if (expected.org_id !== item.org_id || expected.work_item_id !== item.id) {
+      throw new Error("Search answer timeout must belong to the dismissed work item");
+    }
+    if (!facts.search_answer || !sameJson(facts.search_answer, expected) || facts.search_answer.outcome) {
+      return { outcome: "conflict", reason: "stale_search_answer" };
+    }
+    if (!isActiveWorkStatus(item.status) || !run || isTerminalWorkRun(run)) {
+      return { outcome: "conflict", reason: "inactive_search_answer" };
+    }
+    searchAnswer = { ...facts.search_answer, outcome: "timed_out", updated_at: input.now };
   }
   const deliveries = facts.deliveries.map((delivery) => {
     if (delivery.org_id !== item.org_id || delivery.work_item_id !== item.id) {
@@ -133,6 +151,7 @@ export function prepareWorkDismissal(input: WorkDismissal, facts: {
     item: { ...item, status: "skipped", version: (item.version ?? 0) + 1, updated_at: input.now },
     run,
     deliveries,
+    ...(searchAnswer ? { search_answer: searchAnswer } : {}),
   });
 }
 

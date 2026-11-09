@@ -204,6 +204,8 @@ export class MemoryWorkStore implements WorkStore, ExecutorStore {
       run: item?.current_run_id ? this.runs.get(item.current_run_id) ?? null : null,
       deliveries: [...this.deliveries.values()].filter((row) =>
         row.org_id === input.expected_item.org_id && row.work_item_id === input.expected_item.id && row.status !== "acked"),
+      search_answer: input.search_answer_timeout
+        ? this.searchAnswers.get(input.search_answer_timeout.id) ?? null : undefined,
     });
     if (result.outcome !== "applied") return result;
     for (const delivery of result.deliveries) assertWorkDeliveryWrite(
@@ -213,6 +215,7 @@ export class MemoryWorkStore implements WorkStore, ExecutorStore {
     const saved = structuredClone(result);
     this.items.set(saved.item.id, saved.item);
     for (const delivery of saved.deliveries) this.deliveries.set(delivery.id, delivery);
+    if (saved.search_answer) this.searchAnswers.set(saved.search_answer.id, saved.search_answer);
     return result;
   }
 

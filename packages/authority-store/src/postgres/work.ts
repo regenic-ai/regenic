@@ -404,9 +404,14 @@ export async function dismissWorkItem(db: PgSql, input: WorkDismissal): Promise<
     ) : null;
     const deliveries = await db.query<WorkDeliveryRow>(`SELECT * FROM work_deliveries
       WHERE org_id = $1 AND work_item_id = $2 AND status <> 'acked' ORDER BY id FOR UPDATE`, [orgId, id], client);
+    const searchAnswer = input.search_answer_timeout ? await db.queryOne<SearchAnswerRow>(
+      "SELECT * FROM search_answers WHERE org_id = $1 AND id = $2 FOR UPDATE",
+      [orgId, input.search_answer_timeout.id], client,
+    ) : null;
     const result = prepareWorkDismissal(input, {
       item: item ? toWorkItem(item) : null, run: run ? toWorkRun(run) : null,
       deliveries: deliveries.map(toWorkDelivery),
+      search_answer: searchAnswer ? toSearchAnswer(searchAnswer) : null,
     });
     if (result.outcome !== "applied") return result;
     const savedDeliveries: WorkDelivery[] = [];
@@ -414,7 +419,15 @@ export async function dismissWorkItem(db: PgSql, input: WorkDismissal): Promise<
     const savedItem = await db.queryOne<WorkItemRow>(`UPDATE work_items SET status = 'skipped', version = $1, updated_at = $2
       WHERE org_id = $3 AND id = $4 RETURNING *`, [result.item.version, input.now, orgId, id], client);
     if (!savedItem) throw new Error("Dismissed work item disappeared inside its transaction");
-    return { outcome: "applied", item: toWorkItem(savedItem), run: result.run, deliveries: savedDeliveries };
+    const savedAnswer = result.search_answer ? await db.queryOne<SearchAnswerRow>(
+      `UPDATE search_answers SET outcome = 'timed_out', updated_at = $1
+        WHERE org_id = $2 AND id = $3 RETURNING *`, [input.now, orgId, result.search_answer.id], client,
+    ) : null;
+    if (result.search_answer && !savedAnswer) throw new Error("Timed out search answer disappeared inside its transaction");
+    return {
+      outcome: "applied", item: toWorkItem(savedItem), run: result.run, deliveries: savedDeliveries,
+      ...(savedAnswer ? { search_answer: toSearchAnswer(savedAnswer) } : {}),
+    };
   });
 }
 

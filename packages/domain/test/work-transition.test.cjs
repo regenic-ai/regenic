@@ -77,6 +77,31 @@ describe("work dismissal transitions", () => {
     result.run.result = { summary: "Changed" };
     assert.deepEqual(facts, original);
   });
+  it("plans the timeout cause with local dismissal without mutating its input", () => {
+    const { input, facts } = dismissal();
+    const record = {
+      id: "answer", org_id: facts.item.org_id, work_item_id: facts.item.id,
+      query: "Question", event_ids: ["event"], created_at: BEFORE, updated_at: BEFORE,
+    };
+    const original = structuredClone(record);
+    const result = prepareWorkDismissal({ ...input, search_answer_timeout: record }, { ...facts, search_answer: record });
+    assert.equal(result.outcome, "applied");
+    assert.equal(result.item.status, "skipped");
+    assert.deepEqual(result.run, facts.run);
+    assert.deepEqual(result.search_answer, { ...record, outcome: "timed_out", updated_at: NOW });
+    result.search_answer.event_ids.push("mutated");
+    assert.deepEqual(record, original);
+    assert.deepEqual(prepareWorkDismissal({ ...input, search_answer_timeout: record }, facts),
+      { outcome: "conflict", reason: "stale_search_answer" });
+    assert.deepEqual(prepareWorkDismissal({ ...input, search_answer_timeout: record }, {
+      ...facts, search_answer: record, run: { ...facts.run, status: "completed" },
+    }), { outcome: "conflict", reason: "inactive_search_answer" });
+    const skipped = { ...facts.item, status: "skipped" };
+    assert.deepEqual(prepareWorkDismissal({
+      ...input, expected_item: skipped, search_answer_timeout: record,
+    }, { ...facts, item: skipped, search_answer: record }),
+    { outcome: "conflict", reason: "inactive_search_answer" });
+  });
   for (const status of ["write_back", "uncertain"]) {
     it(`preserves ${status} delivery evidence while recording a stop request`, () => {
       const { input, facts } = dismissal();
