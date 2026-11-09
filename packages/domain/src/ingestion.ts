@@ -269,19 +269,27 @@ export interface EventListQuery {
 export interface InboxQuery extends EventListQuery {
   heads?: boolean;
   /**
-   * With `heads` or `tasks`, only rows that still need a work decision.
+   * Only rows that still need a work decision.
    * A row already tied to a settled work item stays in the inbox for people.
    */
   needs_work?: boolean;
   /**
-   * Current-work rows whose arrangement reason is a task.
-   * Conversation faces stay on `heads`. Background observe reads the two
-   * lists separately so a task is not a scan of every current-work row.
+   * Filter event rows by the task arrangement reason: true selects tasks,
+   * false selects non-tasks, and undefined selects both.
+   * Background observe pages messages separately so they cannot starve tasks.
+   * Conversation faces stay on `heads`.
    */
   tasks?: boolean;
   siblings?: boolean;
   /** Default `current_work`. `pending` exposes items for explicit review. */
   disposition?: "current_work" | "pending";
+  /**
+   * Event scans of current work also consider automatically pending rows and
+   * policy-folded threads. Human pending/hidden and outside-current-work remain
+   * excluded. Does not change the disposition or the conversation list;
+   * matching enabled push rules remain the execution gate for non-tasks.
+   */
+  push_candidates?: boolean;
   /** Default `shown`. `hidden` is the folded list, not deleted Events. */
   list?: "shown" | "hidden";
 }
