@@ -94,6 +94,7 @@ export interface AuxiliaryExecutionInput {
 export interface PreparedAuxiliaryExecution {
   work_item: WorkItem;
   recipe: Recipe;
+  search_answer?: SearchAnswerRecord;
 }
 
 export interface WorkRunView {
@@ -457,6 +458,7 @@ export class PersonalWorkService implements OnModuleDestroy {
    */
   async prepareAuxiliaryExecution(
     input: Omit<AuxiliaryExecutionInput, "evidence_text">,
+    searchAnswer?: SearchAnswerRecord,
   ): Promise<PreparedAuxiliaryExecution> {
     await this.executors.ensureMounted();
     const host = this.runtime.requireHost();
@@ -508,11 +510,15 @@ export class PersonalWorkService implements OnModuleDestroy {
     };
     const created = await host.get("authority").createWorkItem({
       item, recipe, expected_recipe: expectedRecipe,
+      ...(searchAnswer ? { search_answer: searchAnswer } : {}),
     });
     if (created.outcome !== "applied") throw new PersonalConnectorError(
       "execution_prepare_conflict", `Auxiliary preparation rejected: ${created.reason}. Refresh the execution.`, 409,
     );
-    return { work_item: created.item, recipe: created.recipe };
+    return {
+      work_item: created.item, recipe: created.recipe,
+      ...(created.search_answer ? { search_answer: created.search_answer } : {}),
+    };
   }
 
   async startPreparedAuxiliaryExecution(

@@ -3,6 +3,7 @@ const { mkdir, rm } = require("node:fs/promises");
 const { randomUUID } = require("node:crypto");
 const { join } = require("node:path");
 const { describe, it } = require("node:test");
+const { DatabaseSync } = require("node:sqlite");
 const { SqliteAuthorityStore } = require("@regenic/authority-store/sqlite");
 const { MemoryExecutorRegistry, createSessionTaskExecutor, createHttpTaskExecutor } = require("@regenic/domain");
 const { dshTaskExecutor } = require("../../../packages/dsh-connector/dist");
@@ -80,7 +81,7 @@ async function fixture(t, maxConcurrent) {
     runtime, {}, { ensureMounted: async () => {} }, { touchInboxDigest() {} }, {}, events,
   );
   return {
-    ports, item, recipe, calls, hooks, channel, supervise, dispatch, service, runtime,
+    ports, item, recipe, calls, hooks, channel, supervise, dispatch, service, runtime, path,
     setExecutor(next) { executor = next; },
     reopen() {
       ports.authority.close();
@@ -103,6 +104,78 @@ describe("durable executor start", () => {
     assert.deepEqual(prepared.work_item, await f.ports.authority.getWorkItem(ORG, prepared.work_item.id));
     return { ...f, service, prepared };
   }
+
+  it("persists answer metadata before reserving or invoking its executor without a separate put", async (t) => {
+    const f = await preparedAuxiliary(t);
+    const put = t.mock.method(f.ports.authority, "putSearchAnswer", async () => { throw new Error("Separate metadata writes are forbidden"); });
+    const claim = f.ports.authority.claimWorkRunStart.bind(f.ports.authority);
+    let saved;
+    t.mock.method(f.ports.authority, "claimWorkRunStart", async (input) => {
+      const answerId = input.run.work_item_id.slice("search-answer:".length);
+      saved = await f.ports.authority.getSearchAnswer(ORG, answerId);
+      assert.equal(saved.work_item_id, input.run.work_item_id);
+      assert.deepEqual(saved.event_ids, ["event-1"]);
+      assert.deepEqual(await f.ports.authority.getWorkItem(ORG, input.run.work_item_id), input.expected_item);
+      return claim(input);
+    });
+    const answers = new PersonalSearchAnswerService(f.runtime, {
+      answerEvidence: async () => ({ query: "Question", refs: ["event-1"], evidence_text: "Evidence", executor_type: "session" }),
+    }, {}, f.service);
+    const result = await answers.start({}, "en");
+    assert.equal(result.status, "running");
+    assert.equal(result.answer_id, saved.id);
+    assert.equal(result.work_item_id, saved.work_item_id);
+    assert.equal(put.mock.callCount(), 0);
+    assert.equal(f.calls.spawn, 1);
+    assert.equal(f.calls.stdin, 1);
+    f.reopen();
+    assert.deepEqual(await f.ports.authority.getSearchAnswer(ORG, result.answer_id), saved);
+  });
+
+  it("rolls back answer, work and changed rule when answer metadata cannot be saved", async (t) => {
+    const f = await preparedAuxiliary(t);
+    const original = await f.ports.authority.getRecipe(ORG, f.prepared.recipe.id);
+    const items = await f.ports.authority.listWorkItems(ORG);
+    const db = new DatabaseSync(f.path);
+    try {
+      db.exec(`CREATE TRIGGER reject_answer_preparation BEFORE INSERT ON search_answers
+        BEGIN SELECT RAISE(ABORT, 'metadata unavailable'); END`);
+      const answers = new PersonalSearchAnswerService(f.runtime, {
+        answerEvidence: async () => ({ query: "Question", refs: [], evidence_text: "Evidence", executor_type: "session" }),
+      }, {}, f.service);
+      await assert.rejects(answers.start({}, "en"));
+      assert.deepEqual(await f.ports.authority.listWorkItems(ORG), items);
+      assert.deepEqual(await f.ports.authority.getRecipe(ORG, original.id), original);
+      assert.equal(db.prepare("SELECT count(*) AS count FROM search_answers").get().count, 0);
+      assert.equal(f.calls.spawn, 0);
+      assert.equal(f.calls.stdin, 0);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("never deletes or overwrites an existing answer on a preparation identity conflict", async (t) => {
+    const f = await preparedAuxiliary(t);
+    const record = await f.ports.authority.putSearchAnswer({
+      id: "occupied-answer", org_id: ORG, work_item_id: f.prepared.work_item.id,
+      query: "Original question", event_ids: [], created_at: f.item.created_at, updated_at: f.item.updated_at,
+    });
+    const create = f.ports.authority.createWorkItem.bind(f.ports.authority);
+    let requested;
+    t.mock.method(f.ports.authority, "createWorkItem", async (input) => {
+      requested = input.item;
+      return create({ ...input, search_answer: { ...input.search_answer, id: record.id } });
+    });
+    const deleted = t.mock.method(f.ports.authority, "deleteSearchAnswer");
+    const answers = new PersonalSearchAnswerService(f.runtime, {
+      answerEvidence: async () => ({ query: "New question", refs: [], evidence_text: "Evidence", executor_type: "session" }),
+    }, {}, f.service);
+    await assert.rejects(answers.start({}, "en"));
+    assert.deepEqual(await f.ports.authority.getSearchAnswer(ORG, record.id), record);
+    assert.equal(await f.ports.authority.getWorkItem(ORG, requested.id), null);
+    assert.equal(deleted.mock.callCount(), 0);
+    assert.equal(f.calls.spawn, 0);
+  });
 
   it("does not overwrite active auxiliary work or change its recipe on repeated preparation", async (t) => {
     const f = await preparedAuxiliary(t);

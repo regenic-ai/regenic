@@ -226,7 +226,9 @@ export async function putWorkItem(
     return await getWorkItem(db, item.org_id, item.id) ?? item;
   }
 
-class WorkItemCreationConflict extends Error {}
+class WorkItemCreationConflict extends Error {
+  constructor(readonly reason: "work_exists" | "search_answer_exists") { super(reason); }
+}
 
 export async function createWorkItem(db: PgSql, input: WorkItemCreation): Promise<WorkItemCreationResult> {
   try {
@@ -234,7 +236,12 @@ export async function createWorkItem(db: PgSql, input: WorkItemCreation): Promis
       await db.execute("SELECT pg_advisory_xact_lock(hashtext($1))", [`work-recipe:${input.recipe.id}`], client);
       let recipe = await db.queryOne<RecipeRow>("SELECT * FROM recipes WHERE id = $1 FOR UPDATE", [input.recipe.id], client);
       const exists = await db.queryOne("SELECT id FROM work_items WHERE id = $1 FOR UPDATE", [input.item.id], client);
-      let result = prepareWorkItemCreation(input, { item_exists: Boolean(exists), recipe: recipe ? toRecipe(recipe) : null });
+      const answerExists = input.search_answer ? await db.queryOne(
+        "SELECT id FROM search_answers WHERE id = $1 FOR UPDATE", [input.search_answer.id], client,
+      ) : null;
+      let result = prepareWorkItemCreation(input, {
+        item_exists: Boolean(exists), recipe: recipe ? toRecipe(recipe) : null, search_answer_exists: Boolean(answerExists),
+      });
       if (result.outcome !== "applied") return result;
       if (!recipe) {
         const inserted = await writeRecipe(db, result.recipe, client, true);
@@ -254,14 +261,25 @@ export async function createWorkItem(db: PgSql, input: WorkItemCreation): Promis
         item.id, item.org_id, item.thread_id, item.unit_key, item.head_event_id ?? null,
         item.record_class, item.thread_facet, item.status, item.recipe_id, item.created_at, item.updated_at,
       ], client);
-      if (!savedItem) throw new WorkItemCreationConflict();
+      if (!savedItem) throw new WorkItemCreationConflict("work_exists");
       await writeRecipe(db, result.recipe, client);
       const savedRecipe = await db.queryOne<RecipeRow>("SELECT * FROM recipes WHERE id = $1", [result.recipe.id], client);
       if (!savedRecipe) throw new Error("Created work recipe disappeared inside its transaction");
-      return { outcome: "applied", item: toWorkItem(savedItem), recipe: toRecipe(savedRecipe) };
+      const answer = result.search_answer;
+      const savedAnswer = answer ? await db.queryOne<SearchAnswerRow>(`INSERT INTO search_answers (
+        id, org_id, work_item_id, query, event_ids_json, outcome, created_at, updated_at
+      ) VALUES ($1, $2, $3, $4, $5, NULL, $6, $7)
+      ON CONFLICT (id) DO NOTHING RETURNING *`, [
+        answer.id, answer.org_id, answer.work_item_id, answer.query, jsonb(answer.event_ids), answer.created_at, answer.updated_at,
+      ], client) : null;
+      if (answer && !savedAnswer) throw new WorkItemCreationConflict("search_answer_exists");
+      return {
+        outcome: "applied", item: toWorkItem(savedItem), recipe: toRecipe(savedRecipe),
+        ...(savedAnswer ? { search_answer: toSearchAnswer(savedAnswer) } : {}),
+      };
     });
   } catch (error) {
-    if (error instanceof WorkItemCreationConflict) return { outcome: "conflict", reason: "work_exists" };
+    if (error instanceof WorkItemCreationConflict) return { outcome: "conflict", reason: error.reason };
     throw error;
   }
 }

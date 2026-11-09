@@ -98,6 +98,38 @@ describe("work item creation transitions", () => {
     assert.equal(result.outcome, "applied");
     assert.deepEqual(result.recipe, current);
   });
+  function answerCreation() {
+    const input = creation();
+    return {
+      ...input, search_answer: {
+        id: "answer", org_id: input.item.org_id, work_item_id: input.item.id,
+        query: "Question", event_ids: ["event"], created_at: BEFORE, updated_at: BEFORE,
+      },
+    };
+  }
+  it("plans answer metadata together and keeps input and output detached", () => {
+    const input = answerCreation();
+    const result = prepareWorkItemCreation(input, { item_exists: false, recipe: null, search_answer_exists: false });
+    assert.equal(result.outcome, "applied");
+    assert.deepEqual(result.search_answer, input.search_answer);
+    result.search_answer.event_ids.push("mutated");
+    assert.deepEqual(input.search_answer.event_ids, ["event"]);
+    assert.deepEqual(prepareWorkItemCreation(input, {
+      item_exists: false, recipe: null, search_answer_exists: true,
+    }), { outcome: "conflict", reason: "search_answer_exists" });
+  });
+  for (const change of [
+    { id: "" }, { org_id: "foreign" }, { work_item_id: "other-work" },
+    { outcome: "timed_out" }, { query: "" }, { event_ids: [""] }, { event_ids: [1] },
+    { created_at: "invalid" }, { updated_at: NOW },
+  ]) {
+    it(`rejects invalid new answer ${JSON.stringify(change)}`, () => {
+      const input = answerCreation();
+      assert.throws(() => prepareWorkItemCreation({
+        ...input, search_answer: { ...input.search_answer, ...change },
+      }, { item_exists: false, recipe: null }), /fresh search answer/);
+    });
+  }
 });
 
 describe("work dismissal transitions", () => {

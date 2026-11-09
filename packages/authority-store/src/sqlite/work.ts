@@ -183,6 +183,8 @@ export async function createWorkItem(db: Database.Database, input: WorkItemCreat
     const result = prepareWorkItemCreation(input, {
       item_exists: Boolean(db.prepare("SELECT id FROM work_items WHERE id = ?").get(input.item.id)),
       recipe: recipe ? toRecipe(recipe) : null,
+      search_answer_exists: input.search_answer
+        ? Boolean(db.prepare("SELECT id FROM search_answers WHERE id = ?").get(input.search_answer.id)) : false,
     });
     if (result.outcome !== "applied") return result;
     writeRecipe(db, result.recipe);
@@ -190,7 +192,18 @@ export async function createWorkItem(db: Database.Database, input: WorkItemCreat
     const savedItem = db.prepare("SELECT * FROM work_items WHERE id = ?").get(result.item.id) as WorkItemRow | undefined;
     const savedRecipe = db.prepare("SELECT * FROM recipes WHERE id = ?").get(result.recipe.id) as RecipeRow | undefined;
     if (!savedRecipe || !savedItem) throw new Error("Created work disappeared inside its transaction");
-    return { outcome: "applied", item: toWorkItem(savedItem), recipe: toRecipe(savedRecipe) };
+    const answer = result.search_answer;
+    const savedAnswer = answer ? db.prepare(`INSERT INTO search_answers (
+      id, org_id, work_item_id, query, event_ids_json, outcome, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?) RETURNING *`).get(
+      answer.id, answer.org_id, answer.work_item_id, answer.query, JSON.stringify(answer.event_ids),
+      answer.created_at, answer.updated_at,
+    ) as SearchAnswerRow | undefined : undefined;
+    if (answer && !savedAnswer) throw new Error("Created search answer disappeared inside its transaction");
+    return {
+      outcome: "applied", item: toWorkItem(savedItem), recipe: toRecipe(savedRecipe),
+      ...(savedAnswer ? { search_answer: toSearchAnswer(savedAnswer) } : {}),
+    };
   }).immediate();
 }
 

@@ -89,16 +89,7 @@ export class PersonalSearchAnswerService {
     const id = randomUUID();
     const workItemId = `${SEARCH_ANSWER_WORK_ITEM_PREFIX}${id}`;
     const now = new Date().toISOString();
-    const prepared = await this.work.prepareAuxiliaryExecution({
-      id: workItemId,
-      purpose: SEARCH_ANSWER_PURPOSE,
-      executor_type: evidence.executor_type,
-      prompt: SEARCH_ANSWER_PROMPT,
-      max_concurrent: SEARCH_ANSWER_ACTIVE_MAX,
-    }).catch((error: unknown) => {
-      throw searchAnswerStartError(error);
-    });
-    const record: SearchAnswerRecord = {
+    const newRecord: SearchAnswerRecord = {
       id,
       org_id: this.runtime.orgId(),
       work_item_id: workItemId,
@@ -107,8 +98,18 @@ export class PersonalSearchAnswerService {
       created_at: now,
       updated_at: now,
     };
+    const prepared = await this.work.prepareAuxiliaryExecution({
+      id: workItemId,
+      purpose: SEARCH_ANSWER_PURPOSE,
+      executor_type: evidence.executor_type,
+      prompt: SEARCH_ANSWER_PROMPT,
+      max_concurrent: SEARCH_ANSWER_ACTIVE_MAX,
+    }, newRecord).catch((error: unknown) => {
+      throw searchAnswerStartError(error);
+    });
+    const record = prepared.search_answer;
+    if (!record) throw new Error("Prepared search answer metadata is missing");
     const authority = this.runtime.requireHost().get("authority");
-    await authority.putSearchAnswer(record);
     let started;
     try {
       started = await this.work.startPreparedAuxiliaryExecution(

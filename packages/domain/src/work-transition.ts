@@ -109,15 +109,17 @@ export interface WorkItemCreation {
   item: WorkItem;
   recipe: Recipe;
   expected_recipe: Recipe | null;
+  search_answer?: SearchAnswerRecord;
 }
 
 export type WorkItemCreationResult =
-  | { outcome: "applied"; item: WorkItem; recipe: Recipe }
-  | { outcome: "conflict"; reason: "work_exists" | "stale_recipe" };
+  | { outcome: "applied"; item: WorkItem; recipe: Recipe; search_answer?: SearchAnswerRecord }
+  | { outcome: "conflict"; reason: "work_exists" | "stale_recipe" | "search_answer_exists" };
 
 export function prepareWorkItemCreation(input: WorkItemCreation, facts: {
   item_exists: boolean;
   recipe: Recipe | null;
+  search_answer_exists?: boolean;
 }): WorkItemCreationResult {
   const { item, recipe, expected_recipe: expected } = input;
   if (!item.id?.trim() || !item.org_id?.trim() || !item.thread_id?.trim() || !item.unit_key?.trim()
@@ -128,7 +130,15 @@ export function prepareWorkItemCreation(input: WorkItemCreation, facts: {
     || (expected && (expected.id !== recipe.id || expected.org_id !== recipe.org_id))) {
     throw new Error("Work creation requires a fresh open item and a matching recipe snapshot");
   }
+  const answer = input.search_answer;
+  if (answer && (!answer.id?.trim() || answer.org_id !== item.org_id || answer.work_item_id !== item.id
+    || answer.outcome !== undefined || typeof answer.query !== "string" || !answer.query.trim()
+    || !Array.isArray(answer.event_ids) || answer.event_ids.some((id) => typeof id !== "string" || !id.trim())
+    || !Number.isFinite(Date.parse(answer.created_at)) || answer.created_at !== answer.updated_at)) {
+    throw new Error("Work creation requires fresh search answer metadata belonging to the same work item");
+  }
   if (facts.item_exists) return { outcome: "conflict", reason: "work_exists" };
+  if (answer && facts.search_answer_exists) return { outcome: "conflict", reason: "search_answer_exists" };
   const current = facts.recipe;
   const equivalent = current && sameJson(
     { ...current, created_at: undefined, updated_at: undefined },
@@ -139,6 +149,7 @@ export function prepareWorkItemCreation(input: WorkItemCreation, facts: {
     outcome: "applied",
     item: { ...item, version: 0 },
     recipe: equivalent ? current : { ...recipe, created_at: current?.created_at ?? recipe.created_at },
+    ...(answer ? { search_answer: answer } : {}),
   });
 }
 
