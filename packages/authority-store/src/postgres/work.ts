@@ -54,8 +54,9 @@ export async function putRecipe(db: PgSql, recipe: Recipe): Promise<Recipe> {
           id, org_id, name, match_json, executor_type, executor_config_json,
           can_write_back, include_context, enabled, trigger_kind,
           trigger_interval_ms, trigger_at_minute, trigger_weekdays, trigger_timezone,
-          trigger_coalesce, max_concurrent, next_run_at, created_at, updated_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+          trigger_coalesce, max_concurrent, next_run_at, write_back_thread_id,
+          created_at, updated_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
         ON CONFLICT (id) DO UPDATE SET
           name = EXCLUDED.name,
           match_json = EXCLUDED.match_json,
@@ -72,6 +73,7 @@ export async function putRecipe(db: PgSql, recipe: Recipe): Promise<Recipe> {
           trigger_coalesce = EXCLUDED.trigger_coalesce,
           max_concurrent = EXCLUDED.max_concurrent,
           next_run_at = EXCLUDED.next_run_at,
+          write_back_thread_id = EXCLUDED.write_back_thread_id,
           updated_at = EXCLUDED.updated_at
       `,
       [
@@ -92,6 +94,7 @@ export async function putRecipe(db: PgSql, recipe: Recipe): Promise<Recipe> {
         trigger.kind === "push" && trigger.coalesce !== false,
         recipe.max_concurrent ?? null,
         recipe.next_run_at ?? null,
+        recipe.write_back_thread_id ?? null,
         recipe.created_at,
         recipe.updated_at,
       ],
@@ -556,6 +559,7 @@ interface RecipeRow {
   trigger_coalesce: unknown;
   max_concurrent: number | null;
   next_run_at: unknown;
+  write_back_thread_id: string | null;
   created_at: unknown;
   updated_at: unknown;
 }
@@ -657,6 +661,9 @@ function toRecipe(row: RecipeRow): Recipe {
     executor_type: row.executor_type,
     executor_config: asJson<Recipe["executor_config"]>(row.executor_config_json),
     can_write_back: asBool(row.can_write_back),
+    ...(typeof row.write_back_thread_id === "string" && row.write_back_thread_id.trim()
+      ? { write_back_thread_id: row.write_back_thread_id.trim() }
+      : {}),
     include_context: asBool(row.include_context),
     enabled: asBool(row.enabled),
     ...(row.max_concurrent && row.max_concurrent > 0

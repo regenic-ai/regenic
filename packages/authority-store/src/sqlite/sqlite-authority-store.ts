@@ -1686,6 +1686,11 @@ export class SqliteAuthorityStore
         }
         if (migration.version === 54) {
           this.applyRecipeClockColumns();
+        } else if (
+          migration.version === 56 &&
+          this.columnExists("recipes", "write_back_thread_id")
+        ) {
+          // Column was added before this migration ran.
         } else {
           this.database.exec(migration.sql);
         }

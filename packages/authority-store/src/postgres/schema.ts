@@ -1,4 +1,4 @@
-export const PG_SCHEMA_VERSION = 55;
+export const PG_SCHEMA_VERSION = 56;
 
 /** Applied when an existing postgres authority DB is already at a prior baseline. */
 export const PG_MIGRATIONS = [
@@ -573,6 +573,10 @@ ALTER TABLE recipes ADD COLUMN trigger_weekdays TEXT;
 ALTER TABLE recipes ADD COLUMN trigger_timezone TEXT;
 `,
   },
+  {
+    version: 56,
+    sql: `ALTER TABLE recipes ADD COLUMN write_back_thread_id TEXT;`,
+  },
 ] as const;
 
 export const PG_BASELINE_SQL = `
@@ -741,6 +745,7 @@ CREATE TABLE recipes (
   trigger_coalesce BOOLEAN NOT NULL DEFAULT TRUE,
   max_concurrent INTEGER,
   next_run_at TIMESTAMPTZ,
+  write_back_thread_id TEXT,
   created_at TIMESTAMPTZ NOT NULL,
   updated_at TIMESTAMPTZ NOT NULL
 );

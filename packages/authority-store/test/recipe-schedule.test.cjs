@@ -34,7 +34,7 @@ function recipe(trigger) {
 
 describe("recipe pull schedule", () => {
   it("appends the PostgreSQL schedule migration after main's existing migrations", () => {
-    assert.equal(PG_SCHEMA_VERSION, 55);
+    assert.equal(PG_SCHEMA_VERSION, 56);
     assert.deepEqual(PG_MIGRATIONS.filter(({ version }) => version > 54), [
       {
         version: 55,
@@ -43,6 +43,10 @@ ALTER TABLE recipes ADD COLUMN trigger_at_minute INTEGER;
 ALTER TABLE recipes ADD COLUMN trigger_weekdays TEXT;
 ALTER TABLE recipes ADD COLUMN trigger_timezone TEXT;
 `,
+      },
+      {
+        version: 56,
+        sql: `ALTER TABLE recipes ADD COLUMN write_back_thread_id TEXT;`,
       },
     ]);
   });
@@ -179,6 +183,29 @@ ALTER TABLE recipes ADD COLUMN trigger_timezone TEXT;
       assert.equal(interval.trigger.at_minute, undefined);
       assert.equal(interval.trigger.timezone, undefined);
       assert.equal(interval.trigger.weekdays, undefined);
+    } finally {
+      store.close();
+    }
+  });
+
+  it("keeps the conversation a recipe writes back to", async () => {
+    const root = await mkdtemp(join(tmpdir(), "regenic-recipe-write-back-"));
+    roots.push(root);
+    const store = new SqliteAuthorityStore(join(root, "authority.db"));
+    try {
+      await store.putRecipe({
+        ...recipe({ kind: "push" }),
+        write_back_thread_id: "feishu:oc_results",
+      });
+      assert.equal(
+        (await store.getRecipe("local-owner", "weekly")).write_back_thread_id,
+        "feishu:oc_results",
+      );
+      await store.putRecipe(recipe({ kind: "push" }));
+      assert.equal(
+        (await store.getRecipe("local-owner", "weekly")).write_back_thread_id,
+        undefined,
+      );
     } finally {
       store.close();
     }
