@@ -17,6 +17,9 @@ async function rendererSmoke() {
     useContentSize: true,
     webPreferences: { contextIsolation: true, sandbox: true },
   });
+  window.webContents.on("console-message", (event) => {
+    if (event.level === "error") console.error("Recipe renderer:", event.message);
+  });
   try {
     await window.loadURL(process.env.REGENIC_SMOKE_URL);
     for (let attempt = 0; ; attempt++) {
@@ -59,7 +62,7 @@ async function rendererSmoke() {
       const row = [...document.querySelectorAll(".recipe-row")]
         .find(row => row.textContent.includes("Send result to"));
       return Boolean(row?.querySelector(".menu-select-btn"));
-    })()`), true, "Destination picker must remain reachable when results stay local");
+    })()`), false, "Keep here hides the destination picker without discarding the destination");
     const addCondition = async (label) => {
       await window.webContents.executeJavaScript(
         'document.querySelector(\'button[aria-label="Add condition"]\').click()',
@@ -407,6 +410,208 @@ async function rendererSmoke() {
       'document.querySelector(\'input[aria-label="Body contains"]\').checkValidity()',
     ), false, "Switching back must restore whitespace validation along with its draft value");
     console.log("Recipe filter trigger switching, trial, preview, save and edit smoke passed");
+    await switchTrigger("Only when I ask");
+    const clickText = async (label) => {
+      await window.webContents.executeJavaScript(`(() => {
+        const button = [...document.querySelectorAll(".recipe-form button")]
+          .find(item => item.textContent.trim() === ${JSON.stringify(label)});
+        if (!button || button.disabled) throw new Error("Missing enabled action: " + ${JSON.stringify(label)});
+        button.click();
+      })()`).catch((error) => { throw new Error(`Action failed: ${label}`, { cause: error }); });
+      await new Promise((resolve) => setTimeout(resolve, 75));
+    };
+    const setConversations = async (sourceCanSend, resultCanSend) => {
+      await window.webContents.executeJavaScript(`window.__setConversations([
+        { id: "smoke:room", label: "Filter smoke chat", source: "smoke",
+          record_class: "utterance", thread_facet: "chat", can_send: ${sourceCanSend} },
+        { id: "results:room", label: "Writable result chat", source: "results", can_send: ${resultCanSend} },
+        { id: "unknown:room", label: "Unknown capability", source: "unknown" }
+      ])`);
+      await new Promise((resolve) => setTimeout(resolve, 75));
+    };
+    const pickDestination = async (value) => {
+      console.log("Picking destination:", value);
+      await window.webContents.executeJavaScript(
+        'document.querySelector(\'button[aria-label="Send result to"]\').click()',
+      );
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const options = await window.webContents.executeJavaScript(
+        '[...document.querySelectorAll(\'[role="option"]\')].map(item => item.textContent.trim())',
+      );
+      assert.equal(options.includes("Unknown capability"), false);
+      await window.webContents.executeJavaScript(`(() => {
+        const option = [...document.querySelectorAll('[role="option"]')]
+          .find(item => item.textContent.trim() === ${JSON.stringify(value)});
+        if (!option) throw new Error("Missing destination: " + ${JSON.stringify(value)});
+        option.click();
+      })()`);
+      await new Promise((resolve) => setTimeout(resolve, 75));
+      return options;
+    };
+    const saveAndReopen = async () => {
+      const count = await window.webContents.executeJavaScript('window.__saveCount');
+      await window.webContents.executeJavaScript('document.querySelector(".recipe-form").requestSubmit()');
+      for (let attempt = 0; ; attempt++) {
+        if (await window.webContents.executeJavaScript(`window.__saveCount > ${count} &&
+          document.querySelector('.recipe-form button[type="submit"]').textContent.trim() !== "Saving…"`)) break;
+        assert.ok(attempt < 50, "Destination save did not settle");
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      await window.webContents.executeJavaScript('document.querySelector(".recipe-card-hit").click()');
+      await new Promise((resolve) => setTimeout(resolve, 75));
+    };
+    await setConversations(false, true);
+    await clickText("Send back");
+    assert.deepEqual(await pickDestination("Writable result chat"), ["Writable result chat"],
+      "A read-only original must not prevent picking another writable destination");
+    await saveAndReopen();
+    let delivery = await window.webContents.executeJavaScript('window.__savedRecipe');
+    assert.equal(delivery.can_write_back, true);
+    assert.equal(delivery.write_back_thread_id, "results:room");
+    await clickText("Try & send back");
+    assert.equal(await window.webContents.executeJavaScript('window.__lastTry.write_back'), true);
+    assert.equal(await window.webContents.executeJavaScript('window.__lastTry.thread_id'), "smoke:room");
+    await clickText("Keep here");
+    await saveAndReopen();
+    assert.equal(await window.webContents.executeJavaScript('window.__savedRecipe.can_write_back'), false);
+    assert.equal(await window.webContents.executeJavaScript('window.__savedRecipe.write_back_thread_id'), "results:room");
+    await clickText("Send back");
+    await setConversations(true, true);
+    await pickDestination("Original conversation");
+    await saveAndReopen();
+    assert.equal(await window.webContents.executeJavaScript('window.__savedRecipe.write_back_thread_id'), null);
+    await pickDestination("Writable result chat");
+    await saveAndReopen();
+    await setConversations(false, false);
+    assert.match(await window.webContents.executeJavaScript(
+      'document.querySelector(\'button[aria-label="Send result to"]\').textContent',
+    ), /Writable result chat.*unavailable/);
+    assert.equal(await window.webContents.executeJavaScript(
+      'document.querySelector(\'button[aria-label="Send result to"]\').disabled',
+    ), true, "No unavailable target may be a new option");
+    assert.match(await window.webContents.executeJavaScript(
+      'document.querySelector(".recipe-form").textContent',
+    ), /No available conversations/);
+    assert.equal(await window.webContents.executeJavaScript(`(() => {
+      const buttons = [...document.querySelectorAll(".recipe-form button")];
+      return buttons.find(item => item.textContent.trim() === "Send back").disabled;
+    })()`), false, "Send back always represents selectable intent, even with no candidates");
+    assert.equal(await window.webContents.executeJavaScript(`(() => {
+      return [...document.querySelectorAll(".recipe-form button")]
+        .find(item => item.textContent.trim() === "Try & send back").disabled;
+    })()`), true, "Unavailable destinations must block send trials");
+    await saveAndReopen();
+    delivery = await window.webContents.executeJavaScript('window.__savedRecipe');
+    assert.equal(delivery.can_write_back, true, "Unrelated saves must preserve unavailable delivery intent");
+    assert.equal(delivery.write_back_thread_id, "results:room");
+    await clickText("Keep here");
+    await saveAndReopen();
+    await clickText("Send back");
+    assert.equal(await window.webContents.executeJavaScript(
+      'document.querySelector(\'.recipe-form button[type="submit"]\').disabled',
+    ), true, "Re-enabling send with no valid target must block saving");
+    const before = await window.webContents.executeJavaScript('window.__saveCount');
+    await window.webContents.executeJavaScript('document.querySelector(".recipe-form").requestSubmit()');
+    await new Promise((resolve) => setTimeout(resolve, 75));
+    assert.equal(await window.webContents.executeJavaScript('window.__saveCount'), before);
+    for (const width of [1186, 480]) {
+      window.setContentSize(width, 800);
+      await window.webContents.executeJavaScript(
+        'document.querySelector(\'button[aria-label="Send result to"]\').scrollIntoView({ block: "center" })',
+      );
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      assert.equal(await window.webContents.executeJavaScript(`(() => {
+        const name = document.querySelector(".recipe-name input").getBoundingClientRect();
+        const actions = document.querySelector(".recipe-actions").getBoundingClientRect();
+        return name.width >= 120 && (name.right <= actions.left || name.bottom <= actions.top);
+      })()`), true, "Destination trial controls must not squeeze or overlap the rule name");
+      writeFileSync(join(process.env.REGENIC_SMOKE_OUTPUT, `destination-empty-${width}.png`),
+        (await window.webContents.capturePage()).toPNG());
+    }
+    await clickText("Keep here");
+    assert.equal(await window.webContents.executeJavaScript(
+      'document.querySelector(\'.recipe-form button[type="submit"]\').disabled',
+    ), false);
+    await clickText("Cancel");
+    await clickText("All tasks");
+    await window.webContents.executeJavaScript(`(() => {
+      const row = [...document.querySelectorAll(".recipe-row")]
+        .find(item => item.querySelector(".recipe-row-label")?.textContent.trim() === "Playbook");
+      const textarea = row.querySelector("textarea");
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set.call(textarea, "Local fixture task");
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    })()`);
+    await clickText("Send back");
+    assert.equal(await window.webContents.executeJavaScript(
+      'document.querySelector(\'.recipe-form button[type="submit"]\').disabled',
+    ), true, "A new send rule must not save without an available destination");
+    assert.match(await window.webContents.executeJavaScript(
+      'document.querySelector(\'button[aria-label="Send result to"]\').textContent',
+    ), /No available conversations/);
+    await window.webContents.executeJavaScript(
+      'document.querySelector(\'button[aria-label="Send result to"]\').scrollIntoView({ block: "center" })',
+    );
+    await new Promise((resolve) => setTimeout(resolve, 75));
+    writeFileSync(join(process.env.REGENIC_SMOKE_OUTPUT, "destination-new-empty.png"),
+      (await window.webContents.capturePage()).toPNG());
+    await clickText("Keep here");
+    assert.equal(await window.webContents.executeJavaScript(
+      'document.querySelector(\'.recipe-form button[type="submit"]\').disabled',
+    ), false, "Keeping a new rule local needs no sendable conversation");
+    await window.webContents.executeJavaScript(`window.__setConversations([{
+      id: "smoke:room", label: "Filter smoke chat", source: "smoke",
+      record_class: "task", thread_facet: "ticket", can_send: true, body_text: "draft"
+    }])`);
+    await clickText("Send back");
+    for (const scope of ["All tasks", "One channel"]) {
+      await clickText(scope);
+      if (scope === "One channel") {
+        await window.webContents.executeJavaScript(`(() => {
+          const row = [...document.querySelectorAll(".recipe-row")]
+            .find(item => item.querySelector(".recipe-row-label")?.textContent.trim() === "Source");
+          row.querySelector(".menu-select-btn").click();
+        })()`);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        await window.webContents.executeJavaScript(`(() => {
+          [...document.querySelectorAll('[role="option"]')]
+            .find(item => item.textContent.trim() === "Smoke channel").click();
+        })()`);
+        await new Promise((resolve) => setTimeout(resolve, 75));
+      }
+      await addCondition("Body contains");
+      await addCondition("Body does not contain");
+      for (const [contains, excludes] of [["MISSING", "other"], ["draft", "draft"]]) {
+        await setFilters(contains, excludes);
+        assert.match(await window.webContents.executeJavaScript(
+          'document.querySelector(".recipe-preview-body").textContent',
+        ), /No matching chats/, "Preview must still apply current message conditions");
+        await pickDestination("Original conversation");
+        assert.equal(await window.webContents.executeJavaScript(
+          'document.querySelector(\'.recipe-form button[type="submit"]\').disabled',
+        ), false, "Dynamic original capability must not depend on current text matches");
+        await saveAndReopen();
+        const saved = await window.webContents.executeJavaScript('window.__savedRecipe');
+        assert.equal(saved.can_write_back, true);
+        assert.equal(saved.write_back_thread_id, null);
+        assert.equal(saved.match.text_contains, contains);
+        assert.equal(saved.match.text_excludes, excludes);
+        assert.equal(saved.match.source, scope === "One channel" ? "smoke" : undefined);
+        assert.equal(await window.webContents.executeJavaScript(`(() => {
+          return [...document.querySelectorAll(".recipe-form-foot button")]
+            .find(item => item.textContent.trim() === "Try once").disabled;
+        })()`), true, "No current matching message means no trial sample, even though saving is allowed");
+      }
+      await window.webContents.executeJavaScript(
+        'document.querySelector(\'button[aria-label="Remove contains condition"]\').click()',
+      );
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      await window.webContents.executeJavaScript(
+        'document.querySelector(\'button[aria-label="Remove does-not-contain condition"]\').click()',
+      );
+      await new Promise((resolve) => setTimeout(resolve, 75));
+    }
+    console.log("Dynamic original destination ignores body filters; save and trial remain distinct");
+    console.log("Destination intent, candidates, empty/legacy states, save/edit and send-trial smoke passed");
   } finally {
     window.destroy();
     app.quit();
@@ -440,6 +645,7 @@ async function launchSmoke() {
     window.fetch = async (input, init) => {
       const path = new URL(String(input), location.href).pathname;
       if (path === "/v1/me/recipes/smoke-rule/try" && init?.method === "POST") {
+        window.__lastTry = JSON.parse(init.body);
         window.__tryCalls = (window.__tryCalls ?? 0) + 1;
         return new Response(JSON.stringify({ thread_id: "smoke:room" }), { headers: { "content-type": "application/json" } });
       }
@@ -454,16 +660,22 @@ async function launchSmoke() {
       if (!(path in fixtures)) throw new Error("Unexpected smoke request: " + path);
       return new Response(JSON.stringify(fixtures[path]), { headers: { "content-type": "application/json" } });
     };
-    createRoot(document.getElementById("root")).render(
+    function Fixture() {
+      const [conversations, setConversations] = React.useState([{
+        id: "smoke:room", label: "Filter smoke chat", source: "smoke", can_send: true,
+        record_class: "utterance", thread_facet: "chat", body_text: "approve release"
+      }]);
+      window.__setConversations = setConversations;
+      return (
       <div className="shell">
         <header className="titlebar">Recipe layout smoke</header>
         <nav className="rail" />
-        <div className="workspace"><RecipesPage sources={[]} conversations={[{
-          id: "smoke:room", label: "Filter smoke chat", source: "smoke",
-          record_class: "utterance", thread_facet: "chat", body_text: "approve release"
-        }]} seed={{ thread_id: "smoke:room", title: "Filter smoke chat" }} /></div>
+        <div className="workspace"><RecipesPage sources={[{ id: "smoke", label: "Smoke channel" }]} conversations={conversations} seed={seed} /></div>
       </div>
-    );
+      );
+    }
+    const seed = { thread_id: "smoke:room", title: "Filter smoke chat" };
+    createRoot(document.getElementById("root")).render(<Fixture />);
   `;
   const server = await createServer({
     configFile: false,

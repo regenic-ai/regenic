@@ -787,7 +787,10 @@ export const en = {
   "recipes.writeBackHintPull":
     "The result goes back to this chat. It will not start this rule again.",
   "recipes.writeBackUnavailable":
-    "This chat cannot receive replies yet. The result will stay here.",
+    "This destination is unavailable. Choose a sendable conversation or Keep here.",
+  "recipes.writeBackTargetUnavailable": "{name} (unavailable)",
+  "recipes.writeBackNoTargets": "No available conversations",
+  "recipes.writeBackPreserved": "Send back remains selected; delivery may fail until the destination is available.",
   "recipes.writeBackMatchHint":
     "If the chat is waiting for a choice, put that on the first line. Reasons go below.",
   "recipes.lastRunFailed": "Last run failed",
@@ -2138,7 +2141,10 @@ export const zh: Record<MessageKey, string> = {
   "recipes.writeBackCheck": "处理完后发回原会话",
   "recipes.writeBackHint": "助手做完后，把结果发回原会话。",
   "recipes.writeBackHintPull": "结果会发回这条会话，不会再触发本规则。",
-  "recipes.writeBackUnavailable": "这条会话现在发不回去，结果会留在这里。",
+  "recipes.writeBackUnavailable": "此目标不可用，请选择可发送的会话，或留在本地。",
+  "recipes.writeBackTargetUnavailable": "{name}（不可用）",
+  "recipes.writeBackNoTargets": "暂无可用的会话",
+  "recipes.writeBackPreserved": "已保留发回配置；目标恢复可用前，发送可能失败。",
   "recipes.writeBackMatchHint":
     "原会话在等一个选项时，把选项写在第一行，原因写在后面。",
   "recipes.lastRunFailed": "上次失败",
