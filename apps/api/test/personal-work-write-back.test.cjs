@@ -2,6 +2,9 @@ const assert = require("node:assert/strict");
 const { describe, it } = require("node:test");
 const { PersonalWorkChannel } = require("../dist/personal-work-channel");
 const { PersonalWorkService } = require("../dist/personal-work.service");
+const { PersonalWorkFlush } = require("../dist/personal-work-flush");
+const { enqueueWriteBack } = require("@regenic/domain");
+const { workInboxFaces } = require("../dist/personal-work-faces");
 
 function recipeServiceFixture() {
   const recipes = new Map();
@@ -131,6 +134,99 @@ describe("recipe destination validation", () => {
 });
 
 describe("personal work write-back", () => {
+  it("uses the frozen installation and destination even if its recipe is edited or removed", async () => {
+    for (const recipe of [null, { can_write_back: false, write_back_thread_id: "source:new-room" }]) {
+      const target = { installation_id: "original", source: "source", target: "original-room" };
+      let installations = [{ id: "replacement" }, { id: "original" }];
+      const authority = {
+        getRecipe: async () => recipe,
+        getWorkItem: async () => ({ status: "done" }),
+        listInstallations: async () => installations,
+      };
+      const runtime = {
+        orgId: () => "owner",
+        requireHost: () => ({ get: () => authority }),
+      };
+      const drivers = { findForThread: (rows) => rows.length ? ({
+        installation: rows[0], driver: {
+          capabilities: () => ({ reply: true }), bindEgress() {}, outboundId: () => "outbound",
+        },
+      }) : undefined };
+      const channel = new PersonalWorkChannel(runtime, drivers);
+      let sent;
+      channel.sendText = async (thread, _text, options) => { sent = { thread, options }; };
+      const delivery = { id: "delivery", run_id: "run", target, idempotency_key: "request" };
+      const item = { id: "work", org_id: "owner", recipe_id: "rule", thread_id: "source:trigger" };
+      assert.equal(await channel.writeBack(item, "Done", undefined, delivery), "sent");
+      assert.equal(sent.thread.target, "original-room");
+      assert.equal(sent.options.installationId, "original");
+      assert.equal(sent.options.idempotency_key, "request");
+      installations = [{ id: "replacement" }];
+      await assert.rejects(channel.writeBack(item, "Done", undefined, delivery),
+        /Frozen write-back installation is unavailable/);
+    }
+  });
+
+  it("settles a delayed receipt against its original delivery rather than the current item delivery", async () => {
+    const now = new Date().toISOString();
+    const item = { id: "work", org_id: "owner", recipe_id: "rule", status: "done" };
+    const make = (run) => enqueueWriteBack({
+      org_id: item.org_id, work_item_id: item.id, recipe_id: "rule", kind: "push",
+      unit_key: "unit", payload: { summary: "Same result" }, run_id: run, now,
+      target: { installation_id: "sender", source: "source", target: "room" },
+    });
+    const original = make("old-run");
+    const current = make("new-run");
+    const rows = new Map([[original.id, original]]);
+    const authority = {
+      listDueWorkDeliveries: async () => [original],
+      listRecipes: async () => [],
+      getWorkItem: async () => item,
+      getWorkDelivery: async (_org, id) => rows.get(id),
+      getWorkDeliveryByItem: async () => { throw new Error("Must not settle by item"); },
+      putWorkDelivery: async (row) => { rows.set(row.id, row); return row; },
+    };
+    const runtime = { orgId: () => item.org_id, requireHost: () => ({ get: () => authority }) };
+    const channel = { writeBack: async (_item, _summary, _content, _delivery, onReceipt) => {
+      rows.set(current.id, current);
+      await onReceipt({ accepted: true, rpc_id: "old-message" }, now);
+      return "sent";
+    } };
+    await new PersonalWorkFlush(runtime, channel).flushDeliveries();
+    assert.equal(rows.get(original.id).status, "acked");
+    assert.equal(rows.get(original.id).channel_receipt.rpc_id, "old-message");
+    assert.deepEqual(rows.get(current.id), current);
+  });
+
+  it("shows the current run's delivery while retaining attention for unresolved history", () => {
+    const item = {
+      id: "work", org_id: "owner", thread_id: "source:room", current_run_id: "current",
+      status: "done", recipe_id: "rule", created_at: "2026-11-09T08:00:00.000Z",
+    };
+    const input = {
+      threadIds: [item.thread_id], items: [item],
+      runs: [
+        { id: "current", work_item_id: item.id, result: { summary: "Current result" }, write_back_required: true },
+        { id: "old", work_item_id: item.id, result: { summary: "Old result" }, updated_at: "2099-01-01" },
+      ],
+      recipes: [{ id: "rule", can_write_back: false }],
+      deliveries: [
+        { id: "current-delivery", work_item_id: item.id, run_id: "current", status: "acked", write_back: "sent", attempts: 1 },
+        { id: "old-delivery", work_item_id: item.id, run_id: "old", status: "dead", write_back: "failed", attempts: 3 },
+      ],
+    };
+    const face = workInboxFaces(input).get(item.thread_id);
+    assert.equal(face.work.run_id, "current");
+    assert.equal(face.work.result_summary, "Current result");
+    assert.equal(face.work.can_write_back, true);
+    assert.equal(face.work.delivery.status, "acked");
+    assert.equal(face.attention, "waiting_you");
+    const unknown = workInboxFaces({
+      ...input, items: [{ ...item, current_run_id: undefined }],
+    }).get(item.thread_id);
+    assert.equal(unknown.work.run_id, undefined);
+  });
+
   it("uses the configured destination and otherwise keeps the triggering conversation", async () => {
     for (const [writeBackThreadId, expectedTarget] of [
       ["feishu:results", "results"],

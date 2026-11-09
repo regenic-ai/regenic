@@ -1,4 +1,4 @@
-export const PG_SCHEMA_VERSION = 57;
+export const PG_SCHEMA_VERSION = 58;
 
 /** Applied when an existing postgres authority DB is already at a prior baseline. */
 export const PG_MIGRATIONS = [
@@ -596,6 +596,22 @@ WHERE status IN ('running', 'waiting_human')
   );
 `,
   },
+  {
+    version: 58,
+    sql: `
+ALTER TABLE work_runs ADD COLUMN write_back_required BOOLEAN;
+ALTER TABLE work_runs ADD COLUMN trigger_kind TEXT CHECK (trigger_kind IN ('push', 'pull', 'manual'));
+ALTER TABLE work_runs ADD COLUMN write_back_target_json JSONB;
+CREATE UNIQUE INDEX work_runs_org_id_idx ON work_runs (org_id, id);
+ALTER TABLE work_deliveries DROP CONSTRAINT work_deliveries_org_id_work_item_id_key;
+ALTER TABLE work_deliveries ADD COLUMN run_id TEXT;
+ALTER TABLE work_deliveries ADD COLUMN target_json JSONB;
+ALTER TABLE work_deliveries ADD FOREIGN KEY (org_id, run_id) REFERENCES work_runs(org_id, id);
+CREATE UNIQUE INDEX work_deliveries_run_idx ON work_deliveries (org_id, run_id) WHERE run_id IS NOT NULL;
+CREATE UNIQUE INDEX work_deliveries_legacy_item_idx ON work_deliveries (org_id, work_item_id) WHERE run_id IS NULL;
+CREATE INDEX work_deliveries_item_idx ON work_deliveries (org_id, work_item_id, created_at, id);
+`,
+  },
 ] as const;
 
 export const PG_BASELINE_SQL = `
@@ -800,6 +816,9 @@ CREATE TABLE work_runs (
   status TEXT NOT NULL,
   start_state TEXT CHECK (start_state IN ('pending', 'submitted', 'uncertain')),
   result_json JSONB,
+  write_back_required BOOLEAN,
+  trigger_kind TEXT CHECK (trigger_kind IN ('push', 'pull', 'manual')),
+  write_back_target_json JSONB,
   created_at TIMESTAMPTZ NOT NULL,
   updated_at TIMESTAMPTZ NOT NULL
 );
@@ -809,6 +828,7 @@ ALTER TABLE work_items ADD COLUMN version INTEGER NOT NULL DEFAULT 0 CHECK (vers
 ALTER TABLE work_runs ADD COLUMN version INTEGER NOT NULL DEFAULT 0 CHECK (version >= 0);
 
 CREATE INDEX work_runs_item_idx ON work_runs (org_id, work_item_id, updated_at);
+CREATE UNIQUE INDEX work_runs_org_id_idx ON work_runs (org_id, id);
 
 CREATE TABLE search_answers (
   id TEXT PRIMARY KEY,
@@ -863,13 +883,18 @@ CREATE TABLE work_deliveries (
   lease_expires_at TIMESTAMPTZ,
   idempotency_key TEXT,
   channel_receipt_json JSONB,
+  run_id TEXT,
+  target_json JSONB,
   created_at TIMESTAMPTZ NOT NULL,
   updated_at TIMESTAMPTZ NOT NULL,
-  UNIQUE (org_id, work_item_id)
+  FOREIGN KEY (org_id, run_id) REFERENCES work_runs(org_id, id)
 );
 
 CREATE INDEX work_deliveries_org_status_idx
   ON work_deliveries (org_id, status, next_retry_at);
+CREATE UNIQUE INDEX work_deliveries_run_idx ON work_deliveries (org_id, run_id) WHERE run_id IS NOT NULL;
+CREATE UNIQUE INDEX work_deliveries_legacy_item_idx ON work_deliveries (org_id, work_item_id) WHERE run_id IS NULL;
+CREATE INDEX work_deliveries_item_idx ON work_deliveries (org_id, work_item_id, created_at, id);
 
 CREATE TABLE connector_stream_members (
   installation_id TEXT NOT NULL REFERENCES connector_installations(id),

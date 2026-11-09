@@ -1253,6 +1253,10 @@ describe("SQLite context artifact store", () => {
     legacy.exec("ALTER TABLE work_items DROP COLUMN current_run_id");
     legacy.exec("ALTER TABLE work_items DROP COLUMN version");
     legacy.exec("ALTER TABLE work_runs DROP COLUMN version");
+    legacy.exec("ALTER TABLE work_runs DROP COLUMN write_back_required");
+    legacy.exec("ALTER TABLE work_runs DROP COLUMN write_back_target_json");
+    legacy.exec("ALTER TABLE work_runs DROP COLUMN trigger_kind");
+    legacy.exec("DROP INDEX work_runs_org_id_idx");
     legacy.pragma("user_version = 45");
     legacy.close();
 
@@ -1308,6 +1312,10 @@ describe("SQLite context artifact store", () => {
       ALTER TABLE work_items DROP COLUMN current_run_id;
       ALTER TABLE work_items DROP COLUMN version;
       ALTER TABLE work_runs DROP COLUMN version;
+      ALTER TABLE work_runs DROP COLUMN write_back_required;
+      ALTER TABLE work_runs DROP COLUMN write_back_target_json;
+      ALTER TABLE work_runs DROP COLUMN trigger_kind;
+      DROP INDEX work_runs_org_id_idx;
     `);
     // Last migration before preview_json (46) and the preview rebuild (47).
     legacy.pragma("user_version = 45");

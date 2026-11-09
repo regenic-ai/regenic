@@ -2,6 +2,7 @@ import type {
   ResultEnvelope,
   WorkRun,
   WorkRunStatus,
+  WorkWriteBackTarget,
 } from "@regenic/connector-contract";
 import type { ContentPart, JsonValue } from "./ingestion";
 import type { RecordClass } from "./record-class";
@@ -10,6 +11,7 @@ import type { SearchAnswerRecord } from "./search-answer";
 import type { CommitWorkObservation, CommitWorkObservationResult } from "./work-transition";
 
 export type { ResultEnvelope, WorkRun, WorkRunStatus };
+export type { WorkWriteBackTarget } from "@regenic/connector-contract";
 
 export const WORK_ITEM_STATUSES = [
   "open",
@@ -168,6 +170,8 @@ export interface WorkDelivery {
   id: string;
   org_id: string;
   work_item_id: string;
+  run_id?: string;
+  target?: WorkWriteBackTarget;
   recipe_id: string;
   kind: RecipeTriggerKind;
   unit_key: string;

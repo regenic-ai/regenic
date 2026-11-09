@@ -1,4 +1,4 @@
-export const LATEST_SCHEMA_VERSION = 57;
+export const LATEST_SCHEMA_VERSION = 58;
 
 export const CUSTOMER_SERVICE_TASKS_SQL = `
   CREATE TABLE IF NOT EXISTS customer_service_tasks (
@@ -20,6 +20,49 @@ export const RECIPE_CLOCK_COLUMN_SQL = [
   "ALTER TABLE recipes ADD COLUMN trigger_weekdays TEXT",
   "ALTER TABLE recipes ADD COLUMN trigger_timezone TEXT",
 ] as const;
+
+const RUN_DELIVERY_LEDGER_SQL = `
+      ALTER TABLE work_runs ADD COLUMN trigger_kind TEXT CHECK (trigger_kind IN ('push', 'pull', 'manual'));
+      ALTER TABLE work_runs ADD COLUMN write_back_required INTEGER CHECK (write_back_required IN (0, 1));
+      ALTER TABLE work_runs ADD COLUMN write_back_target_json TEXT CHECK (write_back_target_json IS NULL OR json_valid(write_back_target_json));
+      CREATE UNIQUE INDEX work_runs_org_id_idx ON work_runs (org_id, id);
+      CREATE TABLE work_deliveries_v58 (
+        id TEXT PRIMARY KEY,
+        org_id TEXT NOT NULL,
+        work_item_id TEXT NOT NULL REFERENCES work_items(id),
+        recipe_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        unit_key TEXT NOT NULL,
+        event_id TEXT,
+        status TEXT NOT NULL,
+        write_back TEXT NOT NULL,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        last_error TEXT,
+        next_retry_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        payload_json TEXT,
+        lease_expires_at TEXT,
+        idempotency_key TEXT,
+        channel_receipt_json TEXT,
+        run_id TEXT,
+        target_json TEXT CHECK (target_json IS NULL OR json_valid(target_json)),
+        FOREIGN KEY (org_id, run_id) REFERENCES work_runs(org_id, id)
+      );
+      INSERT INTO work_deliveries_v58 (
+        id, org_id, work_item_id, recipe_id, kind, unit_key, event_id,
+        status, write_back, attempts, last_error, next_retry_at, created_at, updated_at,
+        payload_json, lease_expires_at, idempotency_key, channel_receipt_json
+      ) SELECT id, org_id, work_item_id, recipe_id, kind, unit_key, event_id,
+        status, write_back, attempts, last_error, next_retry_at, created_at, updated_at,
+        payload_json, lease_expires_at, idempotency_key, channel_receipt_json FROM work_deliveries;
+      DROP TABLE work_deliveries;
+      ALTER TABLE work_deliveries_v58 RENAME TO work_deliveries;
+      CREATE UNIQUE INDEX work_deliveries_run_idx ON work_deliveries (org_id, run_id) WHERE run_id IS NOT NULL;
+      CREATE UNIQUE INDEX work_deliveries_legacy_item_idx ON work_deliveries (org_id, work_item_id) WHERE run_id IS NULL;
+      CREATE INDEX work_deliveries_item_idx ON work_deliveries (org_id, work_item_id, created_at, id);
+      CREATE INDEX work_deliveries_org_status_idx ON work_deliveries (org_id, status, next_retry_at);
+`;
 
 export const OUTBOUND_REJECTION_MIGRATION_SQL = `
   CREATE TABLE outbound_attempts_next (
@@ -1134,4 +1177,5 @@ export const MIGRATIONS = [
         );
     `,
   },
+  { version: 58, sql: RUN_DELIVERY_LEDGER_SQL },
 ] as const;

@@ -66,8 +66,18 @@ export interface WorkRun {
   status: WorkRunStatus;
   start_state?: "pending" | "submitted" | "uncertain";
   result?: ResultEnvelope;
+  /** Frozen before external start; absent only for historical runs. */
+  write_back_required?: boolean;
+  write_back_target?: WorkWriteBackTarget;
+  trigger_kind?: "push" | "pull" | "manual";
   created_at: string;
   updated_at: string;
+}
+
+export interface WorkWriteBackTarget {
+  installation_id: string;
+  source: string;
+  target: string;
 }
 
 export interface ExecutorCapabilities {

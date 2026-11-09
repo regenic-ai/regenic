@@ -170,6 +170,15 @@ describe("recipe destination migrations", () => {
     const store = await openPostgres(t, async (db) => {
       const historicalSchema = PG_BASELINE_SQL
         .replace("  write_back_thread_id TEXT,\n", "")
+        .replace("  write_back_required BOOLEAN,\n", "")
+        .replace("  trigger_kind TEXT CHECK (trigger_kind IN ('push', 'pull', 'manual')),\n", "")
+        .replace("  write_back_target_json JSONB,\n", "")
+        .replace("CREATE UNIQUE INDEX work_runs_org_id_idx ON work_runs (org_id, id);\n", "")
+        .replace("  run_id TEXT,\n  target_json JSONB,\n", "")
+        .replace("  FOREIGN KEY (org_id, run_id) REFERENCES work_runs(org_id, id)", "  UNIQUE (org_id, work_item_id)")
+        .replace("CREATE UNIQUE INDEX work_deliveries_run_idx ON work_deliveries (org_id, run_id) WHERE run_id IS NOT NULL;\n", "")
+        .replace("CREATE UNIQUE INDEX work_deliveries_legacy_item_idx ON work_deliveries (org_id, work_item_id) WHERE run_id IS NULL;\n", "")
+        .replace("CREATE INDEX work_deliveries_item_idx ON work_deliveries (org_id, work_item_id, created_at, id);\n", "")
         .replace("ALTER TABLE work_items ADD COLUMN current_run_id TEXT REFERENCES work_runs(id) DEFERRABLE INITIALLY DEFERRED;\n", "")
         .replace("ALTER TABLE work_items ADD COLUMN version INTEGER NOT NULL DEFAULT 0 CHECK (version >= 0);\n", "")
         .replace("ALTER TABLE work_runs ADD COLUMN version INTEGER NOT NULL DEFAULT 0 CHECK (version >= 0);\n", "");

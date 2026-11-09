@@ -22,6 +22,7 @@ import {
   recipeStartInflight,
   recipeWantsContext,
   recipeTextMatches,
+  recipeTriggerOf,
   isOccupiedRecipeSlot,
   isTaskInboxItem,
   selectRecipeForSubject,
@@ -566,6 +567,10 @@ export class PersonalWorkDispatch {
       thread_overflow: thread.overflow,
     });
     const authority = host.get("authority");
+    const writeBackRequired = this.supervise.allowsWriteBack(item.id, recipe);
+    const writeBackTarget = writeBackRequired
+      ? await this.channel.freezeWriteBackTarget(recipe.write_back_thread_id ?? item.thread_id)
+      : undefined;
     const run: WorkRun & { status: "running"; start_state: "pending" } = {
       id: runId,
       org_id: item.org_id,
@@ -574,6 +579,9 @@ export class PersonalWorkDispatch {
       executor_type: executor.executor_type,
       status: "running",
       start_state: "pending",
+      write_back_required: writeBackRequired,
+      trigger_kind: recipeTriggerOf(recipe).kind,
+      ...(writeBackTarget ? { write_back_target: writeBackTarget } : {}),
       created_at: now,
       updated_at: now,
     };

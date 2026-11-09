@@ -1,13 +1,43 @@
 import { createHash, randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
+import { canonicalContextJson } from "./context-canonical";
 import type { ContentPart } from "./ingestion";
 import type { DeliveryReceipt } from "./egress";
-import type { RecipeTriggerKind } from "./work";
+import type { RecipeTriggerKind, WorkWriteBackTarget } from "./work";
 import type {
   WorkDelivery,
   WorkDeliveryFace,
   WorkDeliveryStatus,
   WorkWriteBackState,
+  WorkRun,
 } from "./work";
+
+export function assertWorkDeliveryWrite(
+  delivery: WorkDelivery,
+  current?: WorkDelivery | null,
+  run?: WorkRun | null,
+): void {
+  if (delivery.run_id && (!run || run.id !== delivery.run_id
+    || run.org_id !== delivery.org_id || run.work_item_id !== delivery.work_item_id
+    || run.write_back_required !== true || !delivery.target
+    || !isDeepStrictEqual(run.write_back_target, delivery.target))) {
+    throw new Error("Delivery must belong to its run and frozen write-back target");
+  }
+  if (current && (current.org_id !== delivery.org_id
+    || current.work_item_id !== delivery.work_item_id
+    || current.run_id !== delivery.run_id
+    || (current.run_id && canonicalContextJson({
+      target: current.target, payload: current.payload, idempotency_key: current.idempotency_key,
+    }) !== canonicalContextJson({
+      target: delivery.target, payload: delivery.payload, idempotency_key: delivery.idempotency_key,
+    })))) {
+    throw new Error("Delivery request identity, target and payload are immutable");
+  }
+  if ((!delivery.run_id && delivery.target)
+    || (delivery.run_id && (!delivery.payload || !delivery.idempotency_key?.trim()))) {
+    throw new Error("Run-backed delivery needs a frozen payload, target and idempotency key");
+  }
+}
 
 export const WORK_DELIVERY_RETRY_DELAYS_MS = [30_000, 120_000, 480_000] as const;
 export const WORK_DELIVERY_MAX_ATTEMPTS = 3;
@@ -50,18 +80,31 @@ export function enqueueWriteBack(input: {
   payload: WorkDeliveryPayload;
   now: string;
   existing?: WorkDelivery | null;
+  run_id?: string;
+  target?: WorkWriteBackTarget;
 }): WorkDelivery {
-  const idempotency_key = writeBackIdempotencyKey(input.work_item_id, input.payload);
-  const existing = input.existing;
+  const existing = input.existing?.run_id === input.run_id ? input.existing : undefined;
+  if (input.run_id && existing) {
+    if (existing.org_id !== input.org_id || existing.work_item_id !== input.work_item_id
+      || canonicalContextJson({ target: existing.target, payload: existing.payload })
+        !== canonicalContextJson({ target: input.target, payload: input.payload })) {
+      throw new Error("Delivery request identity, target and payload are immutable");
+    }
+    return existing;
+  }
+  const id = input.run_id ? `deliv-${randomUUID()}` : existing?.id ?? `deliv-${randomUUID()}`;
+  const idempotency_key = input.run_id ? `work-back:${id}` : writeBackIdempotencyKey(input.work_item_id, input.payload);
   if (existing && deliveryPayloadKey(existing) === idempotency_key) {
     return existing.idempotency_key
       ? existing
       : { ...existing, idempotency_key };
   }
   return {
-    id: existing?.id ?? `deliv-${randomUUID()}`,
+    id,
     org_id: input.org_id,
     work_item_id: input.work_item_id,
+    ...(input.run_id ? { run_id: input.run_id } : {}),
+    ...(input.target ? { target: { ...input.target } } : {}),
     recipe_id: input.recipe_id,
     kind: input.kind,
     unit_key: input.unit_key,

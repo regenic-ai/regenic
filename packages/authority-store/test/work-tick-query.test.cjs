@@ -69,26 +69,22 @@ describe("work tick queries", () => {
     store.close();
   });
 
-  it("overwrites the existing delivery when the same work item is saved with a new id", async () => {
+  it("rejects replacing a historical delivery with a new id without a run identity", async () => {
     const root = await mkdtemp(join(tmpdir(), "regenic-work-tick-"));
     roots.push(root);
     const store = new SqliteAuthorityStore(join(root, "authority.db"));
     await store.putWorkItem(item("open-1", "open", "event-open"));
     await store.putWorkDelivery(delivery("deliv-old", "open-1", "queued"));
-    const saved = await store.putWorkDelivery(
+    await assert.rejects(store.putWorkDelivery(
       delivery("deliv-new", "open-1", "write_back", { write_back: "pending" }),
-    );
-    assert.equal(saved.id, "deliv-new");
-    assert.equal(saved.status, "write_back");
-    assert.equal(await store.getWorkDelivery("local-owner", "deliv-old"), null);
-    const current = await store.getWorkDeliveryByItem("local-owner", "open-1");
-    assert.equal(current?.id, "deliv-new");
+    ));
+    assert.equal((await store.getWorkDelivery("local-owner", "deliv-old")).status, "queued");
     const listed = await store.listWorkDeliveries("local-owner");
-    assert.deepEqual(listed.map((row) => row.id), ["deliv-new"]);
+    assert.deepEqual(listed.map((row) => row.id), ["deliv-old"]);
     const retried = await store.putWorkDelivery(
-      delivery("deliv-new", "open-1", "acked", { write_back: "sent" }),
+      delivery("deliv-old", "open-1", "acked", { write_back: "sent" }),
     );
-    assert.equal(retried.id, "deliv-new");
+    assert.equal(retried.id, "deliv-old");
     assert.equal(retried.status, "acked");
     store.close();
   });

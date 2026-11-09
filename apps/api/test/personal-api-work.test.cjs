@@ -174,7 +174,7 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
       status: "skipped",
     });
     const recipe = await authority.getRecipe("local-owner", "recipe-leftover");
-    await authority.putRecipe({ ...recipe, enabled: false });
+    await authority.putRecipe({ ...recipe, enabled: false, can_write_back: false });
     authority.close();
     const dsh = await startDshWebStub({ dropCreateResponse: true });
     const { app, origin } = await startPersonalApi(database, blobRoot);

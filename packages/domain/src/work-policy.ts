@@ -326,7 +326,7 @@ export function workFaceOf(
     ...(run ? { run_id: run.id } : {}),
     agent_thread_id: run?.agent_thread_id,
     head_event_id: item.head_event_id,
-    can_write_back: recipe ? recipeWantsWriteBack(recipe) : undefined,
+    can_write_back: run?.write_back_required ?? (recipe ? recipeWantsWriteBack(recipe) : undefined),
     has_result: Boolean(result_summary),
     ...(result_summary ? { result_summary } : {}),
     ...(delivery_face ? { delivery: delivery_face } : {}),

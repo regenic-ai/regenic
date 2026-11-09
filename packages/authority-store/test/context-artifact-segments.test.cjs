@@ -111,6 +111,10 @@ describe("shared immutable Context artifact segments", () => {
       ALTER TABLE work_items DROP COLUMN current_run_id;
       ALTER TABLE work_items DROP COLUMN version;
       ALTER TABLE work_runs DROP COLUMN version;
+      ALTER TABLE work_runs DROP COLUMN write_back_required;
+      ALTER TABLE work_runs DROP COLUMN write_back_target_json;
+      ALTER TABLE work_runs DROP COLUMN trigger_kind;
+      DROP INDEX work_runs_org_id_idx;
     `);
     binding.database.pragma("user_version = 50");
     const upgraded = binding.reopen();

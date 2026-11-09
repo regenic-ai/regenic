@@ -85,7 +85,7 @@ export class PersonalWorkSupervise {
           code: "execution_identity_unknown",
         });
       }
-      if (!recipe || !run) {
+      if (!run || (!recipe && run.write_back_required === undefined)) {
         continue;
       }
       try {
@@ -106,7 +106,7 @@ export class PersonalWorkSupervise {
 
   async refreshOne(
     item: WorkItem,
-    recipe: Recipe,
+    recipe: Recipe | null,
     run: WorkRun,
   ): Promise<void> {
     if (workRunNeedsStartConfirmation(run)) {
@@ -246,19 +246,21 @@ export class PersonalWorkSupervise {
 
   async applyHandle(
     item: WorkItem,
-    recipe: Recipe,
+    recipe: Recipe | null,
     run: WorkRun,
     handle: ExecutorRunHandle,
   ): Promise<void> {
     const host = this.runtime.requireHost();
     const authority = host.get("authority");
     const now = new Date().toISOString();
+    const triggerKind = run.trigger_kind ?? (recipe ? recipeTriggerOf(recipe).kind : undefined);
+    if (!triggerKind) throw new Error("Historical execution requires recipe reconciliation");
     const result = await authority.commitWorkObservation({
       expected_item: item,
       expected_run: run,
       handle,
-      can_write_back: this.wantsWriteBack(item.id, recipe),
-      trigger_kind: recipeTriggerOf(recipe).kind,
+      can_write_back: run.write_back_required ?? (recipe ? this.wantsWriteBack(item.id, recipe) : false),
+      trigger_kind: triggerKind,
       now,
     });
     if (result.outcome === "ignored") {
@@ -279,7 +281,7 @@ export class PersonalWorkSupervise {
     if (transition.settled) {
       this.writeBackOverride.delete(item.id);
       this.waits?.drop(run.id);
-      if (!isSystemRecipeId(recipe.id)) {
+      if (!isSystemRecipeId(run.recipe_id)) {
         await foldFinishedWorkThreads(
           authority,
           item.org_id,

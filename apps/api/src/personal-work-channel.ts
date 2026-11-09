@@ -34,6 +34,7 @@ import {
   type WorkDelivery,
   type WorkEvidenceLine,
   type WorkItem,
+  type WorkWriteBackTarget,
 } from "@regenic/domain";
 import { resolveInboxBodies, type InboxBody } from "./inbox-body";
 import { PersonalConnectorError } from "./personal-errors";
@@ -50,6 +51,17 @@ export class PersonalWorkChannel {
     private readonly runtime: PersonalRuntimeService,
     private readonly drivers: ChannelDriverRegistry,
   ) {}
+
+  async freezeWriteBackTarget(threadId: string): Promise<WorkWriteBackTarget> {
+    const thread = parseConversationThread(threadId);
+    const installations = await this.runtime.requireHost().get("authority")
+      .listInstallations(this.runtime.orgId());
+    const found = this.drivers.findForThread(installations, thread);
+    if (!found) {
+      throw new PersonalConnectorError("no_sender", "Write-back destination is unavailable", 409);
+    }
+    return { installation_id: found.installation.id, source: thread.source, target: thread.target };
+  }
 
   contextFor(executor: TaskExecutor): ExecutorContext {
     const catalog = executor.catalog();
@@ -147,6 +159,7 @@ export class PersonalWorkChannel {
     text: string,
     options?: {
       writeBack?: boolean;
+      installationId?: string;
       headEventId?: string;
       idempotency_key?: string;
       receipt?: DeliveryReceipt;
@@ -157,7 +170,10 @@ export class PersonalWorkChannel {
     const installations = await host
       .get("authority")
       .listInstallations(this.runtime.orgId());
-    const found = this.drivers.findForThread(installations, thread);
+    const found = this.drivers.findForThread(
+      options?.installationId ? installations.filter((row) => row.id === options.installationId) : installations,
+      thread,
+    );
     if (!found || !driverCanReply(found.driver, found.installation)) {
       throw new PersonalConnectorError(
         "no_sender",
@@ -230,7 +246,7 @@ export class PersonalWorkChannel {
           .get("authority")
           .getRecipe(item.org_id, item.recipe_id)
       : null;
-    if (!recipe || !recipeWantsWriteBack(recipe)) {
+    if (!delivery?.run_id && (!recipe || !recipeWantsWriteBack(recipe))) {
       return "skipped";
     }
     const latest = await this.runtime
@@ -240,7 +256,12 @@ export class PersonalWorkChannel {
     if (isAbandonedWorkItem(latest?.status)) {
       return "skipped";
     }
-    const destinationId = recipe.write_back_thread_id ?? item.thread_id;
+    if (delivery?.run_id && !delivery.target) {
+      throw new PersonalConnectorError("delivery_target_unknown", "Delivery has no frozen target", 409);
+    }
+    const destinationId = delivery?.target
+      ? `${delivery.target.source}:${delivery.target.target}`
+      : recipe?.write_back_thread_id ?? item.thread_id;
     const thread = parseConversationThread(destinationId);
     const text =
       content
@@ -255,14 +276,22 @@ export class PersonalWorkChannel {
       );
     }
     const host = this.runtime.requireHost();
-    const installations = await host
+    const available = await host
       .get("authority")
       .listInstallations(item.org_id);
+    const frozenTarget = delivery?.target;
+    const installations = frozenTarget
+      ? available.filter((row) => row.id === frozenTarget.installation_id)
+      : available;
     const found = this.drivers.findForThread(installations, thread);
+    if (delivery?.target && !found) {
+      throw new PersonalConnectorError("no_sender", "Frozen write-back installation is unavailable", 409);
+    }
     const recorded = deliveryChannelReceipt(delivery);
     if (found && driverCanReply(found.driver, found.installation)) {
       await this.sendText(thread, text, {
         writeBack: true,
+        installationId: delivery?.target?.installation_id,
         ...(destinationId === item.thread_id
           ? { headEventId: item.head_event_id }
           : {}),

@@ -10,10 +10,11 @@ import type {
 } from "./work";
 import { isActiveWorkStatus } from "./work";
 import type { WorkItemStatus } from "./work";
-import { shouldFlushDelivery } from "./work-delivery";
+import { shouldFlushDelivery, assertWorkDeliveryWrite } from "./work-delivery";
 import type { SearchAnswerRecord } from "./search-answer";
 import {
   prepareWorkObservation,
+  assertWorkRunSnapshot,
   type CommitWorkObservation,
   type CommitWorkObservationResult,
 } from "./work-transition";
@@ -137,6 +138,7 @@ export class MemoryWorkStore implements WorkStore, ExecutorStore {
 
   async putWorkRun(run: WorkRun): Promise<WorkRun> {
     const current = this.runs.get(run.id);
+    assertWorkRunSnapshot(run, current);
     const saved = { ...cloneRun(run), version: current ? (current.version ?? 0) + 1 : run.version ?? 0 };
     this.runs.set(run.id, saved);
     return cloneRun(saved);
@@ -147,7 +149,8 @@ export class MemoryWorkStore implements WorkStore, ExecutorStore {
     const item = this.items.get(expectedItem.id);
     const run = this.runs.get(expectedRun.id);
     const delivery = [...this.deliveries.values()].find(
-      (row) => row.org_id === expectedItem.org_id && row.work_item_id === expectedItem.id,
+      (row) => row.org_id === expectedItem.org_id && row.work_item_id === expectedItem.id
+        && (expectedRun.write_back_required === undefined ? !row.run_id : row.run_id === expectedRun.id),
     );
     const prepared = prepareWorkObservation(input, {
       item: item?.org_id === expectedItem.org_id ? item : null,
@@ -158,6 +161,9 @@ export class MemoryWorkStore implements WorkStore, ExecutorStore {
     const nextRun = structuredClone(prepared.transition.run);
     const nextItem = { ...prepared.transition.item };
     const nextDelivery = prepared.delivery ? structuredClone(prepared.delivery) : undefined;
+    if (nextDelivery) assertWorkDeliveryWrite(
+      nextDelivery, this.deliveries.get(nextDelivery.id), nextRun,
+    );
     this.runs.set(nextRun.id, nextRun);
     this.items.set(nextItem.id, nextItem);
     if (nextDelivery) this.deliveries.set(nextDelivery.id, nextDelivery);
@@ -165,11 +171,14 @@ export class MemoryWorkStore implements WorkStore, ExecutorStore {
   }
 
   async claimWorkRunStart({ run, max_concurrent }: WorkRunStartClaim): Promise<boolean> {
+    assertWorkRunSnapshot(run);
     const item = this.items.get(run.work_item_id);
     const recipe = this.recipes.get(run.recipe_id);
     if (
       !item || item.org_id !== run.org_id || item.status !== "open" ||
       item.recipe_id !== run.recipe_id || recipe?.org_id !== run.org_id ||
+      [...this.deliveries.values()].some((delivery) =>
+        delivery.org_id === run.org_id && delivery.work_item_id === item.id && delivery.status !== "acked") ||
       [...this.runs.values()].some((current) =>
         current.org_id === run.org_id && current.work_item_id === item.id &&
         (current.status === "running" || current.status === "waiting_human"))
@@ -242,12 +251,23 @@ export class MemoryWorkStore implements WorkStore, ExecutorStore {
     workItemId: string,
   ): Promise<WorkDelivery | null> {
     const found = [...this.deliveries.values()].find(
-      (item) => item.org_id === orgId && item.work_item_id === workItemId,
+      (row) => row.org_id === orgId && row.work_item_id === workItemId
+        && (row.run_id
+          ? row.run_id === this.items.get(workItemId)?.current_run_id
+          : this.runs.get(this.items.get(workItemId)?.current_run_id ?? "")?.write_back_required === undefined),
     );
     return found ? cloneDelivery(found) : null;
   }
 
   async putWorkDelivery(delivery: WorkDelivery): Promise<WorkDelivery> {
+    assertWorkDeliveryWrite(delivery, this.deliveries.get(delivery.id),
+      delivery.run_id && this.items.get(delivery.work_item_id)?.org_id === delivery.org_id
+        ? this.runs.get(delivery.run_id) : undefined);
+    if ([...this.deliveries.values()].some(
+      (row) => row.org_id === delivery.org_id && row.id !== delivery.id
+        && (delivery.run_id ? row.run_id === delivery.run_id
+          : !row.run_id && row.work_item_id === delivery.work_item_id),
+    )) throw new Error("Work execution already has a delivery");
     this.deliveries.set(delivery.id, cloneDelivery(delivery));
     return cloneDelivery(delivery);
   }
@@ -369,12 +389,14 @@ function cloneRun(run: WorkRun): WorkRun {
   return {
     ...run,
     result: run.result ? structuredClone(run.result) : undefined,
+    ...(run.write_back_target ? { write_back_target: { ...run.write_back_target } } : {}),
   };
 }
 
 function cloneDelivery(delivery: WorkDelivery): WorkDelivery {
   return {
     ...delivery,
+    ...(delivery.target ? { target: { ...delivery.target } } : {}),
     payload: delivery.payload
       ? {
           summary: delivery.payload.summary,

@@ -49,7 +49,7 @@ async function fixture(t, options = {}) {
     contextFor: () => ({ org_id: ORG }),
     evidenceText: async () => "formatted evidence",
     threadContextLines: async () => ({ lines: [], overflow: false }),
-  }, { applyHandle: async () => {} }, { attach() {} });
+  }, { applyHandle: async () => {}, allowsWriteBack: () => false }, { attach() {} });
   let sequence = 0;
   const ingest = async (text) => {
     sequence++;

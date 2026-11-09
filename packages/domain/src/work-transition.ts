@@ -11,6 +11,26 @@ import type { WorkDeliveryPayload } from "./work-delivery";
 import { deliveryAbandoned, enqueueWriteBack } from "./work-delivery";
 import { workStatusFromRun } from "./work-policy";
 
+export function assertWorkRunSnapshot(run: WorkRun, current?: WorkRun): void {
+  if (run.write_back_required === true && !run.write_back_target) {
+    throw new Error("Required write-back needs a frozen destination");
+  }
+  if (run.write_back_target && (
+    run.write_back_required !== true
+    || !run.write_back_target.installation_id?.trim()
+    || !run.write_back_target.source?.trim()
+    || !run.write_back_target.target?.trim()
+  )) throw new Error("Frozen write-back target must contain installation, source and target");
+  if (current && (
+    current.org_id !== run.org_id || current.work_item_id !== run.work_item_id
+    || current.write_back_required !== run.write_back_required
+    || current.trigger_kind !== run.trigger_kind
+    || !sameJson(current.write_back_target, run.write_back_target)
+  )) {
+    throw new Error("Work run identity and write-back snapshot are immutable");
+  }
+}
+
 export type ObservedWorkDelivery =
   | { kind: "enqueue"; payload: WorkDeliveryPayload }
   | { kind: "abandon" }
@@ -95,12 +115,14 @@ export function prepareWorkObservation(
       org_id: item.org_id,
       work_item_id: item.id,
       recipe_id: run.recipe_id,
-      kind: input.trigger_kind,
+      kind: run.trigger_kind ?? input.trigger_kind,
       unit_key: item.unit_key,
       event_id: item.head_event_id,
       payload: transition.delivery.payload,
       now: input.now,
       existing: delivery,
+      run_id: run.write_back_required === undefined ? undefined : run.id,
+      target: run.write_back_target,
     });
   } else if (transition.delivery.kind === "abandon" && delivery && delivery.status !== "acked") {
     nextDelivery = deliveryAbandoned(delivery, input.now);
@@ -158,7 +180,7 @@ export function planWorkObservation(input: {
     : { ...item, status, version: (item.version ?? 0) + 1, updated_at: now };
   const delivery: ObservedWorkDelivery = handle.status !== "completed" || run.status === "completed"
     ? { kind: "keep" }
-    : input.can_write_back
+    : (run.write_back_required ?? input.can_write_back)
       ? {
           kind: "enqueue",
           payload: {

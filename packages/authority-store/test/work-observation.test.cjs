@@ -4,10 +4,11 @@ const { mkdir, rm } = require("node:fs/promises");
 const { join } = require("node:path");
 const { describe, it } = require("node:test");
 const Database = require("better-sqlite3");
-const { MemoryWorkStore, enqueueWriteBack } = require("@regenic/domain");
+const { MemoryWorkStore, enqueueWriteBack, conversationId } = require("@regenic/domain");
 const { SqliteAuthorityStore, SqliteSplitAuthorityStore } = require("../dist/sqlite");
 const { PostgresAuthorityStore } = require("../dist/postgres");
 const { Client } = require("pg");
+const { MIGRATIONS } = require("../dist/sqlite/migrations");
 
 const NOW = "2026-11-09T08:00:00.000Z";
 const LATER = "2026-11-09T08:01:00.000Z";
@@ -46,7 +47,9 @@ drivers.push({
     },
 });
 
-async function fixture(t, driver) {
+const TARGET = { installation_id: "sender-1", source: "source", target: "results" };
+
+async function fixture(t, driver, runFields = {}) {
   const root = join(process.cwd(), `.test-work-observation-${randomUUID()}`);
   await mkdir(root, { recursive: true });
   const path = join(root, "authority.db");
@@ -80,6 +83,7 @@ async function fixture(t, driver) {
     id: "run-1", org_id: ORG, work_item_id: "work-1", recipe_id: recipe.id,
     executor_type: "test", status: "running", start_state: "pending",
     created_at: NOW, updated_at: NOW,
+    ...runFields,
   };
   assert.equal(await store.claimWorkRunStart({ run: initialRun }), true);
   const item = await store.getWorkItem(ORG, "work-1");
@@ -100,11 +104,113 @@ async function fixture(t, driver) {
     },
     can_write_back: true, trigger_kind: "push", now: LATER,
   };
-  return { store, path, recipe, item, run, input };
+  return {
+    get store() { return binding.store; },
+    path, recipe, item, run, input,
+    async reopen() {
+      if (!driver.name.startsWith("sqlite")) return;
+      await binding.store.close();
+      binding = await driver.open(path);
+    },
+  };
 }
 
 for (const driver of drivers) {
   describe(`${driver.name} atomic work observation`, { skip: driver.skip }, () => {
+    it("freezes run obligations across restart and rejects changes to the snapshot", async (t) => {
+      const f = await fixture(t, driver, {
+        write_back_required: true, write_back_target: TARGET, trigger_kind: "push",
+      });
+      await f.store.putRecipe({ ...f.recipe, can_write_back: false, write_back_thread_id: "other:room" });
+      await f.reopen();
+      assert.deepEqual((await f.store.getWorkRun(ORG, f.run.id)).write_back_target, TARGET);
+      for (const change of [
+        { write_back_required: false, write_back_target: undefined },
+        { write_back_target: { ...TARGET, installation_id: "replacement" } },
+        { trigger_kind: "manual" },
+      ]) {
+        await assert.rejects(f.store.putWorkRun({ ...f.run, ...change }), /immutable/);
+      }
+      const reordered = await f.store.putWorkRun({
+        ...f.run, write_back_target: { target: TARGET.target, source: TARGET.source, installation_id: TARGET.installation_id },
+      });
+      assert.equal((await f.store.commitWorkObservation({
+        ...f.input, expected_run: reordered, can_write_back: false, trigger_kind: "manual",
+      })).outcome, "applied");
+      const delivery = await f.store.getWorkDeliveryByItem(ORG, f.item.id);
+      assert.equal(delivery.run_id, f.run.id);
+      assert.equal(delivery.kind, "push");
+      assert.deepEqual(delivery.target, TARGET);
+    });
+
+    it("keeps explicitly local runs local even when the recipe later enables write-back", async (t) => {
+      const f = await fixture(t, driver, { write_back_required: false, trigger_kind: "push" });
+      await f.reopen();
+      assert.equal((await f.store.commitWorkObservation(f.input)).outcome, "applied");
+      assert.equal(await f.store.getWorkDeliveryByItem(ORG, f.item.id), null);
+    });
+
+    it("keeps independent immutable deliveries for identical results from distinct runs", async (t) => {
+      const f = await fixture(t, driver, {
+        write_back_required: true, write_back_target: TARGET, trigger_kind: "push",
+      });
+      await f.store.commitWorkObservation(f.input);
+      const first = await f.store.getWorkDeliveryByItem(ORG, f.item.id);
+      for (const change of [
+        { payload: { summary: "Changed" } },
+        { idempotency_key: "replacement" },
+        { target: { ...TARGET, target: "another" } },
+        { run_id: undefined },
+        { work_item_id: "other" },
+      ]) {
+        await assert.rejects(f.store.putWorkDelivery({ ...first, ...change }), /immutable|must belong/);
+      }
+      await assert.rejects(f.store.putWorkDelivery({ ...first, id: "duplicate" }));
+      await f.store.putWorkDelivery({ ...first, status: "acked", write_back: "sent" });
+      await f.store.putWorkItem({ ...await f.store.getWorkItem(ORG, f.item.id), status: "open" });
+      assert.equal(await f.store.claimWorkRunStart({
+        run: { ...f.run, id: "run-2", status: "running", start_state: "pending" },
+      }), true);
+      const item = await f.store.getWorkItem(ORG, f.item.id);
+      const run = await f.store.getWorkRun(ORG, "run-2");
+      const observe = { ...f.input, expected_item: item, expected_run: run };
+      await f.store.commitWorkObservation(observe);
+      const second = await f.store.getWorkDeliveryByItem(ORG, f.item.id);
+      assert.equal(second.run_id, "run-2");
+      assert.notEqual(first.id, second.id);
+      assert.notEqual(first.idempotency_key, second.idempotency_key);
+      await f.store.commitWorkObservation({
+        ...observe,
+        expected_item: await f.store.getWorkItem(ORG, f.item.id),
+        expected_run: await f.store.getWorkRun(ORG, run.id),
+      });
+      assert.equal((await f.store.listWorkDeliveries(ORG)).length, 2);
+      assert.equal((await f.store.getWorkDeliveryByItem(ORG, f.item.id)).id, second.id);
+      await f.store.putWorkDelivery({
+        ...await f.store.getWorkDelivery(ORG, first.id),
+        channel_receipt: { accepted: true, channel_message_ids: ["original-message"] },
+      });
+      assert.deepEqual(await f.store.getWorkDelivery(ORG, second.id), second);
+      await f.reopen();
+      assert.equal((await f.store.listWorkDeliveries(ORG)).length, 2);
+    });
+
+    it("blocks another execution until all historical deliveries have closed", async (t) => {
+      const f = await fixture(t, driver, {
+        write_back_required: true, write_back_target: TARGET, trigger_kind: "push",
+      });
+      await f.store.commitWorkObservation(f.input);
+      const delivery = await f.store.getWorkDeliveryByItem(ORG, f.item.id);
+      await f.store.putWorkItem({ ...await f.store.getWorkItem(ORG, f.item.id), status: "open" });
+      const next = { ...f.run, id: "run-2", status: "running", start_state: "pending" };
+      for (const status of ["queued", "write_back", "dead"]) {
+        await f.store.putWorkDelivery({ ...delivery, status });
+        assert.equal(await f.store.claimWorkRunStart({ run: next }), false);
+      }
+      await f.store.putWorkDelivery({ ...delivery, status: "acked", write_back: "sent" });
+      assert.equal(await f.store.claimWorkRunStart({ run: next }), true);
+    });
+
     it("commits the completed run, work status and queued delivery together", async (t) => {
       const f = await fixture(t, driver);
       const result = await f.store.commitWorkObservation(f.input);
@@ -204,6 +310,8 @@ for (const driver of drivers) {
       const f = await fixture(t, driver);
       assert.equal((await f.store.commitWorkObservation(f.input)).outcome, "applied");
       const oldRun = await f.store.getWorkRun(ORG, f.run.id);
+      const oldDelivery = await f.store.getWorkDeliveryByItem(ORG, f.item.id);
+      await f.store.putWorkDelivery({ ...oldDelivery, status: "acked", write_back: "sent" });
       const reopened = await f.store.putWorkItem({
         ...await f.store.getWorkItem(ORG, f.item.id),
         status: "open",
@@ -446,7 +554,9 @@ for (const driver of drivers.filter((d) => d.name.startsWith("sqlite"))) {
 
 it("fences competing observations from two SQLite writer workers", async (t) => {
   const driver = drivers.find((d) => d.name === "sqlite writer RPC");
-  const f = await fixture(t, driver);
+  const f = await fixture(t, driver, {
+    write_back_required: true, write_back_target: TARGET, trigger_kind: "push",
+  });
   const second = await SqliteSplitAuthorityStore.open(f.path);
   t.after(() => second.close());
   const results = await Promise.all([
@@ -456,6 +566,53 @@ it("fences competing observations from two SQLite writer workers", async (t) => 
   assert.equal(results.filter((r) => r.outcome === "applied").length, 1);
   assert.equal(results.filter((r) => r.outcome === "conflict").length, 1);
   assert.equal((await second.listWorkDeliveries(ORG)).length, 1);
+});
+
+it("migrates the v57 delivery table without changing request identities or inventing snapshots", async (t) => {
+  const root = join(process.cwd(), `.test-work-ledger-migration-${randomUUID()}`);
+  await mkdir(root, { recursive: true });
+  const path = join(root, "authority.db");
+  let store;
+  t.after(async () => {
+    await store?.close();
+    await rm(root, { recursive: true, force: true });
+  });
+  const db = new Database(path);
+  db.function("conversation_id", (source, externalId, fallbackId) =>
+    conversationId(source, externalId, fallbackId));
+  db.pragma("foreign_keys = ON");
+  for (const migration of MIGRATIONS.filter((migration) => migration.version <= 57)) {
+    db.exec(migration.sql);
+  }
+  db.prepare(`INSERT INTO work_items (
+    id, org_id, thread_id, unit_key, record_class, thread_facet, status, created_at, updated_at
+  ) VALUES ('legacy-work', ?, 'source:legacy', 'unit', 'task', 'ticket', 'done', ?, ?)`).run(ORG, NOW, NOW);
+  db.prepare(`INSERT INTO work_runs (
+    id, org_id, work_item_id, recipe_id, executor_type, status, created_at, updated_at
+  ) VALUES ('legacy-run', ?, 'legacy-work', 'rule', 'test', 'completed', ?, ?)`).run(ORG, NOW, NOW);
+  db.prepare(`INSERT INTO work_deliveries (
+    id, org_id, work_item_id, recipe_id, kind, unit_key, status, write_back, attempts,
+    payload_json, idempotency_key, channel_receipt_json, created_at, updated_at
+  ) VALUES ('legacy-delivery', ?, 'legacy-work', 'rule', 'push', 'unit', 'acked', 'sent', 1,
+    '{"summary":"Original result"}', 'original-key', '{"accepted":true,"rpc_id":"original-receipt"}', ?, ?)`)
+    .run(ORG, NOW, NOW);
+  const before = db.prepare("SELECT * FROM work_deliveries").get();
+  db.pragma("user_version = 57");
+  db.close();
+  store = new SqliteAuthorityStore(path);
+  const inspect = new Database(path, { readonly: true });
+  try {
+    const after = inspect.prepare("SELECT * FROM work_deliveries").get();
+    for (const [field, value] of Object.entries(before)) assert.deepEqual(after[field], value);
+    assert.equal(after.run_id, null);
+    assert.equal(after.target_json, null);
+    assert.equal(inspect.prepare("SELECT count(*) AS total FROM work_deliveries").get().total, 1);
+    assert.deepEqual(inspect.prepare("SELECT write_back_required, write_back_target_json, trigger_kind FROM work_runs").get(),
+      { write_back_required: null, write_back_target_json: null, trigger_kind: null });
+    assert.deepEqual(inspect.pragma("foreign_key_check"), []);
+  } finally {
+    inspect.close();
+  }
 });
 
 it("migrates schema 56 without inferring historical current-run identity", async (t) => {
@@ -503,11 +660,15 @@ it("migrates schema 56 without inferring historical current-run identity", async
     ALTER TABLE work_items DROP COLUMN current_run_id;
     ALTER TABLE work_items DROP COLUMN version;
     ALTER TABLE work_runs DROP COLUMN version;
+    ALTER TABLE work_runs DROP COLUMN write_back_required;
+    ALTER TABLE work_runs DROP COLUMN write_back_target_json;
+    ALTER TABLE work_runs DROP COLUMN trigger_kind;
+    DROP INDEX work_runs_org_id_idx;
   `);
   db.pragma("user_version = 56");
   db.close();
   store = new SqliteAuthorityStore(path);
-  assert.equal(store.schemaVersion, 57);
+  assert.equal(store.schemaVersion, 58);
   assert.deepEqual(await store.getWorkItem(ORG, "legacy-work"), {
     id: "legacy-work", org_id: ORG, thread_id: "source:legacy",
     unit_key: "legacy-unit", head_event_id: undefined, record_class: "task",

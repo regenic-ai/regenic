@@ -17,6 +17,9 @@ import {
   isWorkWriteBackState,
   type WorkItemStatus,
   prepareWorkObservation,
+  assertWorkRunSnapshot,
+  assertWorkDeliveryWrite,
+  canonicalContextJson,
   type CommitWorkObservation,
   type CommitWorkObservationResult,
 } from "@regenic/domain";
@@ -265,8 +268,11 @@ export async function commitWorkObservation(
       .get(orgId, input.expected_item.id) as WorkItemRow | undefined;
     const run = db.prepare("SELECT * FROM work_runs WHERE org_id = ? AND id = ?")
       .get(orgId, input.expected_run.id) as WorkRunRow | undefined;
-    const delivery = db.prepare("SELECT * FROM work_deliveries WHERE org_id = ? AND work_item_id = ?")
-      .get(orgId, input.expected_item.id) as WorkDeliveryRow | undefined;
+    const delivery = db.prepare(`SELECT * FROM work_deliveries WHERE org_id = ? AND work_item_id = ?
+      AND (run_id = ? OR (run_id IS NULL AND ? IS NULL))`)
+      .get(orgId, input.expected_item.id,
+        input.expected_run.write_back_required === undefined ? null : input.expected_run.id,
+        input.expected_run.write_back_required === undefined ? null : input.expected_run.id) as WorkDeliveryRow | undefined;
     const prepared = prepareWorkObservation(input, {
       item: item ? toWorkItem(item) : null,
       run: run ? toWorkRun(run) : null,
@@ -283,13 +289,15 @@ export async function commitWorkObservation(
 }
 
 function writeWorkRun(db: Database.Database, run: WorkRun, advanceVersion = false): WorkRun {
-    db
+    assertWorkRunSnapshot(run);
+    const result = db
       .prepare(
         `
           INSERT INTO work_runs (
             id, org_id, work_item_id, recipe_id, executor_type, external_run_id,
-            agent_thread_id, status, start_state, result_json, created_at, updated_at, version
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            agent_thread_id, status, start_state, result_json, created_at, updated_at, version,
+            write_back_required, write_back_target_json, trigger_kind
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(id) DO UPDATE SET
             recipe_id = excluded.recipe_id,
             executor_type = excluded.executor_type,
@@ -300,6 +308,11 @@ function writeWorkRun(db: Database.Database, run: WorkRun, advanceVersion = fals
             result_json = excluded.result_json,
             updated_at = excluded.updated_at,
             version = ${advanceVersion ? "work_runs.version + 1" : "excluded.version"}
+          WHERE work_runs.org_id = excluded.org_id
+            AND work_runs.work_item_id = excluded.work_item_id
+            AND work_runs.write_back_required IS excluded.write_back_required
+            AND work_runs.write_back_target_json IS excluded.write_back_target_json
+            AND work_runs.trigger_kind IS excluded.trigger_kind
         `,
       )
       .run(
@@ -316,7 +329,11 @@ function writeWorkRun(db: Database.Database, run: WorkRun, advanceVersion = fals
         run.created_at,
         run.updated_at,
         run.version ?? 0,
+        run.write_back_required === undefined ? null : Number(run.write_back_required),
+        run.write_back_target ? canonicalContextJson(run.write_back_target) : null,
+        run.trigger_kind ?? null,
       );
+    if (!result.changes) throw new Error("Work run identity and write-back snapshot are immutable");
     return run;
   }
 
@@ -332,6 +349,9 @@ export async function claimWorkRunStart(db: Database.Database, input: WorkRunSta
         )
     `).get(run.org_id, run.work_item_id, run.recipe_id);
     if (!item) return false;
+    if (db.prepare(
+      "SELECT id FROM work_deliveries WHERE org_id = ? AND work_item_id = ? AND status <> 'acked' LIMIT 1",
+    ).get(run.org_id, run.work_item_id)) return false;
     if (max_concurrent !== undefined) {
       const occupied = db.prepare(`
         SELECT COUNT(*) AS count FROM work_items
@@ -450,17 +470,29 @@ export async function getWorkDelivery(db: Database.Database, orgId: string, id: 
 export async function getWorkDeliveryByItem(db: Database.Database, orgId: string, workItemId: string): Promise<WorkDelivery | null> {
     const row = db
       .prepare(
-        `SELECT * FROM work_deliveries WHERE org_id = ? AND work_item_id = ?`,
+        `SELECT d.* FROM work_deliveries d
+         LEFT JOIN work_items w ON w.org_id = d.org_id AND w.id = d.work_item_id
+         LEFT JOIN work_runs r ON r.org_id = w.org_id AND r.id = w.current_run_id
+         WHERE d.org_id = ? AND d.work_item_id = ?
+           AND (d.run_id = w.current_run_id OR (d.run_id IS NULL AND r.write_back_required IS NULL))
+         ORDER BY d.created_at, d.id LIMIT 1`,
       )
       .get(orgId, workItemId) as WorkDeliveryRow | undefined;
     return row ? toWorkDelivery(row) : null;
   }
 
 export async function putWorkDelivery(db: Database.Database, delivery: WorkDelivery): Promise<WorkDelivery> {
-    return writeWorkDelivery(db, delivery);
+    return db.transaction(() => writeWorkDelivery(db, delivery)).immediate();
   }
 
 function writeWorkDelivery(db: Database.Database, delivery: WorkDelivery): WorkDelivery {
+    const current = db.prepare("SELECT * FROM work_deliveries WHERE id = ?").get(delivery.id) as WorkDeliveryRow | undefined;
+    const run = delivery.run_id
+      ? db.prepare(`SELECT r.* FROM work_runs r
+          JOIN work_items w ON w.id = r.work_item_id AND w.org_id = r.org_id
+          WHERE r.org_id = ? AND r.id = ?`).get(delivery.org_id, delivery.run_id) as WorkRunRow | undefined
+      : undefined;
+    assertWorkDeliveryWrite(delivery, current ? toWorkDelivery(current) : null, run ? toWorkRun(run) : null);
     const row = db
       .prepare(
         `
@@ -468,10 +500,9 @@ function writeWorkDelivery(db: Database.Database, delivery: WorkDelivery): WorkD
             id, org_id, work_item_id, recipe_id, kind, unit_key, event_id,
             status, write_back, attempts, last_error, next_retry_at,
             payload_json, lease_expires_at, idempotency_key, channel_receipt_json,
-            created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          ON CONFLICT(org_id, work_item_id) DO UPDATE SET
-            id = excluded.id,
+            created_at, updated_at, run_id, target_json
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET
             recipe_id = excluded.recipe_id,
             kind = excluded.kind,
             unit_key = excluded.unit_key,
@@ -486,6 +517,14 @@ function writeWorkDelivery(db: Database.Database, delivery: WorkDelivery): WorkD
             idempotency_key = excluded.idempotency_key,
             channel_receipt_json = excluded.channel_receipt_json,
             updated_at = excluded.updated_at
+          WHERE work_deliveries.org_id = excluded.org_id
+            AND work_deliveries.work_item_id = excluded.work_item_id
+            AND work_deliveries.run_id IS excluded.run_id
+            AND (work_deliveries.run_id IS NULL OR (
+              work_deliveries.payload_json IS excluded.payload_json
+              AND work_deliveries.target_json IS excluded.target_json
+              AND work_deliveries.idempotency_key IS excluded.idempotency_key
+            ))
           RETURNING *
         `,
       )
@@ -502,12 +541,14 @@ function writeWorkDelivery(db: Database.Database, delivery: WorkDelivery): WorkD
         delivery.attempts,
         delivery.last_error ?? null,
         delivery.next_retry_at ?? null,
-        delivery.payload ? JSON.stringify(delivery.payload) : null,
+        delivery.payload ? (delivery.run_id ? canonicalContextJson(delivery.payload) : JSON.stringify(delivery.payload)) : null,
         delivery.lease_expires_at ?? null,
         delivery.idempotency_key ?? null,
         delivery.channel_receipt ? JSON.stringify(delivery.channel_receipt) : null,
         delivery.created_at,
         delivery.updated_at,
+        delivery.run_id ?? null,
+        delivery.target ? canonicalContextJson(delivery.target) : null,
       ) as WorkDeliveryRow | undefined;
     if (!row) {
       throw new Error("work delivery upsert returned no row");
@@ -627,6 +668,8 @@ interface WorkDeliveryRow {
   id: string;
   org_id: string;
   work_item_id: string;
+  run_id: string | null;
+  target_json: string | null;
   recipe_id: string;
   kind: string;
   unit_key: string;
@@ -656,6 +699,9 @@ interface WorkRunRow {
   start_state: WorkRun["start_state"] | null;
   result_json: string | null;
   version: number;
+  write_back_required: number | null;
+  write_back_target_json: string | null;
+  trigger_kind: WorkRun["trigger_kind"] | null;
   created_at: string;
   updated_at: string;
 }
@@ -752,6 +798,9 @@ function toWorkRun(row: WorkRunRow): WorkRun {
       ? (JSON.parse(row.result_json) as WorkRun["result"])
       : undefined,
     version: row.version,
+    ...(row.write_back_required !== null ? { write_back_required: row.write_back_required === 1 } : {}),
+    ...(row.write_back_target_json ? { write_back_target: JSON.parse(row.write_back_target_json) } : {}),
+    ...(row.trigger_kind ? { trigger_kind: row.trigger_kind } : {}),
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -776,6 +825,8 @@ function toWorkDelivery(row: WorkDeliveryRow): WorkDelivery {
     id: row.id,
     org_id: row.org_id,
     work_item_id: row.work_item_id,
+    ...(row.run_id ? { run_id: row.run_id } : {}),
+    ...(row.target_json ? { target: JSON.parse(row.target_json) } : {}),
     recipe_id: row.recipe_id,
     kind,
     unit_key: row.unit_key,

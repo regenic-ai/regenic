@@ -128,9 +128,9 @@
 | 表 | 当前主键／唯一约束 | 当前字段 |
 | --- | --- | --- |
 | `conversation_prefs` | PK `(org_id, thread_id)` | `org_id, thread_id, title, pinned, hidden, hidden_reason, last_read_at, last_read_external_id, updated_at` |
-| `work_items` | PK `id`；UNIQUE `(org_id, thread_id, unit_key)` | `id, org_id, thread_id, unit_key, head_event_id, record_class, thread_facet, status, recipe_id, created_at, updated_at` |
-| `work_runs` | PK `id` | `id, org_id, work_item_id, recipe_id, executor_type, external_run_id, agent_thread_id, status, start_state, result_json, created_at, updated_at` |
-| `work_deliveries` | PK `id`；UNIQUE `(org_id, work_item_id)` | `id, org_id, work_item_id, recipe_id, kind, unit_key, event_id, status, write_back, attempts, last_error, next_retry_at, payload_json, lease_expires_at, idempotency_key, channel_receipt_json, created_at, updated_at` |
+| `work_items` | PK `id`；UNIQUE `(org_id, thread_id, unit_key)` | `id, org_id, thread_id, unit_key, head_event_id, record_class, thread_facet, status, recipe_id, current_run_id, version, created_at, updated_at` |
+| `work_runs` | PK `id`；UNIQUE `(org_id, id)` | `id, org_id, work_item_id, recipe_id, executor_type, external_run_id, agent_thread_id, status, start_state, result_json, version, write_back_required, write_back_target_json, trigger_kind, created_at, updated_at` |
+| `work_deliveries` | PK `id`；部分 UNIQUE `(org_id, run_id)`，run_id 非 NULL；历史 NULL run_id 部分 UNIQUE `(org_id, work_item_id)` | `id, org_id, work_item_id, recipe_id, kind, unit_key, event_id, status, write_back, attempts, last_error, next_retry_at, payload_json, lease_expires_at, idempotency_key, channel_receipt_json, run_id, target_json, created_at, updated_at` |
 | `recipes` | PK `id` | `id, org_id, name, match_json, executor_type, executor_config_json, can_write_back, write_back_thread_id, include_context, enabled, trigger_kind, trigger_interval_ms, trigger_at_minute, trigger_weekdays, trigger_timezone, trigger_coalesce, max_concurrent, next_run_at, created_at, updated_at` |
 
 现有状态值：
@@ -151,7 +151,9 @@
 | `connector_sync_work` | UNIQUE `(installation_id, stream_key, lane, generation)`；状态、优先权、租约等 | 执行器同步资源；其 run_id 指同步运行，不是 WorkRun |
 | `context_projection_outbox` | 消息 event_id 唯一；状态、租约、重试等 | 消息上下文投影；不复用作生命周期队列 |
 
-当前 `work_runs.work_item_id` 和 `work_deliveries.work_item_id` 引用 WorkItem；`head_event_id` 引用消息 Event。对话通过 `(org_id, thread_id)` 逻辑关联，没有独立 Conversation 表。自 SQLite／PostgreSQL schema 56 起，Recipe 固定回写目标已覆盖保存、读取及两种数据库映射，既有导入导出继续保留该字段；这不代表运行级投递快照已实现。Schema 57 增加 WorkItem 的 `current_run_id` 与 WorkItem／WorkRun 行版本；历史行从版本 0 起。只有活跃工单恰好只有一条同租户运行，且该运行仍活跃、规则归属一致时才恢复运行指针；其余保留 NULL，不按时间或最新运行猜测。无法恢复的活跃工单输出明确的身份核对诊断，管理面核对入口尚待实现。
+当前 `work_runs.work_item_id` 和 `work_deliveries.work_item_id` 引用 WorkItem；`head_event_id` 引用消息 Event。对话通过 `(org_id, thread_id)` 逻辑关联，没有独立 Conversation 表。自 SQLite／PostgreSQL schema 56 起，Recipe 固定回写目标已覆盖保存、读取及两种数据库映射，既有导入导出继续保留该字段。Schema 57 增加 WorkItem 的 `current_run_id` 与 WorkItem／WorkRun 行版本；历史行从版本 0 起。只有活跃工单恰好只有一条同租户运行，且该运行仍活跃、规则归属一致时才恢复运行指针；其余保留 NULL，不按时间或最新运行猜测。无法恢复的活跃工单输出明确的身份核对诊断，管理面核对入口尚待实现。
+
+Schema 58 增加运行级投递义务、安装／目标快照与触发类型，以及按 Run 保留的投递账本；Delivery 使用 `(org_id, run_id)` 复合 FK 关联同租户 Run，原子写端口同时校验所属工单与目标。新运行在调用外部执行器前持久化这些字段，历史值保持 NULL。历史投递原 ID、正文、幂等键与回执原样迁移，不猜测 Run／目标；NULL run_id 的历史记录保留每工单最多一条的限制，不能换 ID 覆盖。此阶段仍保留旧运行／投递兼容收尾，不代表历史未知授权核对及最终发送协议已启用。
 
 ## 6. 最终表结构变更
 
@@ -167,6 +169,7 @@
 | `work_runs` | `version` | 非负整数，NOT NULL DEFAULT 0 |
 | `work_runs` | `write_back_required` | 可空 BOOLEAN；新运行必填；NULL 只表示历史未知，不能解释为 false |
 | `work_runs` | `write_back_target_json` | 可空 JSON；要求投递的新运行必填，保存规范化 installation／source／target 身份，无凭据 |
+| `work_runs` | `trigger_kind` | 可空 TEXT，`push / pull / manual`；新运行冻结触发类型，保证 Recipe 被删除后仍能记录投递来源；历史 NULL 不猜填 |
 | `work_deliveries` | `version` | 非负整数，NOT NULL DEFAULT 0；行 CAS，不作为投递身份 |
 | `work_deliveries` | `run_id` | 可空，历史未知保留 NULL；新执行结果投递必填 |
 | `work_deliveries` | `target_json` | 可空 JSON；新投递必填，从 Run 快照复制，不跟随 Recipe 后续编辑 |
@@ -183,7 +186,7 @@ WorkRun 的投递快照在外部启动前冻结；试跑关闭投递时明确写
 
 ### 6.2 投递账本改为按运行保留
 
-移除 UNIQUE `(org_id, work_item_id)`；新建唯一索引 `(org_id, run_id)`，条件 `run_id IS NOT NULL`。每次运行最多创建一条结果投递，旧运行的记录不覆盖、不借用。增加 `(org_id, work_item_id, created_at, id)` 查询索引。
+移除覆盖全部记录的 UNIQUE `(org_id, work_item_id)`；新建唯一索引 `(org_id, run_id)`，条件 `run_id IS NOT NULL`。历史 NULL run_id 记录保留部分唯一索引 `(org_id, work_item_id)`，防止没有运行证据的新 ID 替换旧请求。每次运行最多创建一条结果投递，旧运行的记录不覆盖、不借用。增加 `(org_id, work_item_id, created_at, id)` 查询索引。
 
 - Delivery.id 就是不可变的投递身份，不再增加 delivery_generation。
 - `run_id / target_json / payload_json / idempotency_key` 创建后不可修改；发送状态、租约、回执独立更新。
@@ -384,11 +387,15 @@ live Prompt 不属于同一数据库事务，不以“此刻远端没有 Prompt�
 | 当前运行身份与行版本 | 已接入兼容实现 | Schema 57 为 WorkItem 增加 `current_run_id`、为 WorkItem／WorkRun 增加单调行版本；内存、SQLite、PostgreSQL、SQLite 写 RPC 的启动事务写入当前 Run 并递增 Item 版本，观察以明确当前 Run 与版本快照围栏；只恢复可唯一证明的旧活跃运行关联，歧义指针保持未知；旧 Run 在新 Run 启动后不能再结算 Item |
 | 原子端口与存储迁移整体 | 未完成 | 人工操作、启动失败等入口及折叠／列表投影尚未纳入同一事务；所有写入口统一的版本 CAS、对话级锁、审计与取消任务尚未落地 |
 | 规则回写目标持久化 | 已完成 | schema 56 补齐 SQLite／PostgreSQL 新建与升级、写入／读取映射；覆盖 writer RPC、重启、API 局部更新／清除及既有导入导出；旧版 SQLite 修复先恢复至 v55 再执行后续迁移，历史目标保留未知 |
-| 不可变投递与运行快照 | 未完成 | 仍为既有每工单一条投递；尚无冻结的运行投递义务、每运行投递账本、精确 receipt 身份或 claim token，不能安全结算／重试历史投递 |
+| 运行投递快照 | 已接入新运行路径 | Schema 58 在外部启动前冻结投递开关、installation／source／target 与触发类型；试跑保留本地明确写 false；规则修改／删除及重启不改变新运行义务；发送限定原安装并检查当前可用性，不自动换连接器 |
+| 按运行保留的投递账本 | 已接入兼容实现 | 新投递按 `(org_id, run_id)` 唯一，正文／目标／请求身份不可修改；不同 Run 的同内容结果有不同 Delivery.id／幂等键；回执与结算按原 Delivery.id 读写，不按当前工单找行；未闭合历史投递阻止重跑，列表不把旧投递当成当前结果 |
+| 投递认领围栏与未知接受状态 | 未完成 | 尚无 claim token／租约 CAS／独立回执归并审计／uncertain 状态；精确 Delivery.id 只解决跨运行串账，不证明旧 worker 可以结算当前认领；超时重试、在途忽略和历史未知授权仍保留兼容边界，不能宣称最终投递协议已安全切换 |
 | 管理面与最终可见性策略 | 未启用 | 失败折叠、完成即折叠仍为兼容行为；需在原子提交及异常入口就绪后统一切换 |
 
 原子观察提交已覆盖内存、SQLite 直连／写 worker 和 PostgreSQL 的实现与契约用例；当前环境没有 PostgreSQL 测试连接，真实 PostgreSQL 契约用例需通过 TEST_DATABASE_URL 执行，不能将类型检查当成真实数据库验收。
 
 当前运行身份与行版本只覆盖原子启动和观察围栏；其他直接更新路径尚未全部迁移为版本 CAS，也不解决对话新消息插入与折叠的竞态。后续必须将对话级锁及全部写入口共同迁移，才能启用最终可见性策略；不得把本次 Run／Item／投递事务宣称为整个生命周期已原子化。
 
-完成结果保护目前作用于纯观察计划及原子观察入口；既有直接 put 接口尚未全部迁移，不能宣称所有写路径都已具有不可变账本约束。重复完成只保留已存在的投递事实，不尝试替历史运行推断投递义务；当前运行指针阻止旧 Run 观察覆盖新尝试，但旧 receipt 仍不能靠快照或 WorkItem 指针安全归属，必须等待不可变 run_id 投递账本及精确 claim／receipt 身份实现。
+完成结果保护目前作用于纯观察计划及原子观察入口；既有 Run 直接 put 尚未全面冻结完成结果，不能宣称所有结果写路径均已迁移。运行投递快照与新投递不可变字段已由内存、SQLite、PostgreSQL 端口校验；重复完成只保留原投递，不推断历史未知义务。旧 receipt 现在只更新原 Delivery.id；每次认领的 token、过期回执证据归并及忽略在途请求的处理仍须后续实现。
+
+Schema 58 的 SQLite 表重建覆盖 v57 原始投递行、正文／幂等键／回执保留及 FK 核对；新增运行快照、同内容跨 Run 投递、不可变字段拒绝、重启恢复、未闭合投递禁止重跑和迟到回执隔离均有回归用例。列表使用 current_run_id 关联 Run／Delivery，并将未闭合历史投递保留为需关注；完整历史异常管理入口仍未完成。

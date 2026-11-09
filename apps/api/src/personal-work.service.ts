@@ -1142,13 +1142,6 @@ export class PersonalWorkService implements OnModuleDestroy {
     const recipe = item.recipe_id
       ? await host.get("authority").getRecipe(orgId, item.recipe_id)
       : null;
-    if (!recipe) {
-      throw new PersonalConnectorError(
-        "invalid_config",
-        "This work item has no recipe",
-        400,
-      );
-    }
     const delivery = await host.get("authority").getWorkDeliveryByItem(orgId, item.id);
     if (
       delivery &&
@@ -1161,6 +1154,9 @@ export class PersonalWorkService implements OnModuleDestroy {
         run: (await host.get("authority").getActiveWorkRun(orgId, item.id)) ?? undefined,
       };
     }
+    if (!recipe) {
+      throw new PersonalConnectorError("invalid_config", "This work item has no recipe", 400);
+    }
     const active = await host.get("authority").getActiveWorkRun(orgId, item.id);
     if (active) {
       this.assertStartConfirmed(active);
@@ -1171,6 +1167,13 @@ export class PersonalWorkService implements OnModuleDestroy {
         work_item: (await host.get("authority").getWorkItem(orgId, item.id)) ?? item,
         run: (await host.get("authority").getActiveWorkRun(orgId, item.id)) ?? active,
       };
+    }
+    const unresolved = (await host.get("authority").listWorkDeliveries(orgId))
+      .find((row) => row.work_item_id === item.id && row.status !== "acked");
+    if (unresolved) {
+      throw new PersonalConnectorError(
+        "delivery_unresolved", "Resolve the previous write-back before starting another execution.", 409,
+      );
     }
     if (active) {
       await host.get("authority").putWorkRun(
@@ -1192,7 +1195,7 @@ export class PersonalWorkService implements OnModuleDestroy {
     if (
       queued &&
       shouldFlushDelivery(queued, new Date().toISOString()) &&
-      this.supervise.allowsWriteBack(opened.id, recipe)
+      (queued.run_id || this.supervise.allowsWriteBack(opened.id, recipe))
     ) {
       await this.flush.flushOne(latest, recipe, queued);
     }

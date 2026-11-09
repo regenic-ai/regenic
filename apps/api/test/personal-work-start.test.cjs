@@ -64,6 +64,7 @@ async function fixture(t, maxConcurrent) {
     },
   };
   const channel = {
+    freezeWriteBackTarget: async () => ({ installation_id: "sender-1", source: "source", target: "results" }),
     contextFor: () => ctx,
     threadContextLines: async () => ({ lines: [], overflow: false }),
     evidenceText: async () => "evidence",
@@ -88,6 +89,61 @@ async function fixture(t, maxConcurrent) {
 }
 
 describe("durable executor start", () => {
+  it("persists the selected destination before starting and ignores later recipe edits", async (t) => {
+    const f = await fixture(t);
+    const recipe = { ...f.recipe, can_write_back: true, write_back_thread_id: "source:results" };
+    await f.ports.authority.putRecipe(recipe);
+    f.hooks.spawn = async () => {
+      const active = await f.ports.authority.getActiveWorkRun(ORG, f.item.id);
+      assert.equal(active.write_back_required, true);
+      assert.deepEqual(active.write_back_target,
+        { installation_id: "sender-1", source: "source", target: "results" });
+      assert.equal(active.trigger_kind, "push");
+      return { source: "dsh", target: "session-1" };
+    };
+    const run = await f.dispatch().startItem(f.item, recipe, "evidence");
+    await f.ports.authority.putRecipe({ ...recipe, can_write_back: false, write_back_thread_id: "other:room" });
+    f.reopen();
+    await f.supervise().refreshRuns();
+    const delivery = await f.ports.authority.getWorkDeliveryByItem(ORG, f.item.id);
+    assert.equal(delivery.run_id, run.id);
+    assert.deepEqual(delivery.target, run.write_back_target);
+  });
+
+  it("persists keep-here trial decisions after the override and process are gone", async (t) => {
+    const f = await fixture(t);
+    const recipe = { ...f.recipe, can_write_back: true };
+    await f.ports.authority.putRecipe(recipe);
+    const supervisor = f.supervise();
+    supervisor.setWriteBackOverride(f.item.id, false);
+    const run = await f.dispatch(supervisor).startItem(f.item, recipe, "evidence");
+    assert.equal(run.write_back_required, false);
+    f.reopen();
+    await f.supervise().refreshRuns();
+    assert.equal((await f.ports.authority.getWorkItem(ORG, f.item.id)).status, "done");
+    assert.equal(await f.ports.authority.getWorkDeliveryByItem(ORG, f.item.id), null);
+  });
+
+  it("observes a frozen run even when its recipe is no longer available", async (t) => {
+    const f = await fixture(t);
+    const recipe = { ...f.recipe, can_write_back: true };
+    await f.ports.authority.putRecipe(recipe);
+    const run = await f.dispatch().startItem(f.item, recipe, "evidence");
+    t.mock.method(f.ports.authority, "getRecipe", async () => null);
+    await f.supervise().refreshRuns();
+    assert.equal((await f.ports.authority.getWorkRun(ORG, run.id)).status, "completed");
+    assert.equal((await f.ports.authority.getWorkDeliveryByItem(ORG, f.item.id)).run_id, run.id);
+  });
+
+  it("does not start externally when a required destination cannot be frozen", async (t) => {
+    const f = await fixture(t);
+    t.mock.method(f.channel, "freezeWriteBackTarget", async () => { throw new Error("destination removed"); });
+    await assert.rejects(f.dispatch().startItem(f.item, { ...f.recipe, can_write_back: true }, "evidence"),
+      /destination removed/);
+    assert.equal(f.calls.spawn, 0);
+    assert.equal((await f.ports.authority.listWorkRuns(ORG, f.item.id)).length, 0);
+  });
+
   it("keeps the published executor registry available throughout an asynchronous remount", async (t) => {
     const f = await fixture(t);
     const original = f.ports.executors.get("session");

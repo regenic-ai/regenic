@@ -39,7 +39,7 @@ export class PersonalWorkFlush {
     const recipesById = new Map(recipes.map((recipe) => [recipe.id, recipe]));
     const pending: Array<{
       item: WorkItem;
-      recipe: Recipe;
+      recipe: Recipe | undefined;
       delivery: WorkDelivery;
     }> = [];
     for (const delivery of deliveries) {
@@ -53,7 +53,7 @@ export class PersonalWorkFlush {
         continue;
       }
       const recipe = recipesById.get(reclaimed.recipe_id);
-      if (!item || !recipe || !shouldFlushDelivery(reclaimed, now)) {
+      if (!item || (!recipe && !reclaimed.run_id) || !shouldFlushDelivery(reclaimed, now)) {
         continue;
       }
       pending.push({ item, recipe, delivery: reclaimed });
@@ -68,12 +68,17 @@ export class PersonalWorkFlush {
 
   async flushOne(
     item: WorkItem,
-    recipe: Recipe,
+    recipe: Recipe | null | undefined,
     delivery: WorkDelivery,
     force = false,
   ): Promise<void> {
     const now = new Date().toISOString();
     const host = this.runtime.requireHost();
+    const readDelivery = async (): Promise<WorkDelivery> => {
+      const saved = await host.get("authority").getWorkDelivery(item.org_id, delivery.id);
+      if (!saved) throw new Error(`Write-back delivery no longer exists: ${delivery.id}`);
+      return saved;
+    };
     let current = reclaimDeliveryLease(delivery, now);
     if (force) {
       current = deliveryRetryNow(current, now);
@@ -97,33 +102,25 @@ export class PersonalWorkFlush {
           payload.content,
           current,
           async (receipt, sentAt) => {
-            const latest =
-              (await host.get("authority").getWorkDeliveryByItem(item.org_id, item.id)) ??
-              current;
+            const latest = await readDelivery();
             current = deliveryRecordReceipt(latest, receipt, sentAt);
             await host.get("authority").putWorkDelivery(current);
           },
         ),
         WORK_DELIVERY_SEND_TIMEOUT_MS,
       );
-      const latest =
-        (await host.get("authority").getWorkDeliveryByItem(item.org_id, item.id)) ??
-        current;
+      const latest = await readDelivery();
       await host.get("authority").putWorkDelivery(deliveryAcked(latest, outcome, now));
     } catch (error) {
       if (error instanceof WriteBackTimeoutError) {
-        const latest =
-          (await host.get("authority").getWorkDeliveryByItem(item.org_id, item.id)) ??
-          current;
+        const latest = await readDelivery();
         await host.get("authority").putWorkDelivery(
           deliverySendTimedOut(latest, now),
         );
         return;
       }
       console.error("personal write-back failed", error);
-      const latest =
-        (await host.get("authority").getWorkDeliveryByItem(item.org_id, item.id)) ??
-        current;
+      const latest = await readDelivery();
       await host.get("authority").putWorkDelivery(
         deliveryWriteBackFailed(latest, deliveryErrorMessage(error), now),
       );
