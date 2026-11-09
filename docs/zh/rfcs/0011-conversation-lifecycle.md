@@ -131,7 +131,7 @@
 | `work_items` | PK `id`；UNIQUE `(org_id, thread_id, unit_key)` | `id, org_id, thread_id, unit_key, head_event_id, record_class, thread_facet, status, recipe_id, created_at, updated_at` |
 | `work_runs` | PK `id` | `id, org_id, work_item_id, recipe_id, executor_type, external_run_id, agent_thread_id, status, start_state, result_json, created_at, updated_at` |
 | `work_deliveries` | PK `id`；UNIQUE `(org_id, work_item_id)` | `id, org_id, work_item_id, recipe_id, kind, unit_key, event_id, status, write_back, attempts, last_error, next_retry_at, payload_json, lease_expires_at, idempotency_key, channel_receipt_json, created_at, updated_at` |
-| `recipes` | PK `id` | `id, org_id, name, match_json, executor_type, executor_config_json, can_write_back, include_context, enabled, trigger_kind, trigger_interval_ms, trigger_at_minute, trigger_weekdays, trigger_timezone, trigger_coalesce, max_concurrent, next_run_at, created_at, updated_at` |
+| `recipes` | PK `id` | `id, org_id, name, match_json, executor_type, executor_config_json, can_write_back, write_back_thread_id, include_context, enabled, trigger_kind, trigger_interval_ms, trigger_at_minute, trigger_weekdays, trigger_timezone, trigger_coalesce, max_concurrent, next_run_at, created_at, updated_at` |
 
 现有状态值：
 
@@ -151,7 +151,7 @@
 | `connector_sync_work` | UNIQUE `(installation_id, stream_key, lane, generation)`；状态、优先权、租约等 | 执行器同步资源；其 run_id 指同步运行，不是 WorkRun |
 | `context_projection_outbox` | 消息 event_id 唯一；状态、租约、重试等 | 消息上下文投影；不复用作生命周期队列 |
 
-当前 `work_runs.work_item_id` 和 `work_deliveries.work_item_id` 引用 WorkItem；`head_event_id` 引用消息 Event。对话通过 `(org_id, thread_id)` 逻辑关联，没有独立 Conversation 表。当前 Recipe 域类型中的固定回写目标不能假定已持久化：实施必须补齐规则保存、读取、导入导出及两种数据库映射。
+当前 `work_runs.work_item_id` 和 `work_deliveries.work_item_id` 引用 WorkItem；`head_event_id` 引用消息 Event。对话通过 `(org_id, thread_id)` 逻辑关联，没有独立 Conversation 表。自 SQLite／PostgreSQL schema 56 起，Recipe 固定回写目标已覆盖保存、读取及两种数据库映射，既有导入导出继续保留该字段；这不代表运行级投递快照已实现。
 
 ## 6. 最终表结构变更
 
@@ -173,7 +173,7 @@
 | `work_deliveries` | `lease_owner, claim_token` | 可空 TEXT；每次认领生成新 token |
 | `work_deliveries` | `cancel_requested_at` | 可空 timestamp；停止新发送／重试，不代表已经撤销在途请求 |
 | `message_dispositions` | `version` | 非负整数，NOT NULL DEFAULT 0；实际编排字段变化递增，不按重复扫描递增 |
-| `recipes` | `write_back_thread_id` | 可空 TEXT；补齐现有域字段的持久化，沿用既有对话身份格式 |
+| `recipes` | `write_back_thread_id` | 可空 TEXT；沿用既有对话身份格式，已在 schema 56 实现；历史行保留 NULL，不猜填目标 |
 
 `current_run_id / acknowledged_run_id` 必须属于同一个 org 和 WorkItem。新关联采用同租户物理 FK：相关业务表增加 UNIQUE `(org_id, id)`，配合复合 FK；WorkItem 与 Run 循环关联通过可空指针及一个事务中的插入／更新建立。所属工单一致性还必须由原子端口校验。
 
@@ -381,6 +381,7 @@ live Prompt 不属于同一数据库事务，不以“此刻远端没有 Prompt�
 | 原子观察提交 | 已接入兼容实现 | `commitWorkObservation()` 在一次提交中保存 Run、Item 和投递变更；SQLite 使用 immediate 事务，PostgreSQL 在同一连接锁定相关行并提交，内存无 await 地准备后提交，SQLite split 通过单个写 RPC 执行 |
 | 陈旧观察与忽略保护 | 已接入兼容实现 | 比较事务内完整快照而非只比时间；冲突明确返回，已忽略项不再被观察路径伪造远端取消，终态尝试不能被观察改回活跃 |
 | 原子端口与存储迁移整体 | 未完成 | 人工操作、启动失败等入口及折叠／列表投影尚未纳入同一事务；正式 version CAS、对话级锁、审计与取消任务尚未落地 |
+| 规则回写目标持久化 | 已完成 | schema 56 补齐 SQLite／PostgreSQL 新建与升级、写入／读取映射；覆盖 writer RPC、重启、API 局部更新／清除及既有导入导出；旧版 SQLite 修复先恢复至 v55 再执行后续迁移，历史目标保留未知 |
 | 不可变投递与运行快照 | 未完成 | 目前仍为既有每工单一条投递及现有回写路径 |
 | 管理面与最终可见性策略 | 未启用 | 失败折叠、完成即折叠仍为兼容行为；需在原子提交及异常入口就绪后统一切换 |
 

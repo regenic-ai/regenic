@@ -34,8 +34,8 @@ function recipe(trigger) {
 
 describe("recipe pull schedule", () => {
   it("appends the PostgreSQL schedule migration after main's existing migrations", () => {
-    assert.equal(PG_SCHEMA_VERSION, 55);
-    assert.deepEqual(PG_MIGRATIONS.filter(({ version }) => version > 54), [
+    assert.ok(PG_SCHEMA_VERSION >= 55);
+    assert.deepEqual(PG_MIGRATIONS.filter(({ version }) => version === 55), [
       {
         version: 55,
         sql: `

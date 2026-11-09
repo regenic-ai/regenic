@@ -1669,7 +1669,7 @@ export class SqliteAuthorityStore
   }
 
   private migrate(): void {
-    const currentVersion = this.database.pragma("user_version", {
+    let currentVersion = this.database.pragma("user_version", {
       simple: true,
     }) as number;
     if (currentVersion > LATEST_SCHEMA_VERSION) {
@@ -1678,7 +1678,7 @@ export class SqliteAuthorityStore
       );
     }
     if (this.rebasePreMergeSyncSchema(currentVersion)) {
-      return;
+      currentVersion = this.database.pragma("user_version", { simple: true }) as number;
     }
 
     for (const migration of MIGRATIONS) {
@@ -1799,7 +1799,8 @@ export class SqliteAuthorityStore
         CREATE UNIQUE INDEX IF NOT EXISTS search_answers_work_item_idx
           ON search_answers (org_id, work_item_id);
       `);
-      this.database.pragma(`user_version = ${LATEST_SCHEMA_VERSION}`);
+      // This repair reconstructs v55; newer migrations still run through the normal path.
+      this.database.pragma("user_version = 55");
     });
     repair.immediate();
     return true;

@@ -420,6 +420,7 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
       const listed = recipes.find((recipe) => recipe.name === "Feishu tasks");
       assert.equal(listed.executor_config.prompt, "Reply with a decision.");
       assert.equal(listed.include_context, true);
+      assert.equal(listed.write_back_thread_id, "dsh:results");
       assert.equal(listed.match.text_contains, "confirm");
       assert.equal(listed.match.text_excludes, "draft");
       assert.equal(
@@ -432,7 +433,9 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
         body: JSON.stringify({ name: "Renamed filtered rule" }),
       });
       assert.equal(renamed.status, 201);
-      assert.deepEqual((await renamed.json()).match, created.match);
+      const renamedRule = await renamed.json();
+      assert.deepEqual(renamedRule.match, created.match);
+      assert.equal(renamedRule.write_back_thread_id, "dsh:results");
       const cleared = await fetch(`${origin}/v1/me/recipes/${created.id}`, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -440,6 +443,16 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
       });
       assert.equal(cleared.status, 201);
       assert.deepEqual((await cleared.json()).match, { record_class: "task", source: "feishu" });
+      const clearedDestination = await fetch(`${origin}/v1/me/recipes/${created.id}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ can_write_back: false, write_back_thread_id: null }),
+      });
+      assert.equal(clearedDestination.status, 201);
+      assert.equal((await clearedDestination.json()).write_back_thread_id, undefined);
+      const afterClear = await (await fetch(`${origin}/v1/me/recipes`)).json();
+      assert.equal(afterClear.find((recipe) => recipe.id === created.id).write_back_thread_id, undefined);
+      assert.equal(afterClear.find((recipe) => recipe.id === pulled.id).write_back_thread_id, "dsh:results");
       const prefs = await (
         await fetch(`${origin}/v1/me/prefs`, {
           method: "POST",
