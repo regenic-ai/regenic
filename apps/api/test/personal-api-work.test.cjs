@@ -218,8 +218,18 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
     const database = join(root, "authority.db");
     const blobRoot = join(root, "blobs");
     await ingestActionable(database, blobRoot);
+    const dsh = await startDshWebStub();
     const { app, origin } = await startPersonalApi(database, blobRoot);
     try {
+      const installed = await fetch(`${origin}/v1/me/connectors`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          connector_type: "dsh-session",
+          config: { transport: "web", base_url: dsh.origin },
+        }),
+      });
+      assert.equal(installed.status, 201);
       const executors = await (await fetch(`${origin}/v1/me/executors`)).json();
       assert.equal(executors[0].executor_type, "dsh");
       assert.equal(executors[0].source, "dsh");
@@ -297,6 +307,22 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
         }),
       });
       assert.equal(invalidWriteBackDestination.status, 400);
+      for (const destination of ["unknown:results", "feishu:oc_results"]) {
+        const unavailable = await fetch(`${origin}/v1/me/recipes`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            name: "Unavailable destination",
+            match: { thread_id: "feishu:oc_chat" },
+            executor_type: "dsh",
+            executor_config: { prompt: "Handle the task." },
+            can_write_back: true,
+            write_back_thread_id: destination,
+          }),
+        });
+        assert.equal(unavailable.status, 400);
+        assert.match((await unavailable.json()).error.message, /Write-back destination is unavailable/);
+      }
       const missingComplete = await fetch(
         `${origin}/v1/me/work-items/work-missing/complete`,
         { method: "POST" },
@@ -317,14 +343,14 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
             executor_type: "dsh",
             executor_config: { skill: "review", prompt: "Reply with a decision." },
             can_write_back: true,
-            write_back_thread_id: "feishu:oc_results",
+            write_back_thread_id: "dsh:results",
             include_context: true,
           }),
         })
       ).json();
       assert.equal(created.executor_type, "dsh");
       assert.equal(created.can_write_back, true);
-      assert.equal(created.write_back_thread_id, "feishu:oc_results");
+      assert.equal(created.write_back_thread_id, "dsh:results");
       assert.equal(created.include_context, true);
       assert.equal(created.trigger.kind, "push");
       assert.equal(created.trigger.coalesce, true);
@@ -365,6 +391,7 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
           trigger: { kind: "pull", interval_ms: 3_600_000 },
           executor_type: "dsh",
           executor_config: { prompt: "Summarize updates." },
+          write_back_thread_id: "dsh:results",
         }),
       });
       assert.equal(pullMissing.status, 400);
@@ -378,6 +405,7 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
             trigger: { kind: "pull", interval_ms: 3_600_000 },
             executor_type: "dsh",
             executor_config: { prompt: "Summarize updates." },
+            write_back_thread_id: "dsh:results",
           }),
         })
       ).json();
@@ -428,6 +456,7 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
       assert.ok(inbox[0].attention);
     } finally {
       await app.close();
+      await dsh.close();
     }
   });
 
