@@ -109,6 +109,15 @@ describe("work observation transitions", () => {
     assert.equal(plan.item.updated_at, BEFORE);
   });
 
+  it("clears a submitted checkpoint without publishing a spurious executor state change", () => {
+    const input = fixture();
+    input.run.start_state = "submitted";
+    input.handle = { status: "running", external_run_id: input.run.external_run_id };
+    const plan = planWorkObservation(input);
+    assert.equal(plan.changed, false);
+    assert.equal(plan.run.start_state, undefined);
+  });
+
   for (const change of [
     { agent_thread_id: "executor:replacement" },
     { external_run_id: "external-2" },

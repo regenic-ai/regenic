@@ -67,6 +67,8 @@ import type {
   WorkItem,
   WorkRun,
   WorkRunStartClaim,
+  CommitWorkObservation,
+  CommitWorkObservationResult,
   WorkDelivery,
   SearchAnswerRecord,
   DailyDigestPolicy,
@@ -273,6 +275,7 @@ import {
 } from "./inbox";
 import {
   claimWorkRunStart,
+  commitWorkObservation,
   deleteSearchAnswer,
   deleteExecutorInstallation,
   deleteRecipe,
@@ -1240,6 +1243,11 @@ export class SqliteAuthorityStore
   async claimWorkRunStart(input: WorkRunStartClaim): Promise<boolean> {
     this.assertWritable();
     return claimWorkRunStart(this.database, input);
+  }
+
+  async commitWorkObservation(input: CommitWorkObservation): Promise<CommitWorkObservationResult> {
+    this.assertWritable();
+    return commitWorkObservation(this.database, input);
   }
 
   async getSearchAnswer(

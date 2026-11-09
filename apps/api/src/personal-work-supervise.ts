@@ -1,9 +1,4 @@
 import {
-  cancelWorkRun,
-  deliveryAbandoned,
-  enqueueWriteBack,
-  isAbandonedWorkItem,
-  planWorkObservation,
   recipeTriggerOf,
   recipeWantsWriteBack,
   workRunNeedsStartConfirmation,
@@ -29,6 +24,7 @@ import {
   WORK_REAP_LOG_EVERY_MS,
 } from "./personal-work-reap";
 import { isSystemRecipeId } from "./personal-system-work";
+import { PersonalConnectorError } from "./personal-errors";
 
 export class PersonalWorkSupervise {
   private waits?: PersonalWorkWait;
@@ -249,52 +245,28 @@ export class PersonalWorkSupervise {
   ): Promise<void> {
     const host = this.runtime.requireHost();
     const authority = host.get("authority");
-    if (await this.abandonIfSkipped(item, run)) {
-      return;
-    }
     const now = new Date().toISOString();
-    const transition = planWorkObservation({
-      item,
-      run,
+    const result = await authority.commitWorkObservation({
+      expected_item: item,
+      expected_run: run,
       handle,
       can_write_back: this.wantsWriteBack(item.id, recipe),
+      trigger_kind: recipeTriggerOf(recipe).kind,
       now,
     });
-    const nextRun = transition.run;
-    if (await this.abandonIfSkipped(item, nextRun)) {
+    if (result.outcome === "ignored") {
+      this.waits?.drop(run.id);
       return;
     }
-    await authority.putWorkRun(nextRun);
-    if (await this.abandonIfSkipped(item, nextRun)) {
-      return;
-    }
-    const delivery = await authority.getWorkDeliveryByItem(item.org_id, item.id);
-    if (transition.delivery.kind === "enqueue") {
-      if (await this.abandonIfSkipped(item, nextRun)) {
-        return;
-      }
-      await authority.putWorkDelivery(
-        enqueueWriteBack({
-          org_id: item.org_id,
-          work_item_id: item.id,
-          recipe_id: recipe.id,
-          kind: recipeTriggerOf(recipe).kind,
-          unit_key: item.unit_key,
-          event_id: item.head_event_id,
-          payload: transition.delivery.payload,
-          now,
-          existing: delivery,
-        }),
+    if (result.outcome === "conflict") {
+      throw new PersonalConnectorError(
+        "execution_observation_conflict",
+        "Work changed while its executor was being observed. Refresh the work item before applying another observation.",
+        409,
       );
-    } else if (transition.delivery.kind === "abandon" && delivery && delivery.status !== "acked") {
-      await authority.putWorkDelivery(deliveryAbandoned(delivery, now));
     }
-    if (await this.abandonIfSkipped(item, nextRun)) {
-      return;
-    }
-    if (transition.item !== item) {
-      await authority.putWorkItem(transition.item);
-    }
+    const { transition } = result;
+    const nextRun = transition.run;
     if (transition.settled) {
       this.writeBackOverride.delete(item.id);
       this.waits?.drop(run.id);
@@ -306,7 +278,7 @@ export class PersonalWorkSupervise {
           nextRun.agent_thread_id,
           now,
         );
-        if (transition.item !== item) {
+        if (transition.item.status !== item.status) {
           this.touchInboxDigest?.();
         }
       }
@@ -314,23 +286,5 @@ export class PersonalWorkSupervise {
     if (transition.changed) {
       this.workUpdated?.(item.id);
     }
-  }
-
-  async abandonIfSkipped(item: WorkItem, run: WorkRun): Promise<boolean> {
-    const latest = await this.runtime
-      .requireHost()
-      .get("authority")
-      .getWorkItem(item.org_id, item.id);
-    if (!isAbandonedWorkItem(latest?.status)) {
-      return false;
-    }
-    if (run.status !== "cancelled") {
-      await this.runtime
-        .requireHost()
-        .get("authority")
-        .putWorkRun(cancelWorkRun(run, new Date().toISOString()));
-    }
-    this.waits?.drop(run.id);
-    return true;
   }
 }

@@ -12,6 +12,11 @@ import { isActiveWorkStatus } from "./work";
 import type { WorkItemStatus } from "./work";
 import { shouldFlushDelivery } from "./work-delivery";
 import type { SearchAnswerRecord } from "./search-answer";
+import {
+  prepareWorkObservation,
+  type CommitWorkObservation,
+  type CommitWorkObservationResult,
+} from "./work-transition";
 
 export class MemoryWorkStore implements WorkStore, ExecutorStore {
   private readonly recipes = new Map<string, Recipe>();
@@ -130,6 +135,28 @@ export class MemoryWorkStore implements WorkStore, ExecutorStore {
   async putWorkRun(run: WorkRun): Promise<WorkRun> {
     this.runs.set(run.id, cloneRun(run));
     return cloneRun(run);
+  }
+
+  async commitWorkObservation(input: CommitWorkObservation): Promise<CommitWorkObservationResult> {
+    const { expected_item: expectedItem, expected_run: expectedRun } = input;
+    const item = this.items.get(expectedItem.id);
+    const run = this.runs.get(expectedRun.id);
+    const delivery = [...this.deliveries.values()].find(
+      (row) => row.org_id === expectedItem.org_id && row.work_item_id === expectedItem.id,
+    );
+    const prepared = prepareWorkObservation(input, {
+      item: item?.org_id === expectedItem.org_id ? item : null,
+      run: run?.org_id === expectedItem.org_id ? run : null,
+      delivery: delivery ?? null,
+    });
+    if (prepared.outcome !== "applied") return prepared;
+    const nextRun = structuredClone(prepared.transition.run);
+    const nextItem = { ...prepared.transition.item };
+    const nextDelivery = prepared.delivery ? structuredClone(prepared.delivery) : undefined;
+    this.runs.set(nextRun.id, nextRun);
+    this.items.set(nextItem.id, nextItem);
+    if (nextDelivery) this.deliveries.set(nextDelivery.id, nextDelivery);
+    return { outcome: "applied", transition: prepared.transition };
   }
 
   async claimWorkRunStart({ run, max_concurrent }: WorkRunStartClaim): Promise<boolean> {

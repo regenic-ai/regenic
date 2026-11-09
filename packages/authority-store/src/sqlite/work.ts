@@ -16,6 +16,9 @@ import {
   isWorkDeliveryStatus,
   isWorkWriteBackState,
   type WorkItemStatus,
+  prepareWorkObservation,
+  type CommitWorkObservation,
+  type CommitWorkObservationResult,
 } from "@regenic/domain";
 
 export async function listRecipes(db: Database.Database, orgId: string): Promise<Recipe[]> {
@@ -145,7 +148,10 @@ export async function getWorkItemByUnitKey(db: Database.Database, orgId: string,
   }
 
 export async function putWorkItem(db: Database.Database, item: WorkItem): Promise<WorkItem> {
-    
+    return writeWorkItem(db, item);
+  }
+
+function writeWorkItem(db: Database.Database, item: WorkItem): WorkItem {
     db
       .prepare(
         `
@@ -238,6 +244,33 @@ export async function listHiddenExecutorThreadIds(db: Database.Database, orgId: 
 export async function putWorkRun(db: Database.Database, run: WorkRun): Promise<WorkRun> {
     return writeWorkRun(db, run);
   }
+
+export async function commitWorkObservation(
+  db: Database.Database,
+  input: CommitWorkObservation,
+): Promise<CommitWorkObservationResult> {
+  return db.transaction((): CommitWorkObservationResult => {
+    const orgId = input.expected_item.org_id;
+    const item = db.prepare("SELECT * FROM work_items WHERE org_id = ? AND id = ?")
+      .get(orgId, input.expected_item.id) as WorkItemRow | undefined;
+    const run = db.prepare("SELECT * FROM work_runs WHERE org_id = ? AND id = ?")
+      .get(orgId, input.expected_run.id) as WorkRunRow | undefined;
+    const delivery = db.prepare("SELECT * FROM work_deliveries WHERE org_id = ? AND work_item_id = ?")
+      .get(orgId, input.expected_item.id) as WorkDeliveryRow | undefined;
+    const prepared = prepareWorkObservation(input, {
+      item: item ? toWorkItem(item) : null,
+      run: run ? toWorkRun(run) : null,
+      delivery: delivery ? toWorkDelivery(delivery) : null,
+    });
+    if (prepared.outcome !== "applied") return prepared;
+    writeWorkRun(db, prepared.transition.run);
+    if (prepared.delivery) writeWorkDelivery(db, prepared.delivery);
+    if (prepared.transition.item.status !== input.expected_item.status) {
+      writeWorkItem(db, prepared.transition.item);
+    }
+    return { outcome: "applied", transition: prepared.transition };
+  }).immediate();
+}
 
 function writeWorkRun(db: Database.Database, run: WorkRun): WorkRun {
     db
@@ -412,6 +445,10 @@ export async function getWorkDeliveryByItem(db: Database.Database, orgId: string
   }
 
 export async function putWorkDelivery(db: Database.Database, delivery: WorkDelivery): Promise<WorkDelivery> {
+    return writeWorkDelivery(db, delivery);
+  }
+
+function writeWorkDelivery(db: Database.Database, delivery: WorkDelivery): WorkDelivery {
     const row = db
       .prepare(
         `

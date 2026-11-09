@@ -192,6 +192,7 @@ describe("work observation compatibility before RFC 0011 policy activation", () 
   it("retains a known executor thread and previous result when absent from the observation", async () => {
     const f = await fixture();
     const run = { ...f.run, result: { summary: "Earlier result" } };
+    await f.authority.putWorkRun(run);
     await f.supervisor.applyHandle(
       f.item, f.recipe, run, f.handle("running", { agent_thread_id: undefined, result: undefined }),
     );
@@ -213,29 +214,34 @@ describe("work observation compatibility before RFC 0011 policy activation", () 
     assert.equal(f.digestChanges(), 1);
   });
 
-  for (const skipOnRead of [1, 2, 3]) {
-    it(`does not enqueue or reopen work ignored during observation read ${skipOnRead}`, async () => {
-      const f = await fixture();
-      const get = f.authority.getWorkItem.bind(f.authority);
-      let reads = 0;
-      f.authority.getWorkItem = async (org, id) => {
-        if (++reads === skipOnRead) {
-          await f.authority.putWorkItem({ ...f.item, status: "skipped" });
-        }
-        return get(org, id);
-      };
-      await f.supervisor.applyHandle(f.item, f.recipe, f.run, f.handle());
-      assert.equal((await get(ORG, f.item.id)).status, "skipped");
-      assert.equal((await f.authority.getWorkRun(ORG, f.run.id)).status, "cancelled");
-      assert.equal(await f.authority.getWorkDeliveryByItem(ORG, f.item.id), null);
-      assert.equal(f.writes.length, 0);
-      assert.deepEqual(f.updated, []);
-    });
-  }
+  it("does not enqueue, reopen or fake cancellation for work ignored before atomic observation", async () => {
+    const f = await fixture();
+    await f.authority.putWorkItem({ ...f.item, status: "skipped" });
+    await f.supervisor.applyHandle(f.item, f.recipe, f.run, f.handle());
+    assert.equal((await f.authority.getWorkItem(ORG, f.item.id)).status, "skipped");
+    assert.equal((await f.authority.getWorkRun(ORG, f.run.id)).status, "running");
+    assert.equal(await f.authority.getWorkDeliveryByItem(ORG, f.item.id), null);
+    assert.equal(f.writes.length, 0);
+    assert.deepEqual(f.updated, []);
+    assert.deepEqual(f.dropped, [f.run.id]);
+  });
+
+  it("reports a stale observation without changing the new work or notifying success", async () => {
+    const f = await fixture();
+    await f.authority.putWorkItem({ ...f.item, head_event_id: "new-trigger" });
+    await assert.rejects(
+      f.supervisor.applyHandle(f.item, f.recipe, f.run, f.handle()),
+      (error) => error.code === "execution_observation_conflict" && error.httpStatus === 409,
+    );
+    assert.equal((await f.authority.getWorkRun(ORG, f.run.id)).status, "running");
+    assert.equal(await f.authority.getWorkDeliveryByItem(ORG, f.item.id), null);
+    assert.equal(f.writes.length, 0);
+    assert.deepEqual(f.updated, []);
+  });
 
   it("propagates persistence failure rather than notifying success", async () => {
     const f = await fixture();
-    f.authority.putWorkDelivery = async () => { throw new Error("storage unavailable"); };
+    f.authority.commitWorkObservation = async () => { throw new Error("storage unavailable"); };
     await assert.rejects(
       f.supervisor.applyHandle(f.item, f.recipe, f.run, f.handle()), /storage unavailable/,
     );

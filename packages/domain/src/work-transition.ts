@@ -1,6 +1,14 @@
+import { isDeepStrictEqual } from "node:util";
 import type { ExecutorRunHandle } from "./executor";
-import { isActiveWorkStatus, type WorkItem, type WorkRun } from "./work";
+import {
+  isActiveWorkStatus,
+  type WorkItem,
+  type WorkRun,
+  type WorkDelivery,
+  type RecipeTriggerKind,
+} from "./work";
 import type { WorkDeliveryPayload } from "./work-delivery";
+import { deliveryAbandoned, enqueueWriteBack } from "./work-delivery";
 import { workStatusFromRun } from "./work-policy";
 
 export type ObservedWorkDelivery =
@@ -14,6 +22,88 @@ export interface WorkObservationTransition {
   delivery: ObservedWorkDelivery;
   settled: boolean;
   changed: boolean;
+}
+
+export interface CommitWorkObservation {
+  expected_item: WorkItem;
+  expected_run: WorkRun;
+  handle: ExecutorRunHandle;
+  can_write_back: boolean;
+  trigger_kind: RecipeTriggerKind;
+  now: string;
+}
+
+export type CommitWorkObservationResult =
+  | { outcome: "applied"; transition: WorkObservationTransition }
+  | { outcome: "ignored"; reason: "work_skipped" }
+  | { outcome: "conflict"; reason: "missing_work" | "stale_observation" };
+
+export type PreparedWorkObservation =
+  | {
+      outcome: "applied";
+      transition: WorkObservationTransition;
+      delivery?: WorkDelivery;
+    }
+  | Exclude<CommitWorkObservationResult, { outcome: "applied" }>;
+
+/** Snapshot fencing during the compatibility phase; not a replacement for RFC 0011 versions. */
+export function prepareWorkObservation(
+  input: CommitWorkObservation,
+  current: { item: WorkItem | null; run: WorkRun | null; delivery: WorkDelivery | null },
+): PreparedWorkObservation {
+  const { expected_item: expectedItem, expected_run: expectedRun } = input;
+  if (expectedRun.org_id !== expectedItem.org_id || expectedRun.work_item_id !== expectedItem.id) {
+    throw new Error("Work observation must belong to the same organization and work item");
+  }
+  const { item, run, delivery } = current;
+  if (!item || !run) {
+    return { outcome: "conflict", reason: "missing_work" };
+  }
+  if (item.org_id !== expectedItem.org_id || item.id !== expectedItem.id
+    || run.org_id !== item.org_id || run.id !== expectedRun.id || run.work_item_id !== item.id) {
+    throw new Error("Stored work observation does not match the requested identities");
+  }
+  if (item.status === "skipped") {
+    return { outcome: "ignored", reason: "work_skipped" };
+  }
+  if (!sameSnapshot(item, expectedItem) || !sameSnapshot(run, expectedRun)) {
+    return { outcome: "conflict", reason: "stale_observation" };
+  }
+  if ((run.status === "completed" || run.status === "failed" || run.status === "cancelled")
+    && input.handle.status !== run.status) {
+    return { outcome: "conflict", reason: "stale_observation" };
+  }
+  const transition = planWorkObservation({
+    item,
+    run,
+    handle: input.handle,
+    can_write_back: input.can_write_back,
+    now: input.now,
+  });
+  let nextDelivery: WorkDelivery | undefined;
+  if (transition.delivery.kind === "enqueue") {
+    nextDelivery = enqueueWriteBack({
+      org_id: item.org_id,
+      work_item_id: item.id,
+      recipe_id: run.recipe_id,
+      kind: input.trigger_kind,
+      unit_key: item.unit_key,
+      event_id: item.head_event_id,
+      payload: transition.delivery.payload,
+      now: input.now,
+      existing: delivery,
+    });
+  } else if (transition.delivery.kind === "abandon" && delivery && delivery.status !== "acked") {
+    nextDelivery = deliveryAbandoned(delivery, input.now);
+  }
+  return { outcome: "applied", transition, delivery: nextDelivery };
+}
+
+function sameSnapshot(current: WorkItem | WorkRun, expected: WorkItem | WorkRun): boolean {
+  return isDeepStrictEqual(
+    JSON.parse(JSON.stringify(current)),
+    JSON.parse(JSON.stringify(expected)),
+  );
 }
 
 export function planWorkObservation(input: {
@@ -62,7 +152,7 @@ export function planWorkObservation(input: {
 
 function workRunChanged(before: WorkRun, after: WorkRun): boolean {
   return before.status !== after.status
-    || before.start_state !== after.start_state
+    || (before.start_state !== after.start_state && before.start_state !== "submitted")
     || before.external_run_id !== after.external_run_id
     || before.agent_thread_id !== after.agent_thread_id
     || JSON.stringify(before.result) !== JSON.stringify(after.result);

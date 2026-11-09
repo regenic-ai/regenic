@@ -7,6 +7,7 @@ import type { ContentPart, JsonValue } from "./ingestion";
 import type { RecordClass } from "./record-class";
 import type { ThreadFacet } from "./thread-facet";
 import type { SearchAnswerRecord } from "./search-answer";
+import type { CommitWorkObservation, CommitWorkObservationResult } from "./work-transition";
 
 export type { ResultEnvelope, WorkRun, WorkRunStatus };
 
@@ -244,6 +245,8 @@ export interface WorkStore {
   putWorkRun(run: WorkRun): Promise<WorkRun>;
   /** Atomically reserve an open item and persist its run before external start. */
   claimWorkRunStart(input: WorkRunStartClaim): Promise<boolean>;
+  /** Atomically apply an observed run, work status and compatible delivery change. */
+  commitWorkObservation(input: CommitWorkObservation): Promise<CommitWorkObservationResult>;
   listWorkDeliveries(orgId: string): Promise<WorkDelivery[]>;
   /** Deliveries a flush tick may still send. Acked and dead rows stay out. */
   listDueWorkDeliveries(orgId: string, now: string): Promise<WorkDelivery[]>;

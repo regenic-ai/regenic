@@ -71,6 +71,8 @@ import type {
   WorkItem,
   WorkRun,
   WorkRunStartClaim,
+  CommitWorkObservation,
+  CommitWorkObservationResult,
   SearchAnswerRecord,
   WorkDelivery,
   DailyDigestPolicy,
@@ -317,6 +319,7 @@ import {
 } from "./inbox";
 import {
   claimWorkRunStart,
+  commitWorkObservation,
   deleteSearchAnswer,
   deleteExecutorInstallation,
   deleteRecipe,
@@ -1205,6 +1208,10 @@ export class PostgresAuthorityStore
 
   async claimWorkRunStart(input: WorkRunStartClaim): Promise<boolean> {
     return claimWorkRunStart(this.sql, input);
+  }
+
+  async commitWorkObservation(input: CommitWorkObservation): Promise<CommitWorkObservationResult> {
+    return commitWorkObservation(this.sql, input);
   }
 
   async getSearchAnswer(

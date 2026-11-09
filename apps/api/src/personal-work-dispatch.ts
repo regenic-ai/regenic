@@ -716,7 +716,7 @@ export class PersonalWorkDispatch {
       updated_at: new Date().toISOString(),
     };
     await authority.putWorkRun(acknowledged);
-    await this.supervise.applyHandle(runningItem, recipe, { ...acknowledged, start_state: undefined }, handle);
+    await this.supervise.applyHandle(runningItem, recipe, acknowledged, handle);
     const latest = await host.get("authority").getActiveWorkRun(item.org_id, item.id);
     const latestItem = await host.get("authority").getWorkItem(item.org_id, item.id);
     if (latest && latestItem && isActiveWorkStatus(latestItem.status)) {

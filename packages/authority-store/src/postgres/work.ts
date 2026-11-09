@@ -16,6 +16,9 @@ import {
   isWorkDeliveryStatus,
   isWorkWriteBackState,
   type WorkItemStatus,
+  prepareWorkObservation,
+  type CommitWorkObservation,
+  type CommitWorkObservationResult,
 } from "@regenic/domain";
 import {
   PgSql,
@@ -153,7 +156,7 @@ export async function getWorkItemByUnitKey(db: PgSql, orgId: string, threadId: s
     return row ? toWorkItem(row) : null;
   }
 
-export async function putWorkItem(db: PgSql, item: WorkItem): Promise<WorkItem> {
+export async function putWorkItem(db: PgSql, item: WorkItem, client?: PoolClient): Promise<WorkItem> {
     await db.execute(
       `
         INSERT INTO work_items (
@@ -182,7 +185,7 @@ export async function putWorkItem(db: PgSql, item: WorkItem): Promise<WorkItem> 
         item.recipe_id ?? null,
         item.created_at,
         item.updated_at,
-      ],
+      ], client,
     );
     return item;
   }
@@ -274,6 +277,39 @@ export async function putWorkRun(db: PgSql, run: WorkRun, client?: PoolClient): 
     );
     return run;
   }
+
+export async function commitWorkObservation(
+  db: PgSql,
+  input: CommitWorkObservation,
+): Promise<CommitWorkObservationResult> {
+  return db.withTx(async (client) => {
+    const orgId = input.expected_item.org_id;
+    const item = await db.queryOne<WorkItemRow>(
+      "SELECT * FROM work_items WHERE org_id = $1 AND id = $2 FOR UPDATE",
+      [orgId, input.expected_item.id], client,
+    );
+    const run = await db.queryOne<WorkRunRow>(
+      "SELECT * FROM work_runs WHERE org_id = $1 AND id = $2 FOR UPDATE",
+      [orgId, input.expected_run.id], client,
+    );
+    const delivery = await db.queryOne<WorkDeliveryRow>(
+      "SELECT * FROM work_deliveries WHERE org_id = $1 AND work_item_id = $2 FOR UPDATE",
+      [orgId, input.expected_item.id], client,
+    );
+    const prepared = prepareWorkObservation(input, {
+      item: item ? toWorkItem(item) : null,
+      run: run ? toWorkRun(run) : null,
+      delivery: delivery ? toWorkDelivery(delivery) : null,
+    });
+    if (prepared.outcome !== "applied") return prepared;
+    await putWorkRun(db, prepared.transition.run, client);
+    if (prepared.delivery) await putWorkDelivery(db, prepared.delivery, client);
+    if (prepared.transition.item.status !== input.expected_item.status) {
+      await putWorkItem(db, prepared.transition.item, client);
+    }
+    return { outcome: "applied", transition: prepared.transition };
+  });
+}
 
 export async function claimWorkRunStart(db: PgSql, { run, max_concurrent }: WorkRunStartClaim): Promise<boolean> {
   return db.withTx(async (client) => {
@@ -419,7 +455,7 @@ export async function getWorkDeliveryByItem(db: PgSql, orgId: string, workItemId
     return row ? toWorkDelivery(row) : null;
   }
 
-export async function putWorkDelivery(db: PgSql, delivery: WorkDelivery): Promise<WorkDelivery> {
+export async function putWorkDelivery(db: PgSql, delivery: WorkDelivery, client?: PoolClient): Promise<WorkDelivery> {
     const row = await db.queryOne<WorkDeliveryRow>(
       `
         INSERT INTO work_deliveries (
@@ -465,7 +501,7 @@ export async function putWorkDelivery(db: PgSql, delivery: WorkDelivery): Promis
         jsonb(delivery.channel_receipt),
         delivery.created_at,
         delivery.updated_at,
-      ],
+      ], client,
     );
     if (!row) {
       throw new Error("work delivery upsert returned no row");
