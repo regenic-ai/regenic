@@ -17,7 +17,7 @@ Phase 0 先以已接纳的 RFC 定模型，再写业务代码。
 | [0008](0008-thread-surface.md) | Thread Surface | 已接纳 |
 | [0009](0009-work-orchestration.md) | 记录类、线程面与托管执行（L0–L6） | 已接纳 |
 | [0010](0010-cross-channel-forward.md) | 跨渠道转发 | Draft |
-| [0011](0011-conversation-lifecycle.md) | 对话生命周期与策略钩子（含表结构与并发协议） | 已接纳（尚未实现） |
+| [0011](0011-conversation-lifecycle.md) | 对话生命周期与策略钩子（含表结构与并发协议） | 已接纳（分阶段实现中） |
 
 相关文档：
 

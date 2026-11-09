@@ -1,14 +1,11 @@
 import {
   cancelWorkRun,
   deliveryAbandoned,
-  foldThreadByPolicy,
-  isActiveWorkStatus,
   enqueueWriteBack,
   isAbandonedWorkItem,
+  planWorkObservation,
   recipeTriggerOf,
   recipeWantsWriteBack,
-  shouldWriteBackHandle,
-  workStatusFromHandle,
   workRunNeedsStartConfirmation,
   type ExecutorContext,
   type ExecutorRunHandle,
@@ -18,7 +15,7 @@ import {
   type WorkRun,
 } from "@regenic/domain";
 import { PersonalWorkChannel } from "./personal-work-channel";
-import { preferThread, preferredThreadId } from "./personal-pull-status";
+import { foldFinishedWorkThreads } from "./personal-work-lifecycle";
 import { PersonalRuntimeService } from "./personal-runtime.service";
 import type { PersonalWorkWait } from "./personal-work-wait";
 import { isWorkTickShutdown } from "./personal-work-support";
@@ -32,24 +29,6 @@ import {
   WORK_REAP_LOG_EVERY_MS,
 } from "./personal-work-reap";
 import { isSystemRecipeId } from "./personal-system-work";
-
-export async function foldFinishedWorkThreads(
-  store: Parameters<typeof foldThreadByPolicy>[0],
-  orgId: string,
-  sourceThreadId: string,
-  agentThreadId: string | undefined,
-  now: string,
-): Promise<void> {
-  await foldThreadByPolicy(store, orgId, sourceThreadId, now);
-  const agent = agentThreadId?.trim();
-  if (!agent || agent === sourceThreadId) {
-    return;
-  }
-  await foldThreadByPolicy(store, orgId, agent, now);
-  if (preferredThreadId() === agent) {
-    preferThread(null);
-  }
-}
 
 export class PersonalWorkSupervise {
   private waits?: PersonalWorkWait;
@@ -274,33 +253,23 @@ export class PersonalWorkSupervise {
       return;
     }
     const now = new Date().toISOString();
-    const nextRun: WorkRun = {
-      ...run,
-      start_state: undefined,
-      external_run_id: handle.external_run_id,
-      agent_thread_id: handle.agent_thread_id ?? run.agent_thread_id,
-      status:
-        handle.status === "completed"
-          ? "completed"
-          : handle.status === "failed"
-            ? "failed"
-            : handle.status === "waiting_human"
-              ? "waiting_human"
-              : "running",
-      result: handle.result ?? run.result,
-      updated_at: now,
-    };
+    const transition = planWorkObservation({
+      item,
+      run,
+      handle,
+      can_write_back: this.wantsWriteBack(item.id, recipe),
+      now,
+    });
+    const nextRun = transition.run;
     if (await this.abandonIfSkipped(item, nextRun)) {
       return;
     }
-    const changed = workRunChanged(run, nextRun);
     await authority.putWorkRun(nextRun);
     if (await this.abandonIfSkipped(item, nextRun)) {
       return;
     }
-    const status = workStatusFromHandle(handle);
     const delivery = await authority.getWorkDeliveryByItem(item.org_id, item.id);
-    if (shouldWriteBackHandle(handle, this.wantsWriteBack(item.id, recipe))) {
+    if (transition.delivery.kind === "enqueue") {
       if (await this.abandonIfSkipped(item, nextRun)) {
         return;
       }
@@ -312,28 +281,21 @@ export class PersonalWorkSupervise {
           kind: recipeTriggerOf(recipe).kind,
           unit_key: item.unit_key,
           event_id: item.head_event_id,
-          payload: {
-            summary: handle.result?.summary ?? "",
-            content: handle.result?.content,
-          },
+          payload: transition.delivery.payload,
           now,
           existing: delivery,
         }),
       );
-    } else if (handle.status === "completed" && delivery && delivery.status !== "acked") {
+    } else if (transition.delivery.kind === "abandon" && delivery && delivery.status !== "acked") {
       await authority.putWorkDelivery(deliveryAbandoned(delivery, now));
     }
     if (await this.abandonIfSkipped(item, nextRun)) {
       return;
     }
-    if (item.status !== status) {
-      await authority.putWorkItem({
-        ...item,
-        status,
-        updated_at: now,
-      });
+    if (transition.item !== item) {
+      await authority.putWorkItem(transition.item);
     }
-    if (!isActiveWorkStatus(status)) {
+    if (transition.settled) {
       this.writeBackOverride.delete(item.id);
       this.waits?.drop(run.id);
       if (!isSystemRecipeId(recipe.id)) {
@@ -344,12 +306,12 @@ export class PersonalWorkSupervise {
           nextRun.agent_thread_id,
           now,
         );
-        if (item.status !== status) {
+        if (transition.item !== item) {
           this.touchInboxDigest?.();
         }
       }
     }
-    if (changed || item.status !== status) {
+    if (transition.changed) {
       this.workUpdated?.(item.id);
     }
   }
@@ -371,12 +333,4 @@ export class PersonalWorkSupervise {
     this.waits?.drop(run.id);
     return true;
   }
-}
-
-function workRunChanged(before: WorkRun, after: WorkRun): boolean {
-  return before.status !== after.status
-    || before.start_state !== after.start_state
-    || before.external_run_id !== after.external_run_id
-    || before.agent_thread_id !== after.agent_thread_id
-    || JSON.stringify(before.result) !== JSON.stringify(after.result);
 }

@@ -59,10 +59,8 @@ import {
   isWorkTickShutdown,
 } from "./personal-work-support";
 import { PersonalWorkWait } from "./personal-work-wait";
-import {
-  foldFinishedWorkThreads,
-  PersonalWorkSupervise,
-} from "./personal-work-supervise";
+import { PersonalWorkSupervise } from "./personal-work-supervise";
+import { foldFinishedWorkThreads } from "./personal-work-lifecycle";
 import { PersonalEventsService } from "./personal-events.service";
 import { PersonalAgentContextAccessService } from "./personal-agent-context-access.service";
 import {
