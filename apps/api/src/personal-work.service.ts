@@ -514,8 +514,8 @@ export class PersonalWorkService implements OnModuleDestroy {
       created_at: now,
       updated_at: now,
     };
-    await host.get("authority").putWorkItem(item);
-    return { work_item: item, recipe };
+    const saved = await host.get("authority").putWorkItem(item);
+    return { work_item: saved, recipe };
   }
 
   async startPreparedAuxiliaryExecution(
@@ -523,53 +523,26 @@ export class PersonalWorkService implements OnModuleDestroy {
     evidenceText: string,
   ): Promise<{ work_item: WorkItem; run: WorkRun }> {
     const host = this.runtime.requireHost();
-    let run: WorkRun | undefined;
-    try {
-      run = await this.dispatch.startItem(
-        prepared.work_item,
-        prepared.recipe,
-        evidenceText,
-        "auxiliary",
-      );
-    } catch (error) {
-      // A submitted/uncertain start is still durable and must remain recoverable.
-      const durable = (await host.get("authority").listWorkRuns(
-        prepared.work_item.org_id,
-        prepared.work_item.id,
-      ))[0];
-      if (durable && recoverableAuxiliaryStart(durable)) {
-        run = durable;
-      } else {
-        if (!durable || durable.status !== "failed") {
-          await host.get("authority").putWorkItem({
-            ...prepared.work_item,
-            status: "failed",
-            updated_at: new Date().toISOString(),
-          });
-        }
-        throw error;
-      }
-    }
+    const run = await this.dispatch.startItem(
+      prepared.work_item,
+      prepared.recipe,
+      evidenceText,
+      "auxiliary",
+    );
     if (!run) {
-      await host.get("authority").putWorkItem({
-        ...prepared.work_item,
-        status: "skipped",
-        updated_at: new Date().toISOString(),
-      });
       throw new PersonalConnectorError(
         "execution_start_conflict",
         "No executor slot is available",
         429,
       );
     }
-    return {
-      work_item:
-        (await host.get("authority").getWorkItem(
-          prepared.work_item.org_id,
-          prepared.work_item.id,
-        )) ?? prepared.work_item,
-      run,
-    };
+    const item = await host.get("authority").getWorkItem(
+      prepared.work_item.org_id, prepared.work_item.id,
+    );
+    if (!item || item.current_run_id !== run.id) throw new PersonalConnectorError(
+      "execution_start_conflict", "Auxiliary execution changed after start. Refresh the execution.", 409,
+    );
+    return { work_item: item, run };
   }
 
   async startAuxiliaryExecution(
@@ -1253,13 +1226,6 @@ export class PersonalWorkService implements OnModuleDestroy {
 }
 
 const RECIPE_RECENT_RUN_LIMIT = 5;
-
-function recoverableAuxiliaryStart(run: WorkRun): boolean {
-  return run.start_state === "submitted" ||
-    run.start_state === "uncertain" ||
-    run.status === "running" ||
-    run.status === "waiting_human";
-}
 
 function recentRunsForRecipe(
   runs: WorkRun[],

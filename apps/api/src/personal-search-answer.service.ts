@@ -120,7 +120,7 @@ export class PersonalSearchAnswerService {
         .catch(() => undefined);
       throw searchAnswerStartError(error);
     }
-    return view(record, started.run);
+    return view(record, started.run, started.work_item.status);
   }
 
   async get(id: string): Promise<SearchAnswerView> {

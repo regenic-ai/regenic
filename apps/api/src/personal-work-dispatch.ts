@@ -599,10 +599,45 @@ export class PersonalWorkDispatch {
       }
       return undefined;
     }
+    try {
+      return await this.startReservedItem(item, recipe, executor, run, composed, workspace, includeContext, mode);
+    } catch (error) {
+      if (mode === "auxiliary") {
+        const [savedItem, savedRun] = await Promise.all([
+          authority.getWorkItem(item.org_id, item.id),
+          authority.getWorkRun(item.org_id, run.id),
+        ]);
+        if (savedItem?.current_run_id === run.id && savedRun &&
+          (savedRun.status === "running" || savedRun.status === "waiting_human" || savedRun.status === "completed")) {
+          console.error("personal auxiliary start recovering reserved execution", {
+            work_item_id: item.id, run_id: run.id, error,
+          });
+          return savedRun;
+        }
+      }
+      throw error;
+    }
+  }
+
+  private async startReservedItem(
+    item: WorkItem,
+    recipe: Recipe,
+    executor: TaskExecutor,
+    run: WorkRun,
+    composed: ReturnType<typeof composeWorkConversation>,
+    workspace: boolean,
+    includeContext: boolean,
+    mode: "auto" | "manual" | "auxiliary",
+  ): Promise<WorkRun | undefined> {
+    const host = this.runtime.requireHost();
+    const authority = host.get("authority");
     const runningItem = await authority.getWorkItem(item.org_id, item.id);
     if (!runningItem || runningItem.current_run_id !== run.id) {
       throw new Error(`Claimed work item identity disappeared: ${item.id}`);
     }
+    if (!isActiveWorkStatus(runningItem.status)) throw new PersonalConnectorError(
+      "work_abandoned", "Work start is no longer active", 409,
+    );
     let handle;
     try {
       handle = await executor.start(

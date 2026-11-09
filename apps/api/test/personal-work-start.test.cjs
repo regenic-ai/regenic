@@ -9,6 +9,7 @@ const { dshTaskExecutor } = require("../../../packages/dsh-connector/dist");
 const { PersonalWorkDispatch } = require("../dist/personal-work-dispatch");
 const { PersonalWorkSupervise } = require("../dist/personal-work-supervise");
 const { PersonalWorkService } = require("../dist/personal-work.service");
+const { PersonalSearchAnswerService } = require("../dist/personal-search-answer.service");
 const { PersonalConnectorError } = require("../dist/personal-errors");
 const { PersonalExecutorService } = require("../dist/personal-executor.service");
 const { PersonalKernelStoppedError } = require("../dist/personal-runtime.service");
@@ -89,6 +90,225 @@ async function fixture(t, maxConcurrent) {
 }
 
 describe("durable executor start", () => {
+  async function preparedAuxiliary(t, maxConcurrent) {
+    const f = await fixture(t);
+    const service = f.service();
+    service.channel = f.channel;
+    service.supervise = f.supervise();
+    service.dispatch = f.dispatch(service.supervise);
+    const prepared = await service.prepareAuxiliaryExecution({
+      id: "search-answer:prepared", purpose: "search-answer",
+      executor_type: "session", prompt: "Answer safely", max_concurrent: maxConcurrent,
+    });
+    assert.deepEqual(prepared.work_item, await f.ports.authority.getWorkItem(ORG, prepared.work_item.id));
+    return { ...f, service, prepared };
+  }
+
+  it("does not rewrite a prepared auxiliary snapshot after a pre-reservation exception", async (t) => {
+    const f = await preparedAuxiliary(t);
+    const before = await f.ports.authority.putWorkItem({ ...f.prepared.work_item, status: "skipped" });
+    const put = t.mock.method(f.ports.authority, "putWorkItem");
+    const error = new Error("Cannot compose evidence");
+    t.mock.method(f.service.dispatch, "startItem", async () => { throw error; });
+    await assert.rejects(f.service.startPreparedAuxiliaryExecution(f.prepared, "evidence"), (actual) => actual === error);
+    assert.equal(put.mock.callCount(), 0);
+    assert.deepEqual(await f.ports.authority.getWorkItem(ORG, before.id), before);
+    assert.deepEqual(await f.ports.authority.listWorkRuns(ORG, before.id), []);
+  });
+
+  it("leaves unstarted auxiliary work unchanged when capacity is unavailable", async (t) => {
+    const f = await preparedAuxiliary(t, 0);
+    const put = t.mock.method(f.ports.authority, "putWorkItem");
+    await assert.rejects(f.service.startPreparedAuxiliaryExecution(f.prepared, "evidence"), (error) =>
+      error.code === "execution_start_conflict" && error.httpStatus === 429);
+    assert.equal(put.mock.callCount(), 0);
+    assert.deepEqual(await f.ports.authority.getWorkItem(ORG, f.prepared.work_item.id), f.prepared.work_item);
+    assert.deepEqual(await f.ports.authority.listWorkRuns(ORG, f.prepared.work_item.id), []);
+    assert.equal(f.calls.spawn, 0);
+  });
+
+  it("does not adopt an already running auxiliary attempt when this invocation lost reservation", async (t) => {
+    const f = await preparedAuxiliary(t);
+    const first = await f.service.startPreparedAuxiliaryExecution(f.prepared, "first");
+    const before = await f.ports.authority.getWorkItem(ORG, first.work_item.id);
+    const put = t.mock.method(f.ports.authority, "putWorkItem");
+    await assert.rejects(f.service.startPreparedAuxiliaryExecution(f.prepared, "duplicate"), code("execution_start_conflict"));
+    assert.equal(put.mock.callCount(), 0);
+    assert.deepEqual(await f.ports.authority.getWorkItem(ORG, before.id), before);
+    assert.equal((await f.ports.authority.listWorkRuns(ORG, before.id)).length, 1);
+    assert.equal(f.calls.spawn, 1);
+    assert.equal(f.calls.stdin, 1);
+  });
+
+  it("does not recover unrelated history after an auxiliary reservation failure", async (t) => {
+    const f = await preparedAuxiliary(t);
+    await f.ports.authority.putWorkRun({
+      id: "unowned-history", org_id: ORG, work_item_id: f.prepared.work_item.id,
+      recipe_id: f.prepared.recipe.id, executor_type: "session",
+      status: "running", start_state: "uncertain",
+      created_at: f.item.created_at, updated_at: f.item.updated_at,
+    });
+    const error = new Error("Reservation unavailable");
+    t.mock.method(f.ports.authority, "claimWorkRunStart", async () => { throw error; });
+    await assert.rejects(f.service.startPreparedAuxiliaryExecution(f.prepared, "evidence"), (actual) => actual === error);
+    assert.deepEqual(await f.ports.authority.getWorkItem(ORG, f.prepared.work_item.id), f.prepared.work_item);
+    assert.equal(f.calls.spawn, 0);
+  });
+
+  it("retains an auxiliary uncertain start using only its owned reservation", async (t) => {
+    const f = await preparedAuxiliary(t);
+    f.hooks.spawn = async () => { throw new Error("Start response lost"); };
+    const started = await f.service.startPreparedAuxiliaryExecution(f.prepared, "evidence");
+    assert.equal(started.run.status, "waiting_human");
+    assert.equal(started.run.start_state, "uncertain");
+    assert.equal(started.work_item.current_run_id, started.run.id);
+    f.reopen();
+    assert.deepEqual(await f.ports.authority.getWorkRun(ORG, started.run.id), started.run);
+    await assert.rejects(f.service.startPreparedAuxiliaryExecution(f.prepared, "again"), code("execution_start_conflict"));
+    assert.equal(f.calls.spawn, 1);
+    assert.equal(f.calls.stdin, 0);
+  });
+
+  it("recovers the exact submitted auxiliary attempt after finalization fails", async (t) => {
+    const f = await preparedAuxiliary(t);
+    t.mock.method(f.service.supervise, "applyHandle", async () => {
+      await f.ports.authority.putWorkRun({
+        id: "newer-unowned-history", org_id: ORG, work_item_id: f.prepared.work_item.id,
+        recipe_id: f.prepared.recipe.id, executor_type: "session", status: "completed",
+        result: { summary: "Not this invocation" },
+        created_at: f.item.created_at, updated_at: new Date(Date.now() + 60_000).toISOString(),
+      });
+      throw new Error("Finalization unavailable");
+    });
+    const started = await f.service.startPreparedAuxiliaryExecution(f.prepared, "evidence");
+    assert.notEqual(started.run.id, "newer-unowned-history");
+    assert.equal(started.run.start_state, "submitted");
+    assert.equal(started.work_item.current_run_id, started.run.id);
+    f.reopen();
+    await f.supervise().refreshRuns();
+    const recovered = await f.ports.authority.getWorkRun(ORG, started.run.id);
+    assert.equal(recovered.status, "completed");
+    assert.equal(recovered.result.summary, "finished");
+    assert.equal(f.calls.spawn, 1);
+    assert.equal(f.calls.stdin, 1);
+  });
+
+  it("preserves definite auxiliary startup failure without a fallback item rewrite", async (t) => {
+    const f = await preparedAuxiliary(t);
+    const put = t.mock.method(f.ports.authority, "putWorkItem");
+    f.hooks.spawn = async () => { throw new PersonalConnectorError("no_sender", "No sender", 400); };
+    await assert.rejects(f.service.startPreparedAuxiliaryExecution(f.prepared, "evidence"), code("no_sender"));
+    const item = await f.ports.authority.getWorkItem(ORG, f.prepared.work_item.id);
+    const run = await f.ports.authority.getWorkRun(ORG, item.current_run_id);
+    assert.equal(item.status, "failed");
+    assert.equal(run.status, "failed");
+    assert.equal(put.mock.callCount(), 0);
+  });
+
+  it("preserves the atomic auxiliary preflight failure without changing the prior pointer", async (t) => {
+    const f = await preparedAuxiliary(t);
+    f.setExecutor(undefined);
+    const put = t.mock.method(f.ports.authority, "putWorkItem");
+    await assert.rejects(f.service.startPreparedAuxiliaryExecution(f.prepared, "evidence"), code("invalid_config"));
+    const item = await f.ports.authority.getWorkItem(ORG, f.prepared.work_item.id);
+    const [run] = await f.ports.authority.listWorkRuns(ORG, item.id);
+    assert.equal(item.status, "open");
+    assert.equal(item.current_run_id, undefined);
+    assert.equal(item.version, f.prepared.work_item.version + 1);
+    assert.equal(run.status, "failed");
+    assert.equal(put.mock.callCount(), 0);
+  });
+
+  it("does not recover a reserved auxiliary run after a successor replaced it", async (t) => {
+    const f = await preparedAuxiliary(t);
+    const error = new Error("Old attempt finalization failed");
+    let successorItem;
+    t.mock.method(f.service.supervise, "applyHandle", async (item, recipe, run) => {
+      await f.ports.authority.putWorkRun({ ...run, status: "completed", result: { summary: "Old attempt" } });
+      const done = await f.ports.authority.putWorkItem({ ...item, status: "done" });
+      assert.equal(await f.ports.authority.claimWorkRunStart({
+        expected_item: done, retry: "manual",
+        run: { ...run, id: "auxiliary-replacement", status: "running", start_state: "pending" },
+      }), true);
+      successorItem = await f.ports.authority.getWorkItem(ORG, item.id);
+      throw error;
+    });
+    await assert.rejects(f.service.startPreparedAuxiliaryExecution(f.prepared, "evidence"), (actual) => actual === error);
+    assert.deepEqual(await f.ports.authority.getWorkItem(ORG, f.prepared.work_item.id), successorItem);
+    assert.equal(f.calls.spawn, 1);
+    assert.equal(f.calls.stdin, 1);
+    assert.equal(f.calls.attach, 0);
+  });
+
+  it("returns an auxiliary result already committed before a post-observation exception", async (t) => {
+    const f = await preparedAuxiliary(t);
+    t.mock.method(f.service.supervise, "applyHandle", async (item, recipe, run) => {
+      await f.ports.authority.putWorkRun({ ...run, status: "completed", result: { summary: "Committed result" } });
+      await f.ports.authority.putWorkItem({ ...item, status: "done" });
+      throw new Error("Notification unavailable");
+    });
+    const started = await f.service.startPreparedAuxiliaryExecution(f.prepared, "evidence");
+    assert.equal(started.work_item.status, "done");
+    assert.equal(started.run.status, "completed");
+    assert.equal(started.run.result.summary, "Committed result");
+    assert.equal(started.work_item.current_run_id, started.run.id);
+    assert.equal(f.calls.spawn, 1);
+  });
+
+  it("rejects a changed current pointer when returning an otherwise successful auxiliary start", async (t) => {
+    const f = await preparedAuxiliary(t);
+    const first = await f.service.startPreparedAuxiliaryExecution(f.prepared, "evidence");
+    await f.ports.authority.putWorkRun({ ...first.run, status: "completed", result: { summary: "Done" } });
+    const done = await f.ports.authority.putWorkItem({ ...first.work_item, status: "done" });
+    assert.equal(await f.ports.authority.claimWorkRunStart({
+      expected_item: done, retry: "manual",
+      run: { ...first.run, id: "return-successor", status: "running", start_state: "pending" },
+    }), true);
+    const successor = await f.ports.authority.getWorkItem(ORG, done.id);
+    t.mock.method(f.service.dispatch, "startItem", async () => first.run);
+    await assert.rejects(f.service.startPreparedAuxiliaryExecution(f.prepared, "evidence"), code("execution_start_conflict"));
+    assert.deepEqual(await f.ports.authority.getWorkItem(ORG, done.id), successor);
+  });
+
+  it("does not invoke an auxiliary executor when ignored immediately after reservation", async (t) => {
+    const f = await preparedAuxiliary(t);
+    const claim = f.ports.authority.claimWorkRunStart.bind(f.ports.authority);
+    t.mock.method(f.ports.authority, "claimWorkRunStart", async (input) => {
+      assert.equal(await claim(input), true);
+      await f.service.cancelAuxiliaryExecution(input.run.work_item_id);
+      return true;
+    });
+    const result = await f.service.startPreparedAuxiliaryExecution(f.prepared, "evidence");
+    assert.equal(result.work_item.status, "skipped");
+    assert.equal(result.run.start_state, "pending");
+    assert.equal(f.calls.spawn, 0);
+    assert.equal(f.calls.stdin, 0);
+  });
+
+  it("shows a locally stopped answer in the initial response when cancellation wins startup", async (t) => {
+    const f = await preparedAuxiliary(t);
+    const claim = f.ports.authority.claimWorkRunStart.bind(f.ports.authority);
+    t.mock.method(f.ports.authority, "claimWorkRunStart", async (input) => {
+      assert.equal(await claim(input), true);
+      await f.service.cancelAuxiliaryExecution(input.run.work_item_id);
+      return true;
+    });
+    const answers = new PersonalSearchAnswerService(f.runtime, {
+      answerEvidence: async () => ({ query: "Question", refs: [], evidence_text: "Evidence", executor_type: "session" }),
+    }, {}, f.service);
+    const result = await answers.start({}, "en");
+    assert.equal(result.status, "cancelled");
+    assert.equal(result.answer, undefined);
+    assert.equal(result.citations, undefined);
+    const record = await f.ports.authority.getSearchAnswer(ORG, result.answer_id);
+    assert.equal(record.work_item_id, result.work_item_id);
+    const item = await f.ports.authority.getWorkItem(ORG, result.work_item_id);
+    assert.equal(item.status, "skipped");
+    assert.equal((await f.ports.authority.getWorkRun(ORG, item.current_run_id)).start_state, "pending");
+    assert.equal(f.calls.spawn, 0);
+    assert.equal(f.calls.stdin, 0);
+  });
+
   async function auxiliary(t, { unstarted = false, aged = false } = {}) {
     const f = await fixture(t);
     const now = aged ? new Date(Date.now() - 6 * 60_000).toISOString() : f.item.created_at;
