@@ -31,6 +31,21 @@ export function assertWorkRunSnapshot(run: WorkRun, current?: WorkRun): void {
   }
 }
 
+export function assertWorkRunWrite(run: WorkRun, current?: WorkRun): void {
+  assertWorkRunSnapshot(run, current);
+  if (!current) return;
+  if (isTerminalWorkRun(current) && current.status !== run.status) {
+    throw new Error("Terminal work run status is immutable; start a new attempt");
+  }
+  if (current.status === "completed" && !sameJson(current.result, run.result)) {
+    throw new Error("Completed work results are immutable; start a new attempt to change the result");
+  }
+}
+
+function isTerminalWorkRun(run: WorkRun): boolean {
+  return run.status === "completed" || run.status === "failed" || run.status === "cancelled";
+}
+
 export type ObservedWorkDelivery =
   | { kind: "enqueue"; payload: WorkDeliveryPayload }
   | { kind: "abandon" }
@@ -95,8 +110,7 @@ export function prepareWorkObservation(
   if (!sameSnapshot(item, expectedItem) || !sameSnapshot(run, expectedRun)) {
     return { outcome: "conflict", reason: "stale_observation" };
   }
-  if ((run.status === "completed" || run.status === "failed" || run.status === "cancelled")
-    && input.handle.status !== run.status) {
+  if (isTerminalWorkRun(run) && input.handle.status !== run.status) {
     return { outcome: "conflict", reason: "stale_observation" };
   }
   if (completedResultChanged(run, input.handle)) {
@@ -177,6 +191,7 @@ export function planWorkObservation(input: {
     result: run.status === "completed" ? run.result : handle.result ?? run.result,
     updated_at: now,
   };
+  assertWorkRunWrite(nextRun, run);
   const status = workStatusFromRun(nextRun.status);
   const nextItem = item.status === status
     ? item

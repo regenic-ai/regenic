@@ -255,6 +255,7 @@ export interface WorkStore {
   ): Promise<WorkRun | null>;
   /** Executor sessions that are not themselves a work thread. */
   listHiddenExecutorThreadIds(orgId: string): Promise<string[]>;
+  /** Preserves terminal status and completed results; does not settle the item or enqueue a delivery. */
   putWorkRun(run: WorkRun): Promise<WorkRun>;
   /** Atomically reserve an open item and persist its run before external start. */
   claimWorkRunStart(input: WorkRunStartClaim): Promise<boolean>;

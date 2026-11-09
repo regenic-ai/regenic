@@ -405,6 +405,109 @@ for (const driver of drivers) {
       assert.equal(await f.store.getWorkDeliveryByItem(ORG, f.item.id), null);
     });
 
+    it("freezes the full completed result through ordinary puts without touching work or delivery", async (t) => {
+      const f = await fixture(t, driver);
+      f.input.handle.result = {
+        summary: "Handled",
+        content: [{ role: "body", media_type: "text/plain", text: "Original" }],
+        evidence_event_ids: ["event-1", "event-2"],
+      };
+      await f.store.commitWorkObservation(f.input);
+      const run = await f.store.getWorkRun(ORG, f.run.id);
+      const item = await f.store.getWorkItem(ORG, f.item.id);
+      const deliveries = await f.store.listWorkDeliveries(ORG);
+      for (const result of [
+        undefined,
+        { ...run.result, summary: "Corrected" },
+        { ...run.result, content: [{ role: "body", media_type: "text/plain", text: "Changed" }] },
+        { ...run.result, evidence_event_ids: ["event-2", "event-1"] },
+        { summary: run.result.summary },
+      ]) {
+        await assert.rejects(f.store.putWorkRun({ ...run, result }),
+          /Completed work results are immutable/);
+        assert.deepEqual(await f.store.getWorkRun(ORG, f.run.id), run);
+      }
+      await assert.rejects(f.store.putWorkRun(f.run), /Terminal work run status is immutable/);
+      assert.deepEqual(await f.store.getWorkItem(ORG, f.item.id), item);
+      assert.deepEqual(await f.store.listWorkDeliveries(ORG), deliveries);
+      await f.reopen();
+      assert.deepEqual(await f.store.getWorkRun(ORG, f.run.id), run);
+    });
+
+    it("permits non-result metadata updates and semantically equal completed results", async (t) => {
+      const f = await fixture(t, driver);
+      f.input.handle.result = {
+        summary: "Handled",
+        content: [{ role: "body", media_type: "text/plain", text: "Original" }],
+        evidence_event_ids: ["event-1"],
+      };
+      await f.store.commitWorkObservation(f.input);
+      const run = await f.store.getWorkRun(ORG, f.run.id);
+      const item = await f.store.getWorkItem(ORG, f.item.id);
+      const deliveries = await f.store.listWorkDeliveries(ORG);
+      const metadata = await f.store.putWorkRun({
+        ...run,
+        agent_thread_id: "executor:recovered",
+        updated_at: "2026-11-09T08:03:00.000Z",
+        result: {
+          evidence_event_ids: ["event-1"],
+          content: [{ text: "Original", media_type: "text/plain", role: "body" }],
+          summary: "Handled",
+        },
+      });
+      assert.equal(metadata.version, run.version + 1);
+      assert.equal(metadata.agent_thread_id, "executor:recovered");
+      assert.deepEqual(metadata.result, run.result);
+      assert.deepEqual(await f.store.getWorkRun(ORG, f.run.id), metadata);
+      assert.deepEqual(await f.store.getWorkItem(ORG, f.item.id), item);
+      assert.deepEqual(await f.store.listWorkDeliveries(ORG), deliveries);
+    });
+
+    it("does not backfill an unknown result after direct historical completion", async (t) => {
+      const f = await fixture(t, driver);
+      const historical = await f.store.putWorkRun({ ...f.run, status: "completed", result: undefined });
+      await assert.rejects(f.store.putWorkRun({
+        ...historical, result: { summary: "Guessed historical result" },
+      }), /Completed work results are immutable/);
+      assert.deepEqual(await f.store.getWorkRun(ORG, f.run.id), historical);
+    });
+
+    for (const terminal of ["completed", "failed", "cancelled"]) {
+      it(`does not change ${terminal} through ordinary puts, but allows a separate attempt`, async (t) => {
+        const f = await fixture(t, driver);
+        const run = await f.store.putWorkRun({
+          ...f.run, status: terminal, start_state: undefined, result: { summary: "Original" },
+        });
+        for (const status of ["running", "waiting_human", "completed", "failed", "cancelled"]) {
+          if (status === terminal) continue;
+          await assert.rejects(f.store.putWorkRun({ ...run, status }),
+            /Terminal work run status is immutable/);
+        }
+        assert.deepEqual(await f.store.getWorkRun(ORG, f.run.id), run);
+        await f.store.putWorkItem({ ...await f.store.getWorkItem(ORG, f.item.id), status: "open" });
+        assert.equal(await f.store.claimWorkRunStart({
+          run: { ...f.run, id: "run-2", status: "running", start_state: "pending" },
+        }), true);
+        assert.equal((await f.store.getActiveWorkRun(ORG, f.item.id)).id, "run-2");
+        assert.deepEqual(await f.store.getWorkRun(ORG, f.run.id), run);
+      });
+    }
+
+    for (const inserting of [false, true]) {
+      it(`serializes competing completed results on ${inserting ? "insert" : "update"}`, async (t) => {
+        const f = await fixture(t, driver);
+        const id = inserting ? "new-completed-run" : f.run.id;
+        const results = await Promise.allSettled(["First", "Second"].map((summary) =>
+          f.store.putWorkRun({ ...f.run, id, status: "completed", result: { summary } })));
+        assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
+        assert.equal(results.filter((result) => result.status === "rejected").length, 1);
+        const winner = results.find((result) => result.status === "fulfilled").value;
+        assert.deepEqual(await f.store.getWorkRun(ORG, id), winner);
+        assert.deepEqual(await f.store.getWorkItem(ORG, f.item.id), f.item);
+        assert.deepEqual(await f.store.listWorkDeliveries(ORG), []);
+      });
+    }
+
     it("does not expose persisted completed results through mutable reads", async (t) => {
       const f = await fixture(t, driver);
       f.input.handle.result = {
@@ -708,6 +811,24 @@ it("fences competing observations from two SQLite writer workers", async (t) => 
       org_id: ORG, delivery_id: delivery.id, owner: "same-worker", kind: "claim", now: LATER,
     })));
   assert.equal(resultsOfClaim.filter((row) => row.outcome === "applied").length, 1);
+});
+
+it("freezes completed results across independent SQLite writer workers", async (t) => {
+  const driver = drivers.find((d) => d.name === "sqlite writer RPC");
+  const f = await fixture(t, driver);
+  const second = await SqliteSplitAuthorityStore.open(f.path);
+  t.after(() => second.close());
+  const results = await Promise.allSettled([f.store, second].map((store, index) =>
+    store.putWorkRun({
+      ...f.run, status: "completed", result: { summary: `Worker ${index}` },
+    })));
+  assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
+  assert.equal(results.filter((result) => result.status === "rejected").length, 1);
+  const winner = results.find((result) => result.status === "fulfilled").value;
+  assert.deepEqual(await f.store.getWorkRun(ORG, f.run.id), winner);
+  assert.deepEqual(await second.getWorkRun(ORG, f.run.id), winner);
+  await assert.rejects(second.putWorkRun(f.run), /Terminal work run status is immutable/);
+  assert.deepEqual(await f.store.getWorkItem(ORG, f.item.id), f.item);
 });
 
 it("migrates the v57 delivery table without changing request identities or inventing snapshots", async (t) => {

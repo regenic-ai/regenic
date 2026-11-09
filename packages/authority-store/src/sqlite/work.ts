@@ -19,7 +19,7 @@ import {
   isWorkWriteBackState,
   type WorkItemStatus,
   prepareWorkObservation,
-  assertWorkRunSnapshot,
+  assertWorkRunWrite,
   assertWorkDeliveryWrite,
   planWorkDeliveryCommand,
   canonicalContextJson,
@@ -257,8 +257,7 @@ export async function listHiddenExecutorThreadIds(db: Database.Database, orgId: 
   }
 
 export async function putWorkRun(db: Database.Database, run: WorkRun): Promise<WorkRun> {
-    writeWorkRun(db, run, true);
-    return (await getWorkRun(db, run.org_id, run.id)) ?? run;
+    return db.transaction(() => writeWorkRun(db, run, true)).immediate();
   }
 
 export async function commitWorkObservation(
@@ -292,8 +291,9 @@ export async function commitWorkObservation(
 }
 
 function writeWorkRun(db: Database.Database, run: WorkRun, advanceVersion = false): WorkRun {
-    assertWorkRunSnapshot(run);
-    const result = db
+    const current = db.prepare("SELECT * FROM work_runs WHERE id = ?").get(run.id) as WorkRunRow | undefined;
+    assertWorkRunWrite(run, current ? toWorkRun(current) : undefined);
+    const row = db
       .prepare(
         `
           INSERT INTO work_runs (
@@ -316,9 +316,10 @@ function writeWorkRun(db: Database.Database, run: WorkRun, advanceVersion = fals
             AND work_runs.write_back_required IS excluded.write_back_required
             AND work_runs.write_back_target_json IS excluded.write_back_target_json
             AND work_runs.trigger_kind IS excluded.trigger_kind
+          RETURNING *
         `,
       )
-      .run(
+      .get(
         run.id,
         run.org_id,
         run.work_item_id,
@@ -335,9 +336,9 @@ function writeWorkRun(db: Database.Database, run: WorkRun, advanceVersion = fals
         run.write_back_required === undefined ? null : Number(run.write_back_required),
         run.write_back_target ? canonicalContextJson(run.write_back_target) : null,
         run.trigger_kind ?? null,
-      );
-    if (!result.changes) throw new Error("Work run identity and write-back snapshot are immutable");
-    return run;
+      ) as WorkRunRow | undefined;
+    if (!row) throw new Error("Work run identity and write-back snapshot are immutable");
+    return toWorkRun(row);
   }
 
 export async function claimWorkRunStart(db: Database.Database, input: WorkRunStartClaim): Promise<boolean> {

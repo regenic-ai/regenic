@@ -1,6 +1,6 @@
 const assert = require("node:assert/strict");
 const { describe, it } = require("node:test");
-const { planWorkObservation } = require("../dist");
+const { assertWorkRunWrite, planWorkObservation } = require("../dist");
 
 const BEFORE = "2026-11-09T08:00:00.000Z";
 const NOW = "2026-11-09T08:01:00.000Z";
@@ -44,6 +44,32 @@ function fixture() {
 }
 
 describe("work observation transitions", () => {
+  for (const status of ["completed", "failed", "cancelled"]) {
+    it(`rejects a different state after ${status}, even through the pure planner`, () => {
+      const input = fixture();
+      input.run.status = status;
+      input.run.result = input.handle.result;
+      for (const next of ["running", "waiting_human", "completed", "failed", "cancelled"]) {
+        if (next === status) continue;
+        input.handle.status = next;
+        assert.throws(() => planWorkObservation(input), /Terminal work run status is immutable/);
+        assert.throws(() => assertWorkRunWrite({ ...input.run, status: next }, input.run),
+          /Terminal work run status is immutable/);
+      }
+    });
+  }
+
+  it("rejects clearing or filling a completed result through the common write guard", () => {
+    const { run } = fixture();
+    run.status = "completed";
+    run.result = { summary: "Original" };
+    assert.throws(() => assertWorkRunWrite({ ...run, result: undefined }, run),
+      /Completed work results are immutable/);
+    assert.throws(() => assertWorkRunWrite(run, { ...run, result: undefined }),
+      /Completed work results are immutable/);
+    assert.doesNotThrow(() => assertWorkRunWrite({ ...run, updated_at: NOW }, run));
+  });
+
   for (const [status, itemStatus, settled] of [
     ["running", "running", false],
     ["waiting_human", "waiting_human", false],

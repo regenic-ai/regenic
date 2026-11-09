@@ -19,7 +19,7 @@ import {
   isWorkWriteBackState,
   type WorkItemStatus,
   prepareWorkObservation,
-  assertWorkRunSnapshot,
+  assertWorkRunWrite,
   assertWorkDeliveryWrite,
   planWorkDeliveryCommand,
   type CommitWorkObservation,
@@ -266,8 +266,12 @@ export async function putWorkRun(
   client?: PoolClient,
   advanceVersion = true,
 ): Promise<WorkRun> {
-    assertWorkRunSnapshot(run);
-    const changed = await db.execute(
+    if (!client) return db.withTx((tx) => putWorkRun(db, run, tx, advanceVersion));
+    const current = await db.queryOne<WorkRunRow>(
+      "SELECT * FROM work_runs WHERE id = $1 FOR UPDATE", [run.id], client,
+    );
+    assertWorkRunWrite(run, current ? toWorkRun(current) : undefined);
+    const row = await db.queryOne<WorkRunRow>(
       `
         INSERT INTO work_runs (
           id, org_id, work_item_id, recipe_id, executor_type, external_run_id,
@@ -289,6 +293,11 @@ export async function putWorkRun(
           AND work_runs.write_back_required IS NOT DISTINCT FROM EXCLUDED.write_back_required
           AND work_runs.write_back_target_json IS NOT DISTINCT FROM EXCLUDED.write_back_target_json
           AND work_runs.trigger_kind IS NOT DISTINCT FROM EXCLUDED.trigger_kind
+          AND (work_runs.status NOT IN ('completed', 'failed', 'cancelled')
+            OR work_runs.status = EXCLUDED.status)
+          AND (work_runs.status <> 'completed'
+            OR work_runs.result_json IS NOT DISTINCT FROM EXCLUDED.result_json)
+        RETURNING *
       `,
       [
         run.id,
@@ -310,9 +319,8 @@ export async function putWorkRun(
       ],
       client,
     );
-    if (!changed) throw new Error("Work run identity and write-back snapshot are immutable");
-    if (!advanceVersion) return run;
-    return await getWorkRun(db, run.org_id, run.id) ?? run;
+    if (!row) throw new Error("Work run identity, write-back snapshot, terminal status and completed result are immutable");
+    return toWorkRun(row);
   }
 
 export async function commitWorkObservation(

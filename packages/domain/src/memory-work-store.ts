@@ -17,6 +17,7 @@ import type { SearchAnswerRecord } from "./search-answer";
 import {
   prepareWorkObservation,
   assertWorkRunSnapshot,
+  assertWorkRunWrite,
   type CommitWorkObservation,
   type CommitWorkObservationResult,
 } from "./work-transition";
@@ -140,7 +141,7 @@ export class MemoryWorkStore implements WorkStore, ExecutorStore {
 
   async putWorkRun(run: WorkRun): Promise<WorkRun> {
     const current = this.runs.get(run.id);
-    assertWorkRunSnapshot(run, current);
+    assertWorkRunWrite(run, current);
     const saved = { ...cloneRun(run), version: current ? (current.version ?? 0) + 1 : run.version ?? 0 };
     this.runs.set(run.id, saved);
     return cloneRun(saved);
