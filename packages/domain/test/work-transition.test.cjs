@@ -3,7 +3,7 @@ const { describe, it } = require("node:test");
 const {
   assertWorkRunWrite, planWorkObservation, prepareWorkRunStartCheckpoint, canClaimWorkRunStartItem,
   prepareWorkRunStartFailure,
-  prepareWorkDismissal, enqueueWriteBack,
+  prepareWorkDismissal, enqueueWriteBack, prepareWorkObservation,
 } = require("../dist");
 
 const BEFORE = "2026-11-09T08:00:00.000Z";
@@ -365,6 +365,47 @@ describe("work observation transitions", () => {
       assert.equal(plan.item.created_at, BEFORE);
     });
   }
+
+  for (const status of ["running", "waiting_human", "completed", "failed", "cancelled"]) {
+    it(`records actual ${status} facts without reopening ignored work or touching delivery`, () => {
+      const input = fixture();
+      input.item.status = "skipped";
+      input.item.current_run_id = input.run.id;
+      input.item.version = 3;
+      input.handle.status = status;
+      const plan = planWorkObservation(input);
+      assert.equal(plan.item, input.item);
+      assert.equal(plan.item.version, 3);
+      assert.equal(plan.run.status, status);
+      assert.deepEqual(plan.delivery, { kind: "keep" });
+      assert.equal(plan.settled, !["running", "waiting_human"].includes(status));
+    });
+  }
+
+  it("requires a fresh ignored snapshot and known matching execution before applying actual facts", () => {
+    const f = fixture();
+    f.item.status = "skipped";
+    f.item.current_run_id = f.run.id;
+    const input = {
+      expected_item: f.item, expected_run: f.run, handle: f.handle,
+      can_write_back: true, trigger_kind: "push", now: NOW,
+    };
+    const facts = { item: f.item, run: f.run, delivery: null };
+    assert.equal(prepareWorkObservation(input, facts).outcome, "applied");
+    for (const run of [
+      { ...f.run, external_run_id: undefined },
+      { ...f.run, external_run_id: "another-execution" },
+      { ...f.run, start_state: "pending" },
+      { ...f.run, start_state: "uncertain" },
+    ]) {
+      assert.deepEqual(prepareWorkObservation({ ...input, expected_run: run }, { ...facts, run }),
+        { outcome: "conflict", reason: "execution_identity_unknown" });
+    }
+    assert.deepEqual(prepareWorkObservation(input, { ...facts, item: { ...f.item, version: 1 } }),
+      { outcome: "conflict", reason: "stale_observation" });
+    assert.deepEqual(prepareWorkObservation(input, { ...facts, item: { ...f.item, current_run_id: "successor" } }),
+      { outcome: "conflict", reason: "not_current_run" });
+  });
 
   it("plans a delivery payload without allocating a sending identity or touching a store", () => {
     const input = fixture();

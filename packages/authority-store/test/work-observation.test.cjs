@@ -1283,6 +1283,88 @@ for (const driver of drivers) {
       assert.equal(await f.store.getWorkDeliveryByItem(ORG, f.item.id), null);
     });
 
+    for (const status of ["running", "waiting_human", "completed", "failed", "cancelled"]) {
+      it(`records actual ${status} after dismissal without changing ignored item or delivery evidence`, async (t) => {
+        const f = await fixture(t, driver, {
+          write_back_required: true, write_back_target: TARGET, trigger_kind: "push",
+        });
+        const delivery = await f.store.putWorkDelivery(enqueueWriteBack({
+          org_id: ORG, work_item_id: f.item.id, recipe_id: f.recipe.id, kind: "push",
+          unit_key: f.item.unit_key, run_id: f.run.id, target: TARGET,
+          payload: { summary: "Existing evidence" }, now: NOW,
+        }));
+        const dismissed = await f.store.dismissWorkItem({ expected_item: f.item, now: LATER });
+        const stopped = await f.store.getWorkDelivery(ORG, delivery.id);
+        const input = { ...f.input, expected_item: dismissed.item, handle: { ...f.input.handle, status } };
+        const result = await f.store.commitWorkObservation(input);
+        assert.equal(result.outcome, "applied");
+        assert.deepEqual(result.transition.item, dismissed.item);
+        assert.deepEqual(result.transition.delivery, { kind: "keep" });
+        assert.equal(result.transition.run.status, status);
+        assert.equal(result.transition.run.version, f.run.version + 1);
+        assert.equal(result.transition.run.result.summary, "Handled");
+        assert.equal(result.transition.run.write_back_required, true);
+        assert.deepEqual(result.transition.run.write_back_target, TARGET);
+        assert.deepEqual(await f.store.getWorkDelivery(ORG, delivery.id), stopped);
+        assert.equal((await f.store.listWorkDeliveries(ORG)).length, 1);
+        await f.reopen();
+        assert.deepEqual(await f.store.getWorkItem(ORG, f.item.id), dismissed.item);
+        assert.deepEqual(await f.store.getWorkRun(ORG, f.run.id), result.transition.run);
+        const repeated = await f.store.commitWorkObservation({
+          ...input, expected_run: result.transition.run,
+        });
+        assert.equal(repeated.outcome, "applied");
+        assert.equal(repeated.transition.changed, false);
+        assert.deepEqual(await f.store.getWorkDelivery(ORG, delivery.id), stopped);
+        if (status === "completed") {
+          assert.deepEqual(await f.store.commitWorkObservation({
+            ...input, expected_run: repeated.transition.run,
+            handle: { ...input.handle, result: { summary: "Changed after completion" } },
+          }), { outcome: "conflict", reason: "completed_result_changed" });
+        }
+      });
+    }
+
+    it("allows explicit retry only after an ignored execution's actual terminal outcome is committed", async (t) => {
+      const f = await fixture(t, driver);
+      const dismissed = await f.store.dismissWorkItem({ expected_item: f.item, now: LATER });
+      const claim = {
+        expected_item: dismissed.item, retry: "manual",
+        run: { ...f.run, id: "successor", status: "running", start_state: "pending" },
+      };
+      assert.equal(await f.store.claimWorkRunStart(claim), false);
+      const result = await f.store.commitWorkObservation({ ...f.input, expected_item: dismissed.item });
+      assert.equal(result.outcome, "applied");
+      assert.equal(result.transition.run.status, "completed");
+      assert.equal(await f.store.getWorkDeliveryByItem(ORG, f.item.id), null);
+      assert.equal(await f.store.claimWorkRunStart(claim), true);
+      const successor = await f.store.getWorkItem(ORG, f.item.id);
+      assert.equal(successor.current_run_id, "successor");
+      assert.deepEqual(await f.store.commitWorkObservation({
+        ...f.input, expected_item: dismissed.item, expected_run: result.transition.run,
+      }), { outcome: "conflict", reason: "not_current_run" });
+      assert.deepEqual(await f.store.getWorkItem(ORG, f.item.id), successor);
+      assert.deepEqual(await f.store.getWorkRun(ORG, f.run.id), result.transition.run);
+    });
+
+    it("refuses ambiguous or different execution identities on ignored work", async (t) => {
+      const f = await fixture(t, driver);
+      const dismissed = await f.store.dismissWorkItem({ expected_item: f.item, now: LATER });
+      for (const fields of [
+        { external_run_id: undefined }, { external_run_id: "different-execution" },
+        { start_state: "pending" }, { start_state: "uncertain" },
+      ]) {
+        const run = await f.store.putWorkRun({ ...f.run, ...fields });
+        const result = await f.store.commitWorkObservation({
+          ...f.input, expected_item: dismissed.item, expected_run: run,
+        });
+        assert.deepEqual(result, { outcome: "conflict", reason: "execution_identity_unknown" });
+        assert.deepEqual(await f.store.getWorkRun(ORG, run.id), run);
+        assert.deepEqual(await f.store.getWorkItem(ORG, f.item.id), dismissed.item);
+        assert.deepEqual(await f.store.listWorkDeliveries(ORG), []);
+      }
+    });
+
     it("permits only one of two competing completion observations", async (t) => {
       const f = await fixture(t, driver);
       const results = await Promise.all([
@@ -1352,6 +1434,24 @@ for (const driver of drivers) {
 
 for (const driver of drivers.filter((d) => d.name.startsWith("sqlite"))) {
   describe(`${driver.name} observation rollback`, () => {
+    it("preserves ignored work and run facts when actual-outcome persistence fails", async (t) => {
+      const f = await fixture(t, driver);
+      const dismissed = await f.store.dismissWorkItem({ expected_item: f.item, now: LATER });
+      const db = new Database(f.path);
+      try {
+        db.exec(`CREATE TRIGGER reject_ignored_result BEFORE UPDATE ON work_runs
+          BEGIN SELECT RAISE(ABORT, 'ignored result rejected'); END`);
+        await assert.rejects(f.store.commitWorkObservation({
+          ...f.input, expected_item: dismissed.item,
+        }), /ignored result rejected/);
+        assert.deepEqual(await f.store.getWorkItem(ORG, f.item.id), dismissed.item);
+        assert.deepEqual(await f.store.getWorkRun(ORG, f.run.id), f.run);
+        assert.deepEqual(await f.store.listWorkDeliveries(ORG), []);
+      } finally {
+        db.close();
+      }
+    });
+
     it("rolls back delivery stop requests if the dismissal item update fails", async (t) => {
       const f = await fixture(t, driver);
       const delivery = await f.store.putWorkDelivery(enqueueWriteBack({
@@ -1535,6 +1635,25 @@ it("fences competing startup checkpoints across independent SQLite writer worker
   const winner = results.find((result) => result.outcome === "applied");
   assert.deepEqual(await second.getWorkItem(ORG, winner.item.id), winner.item);
   assert.deepEqual(await second.getWorkRun(ORG, winner.run.id), winner.run);
+});
+
+it("fences conflicting actual outcomes for ignored work across independent SQLite writer workers", async (t) => {
+  const driver = drivers.find((d) => d.name === "sqlite writer RPC");
+  const f = await fixture(t, driver);
+  const dismissed = await f.store.dismissWorkItem({ expected_item: f.item, now: LATER });
+  const second = await SqliteSplitAuthorityStore.open(f.path);
+  t.after(() => second.close());
+  const results = await Promise.all([f.store, second].map((store, index) =>
+    store.commitWorkObservation({
+      ...f.input, expected_item: dismissed.item,
+      handle: { ...f.input.handle, status: index === 0 ? "completed" : "cancelled" },
+    })));
+  assert.equal(results.filter((result) => result.outcome === "applied").length, 1);
+  assert.equal(results.filter((result) => result.outcome === "conflict").length, 1);
+  const winner = results.find((result) => result.outcome === "applied");
+  assert.deepEqual(await second.getWorkRun(ORG, f.run.id), winner.transition.run);
+  assert.deepEqual(await second.getWorkItem(ORG, f.item.id), dismissed.item);
+  assert.deepEqual(await second.listWorkDeliveries(ORG), []);
 });
 
 it("fences dismissal against retries across independent SQLite writer workers", async (t) => {

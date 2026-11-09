@@ -206,7 +206,12 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
     const store = new SqliteAuthorityStore(database);
     try {
       const leftover = await store.getWorkRun("local-owner", "run-leftover-1");
-      assert.deepEqual(leftover, originalRun);
+      assert.deepEqual(
+        { ...leftover, updated_at: originalRun.updated_at, version: originalRun.version },
+        originalRun,
+      );
+      assert.ok(leftover.version >= originalRun.version);
+      assert.ok(Date.parse(leftover.updated_at) >= Date.parse(originalRun.updated_at));
       const item = await store.getWorkItem("local-owner", "work-leftover-1");
       assert.deepEqual(item, originalItem);
       const active = await store.getActiveWorkRun("local-owner", item.id);

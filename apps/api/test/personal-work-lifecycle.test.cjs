@@ -58,6 +58,7 @@ async function fixture(options = {}) {
     agent_thread_id: "executor:conversation",
     status: "running",
     start_state: "pending",
+    ...(options.frozen ? { write_back_required: false, trigger_kind: "push" } : {}),
     created_at: NOW,
     updated_at: NOW,
   };
@@ -108,6 +109,125 @@ async function fixture(options = {}) {
 }
 
 describe("work observation compatibility before RFC 0011 policy activation", () => {
+  for (const status of ["running", "waiting_human", "completed", "failed", "cancelled"]) {
+    it(`records an ignored run's ${status} facts without folding, sending or restoring follow priority`, async () => {
+      const f = await fixture();
+      const dismissed = await f.authority.dismissWorkItem({ expected_item: f.item, now: NOW });
+      await f.supervisor.applyHandle(dismissed.item, f.recipe, f.run, f.handle(status));
+      const run = await f.authority.getWorkRun(ORG, f.run.id);
+      assert.equal(run.status, status);
+      assert.equal(run.result.summary, "Handled");
+      assert.deepEqual(await f.authority.getWorkItem(ORG, f.item.id), dismissed.item);
+      assert.equal(await f.authority.getWorkDeliveryByItem(ORG, f.item.id), null);
+      assert.deepEqual(f.dropped, [f.run.id]);
+      assert.deepEqual(f.updated, [f.item.id]);
+      assert.equal(f.writes.length, 0);
+      assert.equal(f.digestChanges(), 0);
+    });
+  }
+
+  it("polls known ignored runs after restart without attaching waits or reaping; stops after actual exit", async () => {
+    const f = await fixture({ frozen: true });
+    await f.authority.dismissWorkItem({ expected_item: f.item, now: NOW });
+    await f.authority.deleteRecipe(ORG, f.recipe.id);
+    const ignored = await f.authority.getWorkItem(ORG, f.item.id);
+    let status = "running";
+    let polls = 0;
+    const executor = {
+      status: async () => { polls++; return f.handle(status); },
+    };
+    const runtime = {
+      orgId: () => ORG,
+      requireHost: () => ({ get: (name) => ({
+        authority: f.authority, executors: { get: () => executor },
+      })[name] }),
+    };
+    const supervisor = new PersonalWorkSupervise(runtime, {
+      contextFor: () => ({ org_id: ORG }),
+      inspectSysout: () => { throw new Error("Ignored runs must not be reaped"); },
+    });
+    const dropped = [];
+    supervisor.bindWaits({
+      drop: (id) => dropped.push(id),
+      attach: () => { throw new Error("Ignored runs must not regain wait priority"); },
+      followSysout: () => { throw new Error("Ignored runs must not be followed"); },
+    });
+    await supervisor.refreshRuns();
+    assert.equal(polls, 1);
+    assert.equal((await f.authority.getWorkRun(ORG, f.run.id)).status, "running");
+    status = "completed";
+    await supervisor.refreshRuns();
+    assert.equal(polls, 2);
+    assert.equal((await f.authority.getWorkRun(ORG, f.run.id)).status, "completed");
+    await supervisor.refreshRuns();
+    assert.equal(polls, 2);
+    assert.deepEqual(await f.authority.getWorkItem(ORG, f.item.id), ignored);
+    assert.deepEqual(await f.authority.listWorkDeliveries(ORG), []);
+    assert.equal(f.writes.length, 0);
+    assert.deepEqual(dropped, [f.run.id, f.run.id]);
+  });
+
+  for (const start_state of ["pending", "uncertain"]) {
+    it(`does not query an ignored ${start_state} start as a confirmed execution`, async () => {
+      const f = await fixture();
+      const run = await f.authority.putWorkRun({ ...f.run, start_state });
+      const dismissed = await f.authority.dismissWorkItem({ expected_item: f.item, now: NOW });
+      const supervisor = new PersonalWorkSupervise({
+        requireHost: () => { throw new Error("Must not query an unconfirmed start"); },
+      }, {});
+      await supervisor.refreshOne(dismissed.item, f.recipe, run);
+      assert.deepEqual(await f.authority.getWorkRun(ORG, run.id), run);
+      assert.equal(f.writes.length, 0);
+    });
+  }
+
+  it("does not apply an ignored observation to the successor started during its status query", async () => {
+    const f = await fixture();
+    const dismissed = await f.authority.dismissWorkItem({ expected_item: f.item, now: NOW });
+    const runtime = {
+      requireHost: () => ({ get: (name) => ({
+        authority: f.authority,
+        executors: { get: () => ({
+          status: async () => {
+            await f.authority.putWorkRun({ ...f.run, status: "completed", result: { summary: "Known result" } });
+            assert.equal(await f.authority.claimWorkRunStart({
+              expected_item: dismissed.item, retry: "manual",
+              run: { ...f.run, id: "successor", status: "running", start_state: "pending" },
+            }), true);
+            return f.handle();
+          },
+        }) },
+      })[name] }),
+    };
+    const supervisor = new PersonalWorkSupervise(runtime, { contextFor: () => ({ org_id: ORG }) });
+    await assert.rejects(supervisor.refreshOne(dismissed.item, f.recipe, f.run),
+      (error) => error.code === "execution_observation_conflict");
+    const current = await f.authority.getWorkItem(ORG, f.item.id);
+    assert.equal(current.current_run_id, "successor");
+    assert.equal(current.status, "running");
+    assert.equal((await f.authority.getWorkRun(ORG, f.run.id)).result.summary, "Known result");
+    assert.deepEqual(await f.authority.listWorkDeliveries(ORG), []);
+  });
+
+  it("logs an ignored status query failure and preserves its last known execution facts", async (t) => {
+    const f = await fixture();
+    const dismissed = await f.authority.dismissWorkItem({ expected_item: f.item, now: NOW });
+    const logged = t.mock.method(console, "error", () => {});
+    const supervisor = new PersonalWorkSupervise({
+      orgId: () => ORG,
+      requireHost: () => ({ get: (name) => ({
+        authority: f.authority, executors: { get: () => ({
+          status: async () => { throw new Error("Status unavailable"); },
+        }) },
+      })[name] }),
+    }, { contextFor: () => ({ org_id: ORG }) });
+    await supervisor.refreshRuns();
+    assert.equal(logged.mock.callCount(), 1);
+    assert.deepEqual(await f.authority.getWorkItem(ORG, f.item.id), dismissed.item);
+    assert.deepEqual(await f.authority.getWorkRun(ORG, f.run.id), f.run);
+    assert.deepEqual(await f.authority.listWorkDeliveries(ORG), []);
+  });
+
   it("completes work, queues its result, and folds both conversations before delivery", async () => {
     const f = await fixture();
     await f.supervisor.applyHandle(f.item, f.recipe, f.run, f.handle());

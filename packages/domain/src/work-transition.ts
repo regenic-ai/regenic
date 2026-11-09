@@ -281,7 +281,7 @@ export type CommitWorkObservationResult =
   | { outcome: "ignored"; reason: "work_skipped" }
   | {
       outcome: "conflict";
-      reason: "missing_work" | "stale_observation" | "completed_result_changed" | "not_current_run";
+      reason: "missing_work" | "stale_observation" | "completed_result_changed" | "not_current_run" | "execution_identity_unknown";
     };
 
 export type PreparedWorkObservation =
@@ -309,7 +309,7 @@ export function prepareWorkObservation(
     || run.org_id !== item.org_id || run.id !== expectedRun.id || run.work_item_id !== item.id) {
     throw new Error("Stored work observation does not match the requested identities");
   }
-  if (item.status === "skipped") {
+  if (item.status === "skipped" && expectedItem.status !== "skipped") {
     return { outcome: "ignored", reason: "work_skipped" };
   }
   if (!item.current_run_id || item.current_run_id !== expectedRun.id) {
@@ -317,6 +317,12 @@ export function prepareWorkObservation(
   }
   if (!sameSnapshot(item, expectedItem) || !sameSnapshot(run, expectedRun)) {
     return { outcome: "conflict", reason: "stale_observation" };
+  }
+  if (item.status === "skipped" && (
+    !run.external_run_id || input.handle.external_run_id !== run.external_run_id
+    || run.start_state === "pending" || run.start_state === "uncertain"
+  )) {
+    return { outcome: "conflict", reason: "execution_identity_unknown" };
   }
   if (isTerminalWorkRun(run) && input.handle.status !== run.status) {
     return { outcome: "conflict", reason: "stale_observation" };
@@ -401,10 +407,10 @@ export function planWorkObservation(input: {
   };
   assertWorkRunWrite(nextRun, run);
   const status = workStatusFromRun(nextRun.status);
-  const nextItem = item.status === status
+  const nextItem = item.status === "skipped" || item.status === status
     ? item
     : { ...item, status, version: (item.version ?? 0) + 1, updated_at: now };
-  const delivery: ObservedWorkDelivery = handle.status !== "completed" || run.status === "completed"
+  const delivery: ObservedWorkDelivery = item.status === "skipped" || handle.status !== "completed" || run.status === "completed"
     ? { kind: "keep" }
     : (run.write_back_required ?? input.can_write_back)
       ? {

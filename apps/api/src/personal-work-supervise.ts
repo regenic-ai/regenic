@@ -68,7 +68,7 @@ export class PersonalWorkSupervise {
     const host = this.runtime.requireHost();
     const orgId = this.runtime.orgId();
     const items = await host.get("authority").listWorkItems(orgId, {
-      statuses: ["running", "waiting_human"],
+      statuses: ["running", "waiting_human", "skipped"],
     });
     const active = [...items].sort((left, right) =>
       left.created_at.localeCompare(right.created_at),
@@ -112,6 +112,13 @@ export class PersonalWorkSupervise {
     if (workRunNeedsStartConfirmation(run)) {
       return;
     }
+    if (item.status === "skipped" && !run.external_run_id) {
+      console.error("personal work ignored execution requires reconciliation", {
+        org_id: item.org_id, work_item_id: item.id, run_id: run.id,
+        code: "execution_identity_unknown",
+      });
+      return;
+    }
     const host = this.runtime.requireHost();
     const executor = host.get("executors").get(run.executor_type);
     if (!executor) {
@@ -120,7 +127,7 @@ export class PersonalWorkSupervise {
     const ctx = this.channel.contextFor(executor);
     let handle = await executor.status(run, ctx);
     const now = Date.now();
-    if (isStaleWork(item.created_at, now, workReapStaleMs()) && handle.status === "running") {
+    if (item.status !== "skipped" && isStaleWork(item.created_at, now, workReapStaleMs()) && handle.status === "running") {
       handle = await this.reapIfInboxEnded(item, run, handle, executor, ctx, now);
     }
     await this.applyHandle(item, recipe, run, handle);
@@ -278,6 +285,12 @@ export class PersonalWorkSupervise {
     }
     const { transition } = result;
     const nextRun = transition.run;
+    if (transition.item.status === "skipped" && item.status === "skipped") {
+      this.waits?.drop(run.id);
+      this.writeBackOverride.delete(item.id);
+      if (transition.changed) this.workUpdated?.(item.id);
+      return;
+    }
     if (transition.settled) {
       this.writeBackOverride.delete(item.id);
       this.waits?.drop(run.id);
