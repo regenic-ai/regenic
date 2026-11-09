@@ -36,7 +36,7 @@ async function fixture(t, options = {}) {
     async start(input) {
       starts++;
       lastTaskInstruction = input.task_instruction;
-      return { status: "running" };
+      return { status: "running", external_run_id: `execution-${starts}` };
     },
   };
   const runtime = {

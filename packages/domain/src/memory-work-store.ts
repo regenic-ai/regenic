@@ -18,6 +18,9 @@ import {
   prepareWorkObservation,
   assertWorkRunSnapshot,
   assertWorkRunWrite,
+  prepareWorkRunStartCheckpoint,
+  type WorkRunStartCheckpoint,
+  type WorkRunStartCheckpointResult,
   type CommitWorkObservation,
   type CommitWorkObservationResult,
 } from "./work-transition";
@@ -145,6 +148,20 @@ export class MemoryWorkStore implements WorkStore, ExecutorStore {
     const saved = { ...cloneRun(run), version: current ? (current.version ?? 0) + 1 : run.version ?? 0 };
     this.runs.set(run.id, saved);
     return cloneRun(saved);
+  }
+
+  async checkpointWorkRunStart(input: WorkRunStartCheckpoint): Promise<WorkRunStartCheckpointResult> {
+    const item = this.items.get(input.expected_item.id);
+    const run = this.runs.get(input.expected_run.id);
+    const result = prepareWorkRunStartCheckpoint(input, {
+      item: item?.org_id === input.expected_item.org_id ? item : null,
+      run: run?.org_id === input.expected_item.org_id ? run : null,
+    });
+    if (result.outcome !== "applied") return result;
+    const saved = structuredClone(result);
+    this.items.set(saved.item.id, saved.item);
+    this.runs.set(saved.run.id, saved.run);
+    return structuredClone(saved);
   }
 
   async commitWorkObservation(input: CommitWorkObservation): Promise<CommitWorkObservationResult> {

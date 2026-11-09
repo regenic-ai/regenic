@@ -1,6 +1,6 @@
 const assert = require("node:assert/strict");
 const { describe, it } = require("node:test");
-const { assertWorkRunWrite, planWorkObservation } = require("../dist");
+const { assertWorkRunWrite, planWorkObservation, prepareWorkRunStartCheckpoint } = require("../dist");
 
 const BEFORE = "2026-11-09T08:00:00.000Z";
 const NOW = "2026-11-09T08:01:00.000Z";
@@ -42,6 +42,72 @@ function fixture() {
     now: NOW,
   };
 }
+
+describe("work start checkpoint planning", () => {
+  function checkpointFixture() {
+    const { item, run } = fixture();
+    item.current_run_id = run.id;
+    run.start_state = "pending";
+    delete run.external_run_id;
+    delete run.agent_thread_id;
+    return {
+      input: { expected_item: item, expected_run: run, now: NOW, kind: "uncertain", error: "Unknown" },
+      current: { item, run },
+    };
+  }
+
+  it("plans the run and item together without mutating caller snapshots", () => {
+    const { input, current } = checkpointFixture();
+    const original = structuredClone(current);
+    const result = prepareWorkRunStartCheckpoint(input, current);
+    assert.equal(result.outcome, "applied");
+    assert.equal(result.run.start_state, "uncertain");
+    assert.equal(result.run.status, "waiting_human");
+    assert.equal(result.item.status, "waiting_human");
+    assert.equal(result.run.version, 1);
+    assert.equal(result.item.version, 1);
+    assert.deepEqual(current, original);
+    assert.deepEqual(prepareWorkRunStartCheckpoint(input, current), result);
+  });
+
+  it("validates timestamps, errors and external identities without writes", () => {
+    const { input, current } = checkpointFixture();
+    for (const change of [
+      { now: "invalid" },
+      { error: " " },
+      { kind: "submitted", external_run_id: undefined },
+      { kind: "bound", external_run_id: "external", agent_thread_id: undefined },
+      { kind: "submitted", external_run_id: " " },
+      { kind: "submitted", external_run_id: "external", agent_thread_id: " " },
+      { kind: "bound", external_run_id: "external", agent_thread_id: " " },
+    ]) {
+      assert.throws(() => prepareWorkRunStartCheckpoint({ ...input, ...change }, current),
+        /requires|checkpoint failure/);
+    }
+    assert.equal(current.run.start_state, "pending");
+    assert.equal(current.item.status, "running");
+    assert.throws(() => prepareWorkRunStartCheckpoint({ ...input, kind: "unsupported" }, current),
+      /Unknown work run start checkpoint kind/);
+  });
+
+  it("keeps historical current identity unknown and does not infer a run", () => {
+    const { input, current } = checkpointFixture();
+    delete current.item.current_run_id;
+    assert.deepEqual(prepareWorkRunStartCheckpoint(input, current),
+      { outcome: "conflict", reason: "not_current_run" });
+  });
+
+  it("does not turn a submitted or uncertain request into a definite failure", () => {
+    for (const start_state of ["submitted", "uncertain"]) {
+      const { input, current } = checkpointFixture();
+      current.run.start_state = start_state;
+      assert.deepEqual(prepareWorkRunStartCheckpoint({ ...input, kind: "failed" }, current),
+        { outcome: "conflict", reason: "start_closed" });
+      assert.deepEqual(prepareWorkRunStartCheckpoint(input, current),
+        { outcome: "conflict", reason: "start_closed" });
+    }
+  });
+});
 
 describe("work observation transitions", () => {
   for (const status of ["completed", "failed", "cancelled"]) {

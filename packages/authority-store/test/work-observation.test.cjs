@@ -115,8 +115,151 @@ async function fixture(t, driver, runFields = {}) {
   };
 }
 
+async function startCheckpointFixture(t, driver) {
+  const f = await fixture(t, driver, {
+    write_back_required: true, write_back_target: TARGET, trigger_kind: "push",
+  });
+  const run = await f.store.putWorkRun({
+    ...f.run, external_run_id: undefined, agent_thread_id: undefined, start_state: "pending",
+  });
+  return { f, input: { expected_item: f.item, expected_run: run, now: LATER } };
+}
+
 for (const driver of drivers) {
   describe(`${driver.name} atomic work observation`, { skip: driver.skip }, () => {
+    it("checkpoints session binding and submission without changing frozen obligations", async (t) => {
+      const { f, input } = await startCheckpointFixture(t, driver);
+      const bound = await f.store.checkpointWorkRunStart({
+        ...input, kind: "bound", external_run_id: "external-1", agent_thread_id: "executor:1",
+      });
+      assert.equal(bound.outcome, "applied");
+      assert.equal(bound.run.start_state, "pending");
+      assert.equal(bound.run.version, input.expected_run.version + 1);
+      assert.deepEqual(bound.item, input.expected_item);
+      const submitted = await f.store.checkpointWorkRunStart({
+        ...input, expected_run: bound.run, kind: "submitted", external_run_id: "external-1",
+      });
+      assert.equal(submitted.outcome, "applied");
+      assert.equal(submitted.run.start_state, "submitted");
+      assert.equal(submitted.run.agent_thread_id, "executor:1");
+      assert.deepEqual(submitted.run.write_back_target, TARGET);
+      assert.equal(submitted.run.write_back_required, true);
+      assert.equal(submitted.run.trigger_kind, "push");
+      assert.deepEqual(await f.store.listWorkDeliveries(ORG), []);
+      await f.reopen();
+      assert.deepEqual(await f.store.getWorkRun(ORG, submitted.run.id), submitted.run);
+      assert.equal((await f.store.commitWorkObservation({
+        ...f.input, expected_item: submitted.item, expected_run: submitted.run,
+      })).outcome, "applied");
+      assert.equal((await f.store.listWorkDeliveries(ORG)).length, 1);
+    });
+
+    for (const kind of ["failed", "uncertain"]) {
+      it(`atomically checkpoints ${kind} with the matching item status`, async (t) => {
+        const { f, input } = await startCheckpointFixture(t, driver);
+        const result = await f.store.checkpointWorkRunStart({ ...input, kind, error: "Start error" });
+        assert.equal(result.outcome, "applied");
+        assert.equal(result.run.status, kind === "failed" ? "failed" : "waiting_human");
+        assert.equal(result.item.status, result.run.status);
+        assert.equal(result.run.start_state, kind === "failed" ? undefined : "uncertain");
+        assert.equal(result.run.version, input.expected_run.version + 1);
+        assert.equal(result.item.version, input.expected_item.version + 1);
+        assert.equal(result.item.current_run_id, result.run.id);
+        assert.equal(result.run.result.summary, "Start error");
+        assert.deepEqual(await f.store.getWorkRun(ORG, result.run.id), result.run);
+        assert.deepEqual(await f.store.getWorkItem(ORG, result.item.id), result.item);
+        assert.deepEqual(await f.store.listWorkDeliveries(ORG), []);
+        await f.reopen();
+        assert.deepEqual(await f.store.getWorkRun(ORG, result.run.id), result.run);
+        assert.deepEqual(await f.store.getWorkItem(ORG, result.item.id), result.item);
+      });
+    }
+
+    it("does not mistake a known external session for a definite pre-start failure", async (t) => {
+      const { f, input } = await startCheckpointFixture(t, driver);
+      const bound = await f.store.checkpointWorkRunStart({
+        ...input, kind: "bound", external_run_id: "external-1", agent_thread_id: "executor:1",
+      });
+      const next = { ...input, expected_run: bound.run };
+      assert.deepEqual(await f.store.checkpointWorkRunStart({
+        ...next, kind: "failed", error: "Not proven",
+      }), { outcome: "conflict", reason: "start_closed" });
+      const uncertain = await f.store.checkpointWorkRunStart({
+        ...next, kind: "uncertain", error: "Submission response lost",
+      });
+      assert.equal(uncertain.run.external_run_id, "external-1");
+      assert.equal(uncertain.run.agent_thread_id, "executor:1");
+      const recovered = await f.store.checkpointWorkRunStart({
+        ...input, expected_item: uncertain.item, expected_run: uncertain.run,
+        kind: "submitted", external_run_id: "external-1",
+      });
+      assert.equal(recovered.outcome, "applied");
+      assert.equal(recovered.run.start_state, "submitted");
+      assert.equal(recovered.item.status, "waiting_human");
+    });
+
+    it("rejects stale startup snapshots, skipped work and superseded attempts", async (t) => {
+      const { f, input } = await startCheckpointFixture(t, driver);
+      const command = { ...input, kind: "uncertain", error: "Unknown" };
+      const newer = await f.store.putWorkItem({ ...f.item, updated_at: LATER });
+      assert.deepEqual(await f.store.checkpointWorkRunStart(command),
+        { outcome: "conflict", reason: "stale_checkpoint" });
+      const run = await f.store.putWorkRun({ ...input.expected_run, result: { summary: "Newer" } });
+      assert.deepEqual(await f.store.checkpointWorkRunStart({ ...command, expected_item: newer }),
+        { outcome: "conflict", reason: "stale_checkpoint" });
+      const skipped = await f.store.putWorkItem({ ...newer, status: "skipped" });
+      assert.deepEqual(await f.store.checkpointWorkRunStart({
+        ...command, expected_item: skipped, expected_run: run,
+      }), { outcome: "conflict", reason: "work_skipped" });
+      await f.store.putWorkRun({ ...run, status: "cancelled", start_state: undefined });
+      await f.store.putWorkItem({ ...skipped, status: "open" });
+      assert.equal(await f.store.claimWorkRunStart({
+        run: { ...input.expected_run, id: "new-start", status: "running", start_state: "pending" },
+      }), true);
+      const currentItem = await f.store.getWorkItem(ORG, f.item.id);
+      const closedRun = await f.store.getWorkRun(ORG, run.id);
+      assert.deepEqual(await f.store.checkpointWorkRunStart({
+        ...command, expected_item: currentItem, expected_run: closedRun,
+      }), { outcome: "conflict", reason: "not_current_run" });
+      assert.deepEqual(await f.store.getWorkRun(ORG, run.id), closedRun);
+      assert.deepEqual(await f.store.getWorkItem(ORG, f.item.id), currentItem);
+    });
+
+    it("cannot checkpoint a closed or terminal start or cross-tenant identity", async (t) => {
+      const { f, input } = await startCheckpointFixture(t, driver);
+      const closed = await f.store.putWorkRun({ ...input.expected_run, start_state: undefined });
+      assert.deepEqual(await f.store.checkpointWorkRunStart({
+        ...input, expected_run: closed, kind: "uncertain", error: "Unknown",
+      }), { outcome: "conflict", reason: "start_closed" });
+      const completed = await f.store.putWorkRun({ ...closed, status: "completed", start_state: "submitted" });
+      assert.deepEqual(await f.store.checkpointWorkRunStart({
+        ...input, expected_run: completed, kind: "submitted", external_run_id: "late",
+      }), { outcome: "conflict", reason: "start_closed" });
+      assert.deepEqual(await f.store.checkpointWorkRunStart({
+        ...input, expected_item: { ...input.expected_item, org_id: "foreign" },
+        expected_run: { ...completed, org_id: "foreign" }, kind: "uncertain", error: "Unknown",
+      }), { outcome: "conflict", reason: "missing_work" });
+      await assert.rejects(f.store.checkpointWorkRunStart({
+        ...input, expected_run: { ...completed, work_item_id: "foreign" }, kind: "uncertain", error: "Unknown",
+      }), /same organization and work item/);
+      assert.deepEqual(await f.store.getWorkRun(ORG, completed.id), completed);
+    });
+
+    it("serializes competing failure and submission checkpoints without torn status", async (t) => {
+      const { f, input } = await startCheckpointFixture(t, driver);
+      const results = await Promise.all([
+        f.store.checkpointWorkRunStart({ ...input, kind: "failed", error: "Not sent" }),
+        f.store.checkpointWorkRunStart({ ...input, kind: "submitted", external_run_id: "accepted" }),
+      ]);
+      assert.equal(results.filter((result) => result.outcome === "applied").length, 1);
+      assert.equal(results.filter((result) => result.outcome === "conflict").length, 1);
+      const winner = results.find((result) => result.outcome === "applied");
+      assert.deepEqual(await f.store.getWorkRun(ORG, winner.run.id), winner.run);
+      assert.deepEqual(await f.store.getWorkItem(ORG, winner.item.id), winner.item);
+      winner.run.result = { summary: "Mutated return" };
+      assert.notEqual((await f.store.getWorkRun(ORG, winner.run.id)).result?.summary, "Mutated return");
+    });
+
     it("atomically claims each delivery once and fences settlement with owner, token and lease", async (t) => {
       const f = await fixture(t, driver);
       await f.store.commitWorkObservation(f.input);
@@ -770,6 +913,28 @@ for (const driver of drivers) {
 
 for (const driver of drivers.filter((d) => d.name.startsWith("sqlite"))) {
   describe(`${driver.name} observation rollback`, () => {
+    for (const kind of ["failed", "uncertain"]) {
+      it(`rolls back the ${kind} checkpoint if the item write fails`, async (t) => {
+        const { f, input } = await startCheckpointFixture(t, driver);
+        const db = new Database(f.path);
+        try {
+          db.exec(`CREATE TRIGGER reject_start_checkpoint BEFORE UPDATE ON work_items
+            BEGIN SELECT RAISE(ABORT, 'checkpoint write rejected'); END`);
+          await assert.rejects(f.store.checkpointWorkRunStart({
+            ...input, kind, error: "Start error",
+          }), /checkpoint write rejected/);
+          assert.deepEqual(await f.store.getWorkRun(ORG, input.expected_run.id), input.expected_run);
+          assert.deepEqual(await f.store.getWorkItem(ORG, f.item.id), input.expected_item);
+          db.exec("DROP TRIGGER reject_start_checkpoint");
+          assert.equal((await f.store.checkpointWorkRunStart({
+            ...input, kind, error: "Start error",
+          })).outcome, "applied");
+        } finally {
+          db.close();
+        }
+      });
+    }
+
     for (const [table, operation] of [["work_deliveries", "INSERT"], ["work_items", "UPDATE"]]) {
       it(`rolls back every write when ${table} fails after the run update`, async (t) => {
         const f = await fixture(t, driver);
@@ -829,6 +994,20 @@ it("freezes completed results across independent SQLite writer workers", async (
   assert.deepEqual(await second.getWorkRun(ORG, f.run.id), winner);
   await assert.rejects(second.putWorkRun(f.run), /Terminal work run status is immutable/);
   assert.deepEqual(await f.store.getWorkItem(ORG, f.item.id), f.item);
+});
+
+it("fences competing startup checkpoints across independent SQLite writer workers", async (t) => {
+  const driver = drivers.find((d) => d.name === "sqlite writer RPC");
+  const { f, input } = await startCheckpointFixture(t, driver);
+  const second = await SqliteSplitAuthorityStore.open(f.path);
+  t.after(() => second.close());
+  const results = await Promise.all([f.store, second].map((store) =>
+    store.checkpointWorkRunStart({ ...input, kind: "uncertain", error: "Response lost" })));
+  assert.equal(results.filter((result) => result.outcome === "applied").length, 1);
+  assert.equal(results.filter((result) => result.outcome === "conflict").length, 1);
+  const winner = results.find((result) => result.outcome === "applied");
+  assert.deepEqual(await second.getWorkItem(ORG, winner.item.id), winner.item);
+  assert.deepEqual(await second.getWorkRun(ORG, winner.run.id), winner.run);
 });
 
 it("migrates the v57 delivery table without changing request identities or inventing snapshots", async (t) => {

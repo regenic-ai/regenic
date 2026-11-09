@@ -95,6 +95,8 @@ import type {
   WorkDeliveryCommandResult,
   CommitWorkObservation,
   CommitWorkObservationResult,
+  WorkRunStartCheckpoint,
+  WorkRunStartCheckpointResult,
   SearchAnswerRecord,
   WorkStore,
   ExecutorInstallation,
@@ -817,6 +819,10 @@ export class SqliteSplitAuthorityStore
 
   async claimWorkRunStart(input: WorkRunStartClaim): Promise<boolean> {
     return this.writer.call("claimWorkRunStart", [input]);
+  }
+
+  async checkpointWorkRunStart(input: WorkRunStartCheckpoint): Promise<WorkRunStartCheckpointResult> {
+    return this.writer.call("checkpointWorkRunStart", [input]);
   }
 
   async commitWorkObservation(input: CommitWorkObservation): Promise<CommitWorkObservationResult> {

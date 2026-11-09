@@ -8,7 +8,10 @@ import type { ContentPart, JsonValue } from "./ingestion";
 import type { RecordClass } from "./record-class";
 import type { ThreadFacet } from "./thread-facet";
 import type { SearchAnswerRecord } from "./search-answer";
-import type { CommitWorkObservation, CommitWorkObservationResult } from "./work-transition";
+import type {
+  CommitWorkObservation, CommitWorkObservationResult,
+  WorkRunStartCheckpoint, WorkRunStartCheckpointResult,
+} from "./work-transition";
 
 export type { ResultEnvelope, WorkRun, WorkRunStatus };
 export type { WorkWriteBackTarget } from "@regenic/connector-contract";
@@ -259,6 +262,8 @@ export interface WorkStore {
   putWorkRun(run: WorkRun): Promise<WorkRun>;
   /** Atomically reserve an open item and persist its run before external start. */
   claimWorkRunStart(input: WorkRunStartClaim): Promise<boolean>;
+  /** Atomically checkpoint a current reserved start and its matching item status. */
+  checkpointWorkRunStart(input: WorkRunStartCheckpoint): Promise<WorkRunStartCheckpointResult>;
   /** Atomically apply an observed run, work status and compatible delivery change. */
   commitWorkObservation(input: CommitWorkObservation): Promise<CommitWorkObservationResult>;
   listWorkDeliveries(orgId: string): Promise<WorkDelivery[]>;

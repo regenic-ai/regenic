@@ -71,6 +71,8 @@ import type {
   WorkItem,
   WorkRun,
   WorkRunStartClaim,
+  WorkRunStartCheckpoint,
+  WorkRunStartCheckpointResult,
   WorkDeliveryCommand,
   WorkDeliveryCommandResult,
   CommitWorkObservation,
@@ -321,6 +323,7 @@ import {
 } from "./inbox";
 import {
   claimWorkRunStart,
+  checkpointWorkRunStart,
   transitionWorkDelivery,
   commitWorkObservation,
   deleteSearchAnswer,
@@ -1211,6 +1214,10 @@ export class PostgresAuthorityStore
 
   async claimWorkRunStart(input: WorkRunStartClaim): Promise<boolean> {
     return claimWorkRunStart(this.sql, input);
+  }
+
+  async checkpointWorkRunStart(input: WorkRunStartCheckpoint): Promise<WorkRunStartCheckpointResult> {
+    return checkpointWorkRunStart(this.sql, input);
   }
 
   async commitWorkObservation(input: CommitWorkObservation): Promise<CommitWorkObservationResult> {

@@ -67,6 +67,8 @@ import type {
   WorkItem,
   WorkRun,
   WorkRunStartClaim,
+  WorkRunStartCheckpoint,
+  WorkRunStartCheckpointResult,
   WorkDeliveryCommand,
   WorkDeliveryCommandResult,
   CommitWorkObservation,
@@ -277,6 +279,7 @@ import {
 } from "./inbox";
 import {
   claimWorkRunStart,
+  checkpointWorkRunStart,
   transitionWorkDelivery,
   commitWorkObservation,
   deleteSearchAnswer,
@@ -1246,6 +1249,11 @@ export class SqliteAuthorityStore
   async claimWorkRunStart(input: WorkRunStartClaim): Promise<boolean> {
     this.assertWritable();
     return claimWorkRunStart(this.database, input);
+  }
+
+  async checkpointWorkRunStart(input: WorkRunStartCheckpoint): Promise<WorkRunStartCheckpointResult> {
+    this.assertWritable();
+    return checkpointWorkRunStart(this.database, input);
   }
 
   async commitWorkObservation(input: CommitWorkObservation): Promise<CommitWorkObservationResult> {

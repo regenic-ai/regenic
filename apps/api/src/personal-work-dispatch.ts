@@ -38,6 +38,8 @@ import {
   type TaskExecutor,
   type WorkItem,
   type WorkRun,
+  type WorkRunStartCheckpoint,
+  type WorkRunStartCheckpointResult,
   type WorkContextAccess,
 } from "@regenic/domain";
 import { resolveInboxBodies, resolveInboxBody, type InboxBody } from "./inbox-body";
@@ -646,17 +648,9 @@ export class PersonalWorkDispatch {
         latestItem.status !== "skipped"
       ) {
         const failedAt = new Date().toISOString();
-        await authority.putWorkRun({
-          ...saved,
-          start_state: undefined,
-          status: "failed",
-          result: { summary: definite.message },
-          updated_at: failedAt,
-        });
-        await authority.putWorkItem({
-          ...latestItem,
-          status: "failed",
-          updated_at: failedAt,
+        await this.checkpointStart({
+          expected_item: latestItem, expected_run: saved,
+          kind: "failed", error: definite.message, now: failedAt,
         });
         console.error("personal work start failed", {
           run_id: run.id,
@@ -673,19 +667,10 @@ export class PersonalWorkDispatch {
       });
       if (saved && latestItem && saved.status !== "cancelled" && latestItem.status !== "skipped") {
         if (saved.start_state === "pending") {
-          await authority.putWorkRun({
-            ...saved,
-            start_state: "uncertain",
-            status: "waiting_human",
-            result: {
-              summary: `Executor start could not be confirmed: ${deliveryErrorMessage(error)}. Check the executor before dismissing this attempt and starting a new one.`,
-            },
-            updated_at: new Date().toISOString(),
-          });
-          await authority.putWorkItem({
-            ...latestItem,
-            status: "waiting_human",
-            updated_at: new Date().toISOString(),
+          await this.checkpointStart({
+            expected_item: latestItem, expected_run: saved, kind: "uncertain",
+            error: `Executor start could not be confirmed: ${deliveryErrorMessage(error)}. Check the executor before dismissing this attempt and starting a new one.`,
+            now: new Date().toISOString(),
           });
         }
       }
@@ -712,76 +697,84 @@ export class PersonalWorkDispatch {
     if (saved.status === "cancelled" || saved.start_state === undefined) {
       if (saved.status === "running" || saved.status === "waiting_human") {
         const latestItem = await authority.getWorkItem(item.org_id, item.id);
-        if (latestItem && isActiveWorkStatus(latestItem.status)) {
+        if (latestItem?.current_run_id === saved.id && isActiveWorkStatus(latestItem.status)) {
           this.waits.attach(latestItem, saved, executor);
         }
       }
       return saved;
     }
-    const acknowledged: WorkRun = {
-      ...saved,
+    const latestStartItem = await authority.getWorkItem(item.org_id, item.id);
+    if (!latestStartItem) throw new Error(`Claimed work item disappeared: ${item.id}`);
+    const acknowledged = await this.checkpointStart({
+      expected_item: latestStartItem, expected_run: saved, kind: "submitted",
       external_run_id: handle.external_run_id,
-      agent_thread_id: handle.agent_thread_id ?? saved.agent_thread_id,
-      start_state: "submitted",
-      result: handle.result ?? saved.result,
-      updated_at: new Date().toISOString(),
-    };
-    const persistedAcknowledged = await authority.putWorkRun(acknowledged);
-    await this.supervise.applyHandle(runningItem, recipe, persistedAcknowledged, handle);
+      agent_thread_id: handle.agent_thread_id, result: handle.result,
+      now: new Date().toISOString(),
+    });
+    await this.supervise.applyHandle(acknowledged.item, recipe, acknowledged.run, handle);
     const latest = await host.get("authority").getActiveWorkRun(item.org_id, item.id);
     const latestItem = await host.get("authority").getWorkItem(item.org_id, item.id);
-    if (latest && latestItem && isActiveWorkStatus(latestItem.status)) {
+    if (latest?.id === run.id && latestItem?.current_run_id === run.id
+      && isActiveWorkStatus(latestItem.status)) {
       this.waits.attach(latestItem, latest, executor);
     }
-    return (
-      latest ?? await authority.getWorkRun(item.org_id, run.id) ?? run
-    );
+    const finishedStart = await authority.getWorkRun(item.org_id, run.id);
+    if (!finishedStart) throw new Error(`Claimed work run disappeared: ${run.id}`);
+    return finishedStart;
   }
 
   private startContext(run: WorkRun, ctx: ExecutorContext): ExecutorContext {
     const authority = this.runtime.requireHost().get("authority");
-    const current = async (): Promise<WorkRun> => {
+    const current = async (): Promise<{ expected_run: WorkRun; expected_item: WorkItem }> => {
       const [saved, item] = await Promise.all([
         authority.getWorkRun(run.org_id, run.id),
         authority.getWorkItem(run.org_id, run.work_item_id),
       ]);
       if (
-        !saved || !item || item.status === "skipped" ||
+        !saved || !item || saved.start_state !== "pending" || !isActiveWorkStatus(item.status)
+        || item.current_run_id !== saved.id ||
         saved.status === "cancelled" || saved.status === "completed" || saved.status === "failed"
       ) {
         throw new PersonalConnectorError("work_abandoned", "Work start is no longer active", 409);
       }
-      return saved;
+      return { expected_run: saved, expected_item: item };
     };
     return {
       ...ctx,
       spawnSysout: async (options) => {
-        await current();
+        const expected = await current();
         const thread = await ctx.spawnSysout(options);
-        const saved = await current();
         const sysoutId = `${thread.source}:${thread.target}`;
-        await authority.putWorkRun({
-          ...saved,
+        await this.checkpointStart({
+          ...expected, kind: "bound",
           external_run_id: sysoutId,
           agent_thread_id: sysoutId,
-          updated_at: new Date().toISOString(),
+          now: new Date().toISOString(),
         });
         return thread;
       },
       writeStdin: async (thread, text) => {
-        await current();
+        const expected = await current();
         await ctx.writeStdin(thread, text);
-        const saved = await current();
         const sysoutId = `${thread.source}:${thread.target}`;
-        await authority.putWorkRun({
-          ...saved,
+        await this.checkpointStart({
+          ...expected, kind: "submitted",
           external_run_id: sysoutId,
           agent_thread_id: sysoutId,
-          start_state: "submitted",
-          updated_at: new Date().toISOString(),
+          now: new Date().toISOString(),
         });
       },
     };
+  }
+
+  private async checkpointStart(
+    input: WorkRunStartCheckpoint,
+  ): Promise<Extract<WorkRunStartCheckpointResult, { outcome: "applied" }>> {
+    const result = await this.runtime.requireHost().get("authority").checkpointWorkRunStart(input);
+    if (result.outcome === "conflict") throw new PersonalConnectorError(
+      "execution_start_conflict", `Work start checkpoint rejected: ${result.reason}. Refresh the work item.`, 409,
+    );
+    return result;
   }
 
   private async hasStartCapacity(recipe: Recipe, exceptItemId: string): Promise<boolean> {

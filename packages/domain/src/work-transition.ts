@@ -46,6 +46,81 @@ function isTerminalWorkRun(run: WorkRun): boolean {
   return run.status === "completed" || run.status === "failed" || run.status === "cancelled";
 }
 
+export type WorkRunStartCheckpoint = {
+  expected_item: WorkItem;
+  expected_run: WorkRun;
+  now: string;
+} & (
+  | { kind: "bound"; external_run_id: string; agent_thread_id: string }
+  | { kind: "submitted"; external_run_id: string; agent_thread_id?: string; result?: WorkRun["result"] }
+  | { kind: "failed" | "uncertain"; error: string }
+);
+
+export type WorkRunStartCheckpointResult =
+  | { outcome: "applied"; item: WorkItem; run: WorkRun }
+  | {
+      outcome: "conflict";
+      reason: "missing_work" | "work_skipped" | "not_current_run" | "stale_checkpoint" | "start_closed";
+    };
+
+export function prepareWorkRunStartCheckpoint(
+  input: WorkRunStartCheckpoint,
+  current: { item: WorkItem | null; run: WorkRun | null },
+): WorkRunStartCheckpointResult {
+  const { expected_item: expectedItem, expected_run: expectedRun } = input;
+  if (!["bound", "submitted", "failed", "uncertain"].includes(input.kind)) {
+    throw new Error("Unknown work run start checkpoint kind");
+  }
+  if (!Number.isFinite(Date.parse(input.now))) throw new Error("Start checkpoint requires a valid timestamp");
+  if (expectedRun.org_id !== expectedItem.org_id || expectedRun.work_item_id !== expectedItem.id) {
+    throw new Error("Start checkpoint must belong to the same organization and work item");
+  }
+  const { item, run } = current;
+  if (!item || !run) return { outcome: "conflict", reason: "missing_work" };
+  if (item.org_id !== expectedItem.org_id || item.id !== expectedItem.id
+    || run.org_id !== item.org_id || run.id !== expectedRun.id || run.work_item_id !== item.id) {
+    throw new Error("Stored start checkpoint does not match the requested identities");
+  }
+  if (item.status === "skipped") return { outcome: "conflict", reason: "work_skipped" };
+  if (item.current_run_id !== run.id) return { outcome: "conflict", reason: "not_current_run" };
+  if (!sameSnapshot(item, expectedItem) || !sameSnapshot(run, expectedRun)) {
+    return { outcome: "conflict", reason: "stale_checkpoint" };
+  }
+  if (!run.start_state || isTerminalWorkRun(run)
+    || (item.status !== "running" && item.status !== "waiting_human")
+    || (input.kind !== "submitted" && run.start_state !== "pending")
+    || (input.kind === "failed" && (run.external_run_id || run.agent_thread_id))) {
+    return { outcome: "conflict", reason: "start_closed" };
+  }
+  const nextRun: WorkRun = { ...run, version: (run.version ?? 0) + 1, updated_at: input.now };
+  if (input.kind === "bound" || input.kind === "submitted") {
+    if (typeof input.external_run_id !== "string" || !input.external_run_id.trim()
+      || (input.kind === "bound" && typeof input.agent_thread_id !== "string")
+      || (input.agent_thread_id !== undefined
+        && (typeof input.agent_thread_id !== "string" || !input.agent_thread_id.trim()))) {
+      throw new Error("Start checkpoint requires an external execution identity");
+    }
+    nextRun.external_run_id = input.external_run_id;
+    nextRun.agent_thread_id = input.agent_thread_id ?? run.agent_thread_id;
+    if (input.kind === "submitted") {
+      nextRun.start_state = "submitted";
+      nextRun.result = input.result ?? run.result;
+    }
+  } else {
+    if (typeof input.error !== "string" || !input.error.trim()) {
+      throw new Error("Start checkpoint failure requires an error");
+    }
+    nextRun.status = input.kind === "failed" ? "failed" : "waiting_human";
+    nextRun.start_state = input.kind === "failed" ? undefined : "uncertain";
+    nextRun.result = { summary: input.error };
+  }
+  assertWorkRunWrite(nextRun, run);
+  const status = workStatusFromRun(nextRun.status);
+  const nextItem = status === item.status ? item
+    : { ...item, status, version: (item.version ?? 0) + 1, updated_at: input.now };
+  return { outcome: "applied", item: nextItem, run: nextRun };
+}
+
 export type ObservedWorkDelivery =
   | { kind: "enqueue"; payload: WorkDeliveryPayload }
   | { kind: "abandon" }

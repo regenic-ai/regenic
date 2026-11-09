@@ -20,6 +20,9 @@ import {
   type WorkItemStatus,
   prepareWorkObservation,
   assertWorkRunWrite,
+  prepareWorkRunStartCheckpoint,
+  type WorkRunStartCheckpoint,
+  type WorkRunStartCheckpointResult,
   assertWorkDeliveryWrite,
   planWorkDeliveryCommand,
   canonicalContextJson,
@@ -259,6 +262,25 @@ export async function listHiddenExecutorThreadIds(db: Database.Database, orgId: 
 export async function putWorkRun(db: Database.Database, run: WorkRun): Promise<WorkRun> {
     return db.transaction(() => writeWorkRun(db, run, true)).immediate();
   }
+
+export async function checkpointWorkRunStart(
+  db: Database.Database, input: WorkRunStartCheckpoint,
+): Promise<WorkRunStartCheckpointResult> {
+  return db.transaction((): WorkRunStartCheckpointResult => {
+    const orgId = input.expected_item.org_id;
+    const item = db.prepare("SELECT * FROM work_items WHERE org_id = ? AND id = ?")
+      .get(orgId, input.expected_item.id) as WorkItemRow | undefined;
+    const run = db.prepare("SELECT * FROM work_runs WHERE org_id = ? AND id = ?")
+      .get(orgId, input.expected_run.id) as WorkRunRow | undefined;
+    const result = prepareWorkRunStartCheckpoint(input, {
+      item: item ? toWorkItem(item) : null, run: run ? toWorkRun(run) : null,
+    });
+    if (result.outcome !== "applied") return result;
+    writeWorkRun(db, result.run);
+    if (result.item.status !== input.expected_item.status) writeWorkItem(db, result.item);
+    return result;
+  }).immediate();
+}
 
 export async function commitWorkObservation(
   db: Database.Database,

@@ -20,6 +20,9 @@ import {
   type WorkItemStatus,
   prepareWorkObservation,
   assertWorkRunWrite,
+  prepareWorkRunStartCheckpoint,
+  type WorkRunStartCheckpoint,
+  type WorkRunStartCheckpointResult,
   assertWorkDeliveryWrite,
   planWorkDeliveryCommand,
   type CommitWorkObservation,
@@ -322,6 +325,31 @@ export async function putWorkRun(
     if (!row) throw new Error("Work run identity, write-back snapshot, terminal status and completed result are immutable");
     return toWorkRun(row);
   }
+
+export async function checkpointWorkRunStart(
+  db: PgSql, input: WorkRunStartCheckpoint,
+): Promise<WorkRunStartCheckpointResult> {
+  return db.withTx(async (client) => {
+    const orgId = input.expected_item.org_id;
+    const item = await db.queryOne<WorkItemRow>(
+      "SELECT * FROM work_items WHERE org_id = $1 AND id = $2 FOR UPDATE",
+      [orgId, input.expected_item.id], client,
+    );
+    const run = await db.queryOne<WorkRunRow>(
+      "SELECT * FROM work_runs WHERE org_id = $1 AND id = $2 FOR UPDATE",
+      [orgId, input.expected_run.id], client,
+    );
+    const result = prepareWorkRunStartCheckpoint(input, {
+      item: item ? toWorkItem(item) : null, run: run ? toWorkRun(run) : null,
+    });
+    if (result.outcome !== "applied") return result;
+    await putWorkRun(db, result.run, client, false);
+    if (result.item.status !== input.expected_item.status) {
+      await putWorkItem(db, result.item, client, false);
+    }
+    return result;
+  });
+}
 
 export async function commitWorkObservation(
   db: PgSql,

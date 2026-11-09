@@ -234,6 +234,96 @@ describe("durable executor start", () => {
     assert.equal(f.calls.stdin, 0);
   });
 
+  for (const kind of ["failed", "uncertain"]) {
+    it(`does not overwrite a concurrent ignore when checkpointing a ${kind} start`, async (t) => {
+      const f = await fixture(t);
+      f.hooks.spawn = async () => {
+        if (kind === "failed") throw new PersonalConnectorError("no_sender", "No sender", 400);
+        throw new Error("Response lost");
+      };
+      const checkpoint = f.ports.authority.checkpointWorkRunStart.bind(f.ports.authority);
+      let before;
+      t.mock.method(f.ports.authority, "checkpointWorkRunStart", async (input) => {
+        assert.equal(input.kind, kind);
+        before = await f.ports.authority.getWorkRun(ORG, input.expected_run.id);
+        await f.ports.authority.putWorkItem({ ...input.expected_item, status: "skipped" });
+        return checkpoint(input);
+      });
+      await assert.rejects(f.dispatch().startItem(f.item, f.recipe, "evidence", "manual"),
+        code("execution_start_conflict"));
+      assert.equal((await f.ports.authority.getWorkItem(ORG, f.item.id)).status, "skipped");
+      assert.deepEqual(await f.ports.authority.getWorkRun(ORG, before.id), before);
+      assert.equal(f.calls.spawn, 1);
+      assert.equal(f.calls.stdin, 0);
+    });
+  }
+
+  it("rejects a late final start acknowledgement without observing or reviving ignored work", async (t) => {
+    const f = await fixture(t);
+    const checkpoint = f.ports.authority.checkpointWorkRunStart.bind(f.ports.authority);
+    let before;
+    t.mock.method(f.ports.authority, "checkpointWorkRunStart", async (input) => {
+      if (input.kind === "submitted" && input.expected_run.start_state === "submitted") {
+        before = await f.ports.authority.getWorkRun(ORG, input.expected_run.id);
+        await f.ports.authority.putWorkItem({ ...input.expected_item, status: "skipped" });
+      }
+      return checkpoint(input);
+    });
+    const supervisor = f.supervise();
+    const observed = t.mock.method(supervisor, "applyHandle");
+    await assert.rejects(f.dispatch(supervisor).startItem(f.item, f.recipe, "evidence", "manual"),
+      code("execution_start_conflict"));
+    assert.equal(observed.mock.callCount(), 0);
+    assert.equal(f.calls.attach, 0);
+    assert.equal(f.calls.stdin, 1);
+    assert.equal((await f.ports.authority.getWorkItem(ORG, f.item.id)).status, "skipped");
+    assert.deepEqual(await f.ports.authority.getWorkRun(ORG, before.id), before);
+  });
+
+  it("does not submit stdin again from an already acknowledged startup context", async (t) => {
+    const f = await fixture(t);
+    const executor = createSessionTaskExecutor({ executor_type: "session", source: "dsh" });
+    f.setExecutor({
+      ...executor,
+      async start(input, ctx) {
+        const handle = await executor.start(input, ctx);
+        await assert.rejects(ctx.writeStdin({ source: "dsh", target: "session-1" }, "duplicate"),
+          code("work_abandoned"));
+        return handle;
+      },
+    });
+    await f.dispatch().startItem(f.item, f.recipe, "evidence");
+    assert.equal(f.calls.stdin, 1);
+  });
+
+  it("does not attach or return a newer run that takes over during start finalization", async (t) => {
+    const f = await fixture(t);
+    const supervisor = f.supervise();
+    const apply = supervisor.applyHandle.bind(supervisor);
+    let originalId;
+    t.mock.method(supervisor, "applyHandle", async (...args) => {
+      await apply(...args);
+      const saved = await f.ports.authority.getActiveWorkRun(ORG, f.item.id);
+      originalId = saved.id;
+      await f.ports.authority.putWorkRun({ ...saved, status: "completed" });
+      await f.ports.authority.putWorkItem({
+        ...await f.ports.authority.getWorkItem(ORG, f.item.id), status: "open",
+      });
+      assert.equal(await f.ports.authority.claimWorkRunStart({
+        run: {
+          ...saved, id: "successor-run", executor_type: "different-executor",
+          status: "running", start_state: "pending", external_run_id: undefined,
+          agent_thread_id: undefined, version: 0,
+        },
+      }), true);
+    });
+    const result = await f.dispatch(supervisor).startItem(f.item, f.recipe, "evidence");
+    assert.equal(result.id, originalId);
+    assert.equal(result.status, "completed");
+    assert.equal((await f.ports.authority.getActiveWorkRun(ORG, f.item.id)).id, "successor-run");
+    assert.equal(f.calls.attach, 0);
+  });
+
   it("reports an unknown executor before any external startup", async (t) => {
     const f = await fixture(t);
     f.setExecutor(undefined);
@@ -263,7 +353,7 @@ describe("durable executor start", () => {
 
   it("keeps the pre-start intent across a crash before the session checkpoint", async (t) => {
     const f = await fixture(t);
-    t.mock.method(f.ports.authority, "putWorkRun", async () => { throw new Error("store unavailable"); });
+    t.mock.method(f.ports.authority, "checkpointWorkRunStart", async () => { throw new Error("store unavailable"); });
     await assert.rejects(f.dispatch().startItem(f.item, f.recipe, "evidence"), /store unavailable/);
     assert.equal(f.calls.spawn, 1);
     assert.equal(f.calls.stdin, 0);

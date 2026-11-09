@@ -149,6 +149,7 @@ export const AUTHORITY_WRITE_METHODS = [
   "putWorkItem",
   "putWorkRun",
   "claimWorkRunStart",
+  "checkpointWorkRunStart",
   "commitWorkObservation",
   "putSearchAnswer",
   "deleteSearchAnswer",
