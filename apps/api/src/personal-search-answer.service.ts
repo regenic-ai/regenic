@@ -3,6 +3,7 @@ import { forwardRef, HttpStatus, Inject, Injectable } from "@nestjs/common";
 import {
   type CopyLocale,
   type SearchAnswerRecord,
+  type SearchAnswerScope,
   type WorkRun,
 } from "@regenic/domain";
 import { PersonalContextError } from "./personal-context-error";
@@ -25,6 +26,8 @@ export const SEARCH_ANSWER_PROMPT = [
   "Answer concisely in the language of the question.",
   "Cite the messages that support each statement with their bracket numbers, for example [3].",
   "If the messages do not answer the question, say so and state what is missing.",
+  "Read EVIDENCE SCOPE when present. If complete=false, never claim an exhaustive total, all items, or that no other records exist; explicitly describe the answer as partial.",
+  "If complete=true, totals and exhaustive lists are allowed only when supported by the cited messages and scope metadata.",
   "Attachment contents are not available; only their names are listed.",
 ].join("\n");
 
@@ -44,6 +47,7 @@ export interface SearchAnswerView {
   agent_thread_id?: string;
   answer?: string;
   citations?: Array<{ ref: number; event_id: string }>;
+  scope?: SearchAnswerScope;
 }
 
 /** Structured executor evidence wins; bracket references are a compatibility fallback. */
@@ -104,6 +108,7 @@ export class PersonalSearchAnswerService {
       work_item_id: workItemId,
       query: evidence.query,
       event_ids: evidence.refs,
+      ...(evidence.scope ? { scope: evidence.scope } : {}),
       created_at: now,
       updated_at: now,
     };
@@ -191,6 +196,7 @@ function view(
     status,
     executor_type: run?.executor_type ?? "",
     ...(run?.agent_thread_id ? { agent_thread_id: run.agent_thread_id } : {}),
+    ...(record.scope ? { scope: record.scope } : {}),
     ...(status === "completed" && answer
       ? {
           answer,

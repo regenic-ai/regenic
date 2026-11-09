@@ -146,6 +146,33 @@ async function ingestAttachmentConversation(database, blobRoot) {
   authority.close();
 }
 
+async function ingestLongConversation(database, blobRoot) {
+  const authority = new SqliteAuthorityStore(database);
+  const service = new IngestionService(new FsBlobStore(blobRoot), authority);
+  await service.ingest({
+    schema_version: INGEST_SCHEMA_VERSION,
+    connector_id: "synthetic-chat",
+    org_id: "local-owner",
+    delivery_id: "delivery-long-context",
+    received_at: "2026-08-30T01:00:00.000Z",
+    records: [{
+      operation: "create",
+      source: "synthetic-chat",
+      external_id: "customer-long:1",
+      occurred_at: "2026-08-30T00:01:00.000Z",
+      actor: { id: "customer" },
+      scope: { id: "customer-long" },
+      type: "message",
+      content: [{
+        role: "body",
+        media_type: "text/plain",
+        text: `long-context-marker ${"x".repeat(1_100)}`,
+      }],
+    }],
+  });
+  authority.close();
+}
+
 async function ingestConversationMetadataOnly(database, blobRoot) {
   const ids = await ingestConversationEvidence(database, blobRoot);
   const authority = new SqliteAuthorityStore(database);
@@ -1044,6 +1071,205 @@ describe("personal context API", () => {
       );
       assert.equal(invalid.response.status, 400, invalid.text);
     }
+  });
+  it("reads and persists the complete authorized range for aggregate answers", async () => {
+    const root = await createRoot();
+    const executor = await startExecutorStub("Three messages were found [1] [2] [3].");
+    const { origin } = await startApi(
+      root,
+      { driver: "none" },
+      undefined,
+      ingestConversationEvidence,
+    );
+    const executorType = await installHttpExecutor(origin, executor.baseUrl);
+    const conversation = JSON.parse((await postJson(
+      `${origin}/v1/me/context/search/expand`,
+      {
+        query: "pending-answer-question",
+        limit: 1,
+        context: { before: 1, after: 1, reply_depth: 8, max_messages: 3 },
+      },
+    )).text).conversations[0];
+    const eventIds = conversation.messages.map((message) => message.event_id);
+    const started = await postJson(
+      `${origin}/v1/me/context/search/answers`,
+      {
+        query: "How many messages were there?",
+        conversations: [{
+          thread_id: conversation.thread_id,
+          event_ids: [eventIds[1]],
+        }],
+        intent: "aggregate",
+        executor_type: executorType,
+        filters: {
+          occurred_after: "2026-08-30T00:00:00.000Z",
+          occurred_before: "2026-08-30T00:02:00.000Z",
+          sources: ["synthetic-chat"],
+          thread_ids: [conversation.thread_id],
+        },
+      },
+    );
+    assert.equal(started.response.status, 202, started.text);
+    const job = JSON.parse(started.text);
+    assert.deepEqual(job.scope, {
+      intent: "aggregate",
+      complete: true,
+      total_count: 3,
+      included_count: 3,
+      omitted_count: 0,
+      occurred_after: "2026-08-30T00:00:00.000Z",
+      occurred_before: "2026-08-30T00:02:00.000Z",
+    });
+    const run = executor.requests.find((request) =>
+      request.method === "POST" && request.url === "/v1/runs");
+    assert.match(run.body.executor_config.prompt, /If complete=false, never claim an exhaustive total/);
+    assert.match(run.body.evidence_text, /EVIDENCE SCOPE\nintent=aggregate\ncomplete=true\nauthorized_total=3\nincluded=3\nomitted=0/);
+    assert.match(run.body.evidence_text, /selected Alice and Bob/);
+    assert.match(run.body.evidence_text, /pending-answer-question/);
+    assert.match(run.body.evidence_text, /identity-follow-up/);
+    const finished = await fetch(
+      `${origin}/v1/me/context/search/answers/${job.answer_id}`,
+    ).then((response) => response.json());
+    assert.deepEqual(finished.scope, job.scope);
+    const ledger = new SqliteAuthorityStore(join(root, "authority.db"));
+    try {
+      const record = await ledger.getSearchAnswer("local-owner", job.answer_id);
+      assert.deepEqual(record.scope, job.scope);
+      assert.deepEqual(record.event_ids, eventIds);
+    } finally {
+      ledger.close();
+    }
+  });
+  it("includes attachment metadata in complete aggregate evidence", async () => {
+    const root = await createRoot();
+    const executor = await startExecutorStub("Two attachments were shared [2] [4].");
+    const { origin } = await startApi(
+      root,
+      { driver: "none" },
+      undefined,
+      ingestAttachmentConversation,
+    );
+    const executorType = await installHttpExecutor(origin, executor.baseUrl);
+    const conversation = JSON.parse((await postJson(
+      `${origin}/v1/me/context/search/expand`,
+      {
+        query: "photo-caption-question",
+        limit: 1,
+        context: { before: 0, after: 0, reply_depth: 0, max_messages: 1 },
+      },
+    )).text).conversations[0];
+    const started = await postJson(
+      `${origin}/v1/me/context/search/answers`,
+      {
+        query: "List every attachment.",
+        conversations: [{
+          thread_id: conversation.thread_id,
+          event_ids: [conversation.messages[0].event_id],
+        }],
+        intent: "list",
+        executor_type: executorType,
+        filters: {
+          occurred_after: "2026-08-30T00:01:00.000Z",
+          occurred_before: "2026-08-30T00:05:00.000Z",
+        },
+      },
+    );
+    assert.equal(started.response.status, 202, started.text);
+    assert.equal(JSON.parse(started.text).scope.complete, true);
+    const run = executor.requests.find((request) =>
+      request.method === "POST" && request.url === "/v1/runs");
+    assert.match(run.body.evidence_text, /\[attachment: image\.png\]/);
+    assert.match(run.body.evidence_text, /\[attachment: brief\.pdf\]/);
+  });
+  it("marks complete scopes partial when a message body is clipped", async () => {
+    const root = await createRoot();
+    const executor = await startExecutorStub("Partial long answer [1].");
+    const { origin } = await startApi(
+      root,
+      { driver: "none" },
+      undefined,
+      ingestLongConversation,
+    );
+    const executorType = await installHttpExecutor(origin, executor.baseUrl);
+    const conversation = JSON.parse((await postJson(
+      `${origin}/v1/me/context/search/expand`,
+      {
+        query: "long-context-marker",
+        limit: 1,
+        context: { before: 0, after: 0, reply_depth: 0, max_messages: 1 },
+      },
+    )).text).conversations[0];
+    const started = await postJson(
+      `${origin}/v1/me/context/search/answers`,
+      {
+        query: "Summarize every detail.",
+        conversations: [{
+          thread_id: conversation.thread_id,
+          event_ids: [conversation.messages[0].event_id],
+        }],
+        intent: "aggregate",
+        executor_type: executorType,
+        filters: {
+          occurred_after: "2026-08-30T00:00:00.000Z",
+          occurred_before: "2026-08-30T00:02:00.000Z",
+        },
+      },
+    );
+    assert.equal(started.response.status, 202, started.text);
+    assert.deepEqual(JSON.parse(started.text).scope, {
+      intent: "aggregate",
+      complete: false,
+      total_count: 1,
+      included_count: 1,
+      omitted_count: 0,
+      occurred_after: "2026-08-30T00:00:00.000Z",
+      occurred_before: "2026-08-30T00:02:00.000Z",
+      incomplete_reason: "transcript_limit",
+    });
+  });
+  it("marks aggregate answers without a bounded range as partial", async () => {
+    const root = await createRoot();
+    const executor = await startExecutorStub("Partial answer [1].");
+    const { origin } = await startApi(
+      root,
+      { driver: "none" },
+      undefined,
+      ingestConversationEvidence,
+    );
+    const executorType = await installHttpExecutor(origin, executor.baseUrl);
+    const conversation = JSON.parse((await postJson(
+      `${origin}/v1/me/context/search/expand`,
+      {
+        query: "pending-answer-question",
+        limit: 1,
+        context: { before: 0, after: 0, reply_depth: 0, max_messages: 1 },
+      },
+    )).text).conversations[0];
+    const started = await postJson(
+      `${origin}/v1/me/context/search/answers`,
+      {
+        query: "How many messages were there?",
+        conversations: [{
+          thread_id: conversation.thread_id,
+          event_ids: [conversation.messages[0].event_id],
+        }],
+        intent: "aggregate",
+        executor_type: executorType,
+      },
+    );
+    assert.equal(started.response.status, 202, started.text);
+    assert.deepEqual(JSON.parse(started.text).scope, {
+      intent: "aggregate",
+      complete: false,
+      total_count: null,
+      included_count: 1,
+      omitted_count: null,
+      incomplete_reason: "missing_time_range",
+    });
+    const run = executor.requests.find((request) =>
+      request.method === "POST" && request.url === "/v1/runs");
+    assert.match(run.body.evidence_text, /complete=false/);
+    assert.match(run.body.evidence_text, /incomplete_reason=missing_time_range/);
   });
   it("recovers an in-flight executor answer after the API restarts", async () => {
     const root = await createRoot();

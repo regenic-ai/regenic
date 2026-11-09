@@ -1620,7 +1620,13 @@ export async function startSearchAnswer(
     query: string;
     conversations: Array<{ thread_id: string; event_ids: string[] }>;
     executor_type?: string;
-    filters?: { occurred_after: string; occurred_before: string };
+    filters?: {
+      occurred_after: string;
+      occurred_before: string;
+      sources?: string[];
+      thread_ids?: string[];
+    };
+    intent?: "lookup" | "aggregate" | "list";
   },
   signal?: AbortSignal,
 ): Promise<PersonalSearchAnswer> {
