@@ -71,6 +71,8 @@ import type {
   WorkRunStartCheckpointResult,
   WorkRunStartFailure,
   WorkRunStartFailureResult,
+  WorkDismissal,
+  WorkDismissalResult,
   WorkDeliveryCommand,
   WorkDeliveryCommandResult,
   CommitWorkObservation,
@@ -283,6 +285,7 @@ import {
   claimWorkRunStart,
   checkpointWorkRunStart,
   recordWorkRunStartFailure,
+  dismissWorkItem,
   transitionWorkDelivery,
   commitWorkObservation,
   deleteSearchAnswer,
@@ -1262,6 +1265,11 @@ export class SqliteAuthorityStore
   async recordWorkRunStartFailure(input: WorkRunStartFailure): Promise<WorkRunStartFailureResult> {
     this.assertWritable();
     return recordWorkRunStartFailure(this.database, input);
+  }
+
+  async dismissWorkItem(input: WorkDismissal): Promise<WorkDismissalResult> {
+    this.assertWritable();
+    return dismissWorkItem(this.database, input);
   }
 
   async commitWorkObservation(input: CommitWorkObservation): Promise<CommitWorkObservationResult> {

@@ -3,6 +3,7 @@ const { describe, it } = require("node:test");
 const {
   assertWorkRunWrite, planWorkObservation, prepareWorkRunStartCheckpoint, canClaimWorkRunStartItem,
   prepareWorkRunStartFailure,
+  prepareWorkDismissal, enqueueWriteBack,
 } = require("../dist");
 
 const BEFORE = "2026-11-09T08:00:00.000Z";
@@ -45,6 +46,66 @@ function fixture() {
     now: NOW,
   };
 }
+
+describe("work dismissal transitions", () => {
+  function dismissal() {
+    const { item, run } = fixture();
+    item.current_run_id = run.id;
+    return {
+      input: { expected_item: item, now: NOW },
+      facts: {
+        item, run,
+        deliveries: [enqueueWriteBack({
+          org_id: item.org_id, work_item_id: item.id, recipe_id: item.recipe_id,
+          unit_key: item.unit_key, kind: "push", payload: { summary: "Previous result" }, now: BEFORE,
+        })],
+      },
+    };
+  }
+  it("stops following work and unsent delivery without forging an executor outcome", () => {
+    const { input, facts } = dismissal();
+    const original = structuredClone(facts);
+    const result = prepareWorkDismissal(input, facts);
+    assert.equal(result.outcome, "applied");
+    assert.equal(result.item.status, "skipped");
+    assert.equal(result.item.current_run_id, facts.run.id);
+    assert.equal(result.item.version, 1);
+    assert.deepEqual(result.run, facts.run);
+    assert.equal(result.deliveries[0].status, "acked");
+    assert.equal(result.deliveries[0].write_back, "skipped");
+    assert.deepEqual(facts, original);
+    result.run.result = { summary: "Changed" };
+    assert.deepEqual(facts, original);
+  });
+  for (const status of ["write_back", "uncertain"]) {
+    it(`preserves ${status} delivery evidence while recording a stop request`, () => {
+      const { input, facts } = dismissal();
+      Object.assign(facts.deliveries[0], {
+        status, lease_owner: "sender", claim_token: "original-token",
+        lease_expires_at: NOW, channel_receipt: { accepted: true, rpc_id: "accepted" },
+      });
+      const result = prepareWorkDismissal(input, facts);
+      assert.equal(result.deliveries[0].status, status);
+      assert.equal(result.deliveries[0].cancel_requested_at, NOW);
+      assert.equal(result.deliveries[0].claim_token, "original-token");
+      assert.deepEqual(result.deliveries[0].channel_receipt, facts.deliveries[0].channel_receipt);
+    });
+  }
+  it("rejects stale items, missing current runs and cross-work delivery identities", () => {
+    const { input, facts } = dismissal();
+    assert.deepEqual(prepareWorkDismissal(input, { ...facts, item: null }),
+      { outcome: "conflict", reason: "missing_work" });
+    assert.deepEqual(prepareWorkDismissal(input, { ...facts, item: { ...facts.item, version: 1 } }),
+      { outcome: "conflict", reason: "stale_dismissal" });
+    assert.deepEqual(prepareWorkDismissal(input, { ...facts, run: null }),
+      { outcome: "conflict", reason: "unknown_current_run" });
+    assert.throws(() => prepareWorkDismissal(input, { ...facts, run: { ...facts.run, work_item_id: "other" } }),
+      /current work item/);
+    facts.deliveries[0].org_id = "other";
+    assert.throws(() => prepareWorkDismissal(input, facts), /same organization/);
+    assert.throws(() => prepareWorkDismissal({ ...input, now: "invalid" }, facts), /valid timestamp/);
+  });
+});
 
 describe("work preflight failure transitions", () => {
   function failure() {

@@ -89,6 +89,96 @@ async function fixture(t, maxConcurrent) {
 }
 
 describe("durable executor start", () => {
+  it("does not dismiss or cancel work that changed after the human action loaded it", async (t) => {
+    const f = await fixture(t);
+    await f.dispatch().startItem(f.item, f.recipe, "evidence");
+    let cancelCalls = 0;
+    f.setExecutor({
+      executor_type: "session", capabilities: () => ({}), cancel: async () => { cancelCalls++; },
+    });
+    const dismiss = f.ports.authority.dismissWorkItem.bind(f.ports.authority);
+    let changed;
+    t.mock.method(f.ports.authority, "dismissWorkItem", async (input) => {
+      changed = await f.ports.authority.putWorkItem(input.expected_item);
+      return dismiss(input);
+    });
+    const run = (await f.ports.authority.listWorkRuns(ORG, f.item.id))[0];
+    await assert.rejects(f.service().dismissWorkItem(f.item.id), code("work_dismissal_conflict"));
+    assert.deepEqual(await f.ports.authority.getWorkItem(ORG, f.item.id), changed);
+    assert.deepEqual(await f.ports.authority.getWorkRun(ORG, run.id), run);
+    assert.equal(cancelCalls, 0);
+  });
+
+  it("commits local dismissal before cancellation and preserves unconfirmed remote execution", async (t) => {
+    const f = await fixture(t);
+    await f.dispatch().startItem(f.item, f.recipe, "evidence");
+    const run = (await f.ports.authority.listWorkRuns(ORG, f.item.id))[0];
+    let cancelledId;
+    f.setExecutor({
+      executor_type: "session", capabilities: () => ({}),
+      cancel: async (target) => {
+        assert.equal((await f.ports.authority.getWorkItem(ORG, f.item.id)).status, "skipped");
+        cancelledId = target.id;
+        throw new Error("Remote cancellation failed");
+      },
+    });
+    const service = f.service();
+    service.channel = f.channel;
+    const result = await service.dismissWorkItem(f.item.id);
+    assert.equal(cancelledId, run.id);
+    assert.equal(result.work_item.status, "skipped");
+    assert.deepEqual(result.run, run);
+    assert.deepEqual(await f.ports.authority.getWorkRun(ORG, run.id), run);
+    await assert.rejects(f.service().runWorkItem(f.item.id), code("execution_start_conflict"));
+    f.reopen();
+    assert.equal((await f.ports.authority.getWorkItem(ORG, f.item.id)).status, "skipped");
+    assert.deepEqual(await f.ports.authority.getWorkRun(ORG, run.id), run);
+  });
+
+  it("does not fold a dismissed conversation with unresolved delivery acceptance", async (t) => {
+    const f = await fixture(t);
+    const { enqueueWriteBack } = require("@regenic/domain");
+    await f.dispatch().startItem(f.item, f.recipe, "evidence");
+    const delivery = await f.ports.authority.putWorkDelivery(enqueueWriteBack({
+      org_id: ORG, work_item_id: f.item.id, recipe_id: f.recipe.id, kind: "push",
+      unit_key: f.item.unit_key, payload: { summary: "Previous result" }, now: f.item.created_at,
+    }));
+    const claim = await f.ports.authority.transitionWorkDelivery({
+      org_id: ORG, delivery_id: delivery.id, kind: "claim", owner: "sender", now: new Date().toISOString(),
+    });
+    const fold = t.mock.method(f.ports.authority, "putConversationPref");
+    const result = await f.service().dismissWorkItem(f.item.id);
+    assert.equal(result.work_item.status, "skipped");
+    const stopped = await f.ports.authority.getWorkDelivery(ORG, delivery.id);
+    assert.equal(stopped.status, "write_back");
+    assert.equal(stopped.claim_token, claim.delivery.claim_token);
+    assert.ok(stopped.cancel_requested_at);
+    assert.equal(fold.mock.callCount(), 0);
+  });
+
+  it("does not guess a remote cancellation target for an unbound pending start", async (t) => {
+    const f = await fixture(t);
+    const run = {
+      id: "pending-start", org_id: ORG, work_item_id: f.item.id, recipe_id: f.recipe.id,
+      executor_type: "session", status: "running", start_state: "pending",
+      write_back_required: false, created_at: f.item.created_at, updated_at: f.item.updated_at,
+    };
+    assert.equal(await f.ports.authority.claimWorkRunStart({ run }), true);
+    let cancelCalls = 0;
+    f.setExecutor({
+      executor_type: "session", capabilities: () => ({}), cancel: async () => { cancelCalls++; },
+    });
+    const service = f.service();
+    service.channel = f.channel;
+    const result = await service.dismissWorkItem(f.item.id);
+    assert.equal(result.work_item.status, "skipped");
+    assert.equal(result.run.status, "running");
+    assert.equal(result.run.start_state, "pending");
+    assert.equal(result.run.external_run_id, undefined);
+    assert.equal(cancelCalls, 0);
+    assert.equal((await f.ports.authority.getWorkRun(ORG, run.id)).version, 0);
+  });
+
   it("rebinds a settled trial only in the start claim and freezes its call-scoped keep-local decision", async (t) => {
     const f = await fixture(t);
     const oldRecipe = await f.ports.authority.putRecipe({ ...f.recipe, id: "old-rule" });
@@ -911,7 +1001,7 @@ describe("durable executor start", () => {
     await starting;
     assert.equal(f.calls.stdin, 0);
     assert.equal((await f.ports.authority.getWorkItem(ORG, f.item.id)).status, "skipped");
-    assert.equal((await f.ports.authority.listWorkRuns(ORG, f.item.id))[0].status, "cancelled");
+    assert.equal((await f.ports.authority.listWorkRuns(ORG, f.item.id))[0].status, "running");
   });
 
   it("does not turn an HTTP response-loss into an automatically retryable failure", async (t) => {

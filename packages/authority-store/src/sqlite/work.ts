@@ -23,6 +23,9 @@ import {
   canClaimWorkRunStartItem,
   prepareWorkRunStartCheckpoint,
   prepareWorkRunStartFailure,
+  prepareWorkDismissal,
+  type WorkDismissal,
+  type WorkDismissalResult,
   type WorkRunStartFailure,
   type WorkRunStartFailureResult,
   type WorkRunStartCheckpoint,
@@ -366,6 +369,30 @@ function writeWorkRun(db: Database.Database, run: WorkRun, advanceVersion = fals
     if (!row) throw new Error("Work run identity and write-back snapshot are immutable");
     return toWorkRun(row);
   }
+
+export async function dismissWorkItem(db: Database.Database, input: WorkDismissal): Promise<WorkDismissalResult> {
+  return db.transaction((): WorkDismissalResult => {
+    const { org_id: orgId, id } = input.expected_item;
+    const item = db.prepare("SELECT * FROM work_items WHERE org_id = ? AND id = ?")
+      .get(orgId, id) as WorkItemRow | undefined;
+    const run = item?.current_run_id
+      ? db.prepare("SELECT * FROM work_runs WHERE org_id = ? AND id = ?")
+        .get(orgId, item.current_run_id) as WorkRunRow | undefined : undefined;
+    const deliveries = db.prepare(`SELECT * FROM work_deliveries
+      WHERE org_id = ? AND work_item_id = ? AND status <> 'acked' ORDER BY id`).all(orgId, id) as WorkDeliveryRow[];
+    const result = prepareWorkDismissal(input, {
+      item: item ? toWorkItem(item) : null, run: run ? toWorkRun(run) : null,
+      deliveries: deliveries.map(toWorkDelivery),
+    });
+    if (result.outcome !== "applied") return result;
+    const savedDeliveries = result.deliveries.map((delivery) => writeWorkDelivery(db, delivery, true));
+    const savedItem = db.prepare(`UPDATE work_items SET status = 'skipped', version = ?, updated_at = ?
+      WHERE org_id = ? AND id = ? RETURNING *`)
+      .get(result.item.version, input.now, orgId, id) as WorkItemRow | undefined;
+    if (!savedItem) throw new Error("Dismissed work item disappeared inside its transaction");
+    return { outcome: "applied", item: toWorkItem(savedItem), run: result.run, deliveries: savedDeliveries };
+  }).immediate();
+}
 
 export async function recordWorkRunStartFailure(
   db: Database.Database, input: WorkRunStartFailure,

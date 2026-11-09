@@ -39,6 +39,11 @@ function fixture({
     findInstallation: async (id) => connector?.id === id ? connector : null,
     listInstallations: async () => connector ? [connector] : [],
     getWorkItem: async () => item,
+    dismissWorkItem: async ({ expected_item, now }) => {
+      assert.equal(expected_item, item);
+      item = { ...item, status: "skipped", updated_at: now };
+      return { outcome: "applied", item, run, deliveries: [] };
+    },
     putWorkItem: async (value) => { item = value; return value; },
     getActiveWorkRun: async () => run,
     putWorkRun: async (value) => { run = value; return value; },
@@ -126,7 +131,7 @@ for (const managed of [true, false]) {
         } else {
           await f.work.dismissWorkItem("work");
         }
-        assert.equal(f.run.status, "cancelled");
+        assert.equal(f.run.status, operation === "auxiliary" ? "cancelled" : "running");
         assert.deepEqual(f.calls, [
           ...(cancel ? ["cancel:owned-agent-run"] : []),
           ...(operation === "auxiliary" ? ["drop:run"] : []),
@@ -146,7 +151,7 @@ for (const operation of ["dismiss", "auxiliary"]) {
     } else {
       await f.work.dismissWorkItem("work");
     }
-    assert.equal(f.run.status, "cancelled");
+    assert.equal(f.run.status, operation === "auxiliary" ? "cancelled" : "running");
     assert.equal(f.calls[0], "cancel:owned-agent-run");
     assert.equal(f.calls.includes("activate"), false);
   });

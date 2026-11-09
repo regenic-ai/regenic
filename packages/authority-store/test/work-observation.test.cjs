@@ -127,6 +127,135 @@ async function startCheckpointFixture(t, driver) {
 
 for (const driver of drivers) {
   describe(`${driver.name} atomic work observation`, { skip: driver.skip }, () => {
+    it("atomically dismisses work and stops all unresolved deliveries without rewriting runs", async (t) => {
+      const f = await fixture(t, driver);
+      const delivery = await f.store.putWorkDelivery(enqueueWriteBack({
+        org_id: ORG, work_item_id: f.item.id, recipe_id: f.recipe.id, kind: "push",
+        unit_key: f.item.unit_key, payload: { summary: "Previous result" }, now: NOW,
+      }));
+      const result = await f.store.dismissWorkItem({ expected_item: f.item, now: LATER });
+      assert.equal(result.outcome, "applied");
+      assert.equal(result.item.status, "skipped");
+      assert.equal(result.item.version, f.item.version + 1);
+      assert.equal(result.item.current_run_id, f.run.id);
+      assert.deepEqual(result.run, f.run);
+      assert.equal(result.deliveries[0].id, delivery.id);
+      assert.equal(result.deliveries[0].status, "acked");
+      assert.equal(result.deliveries[0].write_back, "skipped");
+      assert.equal(result.deliveries[0].cancel_requested_at, LATER);
+      assert.deepEqual(await f.store.getWorkRun(ORG, f.run.id), f.run);
+      const saved = structuredClone(result);
+      result.item.unit_key = "changed";
+      result.run.result = { summary: "changed" };
+      result.deliveries[0].payload.summary = "changed";
+      await f.reopen();
+      assert.deepEqual(await f.store.getWorkItem(ORG, f.item.id), saved.item);
+      assert.deepEqual(await f.store.getWorkRun(ORG, f.run.id), f.run);
+      assert.deepEqual(await f.store.getWorkDelivery(ORG, delivery.id), saved.deliveries[0]);
+    });
+
+    it("preserves completed results while stopping both current and historical delivery attempts", async (t) => {
+      const f = await fixture(t, driver, {
+        write_back_required: true, write_back_target: TARGET, trigger_kind: "push",
+      });
+      const completed = await f.store.putWorkRun({
+        ...f.run, status: "completed", result: { summary: "Completed result" },
+      });
+      const historical = await f.store.putWorkRun({
+        ...completed, id: "historical-run", status: "failed", result: { summary: "Historical result" },
+      });
+      const item = await f.store.putWorkItem({ ...f.item, status: "done" });
+      const rows = [];
+      for (const run of [completed, historical]) {
+        rows.push(await f.store.putWorkDelivery(enqueueWriteBack({
+          org_id: ORG, work_item_id: item.id, recipe_id: f.recipe.id, kind: "push",
+          unit_key: item.unit_key, run_id: run.id, target: TARGET,
+          payload: { summary: run.result.summary }, now: NOW,
+        })));
+      }
+      const result = await f.store.dismissWorkItem({ expected_item: item, now: LATER });
+      assert.equal(result.outcome, "applied");
+      assert.equal(result.deliveries.length, 2);
+      assert.equal(result.item.current_run_id, completed.id);
+      assert.deepEqual(result.run, completed);
+      assert.deepEqual(await f.store.getWorkRun(ORG, completed.id), completed);
+      assert.deepEqual(await f.store.getWorkRun(ORG, historical.id), historical);
+      for (const row of rows) {
+        const stopped = await f.store.getWorkDelivery(ORG, row.id);
+        assert.equal(stopped.status, "acked");
+        assert.equal(stopped.write_back, "skipped");
+        assert.deepEqual(stopped.payload, row.payload);
+        assert.deepEqual(stopped.target, row.target);
+        assert.equal(stopped.idempotency_key, row.idempotency_key);
+        assert.equal(stopped.run_id, row.run_id);
+      }
+      assert.deepEqual(await f.store.dismissWorkItem({ expected_item: item, now: LATER }),
+        { outcome: "conflict", reason: "stale_dismissal" });
+    });
+
+    it("preserves an in-flight claim and accepts its late receipt after dismissal", async (t) => {
+      const f = await fixture(t, driver);
+      const delivery = await f.store.putWorkDelivery(enqueueWriteBack({
+        org_id: ORG, work_item_id: f.item.id, recipe_id: f.recipe.id, kind: "push",
+        unit_key: f.item.unit_key, payload: { summary: "Previous result" }, now: NOW,
+      }));
+      const claim = await f.store.transitionWorkDelivery({
+        org_id: ORG, delivery_id: delivery.id, kind: "claim", owner: "sender", now: NOW,
+      });
+      assert.equal(claim.outcome, "applied");
+      const result = await f.store.dismissWorkItem({ expected_item: f.item, now: LATER });
+      assert.equal(result.outcome, "applied");
+      assert.equal(result.deliveries[0].status, "write_back");
+      assert.equal(result.deliveries[0].claim_token, claim.delivery.claim_token);
+      assert.equal(result.deliveries[0].cancel_requested_at, LATER);
+      const receipt = await f.store.transitionWorkDelivery({
+        org_id: ORG, delivery_id: delivery.id, kind: "receipt", owner: "sender",
+        token: claim.delivery.claim_token, now: LATER, receipt: { accepted: true, rpc_id: "accepted" },
+      });
+      assert.equal(receipt.outcome, "applied");
+      assert.equal(receipt.delivery.channel_receipt.rpc_id, "accepted");
+      assert.equal((await f.store.getWorkItem(ORG, f.item.id)).status, "skipped");
+      assert.deepEqual(await f.store.getWorkRun(ORG, f.run.id), f.run);
+    });
+
+    it("does not dismiss a successor or change delivery when an old item snapshot is stale", async (t) => {
+      const f = await fixture(t, driver);
+      const current = await f.store.putWorkItem(f.item);
+      const delivery = await f.store.putWorkDelivery(enqueueWriteBack({
+        org_id: ORG, work_item_id: f.item.id, recipe_id: f.recipe.id, kind: "push",
+        unit_key: f.item.unit_key, payload: { summary: "Previous result" }, now: NOW,
+      }));
+      assert.deepEqual(await f.store.dismissWorkItem({ expected_item: f.item, now: LATER }),
+        { outcome: "conflict", reason: "stale_dismissal" });
+      assert.deepEqual(await f.store.getWorkItem(ORG, f.item.id), current);
+      assert.deepEqual(await f.store.getWorkDelivery(ORG, delivery.id), delivery);
+      assert.deepEqual(await f.store.getWorkRun(ORG, f.run.id), f.run);
+    });
+
+    it("fences competing retry and dismissal and supports unstarted work", async (t) => {
+      const f = await fixture(t, driver);
+      await f.store.putWorkRun({ ...f.run, status: "failed", start_state: undefined });
+      const item = await f.store.putWorkItem({ ...f.item, status: "failed" });
+      const [dismissed, started] = await Promise.all([
+        f.store.dismissWorkItem({ expected_item: item, now: LATER }),
+        f.store.claimWorkRunStart({
+          expected_item: item, retry: "manual",
+          run: { ...f.run, id: "successor", status: "running", start_state: "pending" },
+        }),
+      ]);
+      assert.equal(Number(dismissed.outcome === "applied") + Number(started), 1);
+      assert.equal((await f.store.getWorkItem(ORG, item.id)).version, item.version + 1);
+      const unstarted = await f.store.putWorkItem({
+        ...f.item, id: "unstarted", unit_key: "unstarted", status: "open",
+      });
+      const result = await f.store.dismissWorkItem({ expected_item: unstarted, now: LATER });
+      assert.equal(result.outcome, "applied");
+      assert.equal(result.run, null);
+      assert.equal(result.item.status, "skipped");
+      assert.equal(result.item.current_run_id, undefined);
+      assert.deepEqual(result.deliveries, []);
+    });
+
     for (const mode of ["automatic", "manual", "auxiliary"]) {
       it(`commits a ${mode} preflight failure and item version together`, async (t) => {
         const f = await fixture(t, driver);
@@ -1223,6 +1352,25 @@ for (const driver of drivers) {
 
 for (const driver of drivers.filter((d) => d.name.startsWith("sqlite"))) {
   describe(`${driver.name} observation rollback`, () => {
+    it("rolls back delivery stop requests if the dismissal item update fails", async (t) => {
+      const f = await fixture(t, driver);
+      const delivery = await f.store.putWorkDelivery(enqueueWriteBack({
+        org_id: ORG, work_item_id: f.item.id, recipe_id: f.recipe.id, kind: "push",
+        unit_key: f.item.unit_key, payload: { summary: "Previous result" }, now: NOW,
+      }));
+      const db = new Database(f.path);
+      try {
+        db.exec(`CREATE TRIGGER reject_dismissal BEFORE UPDATE ON work_items
+          BEGIN SELECT RAISE(ABORT, 'dismissal rejected'); END`);
+        await assert.rejects(f.store.dismissWorkItem({ expected_item: f.item, now: LATER }), /dismissal rejected/);
+        assert.deepEqual(await f.store.getWorkItem(ORG, f.item.id), f.item);
+        assert.deepEqual(await f.store.getWorkDelivery(ORG, delivery.id), delivery);
+        assert.deepEqual(await f.store.getWorkRun(ORG, f.run.id), f.run);
+      } finally {
+        db.close();
+      }
+    });
+
     it("rolls back preflight failure history if the item write fails", async (t) => {
       const f = await fixture(t, driver);
       await f.store.putWorkRun({ ...f.run, status: "failed", start_state: undefined });
@@ -1387,6 +1535,27 @@ it("fences competing startup checkpoints across independent SQLite writer worker
   const winner = results.find((result) => result.outcome === "applied");
   assert.deepEqual(await second.getWorkItem(ORG, winner.item.id), winner.item);
   assert.deepEqual(await second.getWorkRun(ORG, winner.run.id), winner.run);
+});
+
+it("fences dismissal against retries across independent SQLite writer workers", async (t) => {
+  const driver = drivers.find((d) => d.name === "sqlite writer RPC");
+  const f = await fixture(t, driver);
+  await f.store.putWorkRun({ ...f.run, status: "failed", start_state: undefined });
+  const item = await f.store.putWorkItem({ ...f.item, status: "failed" });
+  const second = await SqliteSplitAuthorityStore.open(f.path);
+  t.after(() => second.close());
+  const [dismissed, started] = await Promise.all([
+    f.store.dismissWorkItem({ expected_item: item, now: LATER }),
+    second.claimWorkRunStart({
+      expected_item: item, retry: "manual",
+      run: { ...f.run, id: "real-start", status: "running", start_state: "pending" },
+    }),
+  ]);
+  assert.equal(Number(dismissed.outcome === "applied") + Number(started), 1);
+  const saved = await second.getWorkItem(ORG, item.id);
+  assert.equal(saved.version, item.version + 1);
+  assert.equal(saved.status, started ? "running" : "skipped");
+  assert.equal(saved.current_run_id, started ? "real-start" : f.run.id);
 });
 
 it("fences preflight failures against a real start across independent SQLite writer workers", async (t) => {

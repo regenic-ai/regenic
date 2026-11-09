@@ -23,6 +23,9 @@ import {
   canClaimWorkRunStartItem,
   prepareWorkRunStartCheckpoint,
   prepareWorkRunStartFailure,
+  prepareWorkDismissal,
+  type WorkDismissal,
+  type WorkDismissalResult,
   type WorkRunStartFailure,
   type WorkRunStartFailureResult,
   type WorkRunStartCheckpoint,
@@ -387,6 +390,31 @@ export async function commitWorkObservation(
       await putWorkItem(db, prepared.transition.item, client, false);
     }
     return { outcome: "applied", transition: prepared.transition };
+  });
+}
+
+export async function dismissWorkItem(db: PgSql, input: WorkDismissal): Promise<WorkDismissalResult> {
+  return db.withTx(async (client) => {
+    const { org_id: orgId, id } = input.expected_item;
+    const item = await db.queryOne<WorkItemRow>(
+      "SELECT * FROM work_items WHERE org_id = $1 AND id = $2 FOR UPDATE", [orgId, id], client,
+    );
+    const run = item?.current_run_id ? await db.queryOne<WorkRunRow>(
+      "SELECT * FROM work_runs WHERE org_id = $1 AND id = $2 FOR UPDATE", [orgId, item.current_run_id], client,
+    ) : null;
+    const deliveries = await db.query<WorkDeliveryRow>(`SELECT * FROM work_deliveries
+      WHERE org_id = $1 AND work_item_id = $2 AND status <> 'acked' ORDER BY id FOR UPDATE`, [orgId, id], client);
+    const result = prepareWorkDismissal(input, {
+      item: item ? toWorkItem(item) : null, run: run ? toWorkRun(run) : null,
+      deliveries: deliveries.map(toWorkDelivery),
+    });
+    if (result.outcome !== "applied") return result;
+    const savedDeliveries: WorkDelivery[] = [];
+    for (const delivery of result.deliveries) savedDeliveries.push(await putWorkDelivery(db, delivery, client, true));
+    const savedItem = await db.queryOne<WorkItemRow>(`UPDATE work_items SET status = 'skipped', version = $1, updated_at = $2
+      WHERE org_id = $3 AND id = $4 RETURNING *`, [result.item.version, input.now, orgId, id], client);
+    if (!savedItem) throw new Error("Dismissed work item disappeared inside its transaction");
+    return { outcome: "applied", item: toWorkItem(savedItem), run: result.run, deliveries: savedDeliveries };
   });
 }
 

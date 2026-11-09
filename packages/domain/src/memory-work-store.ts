@@ -21,6 +21,9 @@ import {
   canClaimWorkRunStartItem,
   prepareWorkRunStartCheckpoint,
   prepareWorkRunStartFailure,
+  prepareWorkDismissal,
+  type WorkDismissal,
+  type WorkDismissalResult,
   type WorkRunStartFailure,
   type WorkRunStartFailureResult,
   type WorkRunStartCheckpoint,
@@ -192,6 +195,25 @@ export class MemoryWorkStore implements WorkStore, ExecutorStore {
     this.items.set(nextItem.id, nextItem);
     if (nextDelivery) this.deliveries.set(nextDelivery.id, nextDelivery);
     return { outcome: "applied", transition: prepared.transition };
+  }
+
+  async dismissWorkItem(input: WorkDismissal): Promise<WorkDismissalResult> {
+    const item = this.items.get(input.expected_item.id);
+    const result = prepareWorkDismissal(input, {
+      item: item?.org_id === input.expected_item.org_id ? item : null,
+      run: item?.current_run_id ? this.runs.get(item.current_run_id) ?? null : null,
+      deliveries: [...this.deliveries.values()].filter((row) =>
+        row.org_id === input.expected_item.org_id && row.work_item_id === input.expected_item.id && row.status !== "acked"),
+    });
+    if (result.outcome !== "applied") return result;
+    for (const delivery of result.deliveries) assertWorkDeliveryWrite(
+      delivery, this.deliveries.get(delivery.id),
+      delivery.run_id ? this.runs.get(delivery.run_id) : undefined, true,
+    );
+    const saved = structuredClone(result);
+    this.items.set(saved.item.id, saved.item);
+    for (const delivery of saved.deliveries) this.deliveries.set(delivery.id, delivery);
+    return result;
   }
 
   async recordWorkRunStartFailure(input: WorkRunStartFailure): Promise<WorkRunStartFailureResult> {

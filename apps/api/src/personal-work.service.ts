@@ -1204,49 +1204,36 @@ export class PersonalWorkService implements OnModuleDestroy {
       throw new PersonalConnectorError("not_found", "Work item not found", 404);
     }
     const now = new Date().toISOString();
-    const next =
-      item.status === "skipped"
-        ? item
-        : await host.get("authority").putWorkItem({
-            ...item,
-            status: "skipped",
-            updated_at: now,
-          });
-    const run = await host.get("authority").getActiveWorkRun(orgId, item.id);
-    if (run) {
+    const dismissed = await host.get("authority").dismissWorkItem({ expected_item: item, now });
+    if (dismissed.outcome !== "applied") throw new PersonalConnectorError(
+      "work_dismissal_conflict", `Work dismissal rejected: ${dismissed.reason}. Refresh the work item.`, 409,
+    );
+    const { item: next, run } = dismissed;
+    if (run && (run.status === "running" || run.status === "waiting_human")
+      && (run.external_run_id || run.agent_thread_id)) {
       const executor = host.get("executors").get(run.executor_type);
       if (executor?.cancel) {
         try {
           await executor.cancel(run, this.channel.contextFor(executor));
-        } catch {
-          // Ledger unfollow still stands if the inferior ignores cancel.
+        } catch (error) {
+          console.error("personal work remote cancellation unconfirmed", run.id, error);
         }
       }
     }
-    const cancelled = run
-      ? await host.get("authority").putWorkRun(cancelWorkRun(run, now))
-      : undefined;
-    const delivery = await host.get("authority").getWorkDeliveryByItem(orgId, item.id);
-    if (delivery && delivery.status !== "acked") {
-      const stopped = await host.get("authority").transitionWorkDelivery({
-        org_id: orgId, delivery_id: delivery.id, kind: "cancel", now,
-      });
-      if (stopped.outcome === "conflict") throw new PersonalConnectorError(
-        "delivery_claim_conflict", `Delivery cancellation rejected: ${stopped.reason}`, 409,
+    if (dismissed.deliveries.every((delivery) => delivery.status === "acked")) {
+      await foldFinishedWorkThreads(
+        host.get("authority"),
+        orgId,
+        next.thread_id,
+        run?.agent_thread_id,
+        now,
       );
     }
-    await foldFinishedWorkThreads(
-      host.get("authority"),
-      orgId,
-      next.thread_id,
-      run?.agent_thread_id ?? cancelled?.agent_thread_id,
-      now,
-    );
     this.supervise.clearWriteBackOverride(item.id);
     this.inbox.touchInboxDigest();
     return {
       work_item: next,
-      run: cancelled,
+      run: run ?? undefined,
     };
   }
 

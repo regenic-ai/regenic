@@ -96,6 +96,46 @@ export interface WorkRunStartFailure {
   rebind?: "manual";
 }
 
+export interface WorkDismissal {
+  expected_item: WorkItem;
+  now: string;
+}
+
+export type WorkDismissalResult =
+  | { outcome: "applied"; item: WorkItem; run: WorkRun | null; deliveries: WorkDelivery[] }
+  | { outcome: "conflict"; reason: "missing_work" | "stale_dismissal" | "unknown_current_run" };
+
+export function prepareWorkDismissal(input: WorkDismissal, facts: {
+  item: WorkItem | null;
+  run: WorkRun | null;
+  deliveries: WorkDelivery[];
+}): WorkDismissalResult {
+  if (!Number.isFinite(Date.parse(input.now))) throw new Error("Work dismissal requires a valid timestamp");
+  const { item, run } = facts;
+  if (!item) return { outcome: "conflict", reason: "missing_work" };
+  if (!sameSnapshot(item, input.expected_item)) return { outcome: "conflict", reason: "stale_dismissal" };
+  if (item.current_run_id && !run) return { outcome: "conflict", reason: "unknown_current_run" };
+  if (run && (run.org_id !== item.org_id || run.work_item_id !== item.id || run.id !== item.current_run_id)) {
+    throw new Error("Work dismissal run must belong to the current work item");
+  }
+  const deliveries = facts.deliveries.map((delivery) => {
+    if (delivery.org_id !== item.org_id || delivery.work_item_id !== item.id) {
+      throw new Error("Work dismissal delivery must belong to the same organization and work item");
+    }
+    const result = planWorkDeliveryCommand(delivery, "skipped", {
+      org_id: item.org_id, delivery_id: delivery.id, kind: "cancel", now: input.now,
+    });
+    if (result.outcome !== "applied") throw new Error(`Work dismissal delivery rejected: ${result.reason}`);
+    return result.delivery;
+  });
+  return structuredClone({
+    outcome: "applied",
+    item: { ...item, status: "skipped", version: (item.version ?? 0) + 1, updated_at: input.now },
+    run,
+    deliveries,
+  });
+}
+
 export type WorkRunStartFailureResult =
   | { outcome: "applied"; item: WorkItem; run: WorkRun }
   | { outcome: "conflict"; reason: "missing_work" | "stale_failure" | "missing_recipe" | "active_run" | "unresolved_delivery" };

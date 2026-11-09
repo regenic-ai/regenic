@@ -116,7 +116,7 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
       const body = await dismissed.json();
       assert.equal(body.work_item.status, "skipped");
       assert.equal(body.work_item.id, workId);
-      assert.equal(body.run.status, "cancelled");
+      assert.equal(body.run.status, "running");
       assert.notEqual(body.run.status, "failed");
       const aliased = await (
         await fetch(`${origin}/v1/me/work-items/${workId}/complete`, {
@@ -126,6 +126,7 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
         })
       ).json();
       assert.equal(aliased.work_item.status, "skipped");
+      assert.equal(aliased.run.status, "running");
       const inbox = await (await fetch(`${origin}/v1/me/inbox`)).json();
       const texts = inbox
         .filter((item) => item.thread_id === "feishu:oc_dismiss")
