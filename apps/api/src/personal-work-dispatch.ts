@@ -24,6 +24,7 @@ import {
   recipeTextMatches,
   isOccupiedRecipeSlot,
   isTaskInboxItem,
+  isPushInboxDecision,
   selectRecipeForSubject,
   shouldAcceptPushRecord,
   shouldRetryFailedPush,
@@ -49,8 +50,6 @@ import { shouldDeferWorkForThread } from "./personal-sync-phase";
 
 /** How many inbox rows one dispatch tick may open. The next tick continues after them. */
 const INBOX_OBSERVE_PAGE = 16;
-/** Newest ordinary messages read from one conversation a push rule names. */
-const WATCHED_THREAD_OBSERVE_LIMIT = 200;
 /** Failed retries are a second pass so open work is not stuck behind them. */
 const FAILED_RETRY_PAGE = 20;
 
@@ -62,6 +61,7 @@ export class PersonalWorkDispatch {
   /** Order tasks move on their own cursor so the email backlog cannot block them. */
   private orderScan: { occurred_at: string; id: string } | null = null;
   private opsScan: { occurred_at: string; id: string } | null = null;
+  private messageScan: { occurred_at: string; id: string } | null = null;
   private failedScan = 0;
 
   constructor(
@@ -148,28 +148,25 @@ export class PersonalWorkDispatch {
     const host = this.runtime.requireHost();
     const orgId = this.runtime.orgId();
     const authority = host.get("authority");
-    const [recipes, items, hiddenIds, taskRows] = await Promise.all([
+    const [recipes, items, hiddenIds, taskRows, messageRows] = await Promise.all([
       authority.listRecipes(orgId),
       authority.listWorkItems(orgId, { statuses: [...ACTIVE_WORK_STATUSES] }),
       authority.listHiddenExecutorThreadIds(orgId),
       authority.listInbox(orgId, { tasks: true, needs_work: true }),
+      authority.listInbox(orgId, {
+        tasks: false,
+        needs_work: true,
+        push_candidates: true,
+        limit: INBOX_OBSERVE_PAGE,
+        before: this.messageScan?.occurred_at,
+        before_id: this.messageScan?.id,
+      }),
     ]);
-    const watchedThreadIds = pushWatchedThreadIds(recipes);
-    if (taskRows.length === 0 && items.length === 0 && watchedThreadIds.length === 0) {
+    if (taskRows.length === 0 && messageRows.length === 0 && items.length === 0) {
+      this.messageScan = null;
       return;
     }
     const hidden = new Set(hiddenIds);
-    const watchedRows: InboxItem[] = [];
-    for (const threadId of watchedThreadIds) {
-      if (hidden.has(threadId)) {
-        continue;
-      }
-      watchedRows.push(...await authority.listInbox(orgId, {
-        thread_ids: [threadId],
-        needs_work: true,
-        limit: WATCHED_THREAD_OBSERVE_LIMIT,
-      }));
-    }
     const observeRows = uniqueInboxItems(taskRows).sort(compareInboxItems);
     const orderRows = observeRows.filter((row) => isOrderTask(row));
     const otherRows = observeRows.filter((row) => !isOrderTask(row));
@@ -177,11 +174,9 @@ export class PersonalWorkDispatch {
     const opsPage = takeInboxScanPage(otherRows, this.opsScan, INBOX_OBSERVE_PAGE);
     this.orderScan = orderPage.next;
     this.opsScan = opsPage.next;
-    const page = uniqueInboxItems([
-      ...orderPage.page,
-      ...opsPage.page,
-      ...watchedRows,
-    ]);
+    // Messages use a separate bounded walk of source heads, not conversation faces:
+    // a newer reply must not hide an earlier matching message in the same thread.
+    const page = [...orderPage.page, ...opsPage.page, ...messageRows];
     const bodies = await resolveInboxBodies(
       authority,
       host.get("blobs"),
@@ -239,6 +234,10 @@ export class PersonalWorkDispatch {
         installations,
       });
     }
+    const oldestMessage = messageRows[0]?.event;
+    this.messageScan = messageRows.length === INBOX_OBSERVE_PAGE && oldestMessage
+      ? { occurred_at: oldestMessage.occurred_at, id: oldestMessage.id }
+      : null;
   }
 
   async dispatchPullRecipes(): Promise<void> {
@@ -453,6 +452,14 @@ export class PersonalWorkDispatch {
     mode: "auto" | "manual" | "auxiliary" = "auto",
   ): Promise<WorkRun | undefined> {
     const host = this.runtime.requireHost();
+    if (
+      mode === "auto" &&
+      recipe.trigger.kind === "push" &&
+      item.record_class !== "task" &&
+      !(await this.canAutoStartMessage(item))
+    ) {
+      return undefined;
+    }
     if (
       recipe.trigger.kind === "push" &&
       (recipe.match.text_contains || recipe.match.text_excludes) &&
@@ -791,6 +798,19 @@ export class PersonalWorkDispatch {
     };
   }
 
+  private async canAutoStartMessage(item: WorkItem): Promise<boolean> {
+    if (!item.head_event_id) {
+      return false;
+    }
+    const authority = this.runtime.requireHost().get("authority");
+    const [decision, pref] = await Promise.all([
+      authority.getDisposition(item.head_event_id),
+      authority.getConversationPref(item.org_id, item.thread_id),
+    ]);
+    return Boolean(decision && isPushInboxDecision(decision) &&
+      (!pref?.hidden || pref.hidden_reason === "policy"));
+  }
+
   private async hasStartCapacity(recipe: Recipe, exceptItemId: string): Promise<boolean> {
     if (recipe.max_concurrent === undefined) {
       return true;
@@ -976,23 +996,6 @@ function failedRunCount(runs: WorkRun[]): number {
 
 function isOrderTask(row: InboxItem): boolean {
   return (row.event.thread_id ?? "").startsWith("crm:order:");
-}
-
-function pushWatchedThreadIds(recipes: Recipe[]): string[] {
-  const ids = new Set<string>();
-  for (const recipe of recipes) {
-    const threadId = recipe.match.thread_id?.trim();
-    if (!threadId || !recipeAllowsPushDispatch(recipe)) {
-      continue;
-    }
-    try {
-      parseConversationThread(threadId);
-    } catch {
-      continue;
-    }
-    ids.add(threadId);
-  }
-  return [...ids];
 }
 
 function compareInboxItems(left: InboxItem, right: InboxItem): number {

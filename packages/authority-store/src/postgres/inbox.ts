@@ -483,11 +483,11 @@ function inboxSql(db: PgSql, orgId: string, query?: InboxQuery): { sql: string; 
       {},
       p,
     );
-    if (!scoped) {
-      clauses.push(notHiddenSql(p(orgId), "e"));
+    if (!scoped || query?.push_candidates) {
+      clauses.push(notHiddenSql(p(orgId), "e", query?.push_candidates));
     }
-    if (query?.tasks) {
-      clauses.push(`d.reason_codes ? ${p(TASK_INBOX_REASON)}`);
+    if (query?.tasks !== undefined) {
+      clauses.push(`${query.tasks ? "" : "NOT "}(d.reason_codes ? ${p(TASK_INBOX_REASON)})`);
     }
     if (query?.needs_work) {
       const marks = WORK_OBSERVE_AGAIN_STATUSES.map((status) => p(status)).join(", ");
@@ -536,7 +536,12 @@ function inboxClauses(db: PgSql, orgId: string, query: InboxQuery | undefined, d
     const event = tables.event ?? "e";
     const decision = tables.disposition ?? "d";
     const clauses = [`${event}.org_id = ${p(orgId)}`];
-    if (disposition !== "any") {
+    if (disposition === "current_work" && query?.push_candidates) {
+      clauses.push(`(${decision}.disposition = 'current_work' OR (
+        ${decision}.disposition = 'pending'
+        AND NOT (${decision}.reason_codes ? 'human_triage')
+      ))`);
+    } else if (disposition !== "any") {
       clauses.push(`${decision}.disposition = ${p(disposition)}`);
     }
     if (query?.source) {
@@ -688,8 +693,10 @@ function hiddenThreadIdSql(orgPlaceholder: string): string {
   return `SELECT thread_id FROM conversation_prefs WHERE org_id = ${orgPlaceholder} AND hidden = TRUE`;
 }
 
-function notHiddenSql(orgPlaceholder: string, event = "e"): string {
-  return `${event}.thread_id NOT IN (SELECT pref.thread_id FROM conversation_prefs pref WHERE pref.org_id = ${orgPlaceholder} AND pref.hidden = TRUE)`;
+function notHiddenSql(orgPlaceholder: string, event = "e", allowPolicyFold = false): string {
+  return `${event}.thread_id NOT IN (SELECT pref.thread_id FROM conversation_prefs pref WHERE pref.org_id = ${orgPlaceholder} AND pref.hidden = TRUE${
+    allowPolicyFold ? " AND COALESCE(pref.hidden_reason, 'human') <> 'policy'" : ""
+  })`;
 }
 
 function inboxScoped(query?: InboxQuery): boolean {

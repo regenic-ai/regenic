@@ -35,6 +35,7 @@ import {
 import {
   eventThreadId,
   headsScanQuery,
+  isPushInboxDecision,
   matchesEventQuery,
   selectInboxItems,
   summarizeInboxItems,
@@ -258,7 +259,11 @@ export class MemoryAuthorityStore
       normalizeInboxListView(query?.list) === "hidden";
     const items = useDecided
       ? await this.decidedInbox(orgId, headsScanQuery(query) ?? query)
-      : this.currentWorkInbox(orgId, query?.disposition ?? "current_work");
+      : this.currentWorkInbox(
+          orgId,
+          query?.disposition ?? "current_work",
+          query?.push_candidates,
+        );
     return selectInboxItems(items, query).sort((left, right) => {
       const byTime = left.event.occurred_at.localeCompare(right.event.occurred_at);
       if (byTime !== 0) {
@@ -300,11 +305,18 @@ export class MemoryAuthorityStore
   private currentWorkInbox(
     orgId: string,
     disposition: "current_work" | "pending" = "current_work",
+    pushCandidates = false,
   ): InboxItem[] {
-    const hidden = this.hiddenThreadIds(orgId);
+    const hidden = this.hiddenThreadIds(orgId, pushCandidates);
     return [...this.currentBySource.values()].flatMap((event) => {
       const decision = this.dispositions.get(event.id);
-      if (event.org_id !== orgId || decision?.disposition !== disposition) {
+      if (!decision || event.org_id !== orgId) {
+        return [];
+      }
+      const eligible = pushCandidates && disposition === "current_work"
+        ? isPushInboxDecision(decision)
+        : decision.disposition === disposition;
+      if (!eligible) {
         return [];
       }
       if (hidden.has(eventThreadId(event))) {
@@ -360,10 +372,11 @@ export class MemoryAuthorityStore
     });
   }
 
-  private hiddenThreadIds(orgId: string): Set<string> {
+  private hiddenThreadIds(orgId: string, humanOnly = false): Set<string> {
     return new Set(
       [...this.prefs.values()]
-        .filter((pref) => pref.org_id === orgId && pref.hidden)
+        .filter((pref) => pref.org_id === orgId && pref.hidden &&
+          (!humanOnly || pref.hidden_reason !== "policy"))
         .map((pref) => pref.thread_id),
     );
   }
