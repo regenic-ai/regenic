@@ -572,6 +572,12 @@ describe("thread activity", () => {
     assert.equal(workStatusLabel("open"), null);
     assert.equal(workStatusLabel("waiting_human"), "Waiting");
     assert.equal(workStatusLabel("done"), "Done");
+    assert.equal(workStatusLabel({
+      status: "done", delivery: { status: "uncertain", write_back: "pending" },
+    }), "Delivery needs checking");
+    assert.match(workNextStepCopy({
+      work: { status: "done", delivery: { status: "uncertain", write_back: "pending" } },
+    }) ?? "", /automatic resending is paused/);
     assert.equal(
       workStatusLabel({
         status: "done",

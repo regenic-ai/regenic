@@ -67,6 +67,8 @@ import type {
   WorkItem,
   WorkRun,
   WorkRunStartClaim,
+  WorkDeliveryCommand,
+  WorkDeliveryCommandResult,
   CommitWorkObservation,
   CommitWorkObservationResult,
   WorkDelivery,
@@ -275,6 +277,7 @@ import {
 } from "./inbox";
 import {
   claimWorkRunStart,
+  transitionWorkDelivery,
   commitWorkObservation,
   deleteSearchAnswer,
   deleteExecutorInstallation,
@@ -1291,6 +1294,11 @@ export class SqliteAuthorityStore
   async putWorkDelivery(delivery: WorkDelivery): Promise<WorkDelivery> {
     this.assertWritable();
     return putWorkDelivery(this.database, delivery);
+  }
+
+  async transitionWorkDelivery(input: WorkDeliveryCommand): Promise<WorkDeliveryCommandResult> {
+    this.assertWritable();
+    return transitionWorkDelivery(this.database, input);
   }
 
   async getUiPref(orgId: string, key: string): Promise<string | null> {

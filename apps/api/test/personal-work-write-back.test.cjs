@@ -3,8 +3,9 @@ const { describe, it } = require("node:test");
 const { PersonalWorkChannel } = require("../dist/personal-work-channel");
 const { PersonalWorkService } = require("../dist/personal-work.service");
 const { PersonalWorkFlush } = require("../dist/personal-work-flush");
-const { enqueueWriteBack } = require("@regenic/domain");
+const { enqueueWriteBack, planWorkDeliveryCommand, MemoryWorkStore, WORK_DELIVERY_SEND_TIMEOUT_MS } = require("@regenic/domain");
 const { workInboxFaces } = require("../dist/personal-work-faces");
+const { WorkDeliveryNotSentError } = require("../dist/personal-errors");
 
 function recipeServiceFixture() {
   const recipes = new Map();
@@ -134,6 +135,144 @@ describe("recipe destination validation", () => {
 });
 
 describe("personal work write-back", () => {
+  async function flushFixture(channel) {
+    const authority = new MemoryWorkStore();
+    const now = new Date().toISOString();
+    const item = {
+      id: "work", org_id: "owner", recipe_id: "rule", status: "done",
+      thread_id: "source:room", unit_key: "unit", record_class: "task", thread_facet: "ticket",
+      created_at: now, updated_at: now,
+    };
+    await authority.putWorkItem(item);
+    const delivery = await authority.putWorkDelivery(enqueueWriteBack({
+      org_id: item.org_id, work_item_id: item.id, recipe_id: "rule", kind: "push",
+      unit_key: "unit", payload: { summary: "Done" }, now,
+    }));
+    const runtime = { orgId: () => item.org_id, requireHost: () => ({ get: () => authority }) };
+    return { authority, item, delivery, flush: new PersonalWorkFlush(runtime, channel) };
+  }
+
+  it("allows only one flusher to enter external sending, including overlapping calls by the same worker", async () => {
+    let release;
+    let started;
+    const entered = new Promise((resolve) => { started = resolve; });
+    const sending = new Promise((resolve) => { release = resolve; });
+    let sends = 0;
+    const f = await flushFixture({ writeBack: async () => {
+      sends++;
+      started();
+      await sending;
+      return "sent";
+    } });
+    const first = f.flush.flushOne(f.item, undefined, f.delivery);
+    await entered;
+    const runtime = { requireHost: () => ({ get: () => f.authority }) };
+    await Promise.all([
+      f.flush.flushOne(f.item, undefined, f.delivery),
+      new PersonalWorkFlush(runtime, { writeBack: async () => { sends++; return "sent"; } })
+        .flushOne(f.item, undefined, f.delivery),
+    ]);
+    assert.equal(sends, 1);
+    release();
+    await first;
+    assert.equal((await f.authority.getWorkDelivery("owner", f.delivery.id)).status, "acked");
+  });
+
+  it("pauses unknown acceptance on timeout and uses a late receipt only for local recovery", async (t) => {
+    t.mock.method(console, "error", () => {});
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    let entered;
+    const started = new Promise((resolve) => { entered = resolve; });
+    let finish;
+    const waiting = new Promise((resolve) => { finish = resolve; });
+    let callbacks;
+    const f = await flushFixture({ writeBack: async (_item, _summary, _content, _delivery, onReceipt) => {
+      callbacks = onReceipt;
+      entered();
+      await waiting;
+      return "sent";
+    } });
+    const send = f.flush.flushOne(f.item, undefined, f.delivery);
+    await started;
+    t.mock.timers.tick(WORK_DELIVERY_SEND_TIMEOUT_MS + 1);
+    await send;
+    assert.equal((await f.authority.getWorkDelivery("owner", f.delivery.id)).status, "uncertain");
+    assert.deepEqual(await f.authority.listDueWorkDeliveries("owner", new Date().toISOString()), []);
+    await assert.rejects(f.flush.flushOne(f.item, undefined, f.delivery, true), /requires reconciliation/);
+    await callbacks({ accepted: true, rpc_id: "late" });
+    finish();
+    let recoveries = 0;
+    const runtime = { orgId: () => "owner", requireHost: () => ({ get: () => f.authority }) };
+    await new PersonalWorkFlush(runtime, { writeBack: async (_item, _summary, _content, row) => {
+      recoveries++;
+      assert.equal(row.channel_receipt.rpc_id, "late");
+      return "sent";
+    } }).flushDeliveries();
+    assert.equal(recoveries, 1);
+    assert.equal((await f.authority.getWorkDelivery("owner", f.delivery.id)).write_back, "sent");
+  });
+
+  it("does not automatically retry a connection error with unknown channel acceptance", async (t) => {
+    t.mock.method(console, "error", () => {});
+    let sends = 0;
+    const f = await flushFixture({ writeBack: async () => { sends++; throw new Error("connection reset"); } });
+    await f.flush.flushDeliveries();
+    await f.flush.flushDeliveries();
+    assert.equal(sends, 1);
+    const row = await f.authority.getWorkDelivery("owner", f.delivery.id);
+    assert.equal(row.status, "uncertain");
+    assert.equal(row.write_back, "pending");
+    assert.match(row.last_error, /connection reset/);
+  });
+
+  it("retries proven pre-send failures without treating them as unknown acceptance", async (t) => {
+    t.mock.method(console, "error", () => {});
+    const f = await flushFixture({ writeBack: async () => {
+      throw new WorkDeliveryNotSentError("no_sender", "Installation disabled", 409);
+    } });
+    await f.flush.flushDeliveries();
+    const row = await f.authority.getWorkDelivery("owner", f.delivery.id);
+    assert.equal(row.status, "write_back");
+    assert.equal(row.write_back, "failed");
+    assert.ok(row.next_retry_at);
+    assert.equal((await f.authority.transitionWorkDelivery({
+      org_id: "owner", delivery_id: row.id, kind: "claim", owner: "worker",
+      now: new Date().toISOString(),
+    })).outcome, "conflict");
+  });
+
+  it("does not send externally again when an accepted receipt only needs local ingestion", async () => {
+    let sends = 0;
+    let localAttempts = 0;
+    let storedReceipt;
+    const installation = { id: "original" };
+    const driver = {
+      source: "source", capabilities: () => ({ reply: true }),
+      bindEgress: async () => ({ send: async () => { sends++; return { accepted: true, rpc_id: "request" }; } }),
+      outboundId: () => "outbound",
+    };
+    const ports = {
+      authority: { listInstallations: async () => [installation] },
+      ingest: { ingest: async () => {
+        localAttempts++;
+        if (localAttempts === 1) throw new Error("local persistence failed");
+      } },
+    };
+    const runtime = { orgId: () => "owner", requireHost: () => ({ get: (name) => ports[name] }) };
+    const channel = new PersonalWorkChannel(runtime, { findForThread: () => ({ installation, driver }) });
+    channel.destinationStamp = async () => ({});
+    const options = {
+      installationId: "original", idempotency_key: "immutable-key",
+      onReceipt: async (receipt) => { storedReceipt = receipt; },
+    };
+    await assert.rejects(channel.sendText({ source: "source", target: "room" }, "Done", options),
+      /local persistence failed/);
+    assert.equal(storedReceipt.accepted, true);
+    await channel.sendText({ source: "source", target: "room" }, "Done", { ...options, receipt: storedReceipt });
+    assert.equal(sends, 1);
+    assert.equal(localAttempts, 2);
+  });
+
   it("uses the frozen installation and destination even if its recipe is edited or removed", async () => {
     for (const recipe of [null, { can_write_back: false, write_back_thread_id: "source:new-room" }]) {
       const target = { installation_id: "original", source: "source", target: "original-room" };
@@ -185,6 +324,11 @@ describe("personal work write-back", () => {
       getWorkDelivery: async (_org, id) => rows.get(id),
       getWorkDeliveryByItem: async () => { throw new Error("Must not settle by item"); },
       putWorkDelivery: async (row) => { rows.set(row.id, row); return row; },
+      transitionWorkDelivery: async (input) => {
+        const result = planWorkDeliveryCommand(rows.get(input.delivery_id) ?? null, item.status, input);
+        if (result.outcome === "applied") rows.set(input.delivery_id, result.delivery);
+        return result;
+      },
     };
     const runtime = { orgId: () => item.org_id, requireHost: () => ({ get: () => authority }) };
     const channel = { writeBack: async (_item, _summary, _content, _delivery, onReceipt) => {

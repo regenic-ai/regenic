@@ -71,6 +71,8 @@ import type {
   WorkItem,
   WorkRun,
   WorkRunStartClaim,
+  WorkDeliveryCommand,
+  WorkDeliveryCommandResult,
   CommitWorkObservation,
   CommitWorkObservationResult,
   SearchAnswerRecord,
@@ -319,6 +321,7 @@ import {
 } from "./inbox";
 import {
   claimWorkRunStart,
+  transitionWorkDelivery,
   commitWorkObservation,
   deleteSearchAnswer,
   deleteExecutorInstallation,
@@ -1252,6 +1255,10 @@ export class PostgresAuthorityStore
 
   async putWorkDelivery(delivery: WorkDelivery): Promise<WorkDelivery> {
     return putWorkDelivery(this.sql, delivery);
+  }
+
+  async transitionWorkDelivery(input: WorkDeliveryCommand): Promise<WorkDeliveryCommandResult> {
+    return transitionWorkDelivery(this.sql, input);
   }
 
   async getUiPref(orgId: string, key: string): Promise<string | null> {

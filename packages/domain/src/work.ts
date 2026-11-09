@@ -153,6 +153,7 @@ export const WORK_DELIVERY_STATUSES = [
   "write_back",
   "acked",
   "dead",
+  "uncertain",
 ] as const;
 
 export type WorkDeliveryStatus = (typeof WORK_DELIVERY_STATUSES)[number];
@@ -188,6 +189,9 @@ export interface WorkDelivery {
   last_error?: string;
   next_retry_at?: string;
   lease_expires_at?: string;
+  lease_owner?: string;
+  claim_token?: string;
+  cancel_requested_at?: string;
   created_at: string;
   updated_at: string;
 }
@@ -257,7 +261,7 @@ export interface WorkStore {
   /** Atomically apply an observed run, work status and compatible delivery change. */
   commitWorkObservation(input: CommitWorkObservation): Promise<CommitWorkObservationResult>;
   listWorkDeliveries(orgId: string): Promise<WorkDelivery[]>;
-  /** Deliveries a flush tick may still send. Acked and dead rows stay out. */
+  /** Sendable deliveries and expired claims to recover; unknown acceptance without a receipt stays out. */
   listDueWorkDeliveries(orgId: string, now: string): Promise<WorkDelivery[]>;
   getWorkDelivery(orgId: string, id: string): Promise<WorkDelivery | null>;
   getWorkDeliveryByItem(
@@ -265,6 +269,8 @@ export interface WorkStore {
     workItemId: string,
   ): Promise<WorkDelivery | null>;
   putWorkDelivery(delivery: WorkDelivery): Promise<WorkDelivery>;
+  /** Atomic claim, fenced settlement, expiry recovery or cancellation of one delivery. */
+  transitionWorkDelivery(input: WorkDeliveryCommand): Promise<WorkDeliveryCommandResult>;
   getUiPref(orgId: string, key: string): Promise<string | null>;
   putUiPref(
     orgId: string,
@@ -279,3 +285,24 @@ export interface WorkStore {
   putSearchAnswer(record: SearchAnswerRecord): Promise<SearchAnswerRecord>;
   deleteSearchAnswer(orgId: string, id: string): Promise<boolean>;
 }
+
+export type WorkDeliveryCommand = {
+  org_id: string;
+  delivery_id: string;
+  now: string;
+} & (
+  | { kind: "claim"; owner: string; force?: boolean }
+  | { kind: "expire" }
+  | { kind: "cancel" }
+  | {
+      kind: "receipt" | "sent" | "skipped" | "failed" | "uncertain" | "renew";
+      owner: string;
+      token: string;
+      receipt?: { accepted: boolean; rpc_id?: string };
+      error?: string;
+    }
+);
+
+export type WorkDeliveryCommandResult =
+  | { outcome: "applied"; delivery: WorkDelivery }
+  | { outcome: "conflict"; reason: "missing_delivery" | "not_claimable" | "stale_claim" | "receipt_conflict" };

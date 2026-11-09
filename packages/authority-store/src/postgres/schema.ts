@@ -1,4 +1,4 @@
-export const PG_SCHEMA_VERSION = 58;
+export const PG_SCHEMA_VERSION = 59;
 
 /** Applied when an existing postgres authority DB is already at a prior baseline. */
 export const PG_MIGRATIONS = [
@@ -612,6 +612,14 @@ CREATE UNIQUE INDEX work_deliveries_legacy_item_idx ON work_deliveries (org_id, 
 CREATE INDEX work_deliveries_item_idx ON work_deliveries (org_id, work_item_id, created_at, id);
 `,
   },
+  {
+    version: 59,
+    sql: `
+ALTER TABLE work_deliveries ADD COLUMN lease_owner TEXT;
+ALTER TABLE work_deliveries ADD COLUMN claim_token TEXT;
+ALTER TABLE work_deliveries ADD COLUMN cancel_requested_at TIMESTAMPTZ;
+`,
+  },
 ] as const;
 
 export const PG_BASELINE_SQL = `
@@ -885,6 +893,9 @@ CREATE TABLE work_deliveries (
   channel_receipt_json JSONB,
   run_id TEXT,
   target_json JSONB,
+  lease_owner TEXT,
+  claim_token TEXT,
+  cancel_requested_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL,
   updated_at TIMESTAMPTZ NOT NULL,
   FOREIGN KEY (org_id, run_id) REFERENCES work_runs(org_id, id)

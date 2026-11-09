@@ -175,6 +175,7 @@ describe("recipe destination migrations", () => {
         .replace("  write_back_target_json JSONB,\n", "")
         .replace("CREATE UNIQUE INDEX work_runs_org_id_idx ON work_runs (org_id, id);\n", "")
         .replace("  run_id TEXT,\n  target_json JSONB,\n", "")
+        .replace("  lease_owner TEXT,\n  claim_token TEXT,\n  cancel_requested_at TIMESTAMPTZ,\n", "")
         .replace("  FOREIGN KEY (org_id, run_id) REFERENCES work_runs(org_id, id)", "  UNIQUE (org_id, work_item_id)")
         .replace("CREATE UNIQUE INDEX work_deliveries_run_idx ON work_deliveries (org_id, run_id) WHERE run_id IS NOT NULL;\n", "")
         .replace("CREATE UNIQUE INDEX work_deliveries_legacy_item_idx ON work_deliveries (org_id, work_item_id) WHERE run_id IS NULL;\n", "")

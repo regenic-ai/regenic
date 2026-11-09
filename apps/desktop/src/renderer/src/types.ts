@@ -224,6 +224,7 @@ export type WorkDeliveryStatus =
   | "queued"
   | "running"
   | "write_back"
+  | "uncertain"
   | "acked"
   | "dead";
 

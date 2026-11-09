@@ -8,7 +8,7 @@ import {
   type RecipeTriggerKind,
 } from "./work";
 import type { WorkDeliveryPayload } from "./work-delivery";
-import { deliveryAbandoned, enqueueWriteBack } from "./work-delivery";
+import { planWorkDeliveryCommand, enqueueWriteBack } from "./work-delivery";
 import { workStatusFromRun } from "./work-policy";
 
 export function assertWorkRunSnapshot(run: WorkRun, current?: WorkRun): void {
@@ -125,7 +125,10 @@ export function prepareWorkObservation(
       target: run.write_back_target,
     });
   } else if (transition.delivery.kind === "abandon" && delivery && delivery.status !== "acked") {
-    nextDelivery = deliveryAbandoned(delivery, input.now);
+    const cancelled = planWorkDeliveryCommand(delivery, item.status, {
+      org_id: item.org_id, delivery_id: delivery.id, kind: "cancel", now: input.now,
+    });
+    if (cancelled.outcome === "applied") nextDelivery = cancelled.delivery;
   }
   return { outcome: "applied", transition, delivery: nextDelivery };
 }

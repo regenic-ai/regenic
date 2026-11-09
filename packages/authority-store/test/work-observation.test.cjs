@@ -8,7 +8,7 @@ const { MemoryWorkStore, enqueueWriteBack, conversationId } = require("@regenic/
 const { SqliteAuthorityStore, SqliteSplitAuthorityStore } = require("../dist/sqlite");
 const { PostgresAuthorityStore } = require("../dist/postgres");
 const { Client } = require("pg");
-const { MIGRATIONS } = require("../dist/sqlite/migrations");
+const { MIGRATIONS, LATEST_SCHEMA_VERSION } = require("../dist/sqlite/migrations");
 
 const NOW = "2026-11-09T08:00:00.000Z";
 const LATER = "2026-11-09T08:01:00.000Z";
@@ -117,6 +117,142 @@ async function fixture(t, driver, runFields = {}) {
 
 for (const driver of drivers) {
   describe(`${driver.name} atomic work observation`, { skip: driver.skip }, () => {
+    it("atomically claims each delivery once and fences settlement with owner, token and lease", async (t) => {
+      const f = await fixture(t, driver);
+      await f.store.commitWorkObservation(f.input);
+      const delivery = await f.store.getWorkDeliveryByItem(ORG, f.item.id);
+      const command = { org_id: ORG, delivery_id: delivery.id, now: LATER };
+      await assert.rejects(f.store.putWorkDelivery({
+        ...delivery, lease_owner: "forged", claim_token: "forged",
+      }), /atomic delivery command/);
+      const claims = await Promise.all(["worker-1", "worker-2"].map((owner) =>
+        f.store.transitionWorkDelivery({ ...command, kind: "claim", owner })));
+      assert.equal(claims.filter((row) => row.outcome === "applied").length, 1);
+      const claimed = claims.find((row) => row.outcome === "applied").delivery;
+      assert.ok(claimed.claim_token);
+      assert.equal(claimed.attempts, 1);
+      const evidence = { ...command, owner: claimed.lease_owner, token: claimed.claim_token };
+      for (const change of [{ owner: "foreign" }, { token: "foreign" }]) {
+        assert.deepEqual(await f.store.transitionWorkDelivery({
+          ...evidence, ...change, kind: "sent",
+        }), { outcome: "conflict", reason: "stale_claim" });
+      }
+      await assert.rejects(f.store.putWorkDelivery({ ...claimed, status: "acked", write_back: "sent" }),
+        /atomic delivery command/);
+      const renewed = await f.store.transitionWorkDelivery({
+        ...evidence, kind: "renew", now: "2026-11-09T08:01:30.000Z",
+      });
+      assert.equal(renewed.outcome, "applied");
+      assert.equal(renewed.delivery.claim_token, claimed.claim_token);
+      assert.equal(renewed.delivery.lease_expires_at, "2026-11-09T08:02:30.000Z");
+      const failed = await f.store.transitionWorkDelivery({
+        ...evidence, kind: "failed", error: "Definitely rejected before acceptance",
+        now: "2026-11-09T08:01:31.000Z",
+      });
+      assert.equal(failed.outcome, "applied");
+      const retry = await f.store.transitionWorkDelivery({
+        ...command, kind: "claim", owner: claimed.lease_owner, force: true,
+        now: "2026-11-09T08:01:32.000Z",
+      });
+      assert.equal(retry.outcome, "applied");
+      assert.notEqual(retry.delivery.claim_token, claimed.claim_token);
+      assert.equal(retry.delivery.idempotency_key, delivery.idempotency_key);
+      for (const kind of ["sent", "failed", "renew", "receipt", "uncertain"]) {
+        assert.deepEqual(await f.store.transitionWorkDelivery({
+          ...evidence, kind, receipt: { accepted: true, rpc_id: "stale" }, error: "stale",
+        }), { outcome: "conflict", reason: "stale_claim" });
+      }
+      const settled = await f.store.transitionWorkDelivery({
+        ...command, kind: "sent", owner: retry.delivery.lease_owner,
+        token: retry.delivery.claim_token, now: "2026-11-09T08:01:33.000Z",
+      });
+      assert.equal(settled.delivery.status, "acked");
+    });
+
+    it("persists unknown acceptance across restart and merges only the retained claim's late receipt", async (t) => {
+      const f = await fixture(t, driver);
+      await f.store.commitWorkObservation(f.input);
+      const delivery = await f.store.getWorkDeliveryByItem(ORG, f.item.id);
+      const base = { org_id: ORG, delivery_id: delivery.id, now: LATER };
+      const { delivery: claimed } = await f.store.transitionWorkDelivery({
+        ...base, kind: "claim", owner: "worker",
+      });
+      const evidence = { ...base, owner: "worker", token: claimed.claim_token };
+      const later = "2026-11-09T08:02:00.000Z";
+      for (const kind of ["sent", "failed", "renew"]) {
+        assert.deepEqual(await f.store.transitionWorkDelivery({
+          ...evidence, kind, error: "expired", now: later,
+        }), { outcome: "conflict", reason: "stale_claim" });
+      }
+      assert.equal((await f.store.transitionWorkDelivery({
+        ...base, kind: "expire", now: later,
+      })).delivery.status, "uncertain");
+      await f.reopen();
+      const restored = await f.store.getWorkDelivery(ORG, delivery.id);
+      assert.equal(restored.status, "uncertain");
+      assert.equal(restored.claim_token, claimed.claim_token);
+      assert.equal(restored.lease_owner, "worker");
+      assert.equal((await f.store.transitionWorkDelivery({
+        ...base, kind: "cancel", now: later,
+      })).delivery.status, "uncertain");
+      assert.deepEqual(await f.store.listDueWorkDeliveries(ORG, later), []);
+      assert.equal((await f.store.transitionWorkDelivery({
+        ...base, kind: "claim", owner: "worker", force: true, now: later,
+      })).outcome, "conflict");
+      assert.equal((await f.store.transitionWorkDelivery({
+        ...evidence, kind: "receipt", receipt: { accepted: true, rpc_id: "late-receipt" }, now: later,
+      })).outcome, "applied");
+      assert.deepEqual(await f.store.transitionWorkDelivery({
+        ...evidence, kind: "receipt", receipt: { accepted: true, rpc_id: "conflicting-receipt" }, now: later,
+      }), { outcome: "conflict", reason: "receipt_conflict" });
+      const due = await f.store.listDueWorkDeliveries(ORG, later);
+      assert.equal(due.length, 1);
+      const recovery = await f.store.transitionWorkDelivery({
+        ...base, kind: "claim", owner: "worker", now: later,
+      });
+      assert.equal(recovery.outcome, "applied");
+      assert.equal(recovery.delivery.channel_receipt.rpc_id, "late-receipt");
+      assert.notEqual(recovery.delivery.claim_token, claimed.claim_token);
+      assert.equal((await f.store.transitionWorkDelivery({
+        ...evidence, kind: "receipt", receipt: { accepted: true }, now: later,
+      })).outcome, "conflict");
+    });
+
+    it("retains in-flight acceptance evidence when work is dismissed instead of faking a withdrawal", async (t) => {
+      const f = await fixture(t, driver);
+      await f.store.commitWorkObservation(f.input);
+      const delivery = await f.store.getWorkDeliveryByItem(ORG, f.item.id);
+      const base = { org_id: ORG, delivery_id: delivery.id, now: LATER };
+      const { delivery: claimed } = await f.store.transitionWorkDelivery({
+        ...base, kind: "claim", owner: "worker",
+      });
+      await f.store.putWorkItem({ ...await f.store.getWorkItem(ORG, f.item.id), status: "skipped" });
+      const cancel = await f.store.transitionWorkDelivery({ ...base, kind: "cancel" });
+      assert.equal(cancel.delivery.status, "write_back");
+      assert.equal(cancel.delivery.cancel_requested_at, LATER);
+      const evidence = { ...base, owner: "worker", token: claimed.claim_token };
+      await f.store.transitionWorkDelivery({
+        ...evidence, kind: "receipt", receipt: { accepted: true, rpc_id: "accepted" },
+      });
+      const result = await f.store.transitionWorkDelivery({ ...evidence, kind: "sent" });
+      assert.equal(result.delivery.write_back, "sent");
+      assert.equal((await f.store.getWorkItem(ORG, f.item.id)).status, "skipped");
+      assert.equal((await f.store.transitionWorkDelivery({ ...base, kind: "cancel" })).delivery.write_back, "sent");
+    });
+
+    it("cancels a queued send without exposing it to a new worker", async (t) => {
+      const f = await fixture(t, driver);
+      await f.store.commitWorkObservation(f.input);
+      const delivery = await f.store.getWorkDeliveryByItem(ORG, f.item.id);
+      const base = { org_id: ORG, delivery_id: delivery.id, now: LATER };
+      const cancelled = await f.store.transitionWorkDelivery({ ...base, kind: "cancel" });
+      assert.equal(cancelled.delivery.status, "acked");
+      assert.equal(cancelled.delivery.write_back, "skipped");
+      assert.equal((await f.store.transitionWorkDelivery({
+        ...base, kind: "claim", owner: "worker", force: true,
+      })).outcome, "conflict");
+    });
+
     it("freezes run obligations across restart and rejects changes to the snapshot", async (t) => {
       const f = await fixture(t, driver, {
         write_back_required: true, write_back_target: TARGET, trigger_kind: "push",
@@ -566,6 +702,12 @@ it("fences competing observations from two SQLite writer workers", async (t) => 
   assert.equal(results.filter((r) => r.outcome === "applied").length, 1);
   assert.equal(results.filter((r) => r.outcome === "conflict").length, 1);
   assert.equal((await second.listWorkDeliveries(ORG)).length, 1);
+  const delivery = await second.getWorkDeliveryByItem(ORG, f.item.id);
+  const resultsOfClaim = await Promise.all([f.store, second].map((store) =>
+    store.transitionWorkDelivery({
+      org_id: ORG, delivery_id: delivery.id, owner: "same-worker", kind: "claim", now: LATER,
+    })));
+  assert.equal(resultsOfClaim.filter((row) => row.outcome === "applied").length, 1);
 });
 
 it("migrates the v57 delivery table without changing request identities or inventing snapshots", async (t) => {
@@ -668,7 +810,7 @@ it("migrates schema 56 without inferring historical current-run identity", async
   db.pragma("user_version = 56");
   db.close();
   store = new SqliteAuthorityStore(path);
-  assert.equal(store.schemaVersion, 58);
+  assert.equal(store.schemaVersion, LATEST_SCHEMA_VERSION);
   assert.deepEqual(await store.getWorkItem(ORG, "legacy-work"), {
     id: "legacy-work", org_id: ORG, thread_id: "source:legacy",
     unit_key: "legacy-unit", head_event_id: undefined, record_class: "task",

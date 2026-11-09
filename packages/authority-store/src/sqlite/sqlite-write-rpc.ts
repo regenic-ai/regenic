@@ -93,6 +93,7 @@ export type AuthorityReadMethod = (typeof AUTHORITY_READ_METHODS)[number];
 export const AUTHORITY_READ_METHOD_SET = new Set<string>(AUTHORITY_READ_METHODS);
 
 export const AUTHORITY_WRITE_METHODS = [
+  "transitionWorkDelivery",
   "append",
   "appendRevision",
   "markTombstone",

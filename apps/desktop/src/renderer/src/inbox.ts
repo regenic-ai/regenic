@@ -222,6 +222,7 @@ export function threadStatusFilterKey(
   }
   if (
     thread.work?.status === "waiting_human" ||
+    thread.work?.delivery?.status === "uncertain" ||
     (thread.prompts?.length ?? 0) > 0 ||
     Boolean(thread.proposal)
   ) {

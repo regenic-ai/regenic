@@ -9,6 +9,9 @@ export class PersonalConnectorError extends Error {
   }
 }
 
+/** Only for failures known to precede channel acceptance. */
+export class WorkDeliveryNotSentError extends PersonalConnectorError {}
+
 export const STORE_BUSY_MESSAGE =
   "Cannot clear local data while the kernel is still syncing";
 

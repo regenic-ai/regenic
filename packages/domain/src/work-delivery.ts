@@ -10,13 +10,20 @@ import type {
   WorkDeliveryStatus,
   WorkWriteBackState,
   WorkRun,
+  WorkDeliveryCommand,
+  WorkDeliveryCommandResult,
 } from "./work";
 
 export function assertWorkDeliveryWrite(
   delivery: WorkDelivery,
   current?: WorkDelivery | null,
   run?: WorkRun | null,
+  commandWrite = false,
 ): void {
+  if (!commandWrite && (current?.claim_token || delivery.claim_token || delivery.lease_owner
+    || current?.cancel_requested_at || delivery.cancel_requested_at)) {
+    throw new Error("Claimed delivery must be updated through the atomic delivery command");
+  }
   if (delivery.run_id && (!run || run.id !== delivery.run_id
     || run.org_id !== delivery.org_id || run.work_item_id !== delivery.work_item_id
     || run.write_back_required !== true || !delivery.target
@@ -57,7 +64,8 @@ export function isWorkDeliveryStatus(
     value === "running" ||
     value === "write_back" ||
     value === "acked" ||
-    value === "dead"
+    value === "dead" ||
+    value === "uncertain"
   );
 }
 
@@ -246,12 +254,19 @@ export function deliverySendTimedOut(
 ): WorkDelivery {
   return {
     ...delivery,
-    attempts: Math.max(0, delivery.attempts - 1),
+    status: "uncertain",
+    write_back: "pending",
+    last_error: "Delivery acceptance is unknown. Reconcile before retrying.",
+    next_retry_at: undefined,
+    lease_expires_at: undefined,
     updated_at: now,
   };
 }
 
 export function deliveryRetryNow(delivery: WorkDelivery, now: string): WorkDelivery {
+  if (delivery.status === "uncertain") {
+    throw new Error("Uncertain delivery requires reconciliation before retrying");
+  }
   return {
     ...delivery,
     status: "queued",
@@ -277,7 +292,8 @@ export function isDeliveryLeaseExpired(
   if (!delivery.lease_expires_at) {
     return true;
   }
-  return Date.parse(now) >= Date.parse(delivery.lease_expires_at);
+  const expires = Date.parse(delivery.lease_expires_at);
+  return !Number.isFinite(expires) || Date.parse(now) >= expires;
 }
 
 export function reclaimDeliveryLease(
@@ -287,16 +303,7 @@ export function reclaimDeliveryLease(
   if (!isDeliveryLeaseExpired(delivery, now)) {
     return delivery;
   }
-  if (delivery.payload) {
-    return {
-      ...delivery,
-      status: "queued",
-      write_back: "pending",
-      lease_expires_at: undefined,
-      updated_at: now,
-    };
-  }
-  return deliveryAbandoned(delivery, now);
+  return deliverySendTimedOut(delivery, now);
 }
 
 export function shouldFlushDelivery(
@@ -304,6 +311,7 @@ export function shouldFlushDelivery(
   now: string,
 ): boolean {
   const current = reclaimDeliveryLease(delivery, now);
+  if (current.status === "uncertain") return current.channel_receipt?.accepted === true;
   if (current.status === "acked" || current.status === "dead") {
     return false;
   }
@@ -338,7 +346,92 @@ export function deliveryNeedsAttention(
     | null
     | undefined,
 ): boolean {
-  return delivery?.status === "dead" || delivery?.write_back === "failed";
+  return delivery?.status === "dead" || delivery?.status === "uncertain" || delivery?.write_back === "failed";
+}
+
+export function planWorkDeliveryCommand(
+  current: WorkDelivery | null,
+  itemStatus: string | undefined,
+  input: WorkDeliveryCommand,
+): WorkDeliveryCommandResult {
+  if (!Number.isFinite(Date.parse(input.now))) throw new Error("Delivery command requires a valid timestamp");
+  if (!current) return { outcome: "conflict", reason: "missing_delivery" };
+  if (current.org_id !== input.org_id || current.id !== input.delivery_id) {
+    throw new Error("Delivery command identity mismatch");
+  }
+  const applied = (delivery: WorkDelivery): WorkDeliveryCommandResult => ({ outcome: "applied", delivery });
+  if (input.kind === "expire") {
+    return isDeliveryLeaseExpired(current, input.now)
+      ? applied(deliverySendTimedOut(current, input.now))
+      : { outcome: "conflict", reason: "not_claimable" };
+  }
+  if (input.kind === "cancel") {
+    if (current.status === "acked") return applied(current);
+    const unsafe = current.status === "uncertain" || current.status === "running"
+      || (current.status === "write_back" && current.write_back !== "failed")
+      || current.channel_receipt?.accepted === true;
+    return applied({
+      ...(unsafe ? current : deliveryAbandoned(current, input.now)),
+      cancel_requested_at: current.cancel_requested_at ?? input.now,
+      updated_at: input.now,
+    });
+  }
+  if (input.kind === "claim") {
+    if (!input.owner.trim()) throw new Error("Delivery claim requires an owner");
+    if (!itemStatus) throw new Error("Delivery work item identity is unknown");
+    const localRecovery = current.channel_receipt?.accepted === true;
+    const ready = current.status === "uncertain" ? localRecovery
+      : (current.status === "queued" || current.write_back === "failed" || current.status === "dead")
+        && (input.force || shouldFlushDelivery(current, input.now));
+    if (!ready || current.status === "acked" || !current.payload
+      || ((itemStatus === "skipped" || current.cancel_requested_at) && !localRecovery)) {
+      return { outcome: "conflict", reason: "not_claimable" };
+    }
+    return applied({
+      ...deliveryClaimSend(input.force && current.status !== "uncertain"
+        ? deliveryRetryNow(current, input.now) : current, input.now),
+      lease_owner: input.owner,
+      claim_token: randomUUID(),
+    });
+  }
+  if (!input.owner.trim() || !input.token.trim()
+    || current.lease_owner !== input.owner || current.claim_token !== input.token) {
+    return { outcome: "conflict", reason: "stale_claim" };
+  }
+  if (input.kind === "receipt") {
+    if (input.receipt?.accepted !== true) throw new Error("Receipt must prove channel acceptance");
+    if (current.channel_receipt?.accepted && current.channel_receipt.rpc_id
+      && current.channel_receipt.rpc_id !== input.receipt.rpc_id) {
+      return { outcome: "conflict", reason: "receipt_conflict" };
+    }
+    // Retained claim evidence may merge acceptance after expiry, never settle a newer claim.
+    const needsRecovery = current.status === "dead"
+      || (current.status === "acked" && current.write_back !== "sent")
+      || current.write_back === "failed";
+    return applied(deliveryRecordReceipt(
+      needsRecovery ? deliverySendTimedOut(current, input.now) : current, input.receipt, input.now,
+    ));
+  }
+  const expires = current.lease_expires_at ? Date.parse(current.lease_expires_at) : NaN;
+  if (current.status !== "write_back" || !Number.isFinite(expires) || expires <= Date.parse(input.now)) {
+    return { outcome: "conflict", reason: "stale_claim" };
+  }
+  if (input.kind === "renew") return applied({
+    ...current,
+    lease_expires_at: new Date(Date.parse(input.now) + WORK_DELIVERY_LEASE_MS).toISOString(),
+    updated_at: input.now,
+  });
+  if (input.kind === "sent") return applied(deliveryAcked(current, "sent", input.now));
+  if (input.kind === "skipped") {
+    return applied(current.channel_receipt?.accepted
+      ? deliverySendTimedOut(current, input.now) : deliveryAcked(current, "skipped", input.now));
+  }
+  if (input.kind === "uncertain") return applied({
+    ...deliverySendTimedOut(current, input.now),
+    ...(input.error ? { last_error: input.error } : {}),
+  });
+  if (!input.error?.trim()) throw new Error("Delivery failure requires an error");
+  return applied(deliveryWriteBackFailed(current, input.error, input.now));
 }
 
 export function deliveryFaceOf(

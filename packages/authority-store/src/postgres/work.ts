@@ -4,6 +4,8 @@ import type {
   WorkItem,
   WorkRun,
   WorkRunStartClaim,
+  WorkDeliveryCommand,
+  WorkDeliveryCommandResult,
   WorkDelivery,
   ExecutorInstallation,
   SearchAnswerRecord,
@@ -19,6 +21,7 @@ import {
   prepareWorkObservation,
   assertWorkRunSnapshot,
   assertWorkDeliveryWrite,
+  planWorkDeliveryCommand,
   type CommitWorkObservation,
   type CommitWorkObservationResult,
 } from "@regenic/domain";
@@ -339,7 +342,7 @@ export async function commitWorkObservation(
     });
     if (prepared.outcome !== "applied") return prepared;
     await putWorkRun(db, prepared.transition.run, client, false);
-    if (prepared.delivery) await putWorkDelivery(db, prepared.delivery, client);
+    if (prepared.delivery) await putWorkDelivery(db, prepared.delivery, client, true);
     if (prepared.transition.item.status !== input.expected_item.status) {
       await putWorkItem(db, prepared.transition.item, client, false);
     }
@@ -454,7 +457,8 @@ export async function listDueWorkDeliveries(db: PgSql, orgId: string, now: strin
           AND payload_json IS NOT NULL
           AND status NOT IN ('acked', 'dead')
           AND (
-            (
+            (status = 'uncertain' AND channel_receipt_json->>'accepted' = 'true')
+            OR (
               status = 'queued'
               AND (
                 write_back IS NULL
@@ -500,7 +504,29 @@ export async function getWorkDeliveryByItem(db: PgSql, orgId: string, workItemId
     return row ? toWorkDelivery(row) : null;
   }
 
-export async function putWorkDelivery(db: PgSql, delivery: WorkDelivery, client?: PoolClient): Promise<WorkDelivery> {
+export async function transitionWorkDelivery(
+  db: PgSql, input: WorkDeliveryCommand,
+): Promise<WorkDeliveryCommandResult> {
+  return db.withTx(async (client) => {
+    const item = await db.queryOne<{ status: string }>(
+      `SELECT w.status FROM work_items w JOIN work_deliveries d
+       ON d.org_id = w.org_id AND d.work_item_id = w.id
+       WHERE d.org_id = $1 AND d.id = $2 FOR UPDATE OF w`,
+      [input.org_id, input.delivery_id], client,
+    );
+    const row = await db.queryOne<WorkDeliveryRow>(
+      "SELECT * FROM work_deliveries WHERE org_id = $1 AND id = $2 FOR UPDATE",
+      [input.org_id, input.delivery_id], client,
+    );
+    const result = planWorkDeliveryCommand(row ? toWorkDelivery(row) : null, item?.status, input);
+    if (result.outcome === "applied") await putWorkDelivery(db, result.delivery, client, true);
+    return result;
+  });
+}
+
+export async function putWorkDelivery(
+  db: PgSql, delivery: WorkDelivery, client?: PoolClient, commandWrite = false,
+): Promise<WorkDelivery> {
     if (!client) return db.withTx((tx) => putWorkDelivery(db, delivery, tx));
     const current = await db.queryOne<WorkDeliveryRow>(
       "SELECT * FROM work_deliveries WHERE id = $1 FOR UPDATE", [delivery.id], client,
@@ -511,15 +537,15 @@ export async function putWorkDelivery(db: PgSql, delivery: WorkDelivery, client?
        WHERE r.org_id = $1 AND r.id = $2`,
       [delivery.org_id, delivery.run_id], client,
     ) : null;
-    assertWorkDeliveryWrite(delivery, current ? toWorkDelivery(current) : null, run ? toWorkRun(run) : null);
+    assertWorkDeliveryWrite(delivery, current ? toWorkDelivery(current) : null, run ? toWorkRun(run) : null, commandWrite);
     const row = await db.queryOne<WorkDeliveryRow>(
       `
         INSERT INTO work_deliveries (
           id, org_id, work_item_id, recipe_id, kind, unit_key, event_id,
           status, write_back, attempts, last_error, next_retry_at,
           payload_json, lease_expires_at, idempotency_key, channel_receipt_json,
-          created_at, updated_at, run_id, target_json
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+          created_at, updated_at, run_id, target_json, lease_owner, claim_token, cancel_requested_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
         ON CONFLICT (id) DO UPDATE SET
           recipe_id = EXCLUDED.recipe_id,
           kind = EXCLUDED.kind,
@@ -534,6 +560,9 @@ export async function putWorkDelivery(db: PgSql, delivery: WorkDelivery, client?
           lease_expires_at = EXCLUDED.lease_expires_at,
           idempotency_key = EXCLUDED.idempotency_key,
           channel_receipt_json = EXCLUDED.channel_receipt_json,
+          lease_owner = EXCLUDED.lease_owner,
+          claim_token = EXCLUDED.claim_token,
+          cancel_requested_at = EXCLUDED.cancel_requested_at,
           updated_at = EXCLUDED.updated_at
         WHERE work_deliveries.org_id = EXCLUDED.org_id
           AND work_deliveries.work_item_id = EXCLUDED.work_item_id
@@ -566,6 +595,9 @@ export async function putWorkDelivery(db: PgSql, delivery: WorkDelivery, client?
         delivery.updated_at,
         delivery.run_id ?? null,
         jsonb(delivery.target),
+        delivery.lease_owner ?? null,
+        delivery.claim_token ?? null,
+        delivery.cancel_requested_at ?? null,
       ], client,
     );
     if (!row) {
@@ -683,6 +715,9 @@ interface WorkDeliveryRow {
   org_id: string;
   work_item_id: string;
   run_id: string | null;
+  lease_owner: string | null;
+  claim_token: string | null;
+  cancel_requested_at: Date | string | null;
   target_json: unknown;
   recipe_id: string;
   kind: string;
@@ -841,6 +876,9 @@ function toWorkDelivery(row: WorkDeliveryRow): WorkDelivery {
     id: row.id,
     org_id: row.org_id,
     work_item_id: row.work_item_id,
+    ...(row.lease_owner ? { lease_owner: row.lease_owner } : {}),
+    ...(row.claim_token ? { claim_token: row.claim_token } : {}),
+    ...(row.cancel_requested_at ? { cancel_requested_at: toIso(row.cancel_requested_at) } : {}),
     ...(row.run_id ? { run_id: row.run_id } : {}),
     ...(row.target_json ? { target: asJson<NonNullable<WorkDelivery["target"]>>(row.target_json) } : {}),
     recipe_id: row.recipe_id,

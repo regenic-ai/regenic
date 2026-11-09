@@ -1,132 +1,110 @@
+import { randomUUID } from "node:crypto";
 import {
-  deliveryAbandoned,
-  deliveryAcked,
-  deliveryClaimSend,
   deliveryErrorMessage,
-  deliveryRecordReceipt,
-  deliveryRetryNow,
-  deliverySendTimedOut,
-  deliveryWriteBackFailed,
-  reclaimDeliveryLease,
+  isDeliveryLeaseExpired,
   shouldFlushDelivery,
   WORK_DELIVERY_SEND_TIMEOUT_MS,
   type Recipe,
   type WorkDelivery,
+  type WorkDeliveryCommand,
   type WorkItem,
 } from "@regenic/domain";
 import { PersonalWorkChannel } from "./personal-work-channel";
+import { PersonalConnectorError, WorkDeliveryNotSentError } from "./personal-errors";
 import { PersonalRuntimeService } from "./personal-runtime.service";
 import { WriteBackTimeoutError, withTimeout } from "./personal-work-support";
 
-/** One organization shares this flush. Keep CRM writes overlapping, not unbounded. */
 const WRITE_BACK_CONCURRENCY = 4;
 
 export class PersonalWorkFlush {
+  private readonly owner = `work-flush:${randomUUID()}`;
+
   constructor(
     private readonly runtime: PersonalRuntimeService,
     private readonly channel: PersonalWorkChannel,
   ) {}
 
   async flushDeliveries(): Promise<void> {
-    const host = this.runtime.requireHost();
+    const authority = this.runtime.requireHost().get("authority");
     const orgId = this.runtime.orgId();
-    const authority = host.get("authority");
     const now = new Date().toISOString();
-    const [deliveries, recipes] = await Promise.all([
-      authority.listDueWorkDeliveries(orgId, now),
-      authority.listRecipes(orgId),
-    ]);
-    const recipesById = new Map(recipes.map((recipe) => [recipe.id, recipe]));
-    const pending: Array<{
-      item: WorkItem;
-      recipe: Recipe | undefined;
-      delivery: WorkDelivery;
-    }> = [];
-    for (const delivery of deliveries) {
-      const reclaimed = reclaimDeliveryLease(delivery, now);
-      if (reclaimed !== delivery) {
-        await authority.putWorkDelivery(reclaimed);
-      }
-      const item = await authority.getWorkItem(orgId, reclaimed.work_item_id);
-      if (item?.status === "skipped" && reclaimed.status !== "acked") {
-        await authority.putWorkDelivery(deliveryAbandoned(reclaimed, now));
-        continue;
-      }
-      const recipe = recipesById.get(reclaimed.recipe_id);
-      if (!item || (!recipe && !reclaimed.run_id) || !shouldFlushDelivery(reclaimed, now)) {
-        continue;
-      }
-      pending.push({ item, recipe, delivery: reclaimed });
-    }
-    for (let index = 0; index < pending.length; index += WRITE_BACK_CONCURRENCY) {
-      const batch = pending.slice(index, index + WRITE_BACK_CONCURRENCY);
-      await Promise.all(
-        batch.map((row) => this.flushOne(row.item, row.recipe, row.delivery)),
-      );
+    const deliveries = await authority.listDueWorkDeliveries(orgId, now);
+    for (let index = 0; index < deliveries.length; index += WRITE_BACK_CONCURRENCY) {
+      await Promise.all(deliveries.slice(index, index + WRITE_BACK_CONCURRENCY).map(async (delivery) => {
+        let current = delivery;
+        if (isDeliveryLeaseExpired(current, now)) {
+          const expired = await authority.transitionWorkDelivery({
+            org_id: orgId, delivery_id: current.id, kind: "expire", now,
+          });
+          if (expired.outcome === "conflict") return;
+          current = expired.delivery;
+        }
+        const item = await authority.getWorkItem(orgId, current.work_item_id);
+        if (!item) throw new Error(`Delivery work item no longer exists: ${current.work_item_id}`);
+        if (item.status === "skipped" && !current.channel_receipt?.accepted) {
+          const stopped = await authority.transitionWorkDelivery({
+            org_id: orgId, delivery_id: current.id, kind: "cancel", now,
+          });
+          if (stopped.outcome === "conflict") throw new Error(
+            `Delivery cancellation rejected: ${stopped.reason}`,
+          );
+          return;
+        }
+        if (shouldFlushDelivery(current, now)) await this.flushOne(item, undefined, current);
+      }));
     }
   }
 
   async flushOne(
     item: WorkItem,
-    recipe: Recipe | null | undefined,
+    _recipe: Recipe | null | undefined,
     delivery: WorkDelivery,
     force = false,
   ): Promise<void> {
-    const now = new Date().toISOString();
-    const host = this.runtime.requireHost();
-    const readDelivery = async (): Promise<WorkDelivery> => {
-      const saved = await host.get("authority").getWorkDelivery(item.org_id, delivery.id);
-      if (!saved) throw new Error(`Write-back delivery no longer exists: ${delivery.id}`);
-      return saved;
-    };
-    let current = reclaimDeliveryLease(delivery, now);
-    if (force) {
-      current = deliveryRetryNow(current, now);
-    } else if (!shouldFlushDelivery(current, now)) {
-      return;
-    }
-    const payload = current.payload;
-    if (!payload) {
-      await host.get("authority").putWorkDelivery(
-        deliveryWriteBackFailed(current, "Write-back has no payload", now),
+    const authority = this.runtime.requireHost().get("authority");
+    const claimed = await authority.transitionWorkDelivery({
+      org_id: item.org_id, delivery_id: delivery.id, kind: "claim",
+      owner: this.owner, force, now: new Date().toISOString(),
+    });
+    if (claimed.outcome === "conflict") {
+      if (force) throw new PersonalConnectorError(
+        "delivery_claim_conflict", "Delivery is active or requires reconciliation before retrying.", 409,
       );
       return;
     }
-    current = deliveryClaimSend(current, now);
-    await host.get("authority").putWorkDelivery(current);
+    const current = claimed.delivery;
+    const token = current.claim_token;
+    if (!token || !current.payload) throw new Error("Claimed delivery has no token or payload");
+    const settle = async (
+      change: Extract<WorkDeliveryCommand, { token: string }>,
+    ): Promise<void> => {
+      const result = await authority.transitionWorkDelivery(change);
+      if (result.outcome === "conflict") throw new PersonalConnectorError(
+        "delivery_claim_conflict", `Delivery settlement rejected: ${result.reason}`, 409,
+      );
+    };
+    const identity = { org_id: item.org_id, delivery_id: delivery.id, owner: this.owner, token };
+    let accepted = current.channel_receipt?.accepted === true;
     try {
       const outcome = await withTimeout(
-        this.channel.writeBack(
-          item,
-          payload.summary,
-          payload.content,
-          current,
-          async (receipt, sentAt) => {
-            const latest = await readDelivery();
-            current = deliveryRecordReceipt(latest, receipt, sentAt);
-            await host.get("authority").putWorkDelivery(current);
-          },
-        ),
+        this.channel.writeBack(item, current.payload.summary, current.payload.content, current, async (receipt) => {
+          await settle({ ...identity, kind: "receipt", receipt, now: new Date().toISOString() });
+          accepted = receipt.accepted;
+        }),
         WORK_DELIVERY_SEND_TIMEOUT_MS,
       );
-      const latest = await readDelivery();
-      await host.get("authority").putWorkDelivery(deliveryAcked(latest, outcome, now));
+      await settle({ ...identity, kind: outcome, now: new Date().toISOString() });
     } catch (error) {
-      if (error instanceof WriteBackTimeoutError) {
-        const latest = await readDelivery();
-        await host.get("authority").putWorkDelivery(
-          deliverySendTimedOut(latest, now),
-        );
-        return;
-      }
       console.error("personal write-back failed", error);
-      const latest = await readDelivery();
-      await host.get("authority").putWorkDelivery(
-        deliveryWriteBackFailed(latest, deliveryErrorMessage(error), now),
-      );
-      if (force) {
-        throw error;
-      }
+      const kind = !(error instanceof WriteBackTimeoutError)
+        && (accepted || error instanceof WorkDeliveryNotSentError) ? "failed" : "uncertain";
+      const result = await authority.transitionWorkDelivery({
+        ...identity, kind, error: deliveryErrorMessage(error), now: new Date().toISOString(),
+      });
+      if (result.outcome === "conflict") console.error("personal write-back settlement conflict", {
+        delivery_id: delivery.id, reason: result.reason,
+      });
+      if (force) throw error;
     }
   }
 }

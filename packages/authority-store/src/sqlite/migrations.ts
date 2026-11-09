@@ -1,4 +1,4 @@
-export const LATEST_SCHEMA_VERSION = 58;
+export const LATEST_SCHEMA_VERSION = 59;
 
 export const CUSTOMER_SERVICE_TASKS_SQL = `
   CREATE TABLE IF NOT EXISTS customer_service_tasks (
@@ -1178,4 +1178,12 @@ export const MIGRATIONS = [
     `,
   },
   { version: 58, sql: RUN_DELIVERY_LEDGER_SQL },
+  {
+    version: 59,
+    sql: `
+      ALTER TABLE work_deliveries ADD COLUMN lease_owner TEXT;
+      ALTER TABLE work_deliveries ADD COLUMN claim_token TEXT;
+      ALTER TABLE work_deliveries ADD COLUMN cancel_requested_at TEXT;
+    `,
+  },
 ] as const;

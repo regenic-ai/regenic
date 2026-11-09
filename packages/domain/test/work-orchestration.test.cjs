@@ -926,19 +926,21 @@ describe("work delivery", () => {
     assert.equal(same.idempotency_key, sent.idempotency_key);
     const claimed = deliveryClaimSend(queued(), now);
     const timedOut = deliverySendTimedOut(claimed, now);
-    assert.equal(timedOut.attempts, 0);
-    assert.equal(timedOut.status, "write_back");
-    assert.equal(timedOut.lease_expires_at, claimed.lease_expires_at);
+    assert.equal(timedOut.attempts, 1);
+    assert.equal(timedOut.status, "uncertain");
+    assert.equal(timedOut.lease_expires_at, undefined);
+    assert.equal(shouldFlushDelivery(timedOut, now), false);
+    assert.throws(() => deliveryRetryNow(timedOut, now), /reconciliation/);
   });
 
-  it("reclaims an expired lease and does not flush an in-flight send", () => {
+  it("marks expired sends uncertain instead of requeuing an unknown external request", () => {
     let delivery = deliveryClaimSend(queued(), now);
     assert.equal(delivery.status, "write_back");
     assert.equal(shouldFlushDelivery(delivery, now), false);
     const later = new Date(Date.parse(delivery.lease_expires_at) + 1).toISOString();
     const reclaimed = reclaimDeliveryLease(delivery, later);
-    assert.equal(reclaimed.status, "queued");
-    assert.equal(shouldFlushDelivery(delivery, later), true);
+    assert.equal(reclaimed.status, "uncertain");
+    assert.equal(shouldFlushDelivery(delivery, later), false);
   });
 
   it("acks a sent write-back and dead-letters after three send failures", () => {

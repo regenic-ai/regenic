@@ -458,6 +458,7 @@ export const ThreadPane = memo(function ThreadPane({
   const canRun =
     Boolean(onRunWork) &&
     Boolean(thread.work) &&
+    thread.work?.delivery?.status !== "uncertain" &&
     (thread.work?.status === "open" ||
       thread.work?.status === "failed" ||
       thread.work?.status === "skipped" ||

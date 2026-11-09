@@ -11,7 +11,6 @@ import {
   DEFAULT_PERSONAL_FOLLOW_UP_POLICY,
   DEFAULT_LOCAL_EXECUTOR_ID,
   cancelWorkRun,
-  deliveryAbandoned,
   hiddenExecutorThreadIds,
   isActiveWorkStatus,
   ACTIVE_WORK_STATUSES,
@@ -896,12 +895,16 @@ export class PersonalWorkService implements OnModuleDestroy {
     const allowWriteBack =
       input?.write_back === true && Boolean(recipe.can_write_back);
     this.supervise.setWriteBackOverride(item.id, allowWriteBack);
-    const pending = await authority.getWorkDeliveryByItem(orgId, item.id);
-    if (pending && pending.status !== "acked") {
-      // Drop stale queued send-back so keep-here (and a fresh try) cannot flush it.
-      await authority.putWorkDelivery(deliveryAbandoned(pending, now));
-    }
     try {
+      const pending = await authority.getWorkDeliveryByItem(orgId, item.id);
+      if (pending && pending.status !== "acked") {
+        const stopped = await authority.transitionWorkDelivery({
+          org_id: orgId, delivery_id: pending.id, kind: "cancel", now,
+        });
+        if (stopped.outcome === "conflict") throw new PersonalConnectorError(
+          "delivery_claim_conflict", `Delivery cancellation rejected: ${stopped.reason}`, 409,
+        );
+      }
       const result = await this.runWorkItem(item.id);
       this.inbox.touchInboxDigest();
       return { ...result, thread_id: threadId };
@@ -1143,6 +1146,11 @@ export class PersonalWorkService implements OnModuleDestroy {
       ? await host.get("authority").getRecipe(orgId, item.recipe_id)
       : null;
     const delivery = await host.get("authority").getWorkDeliveryByItem(orgId, item.id);
+    if (delivery?.status === "uncertain" && !delivery.channel_receipt?.accepted) {
+      throw new PersonalConnectorError(
+        "delivery_reconciliation_required", "Delivery acceptance is unknown. Check the original destination before retrying.", 409,
+      );
+    }
     if (
       delivery &&
       (delivery.write_back === "failed" || isDeadLetter(delivery)) &&
@@ -1240,7 +1248,12 @@ export class PersonalWorkService implements OnModuleDestroy {
       : undefined;
     const delivery = await host.get("authority").getWorkDeliveryByItem(orgId, item.id);
     if (delivery && delivery.status !== "acked") {
-      await host.get("authority").putWorkDelivery(deliveryAbandoned(delivery, now));
+      const stopped = await host.get("authority").transitionWorkDelivery({
+        org_id: orgId, delivery_id: delivery.id, kind: "cancel", now,
+      });
+      if (stopped.outcome === "conflict") throw new PersonalConnectorError(
+        "delivery_claim_conflict", `Delivery cancellation rejected: ${stopped.reason}`, 409,
+      );
     }
     await foldFinishedWorkThreads(
       host.get("authority"),

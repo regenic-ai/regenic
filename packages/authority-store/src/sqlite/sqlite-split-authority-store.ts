@@ -91,6 +91,8 @@ import type {
   WorkItem,
   WorkRun,
   WorkRunStartClaim,
+  WorkDeliveryCommand,
+  WorkDeliveryCommandResult,
   CommitWorkObservation,
   CommitWorkObservationResult,
   SearchAnswerRecord,
@@ -859,6 +861,10 @@ export class SqliteSplitAuthorityStore
 
   async putWorkDelivery(delivery: WorkDelivery): Promise<WorkDelivery> {
     return this.writer.call("putWorkDelivery", [delivery]);
+  }
+
+  async transitionWorkDelivery(input: WorkDeliveryCommand): Promise<WorkDeliveryCommandResult> {
+    return this.writer.call("transitionWorkDelivery", [input]);
   }
 
   async getUiPref(orgId: string, key: string): Promise<string | null> {

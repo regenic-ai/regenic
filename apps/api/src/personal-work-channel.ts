@@ -37,7 +37,7 @@ import {
   type WorkWriteBackTarget,
 } from "@regenic/domain";
 import { resolveInboxBodies, type InboxBody } from "./inbox-body";
-import { PersonalConnectorError } from "./personal-errors";
+import { PersonalConnectorError, WorkDeliveryNotSentError } from "./personal-errors";
 import { stampFromThreadSurfaces } from "./personal-reply-stamp";
 import { writeWorkContextFiles } from "./personal-work-context";
 import { PersonalRuntimeService } from "./personal-runtime.service";
@@ -175,7 +175,7 @@ export class PersonalWorkChannel {
       thread,
     );
     if (!found || !driverCanReply(found.driver, found.installation)) {
-      throw new PersonalConnectorError(
+      throw new WorkDeliveryNotSentError(
         "no_sender",
         "No enabled connector can send in this conversation",
         404,
@@ -200,6 +200,9 @@ export class PersonalWorkChannel {
           : {}),
       }));
     const now = new Date().toISOString();
+    if (!receipt.accepted) throw new WorkDeliveryNotSentError(
+      "send_rejected", "Channel rejected the outbound request", 502,
+    );
     if (options?.onReceipt) {
       await options.onReceipt(receipt, now);
     }
@@ -246,18 +249,19 @@ export class PersonalWorkChannel {
           .get("authority")
           .getRecipe(item.org_id, item.recipe_id)
       : null;
-    if (!delivery?.run_id && (!recipe || !recipeWantsWriteBack(recipe))) {
+    const recorded = deliveryChannelReceipt(delivery);
+    if (!recorded && !delivery?.run_id && (!recipe || !recipeWantsWriteBack(recipe))) {
       return "skipped";
     }
     const latest = await this.runtime
       .requireHost()
       .get("authority")
       .getWorkItem(item.org_id, item.id);
-    if (isAbandonedWorkItem(latest?.status)) {
+    if (!recorded && isAbandonedWorkItem(latest?.status)) {
       return "skipped";
     }
     if (delivery?.run_id && !delivery.target) {
-      throw new PersonalConnectorError("delivery_target_unknown", "Delivery has no frozen target", 409);
+      throw new WorkDeliveryNotSentError("delivery_target_unknown", "Delivery has no frozen target", 409);
     }
     const destinationId = delivery?.target
       ? `${delivery.target.source}:${delivery.target.target}`
@@ -269,7 +273,7 @@ export class PersonalWorkChannel {
         .find((part) => part.trim())
         ?.trim() ?? summary;
     if (!text.trim()) {
-      throw new PersonalConnectorError(
+      throw new WorkDeliveryNotSentError(
         "invalid_config",
         "Write-back has no text",
         400,
@@ -285,9 +289,8 @@ export class PersonalWorkChannel {
       : available;
     const found = this.drivers.findForThread(installations, thread);
     if (delivery?.target && !found) {
-      throw new PersonalConnectorError("no_sender", "Frozen write-back installation is unavailable", 409);
+      throw new WorkDeliveryNotSentError("no_sender", "Frozen write-back installation is unavailable", 409);
     }
-    const recorded = deliveryChannelReceipt(delivery);
     if (found && driverCanReply(found.driver, found.installation)) {
       await this.sendText(thread, text, {
         writeBack: true,
@@ -314,7 +317,7 @@ export class PersonalWorkChannel {
       (label) => found?.driver.writeBackLabels?.(label) ?? [label.trim()].filter(Boolean),
     );
     if (!answer) {
-      throw new PersonalConnectorError(
+      throw new WorkDeliveryNotSentError(
         "invalid_config",
         prompts.length === 0
           ? "Write-back has no live prompt on this conversation"
@@ -329,7 +332,7 @@ export class PersonalWorkChannel {
       host,
     );
     if (!accepted.accepted) {
-      throw new PersonalConnectorError(
+      throw new WorkDeliveryNotSentError(
         "invalid_config",
         "Write-back prompt was not accepted",
         502,

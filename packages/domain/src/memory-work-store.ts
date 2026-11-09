@@ -7,10 +7,12 @@ import type {
   WorkRun,
   WorkRunStartClaim,
   WorkStore,
+  WorkDeliveryCommand,
+  WorkDeliveryCommandResult,
 } from "./work";
 import { isActiveWorkStatus } from "./work";
 import type { WorkItemStatus } from "./work";
-import { shouldFlushDelivery, assertWorkDeliveryWrite } from "./work-delivery";
+import { shouldFlushDelivery, isDeliveryLeaseExpired, assertWorkDeliveryWrite, planWorkDeliveryCommand } from "./work-delivery";
 import type { SearchAnswerRecord } from "./search-answer";
 import {
   prepareWorkObservation,
@@ -162,7 +164,7 @@ export class MemoryWorkStore implements WorkStore, ExecutorStore {
     const nextItem = { ...prepared.transition.item };
     const nextDelivery = prepared.delivery ? structuredClone(prepared.delivery) : undefined;
     if (nextDelivery) assertWorkDeliveryWrite(
-      nextDelivery, this.deliveries.get(nextDelivery.id), nextRun,
+      nextDelivery, this.deliveries.get(nextDelivery.id), nextRun, true,
     );
     this.runs.set(nextRun.id, nextRun);
     this.items.set(nextItem.id, nextItem);
@@ -236,7 +238,8 @@ export class MemoryWorkStore implements WorkStore, ExecutorStore {
   ): Promise<WorkDelivery[]> {
     return [...this.deliveries.values()]
       .filter(
-        (item) => item.org_id === orgId && shouldFlushDelivery(item, now),
+        (item) => item.org_id === orgId && Boolean(item.payload)
+          && (shouldFlushDelivery(item, now) || isDeliveryLeaseExpired(item, now)),
       )
       .map((item) => cloneDelivery(item));
   }
@@ -270,6 +273,16 @@ export class MemoryWorkStore implements WorkStore, ExecutorStore {
     )) throw new Error("Work execution already has a delivery");
     this.deliveries.set(delivery.id, cloneDelivery(delivery));
     return cloneDelivery(delivery);
+  }
+
+  async transitionWorkDelivery(input: WorkDeliveryCommand): Promise<WorkDeliveryCommandResult> {
+    const current = this.deliveries.get(input.delivery_id);
+    const delivery = current?.org_id === input.org_id ? current : null;
+    const item = delivery ? this.items.get(delivery.work_item_id) : undefined;
+    const result = planWorkDeliveryCommand(delivery,
+      item?.org_id === input.org_id ? item.status : undefined, input);
+    if (result.outcome === "applied") this.deliveries.set(result.delivery.id, cloneDelivery(result.delivery));
+    return structuredClone(result);
   }
 
   async getUiPref(orgId: string, key: string): Promise<string | null> {

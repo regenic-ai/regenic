@@ -4,6 +4,8 @@ import type {
   WorkItem,
   WorkRun,
   WorkRunStartClaim,
+  WorkDeliveryCommand,
+  WorkDeliveryCommandResult,
   WorkDelivery,
   ExecutorInstallation,
   SearchAnswerRecord,
@@ -19,6 +21,7 @@ import {
   prepareWorkObservation,
   assertWorkRunSnapshot,
   assertWorkDeliveryWrite,
+  planWorkDeliveryCommand,
   canonicalContextJson,
   type CommitWorkObservation,
   type CommitWorkObservationResult,
@@ -280,7 +283,7 @@ export async function commitWorkObservation(
     });
     if (prepared.outcome !== "applied") return prepared;
     writeWorkRun(db, prepared.transition.run);
-    if (prepared.delivery) writeWorkDelivery(db, prepared.delivery);
+    if (prepared.delivery) writeWorkDelivery(db, prepared.delivery, true);
     if (prepared.transition.item.status !== input.expected_item.status) {
       writeWorkItem(db, prepared.transition.item);
     }
@@ -435,7 +438,8 @@ export async function listDueWorkDeliveries(db: Database.Database, orgId: string
             AND payload_json IS NOT NULL
             AND status NOT IN ('acked', 'dead')
             AND (
-              (
+              (status = 'uncertain' AND json_extract(channel_receipt_json, '$.accepted') = 1)
+              OR (
                 status = 'queued'
                 AND (
                   write_back IS NULL
@@ -485,14 +489,28 @@ export async function putWorkDelivery(db: Database.Database, delivery: WorkDeliv
     return db.transaction(() => writeWorkDelivery(db, delivery)).immediate();
   }
 
-function writeWorkDelivery(db: Database.Database, delivery: WorkDelivery): WorkDelivery {
+export async function transitionWorkDelivery(
+  db: Database.Database, input: WorkDeliveryCommand,
+): Promise<WorkDeliveryCommandResult> {
+  return db.transaction((): WorkDeliveryCommandResult => {
+    const row = db.prepare("SELECT * FROM work_deliveries WHERE org_id = ? AND id = ?")
+      .get(input.org_id, input.delivery_id) as WorkDeliveryRow | undefined;
+    const item = row ? db.prepare("SELECT status FROM work_items WHERE org_id = ? AND id = ?")
+      .get(input.org_id, row.work_item_id) as { status: string } | undefined : undefined;
+    const result = planWorkDeliveryCommand(row ? toWorkDelivery(row) : null, item?.status, input);
+    if (result.outcome === "applied") writeWorkDelivery(db, result.delivery, true);
+    return result;
+  }).immediate();
+}
+
+function writeWorkDelivery(db: Database.Database, delivery: WorkDelivery, commandWrite = false): WorkDelivery {
     const current = db.prepare("SELECT * FROM work_deliveries WHERE id = ?").get(delivery.id) as WorkDeliveryRow | undefined;
     const run = delivery.run_id
       ? db.prepare(`SELECT r.* FROM work_runs r
           JOIN work_items w ON w.id = r.work_item_id AND w.org_id = r.org_id
           WHERE r.org_id = ? AND r.id = ?`).get(delivery.org_id, delivery.run_id) as WorkRunRow | undefined
       : undefined;
-    assertWorkDeliveryWrite(delivery, current ? toWorkDelivery(current) : null, run ? toWorkRun(run) : null);
+    assertWorkDeliveryWrite(delivery, current ? toWorkDelivery(current) : null, run ? toWorkRun(run) : null, commandWrite);
     const row = db
       .prepare(
         `
@@ -500,8 +518,8 @@ function writeWorkDelivery(db: Database.Database, delivery: WorkDelivery): WorkD
             id, org_id, work_item_id, recipe_id, kind, unit_key, event_id,
             status, write_back, attempts, last_error, next_retry_at,
             payload_json, lease_expires_at, idempotency_key, channel_receipt_json,
-            created_at, updated_at, run_id, target_json
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            created_at, updated_at, run_id, target_json, lease_owner, claim_token, cancel_requested_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(id) DO UPDATE SET
             recipe_id = excluded.recipe_id,
             kind = excluded.kind,
@@ -516,6 +534,9 @@ function writeWorkDelivery(db: Database.Database, delivery: WorkDelivery): WorkD
             lease_expires_at = excluded.lease_expires_at,
             idempotency_key = excluded.idempotency_key,
             channel_receipt_json = excluded.channel_receipt_json,
+            lease_owner = excluded.lease_owner,
+            claim_token = excluded.claim_token,
+            cancel_requested_at = excluded.cancel_requested_at,
             updated_at = excluded.updated_at
           WHERE work_deliveries.org_id = excluded.org_id
             AND work_deliveries.work_item_id = excluded.work_item_id
@@ -549,6 +570,9 @@ function writeWorkDelivery(db: Database.Database, delivery: WorkDelivery): WorkD
         delivery.updated_at,
         delivery.run_id ?? null,
         delivery.target ? canonicalContextJson(delivery.target) : null,
+        delivery.lease_owner ?? null,
+        delivery.claim_token ?? null,
+        delivery.cancel_requested_at ?? null,
       ) as WorkDeliveryRow | undefined;
     if (!row) {
       throw new Error("work delivery upsert returned no row");
@@ -669,6 +693,9 @@ interface WorkDeliveryRow {
   org_id: string;
   work_item_id: string;
   run_id: string | null;
+  lease_owner: string | null;
+  claim_token: string | null;
+  cancel_requested_at: string | null;
   target_json: string | null;
   recipe_id: string;
   kind: string;
@@ -825,6 +852,9 @@ function toWorkDelivery(row: WorkDeliveryRow): WorkDelivery {
     id: row.id,
     org_id: row.org_id,
     work_item_id: row.work_item_id,
+    ...(row.lease_owner ? { lease_owner: row.lease_owner } : {}),
+    ...(row.claim_token ? { claim_token: row.claim_token } : {}),
+    ...(row.cancel_requested_at ? { cancel_requested_at: row.cancel_requested_at } : {}),
     ...(row.run_id ? { run_id: row.run_id } : {}),
     ...(row.target_json ? { target: JSON.parse(row.target_json) } : {}),
     recipe_id: row.recipe_id,
