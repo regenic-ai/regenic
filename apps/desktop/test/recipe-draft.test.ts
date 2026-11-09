@@ -39,6 +39,17 @@ const rule: RecipeView = {
 };
 
 describe("recipe draft", () => {
+  it("does not add task or unit-kind restrictions to a new conversation push rule", () => {
+    const conversations = [{ id: "chat:room", label: "Room", source: "chat", can_send: true }];
+    const draft = starterDraft("chat", emptyDraft(), [{ id: "chat", label: "Chat" }], conversations);
+    assert.deepEqual(draftMatch({ ...draft, text_contains: "[给客户]" }), {
+      thread_id: "chat:room", text_contains: "[给客户]",
+    });
+    assert.equal(canAutoStart(draftMatch(draft), draft), true);
+    const channel = starterDraft("channel", emptyDraft(), [{ id: "chat", label: "Chat" }], conversations);
+    assert.deepEqual(draftMatch(channel), { source: "chat", record_class: "task" });
+  });
+
   it("preserves filters through editing and scope changes, and clears blank fields", () => {
     const saved = { ...rule, match: { ...rule.match, text_contains: " approve ", text_excludes: "draft" } };
     const draft = draftFromRecipe(saved);

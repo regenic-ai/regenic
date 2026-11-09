@@ -479,13 +479,13 @@ function inboxSql(db: Database.Database, orgId: string, query?: InboxQuery): { s
       query,
       query?.disposition ?? "current_work",
     );
-    if (!scoped) {
-      clauses.push(notHiddenSql("e"));
+    if (!scoped || query?.push_candidates) {
+      clauses.push(notHiddenSql("e", query?.push_candidates));
       params.push(orgId);
     }
-    if (query?.tasks) {
+    if (query?.tasks !== undefined) {
       clauses.push(
-        `EXISTS (SELECT 1 FROM json_each(d.reason_codes_json) WHERE value = ?)`,
+        `${query.tasks ? "" : "NOT "}EXISTS (SELECT 1 FROM json_each(d.reason_codes_json) WHERE value = ?)`,
       );
       params.push(TASK_INBOX_REASON);
     }
@@ -538,7 +538,14 @@ function inboxClauses(db: Database.Database, orgId: string, query: InboxQuery | 
     const decision = tables.disposition ?? "d";
     const clauses = [`${event}.org_id = ?`];
     const params: unknown[] = [orgId];
-    if (disposition !== "any") {
+    if (disposition === "current_work" && query?.push_candidates) {
+      clauses.push(`(${decision}.disposition = 'current_work' OR (
+        ${decision}.disposition = 'pending'
+        AND NOT EXISTS (
+          SELECT 1 FROM json_each(${decision}.reason_codes_json) WHERE value = 'human_triage'
+        )
+      ))`);
+    } else if (disposition !== "any") {
       clauses.push(`${decision}.disposition = ?`);
       params.push(disposition);
     }
@@ -704,8 +711,10 @@ function hiddenThreadIdSql(orgId: string): { sql: string; params: unknown[] } {
   };
 }
 
-function notHiddenSql(event = "e"): string {
-  return `${event}.thread_id NOT IN (SELECT p.thread_id FROM conversation_prefs p WHERE p.org_id = ? AND p.hidden = 1)`;
+function notHiddenSql(event = "e", allowPolicyFold = false): string {
+  return `${event}.thread_id NOT IN (SELECT p.thread_id FROM conversation_prefs p WHERE p.org_id = ? AND p.hidden = 1${
+    allowPolicyFold ? " AND COALESCE(p.hidden_reason, 'human') <> 'policy'" : ""
+  })`;
 }
 
 function inboxScoped(query?: InboxQuery): boolean {

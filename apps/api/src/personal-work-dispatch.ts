@@ -24,6 +24,7 @@ import {
   recipeTextMatches,
   isOccupiedRecipeSlot,
   isTaskInboxItem,
+  isPushInboxDecision,
   selectRecipeForSubject,
   shouldAcceptPushRecord,
   shouldRetryFailedPush,
@@ -60,6 +61,7 @@ export class PersonalWorkDispatch {
   /** Order tasks move on their own cursor so the email backlog cannot block them. */
   private orderScan: { occurred_at: string; id: string } | null = null;
   private opsScan: { occurred_at: string; id: string } | null = null;
+  private messageScan: { occurred_at: string; id: string } | null = null;
   private failedScan = 0;
 
   constructor(
@@ -146,13 +148,22 @@ export class PersonalWorkDispatch {
     const host = this.runtime.requireHost();
     const orgId = this.runtime.orgId();
     const authority = host.get("authority");
-    const [recipes, items, hiddenIds, taskRows] = await Promise.all([
+    const [recipes, items, hiddenIds, taskRows, messageRows] = await Promise.all([
       authority.listRecipes(orgId),
       authority.listWorkItems(orgId, { statuses: [...ACTIVE_WORK_STATUSES] }),
       authority.listHiddenExecutorThreadIds(orgId),
       authority.listInbox(orgId, { tasks: true, needs_work: true }),
+      authority.listInbox(orgId, {
+        tasks: false,
+        needs_work: true,
+        push_candidates: true,
+        limit: INBOX_OBSERVE_PAGE,
+        before: this.messageScan?.occurred_at,
+        before_id: this.messageScan?.id,
+      }),
     ]);
-    if (taskRows.length === 0 && items.length === 0) {
+    if (taskRows.length === 0 && messageRows.length === 0 && items.length === 0) {
+      this.messageScan = null;
       return;
     }
     const hidden = new Set(hiddenIds);
@@ -163,7 +174,9 @@ export class PersonalWorkDispatch {
     const opsPage = takeInboxScanPage(otherRows, this.opsScan, INBOX_OBSERVE_PAGE);
     this.orderScan = orderPage.next;
     this.opsScan = opsPage.next;
-    const page = [...orderPage.page, ...opsPage.page];
+    // Messages use a separate bounded walk of source heads, not conversation faces:
+    // a newer reply must not hide an earlier matching message in the same thread.
+    const page = [...orderPage.page, ...opsPage.page, ...messageRows];
     const bodies = await resolveInboxBodies(
       authority,
       host.get("blobs"),
@@ -221,6 +234,10 @@ export class PersonalWorkDispatch {
         installations,
       });
     }
+    const oldestMessage = messageRows[0]?.event;
+    this.messageScan = messageRows.length === INBOX_OBSERVE_PAGE && oldestMessage
+      ? { occurred_at: oldestMessage.occurred_at, id: oldestMessage.id }
+      : null;
   }
 
   async dispatchPullRecipes(): Promise<void> {
@@ -435,6 +452,14 @@ export class PersonalWorkDispatch {
     mode: "auto" | "manual" | "auxiliary" = "auto",
   ): Promise<WorkRun | undefined> {
     const host = this.runtime.requireHost();
+    if (
+      mode === "auto" &&
+      recipe.trigger.kind === "push" &&
+      item.record_class !== "task" &&
+      !(await this.canAutoStartMessage(item))
+    ) {
+      return undefined;
+    }
     if (
       recipe.trigger.kind === "push" &&
       (recipe.match.text_contains || recipe.match.text_excludes) &&
@@ -771,6 +796,19 @@ export class PersonalWorkDispatch {
         });
       },
     };
+  }
+
+  private async canAutoStartMessage(item: WorkItem): Promise<boolean> {
+    if (!item.head_event_id) {
+      return false;
+    }
+    const authority = this.runtime.requireHost().get("authority");
+    const [decision, pref] = await Promise.all([
+      authority.getDisposition(item.head_event_id),
+      authority.getConversationPref(item.org_id, item.thread_id),
+    ]);
+    return Boolean(decision && isPushInboxDecision(decision) &&
+      (!pref?.hidden || pref.hidden_reason === "policy"));
   }
 
   private async hasStartCapacity(recipe: Recipe, exceptItemId: string): Promise<boolean> {

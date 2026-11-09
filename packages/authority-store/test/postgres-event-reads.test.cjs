@@ -55,6 +55,30 @@ function assertMetadata(actual, expected) {
 }
 
 describe("postgres Event read projections without a live database", () => {
+  it("keeps push candidate eligibility and tied-time paging in SQL before the limit", async () => {
+    const db = {
+      async query(sql, params) {
+        assert.match(sql, /d\.disposition = 'current_work' OR/);
+        assert.match(sql, /d\.disposition = 'pending'\s+AND NOT \(d\.reason_codes \? 'human_triage'\)/);
+        assert.match(sql, /NOT \(d\.reason_codes \? \$\d+\)/);
+        assert.match(sql, /NOT EXISTS \(\s+SELECT 1 FROM work_items/);
+        assert.match(sql, /source_heads/);
+        assert.match(sql, /conversation_prefs/);
+        assert.match(sql, /COALESCE\(pref\.hidden_reason, 'human'\) <> 'policy'/);
+        assert.match(sql, /e\.occurred_at < \$\d+ OR \(e\.occurred_at = \$\d+ AND e\.id < \$\d+\)/);
+        assert.match(sql, /ORDER BY e\.occurred_at DESC, e\.id DESC LIMIT/);
+        assert.ok(params.includes("task"));
+        assert.ok(params.includes("cursor-id"));
+        assert.equal(params.at(-1), 16);
+        return [];
+      },
+    };
+    assert.deepEqual(await listInbox(db, identity.org_id, {
+      tasks: false, needs_work: true, push_candidates: true,
+      before: occurredAt, before_id: "cursor-id", limit: 16,
+    }), []);
+  });
+
   const variants = [
     {
       name: "populated",
