@@ -168,7 +168,12 @@ describe("recipe destination migrations", () => {
     skip: !process.env.TEST_DATABASE_URL?.trim(),
   }, async (t) => {
     const store = await openPostgres(t, async (db) => {
-      await db.query(PG_BASELINE_SQL.replace("  write_back_thread_id TEXT,\n", ""));
+      const historicalSchema = PG_BASELINE_SQL
+        .replace("  write_back_thread_id TEXT,\n", "")
+        .replace("ALTER TABLE work_items ADD COLUMN current_run_id TEXT REFERENCES work_runs(id) DEFERRABLE INITIALLY DEFERRED;\n", "")
+        .replace("ALTER TABLE work_items ADD COLUMN version INTEGER NOT NULL DEFAULT 0 CHECK (version >= 0);\n", "")
+        .replace("ALTER TABLE work_runs ADD COLUMN version INTEGER NOT NULL DEFAULT 0 CHECK (version >= 0);\n", "");
+      await db.query(historicalSchema);
       await db.query("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL)");
       await db.query("INSERT INTO schema_migrations VALUES (55, $1)", [NOW]);
       await db.query(`

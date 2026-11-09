@@ -583,6 +583,17 @@ ALTER TABLE recipes ADD COLUMN trigger_timezone TEXT;
 ALTER TABLE work_items ADD COLUMN current_run_id TEXT REFERENCES work_runs(id) DEFERRABLE INITIALLY DEFERRED;
 ALTER TABLE work_items ADD COLUMN version INTEGER NOT NULL DEFAULT 0 CHECK (version >= 0);
 ALTER TABLE work_runs ADD COLUMN version INTEGER NOT NULL DEFAULT 0 CHECK (version >= 0);
+UPDATE work_items SET current_run_id = (
+  SELECT r.id FROM work_runs r
+  WHERE r.org_id = work_items.org_id AND r.work_item_id = work_items.id
+    AND r.recipe_id = work_items.recipe_id
+    AND r.status IN ('running', 'waiting_human')
+)
+WHERE status IN ('running', 'waiting_human')
+  AND 1 = (
+    SELECT COUNT(*) FROM work_runs r
+    WHERE r.org_id = work_items.org_id AND r.work_item_id = work_items.id
+  );
 `,
   },
 ] as const;

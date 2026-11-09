@@ -477,6 +477,25 @@ it("migrates schema 56 without inferring historical current-run identity", async
     recipe_id: "legacy-recipe", executor_type: "test", status: "completed",
     created_at: NOW, updated_at: NOW,
   });
+  for (const [id, count, status] of [
+    ["single-active", 1, "running"],
+    ["ambiguous-active", 2, "running"],
+    ["single-waiting", 1, "waiting_human"],
+    ["terminal-only", 1, "failed"],
+  ]) {
+    await store.putWorkItem({
+      id, org_id: ORG, thread_id: `source:${id}`, unit_key: id,
+      record_class: "task", thread_facet: "ticket", status: "running",
+      recipe_id: "legacy-recipe", created_at: NOW, updated_at: NOW,
+    });
+    for (let index = 0; index < count; index += 1) {
+      await store.putWorkRun({
+        id: `${id}-${index}`, org_id: ORG, work_item_id: id,
+        recipe_id: "legacy-recipe", executor_type: "test", status,
+        created_at: NOW, updated_at: NOW,
+      });
+    }
+  }
   store.close();
   store = undefined;
   const db = new Database(path);
@@ -496,4 +515,12 @@ it("migrates schema 56 without inferring historical current-run identity", async
     current_run_id: undefined, version: 0, created_at: NOW, updated_at: NOW,
   });
   assert.equal((await store.getWorkRun(ORG, "legacy-run")).version, 0);
+  for (const id of ["single-active", "single-waiting"]) {
+    assert.equal((await store.getWorkItem(ORG, id)).current_run_id, `${id}-0`);
+    assert.equal((await store.getActiveWorkRun(ORG, id)).id, `${id}-0`);
+  }
+  for (const id of ["ambiguous-active", "terminal-only"]) {
+    assert.equal((await store.getWorkItem(ORG, id)).current_run_id, undefined);
+    assert.equal(await store.getActiveWorkRun(ORG, id), null);
+  }
 });

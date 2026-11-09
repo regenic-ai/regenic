@@ -108,6 +108,9 @@ describe("shared immutable Context artifact segments", () => {
       ALTER TABLE recipes DROP COLUMN trigger_weekdays;
       ALTER TABLE recipes DROP COLUMN trigger_timezone;
       ALTER TABLE recipes DROP COLUMN write_back_thread_id;
+      ALTER TABLE work_items DROP COLUMN current_run_id;
+      ALTER TABLE work_items DROP COLUMN version;
+      ALTER TABLE work_runs DROP COLUMN version;
     `);
     binding.database.pragma("user_version = 50");
     const upgraded = binding.reopen();

@@ -78,6 +78,13 @@ export class PersonalWorkSupervise {
         ? await host.get("authority").getRecipe(orgId, item.recipe_id)
         : null;
       const run = await host.get("authority").getActiveWorkRun(orgId, item.id);
+      if (recipe && !run && !item.current_run_id) {
+        console.error("personal work current run requires reconciliation", {
+          org_id: orgId,
+          work_item_id: item.id,
+          code: "execution_identity_unknown",
+        });
+      }
       if (!recipe || !run) {
         continue;
       }
