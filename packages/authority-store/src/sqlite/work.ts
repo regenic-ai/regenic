@@ -368,13 +368,13 @@ export async function claimWorkRunStart(db: Database.Database, input: WorkRunSta
   const { run, max_concurrent } = input;
   return db.transaction(() => {
     const item = db.prepare(`
-      SELECT w.* FROM work_items w JOIN recipes r ON r.id = w.recipe_id AND r.org_id = w.org_id
-      WHERE w.org_id = ? AND w.id = ? AND w.recipe_id = ?
+      SELECT w.* FROM work_items w JOIN recipes r ON r.org_id = w.org_id AND r.id = ?
+      WHERE w.org_id = ? AND w.id = ?
         AND NOT EXISTS (
           SELECT 1 FROM work_runs WHERE org_id = w.org_id AND work_item_id = w.id
             AND status IN ('running', 'waiting_human')
         )
-    `).get(run.org_id, run.work_item_id, run.recipe_id) as WorkItemRow | undefined;
+    `).get(run.recipe_id, run.org_id, run.work_item_id) as WorkItemRow | undefined;
     if (!item || !canClaimWorkRunStartItem(input, toWorkItem(item))) return false;
     if (db.prepare(
       "SELECT id FROM work_deliveries WHERE org_id = ? AND work_item_id = ? AND status <> 'acked' LIMIT 1",
@@ -390,8 +390,8 @@ export async function claimWorkRunStart(db: Database.Database, input: WorkRunSta
       throw new Error(`Work run already exists: ${run.id}`);
     }
     writeWorkRun(db, run);
-    db.prepare("UPDATE work_items SET status = 'running', current_run_id = ?, version = version + 1, updated_at = ? WHERE org_id = ? AND id = ?")
-      .run(run.id, run.updated_at, run.org_id, run.work_item_id);
+    db.prepare("UPDATE work_items SET status = 'running', recipe_id = ?, current_run_id = ?, version = version + 1, updated_at = ? WHERE org_id = ? AND id = ?")
+      .run(run.recipe_id, run.id, run.updated_at, run.org_id, run.work_item_id);
     return true;
   }).immediate();
 }

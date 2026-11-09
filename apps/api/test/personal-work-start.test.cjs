@@ -89,6 +89,118 @@ async function fixture(t, maxConcurrent) {
 }
 
 describe("durable executor start", () => {
+  it("rebinds a settled trial only in the start claim and freezes its call-scoped keep-local decision", async (t) => {
+    const f = await fixture(t);
+    const oldRecipe = await f.ports.authority.putRecipe({ ...f.recipe, id: "old-rule" });
+    const oldItem = await f.ports.authority.putWorkItem({
+      ...f.item, recipe_id: oldRecipe.id, status: "done",
+    });
+    const recipe = await f.ports.authority.putRecipe({ ...f.recipe, can_write_back: true });
+    const supervisor = f.supervise();
+    supervisor.setWriteBackOverride(oldItem.id, true);
+    const service = f.service();
+    service.dispatch = f.dispatch(supervisor);
+    const put = t.mock.method(f.ports.authority, "putWorkItem");
+    const result = await service.tryRecipe(recipe.id, { thread_id: oldItem.thread_id, write_back: false });
+    assert.equal(put.mock.callCount(), 0);
+    assert.equal(result.work_item.id, oldItem.id);
+    assert.equal(result.work_item.version, oldItem.version + 1);
+    assert.equal(result.work_item.recipe_id, recipe.id);
+    assert.equal(result.run.write_back_required, false);
+    assert.equal(result.run.write_back_target, undefined);
+    f.reopen();
+    await f.supervise().refreshRuns();
+    assert.equal(await f.ports.authority.getWorkDeliveryByItem(ORG, oldItem.id), null);
+    assert.equal((await f.ports.authority.getWorkRun(ORG, result.run.id)).write_back_required, false);
+  });
+
+  it("flushes only the immediately completed trial's own frozen delivery", async (t) => {
+    const f = await fixture(t);
+    const recipe = await f.ports.authority.putRecipe({ ...f.recipe, can_write_back: true });
+    const supervisor = f.supervise();
+    supervisor.setWriteBackOverride(f.item.id, false);
+    f.setExecutor({
+      executor_type: "session",
+      capabilities: () => ({}),
+      start: async () => ({
+        status: "completed", external_run_id: "trial-execution", result: { summary: "Trial result" },
+      }),
+    });
+    const service = f.service();
+    service.dispatch = f.dispatch(supervisor);
+    t.mock.method(service.channel, "canReplyThread", async () => true);
+    let flushed;
+    t.mock.method(service.flush, "flushOne", async (item, rule, delivery) => {
+      flushed = { item, rule, delivery };
+    });
+    const result = await service.tryRecipe(recipe.id, { thread_id: f.item.thread_id, write_back: true });
+    assert.equal(result.run.write_back_required, true);
+    assert.equal(result.work_item.status, "done");
+    assert.equal(flushed.item.id, result.work_item.id);
+    assert.equal(flushed.rule.id, recipe.id);
+    assert.equal(flushed.delivery.run_id, result.run.id);
+    assert.equal(flushed.delivery.payload.summary, "Trial result");
+    assert.deepEqual(flushed.delivery.target, result.run.write_back_target);
+  });
+
+  it("does not rebind or reopen a trial sample ignored after it was selected", async (t) => {
+    const f = await fixture(t);
+    const sample = await f.ports.authority.putWorkItem({ ...f.item, recipe_id: undefined, status: "failed" });
+    const claim = f.ports.authority.claimWorkRunStart.bind(f.ports.authority);
+    let ignored;
+    t.mock.method(f.ports.authority, "claimWorkRunStart", async (input) => {
+      assert.equal(input.expected_item.id, sample.id);
+      assert.equal(input.expected_item.recipe_id, undefined);
+      assert.equal(input.rebind, "manual");
+      ignored = await f.ports.authority.putWorkItem({ ...sample, status: "skipped" });
+      return claim(input);
+    });
+    const service = f.service();
+    service.dispatch = f.dispatch();
+    await assert.rejects(service.tryRecipe(f.recipe.id, { thread_id: sample.thread_id }),
+      code("execution_start_conflict"));
+    assert.deepEqual(await f.ports.authority.getWorkItem(ORG, sample.id), ignored);
+    assert.equal((await f.ports.authority.listWorkRuns(ORG, sample.id)).length, 0);
+    assert.equal(f.calls.spawn, 0);
+  });
+
+  it("does not abandon an earlier queued delivery to make a new trial startable", async (t) => {
+    const f = await fixture(t);
+    const { enqueueWriteBack } = require("@regenic/domain");
+    const sample = await f.ports.authority.putWorkItem({ ...f.item, status: "done" });
+    const delivery = await f.ports.authority.putWorkDelivery(enqueueWriteBack({
+      org_id: ORG, work_item_id: sample.id, recipe_id: f.recipe.id, kind: "push",
+      unit_key: sample.unit_key, payload: { summary: "Previous result" }, now: sample.updated_at,
+    }));
+    const service = f.service();
+    service.dispatch = f.dispatch();
+    await assert.rejects(service.tryRecipe(f.recipe.id, { thread_id: sample.thread_id }),
+      code("execution_start_conflict"));
+    assert.deepEqual(await f.ports.authority.getWorkItem(ORG, sample.id), sample);
+    assert.deepEqual(await f.ports.authority.getWorkDelivery(ORG, delivery.id), delivery);
+    assert.equal((await f.ports.authority.listWorkRuns(ORG, sample.id)).length, 0);
+    assert.equal(f.calls.spawn, 0);
+  });
+
+  it("preserves the trial sample binding when another run wins the reservation", async (t) => {
+    const f = await fixture(t);
+    const sample = await f.ports.authority.putWorkItem({ ...f.item, status: "failed" });
+    const claim = f.ports.authority.claimWorkRunStart.bind(f.ports.authority);
+    let winner;
+    t.mock.method(f.ports.authority, "claimWorkRunStart", async (input) => {
+      assert.equal(await claim({ ...input, run: { ...input.run, id: "winner" } }), true);
+      winner = await f.ports.authority.getWorkItem(ORG, sample.id);
+      return claim(input);
+    });
+    const service = f.service();
+    service.dispatch = f.dispatch();
+    await assert.rejects(service.tryRecipe(f.recipe.id, { thread_id: sample.thread_id }),
+      code("execution_start_conflict"));
+    assert.deepEqual(await f.ports.authority.getWorkItem(ORG, sample.id), winner);
+    assert.equal((await f.ports.authority.listWorkRuns(ORG, sample.id)).length, 1);
+    assert.equal(f.calls.spawn, 0);
+  });
+
   async function failedWork(f) {
     const now = new Date(Date.now() - 3_600_000).toISOString();
     await f.ports.authority.putWorkRun({

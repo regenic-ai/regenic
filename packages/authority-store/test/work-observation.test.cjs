@@ -127,6 +127,92 @@ async function startCheckpointFixture(t, driver) {
 
 for (const driver of drivers) {
   describe(`${driver.name} atomic work observation`, { skip: driver.skip }, () => {
+    for (const [status, intent] of [
+      ["failed", "manual"], ["done", "manual"], ["skipped", "manual"],
+      ["open", "automatic"], ["failed", "automatic"],
+    ]) {
+      it(`binds the selected rule only when the ${intent} ${status} start is reserved`, async (t) => {
+        const f = await fixture(t, driver);
+        const oldRun = await f.store.putWorkRun({
+          ...f.run, status: "failed", start_state: undefined,
+        });
+        const item = await f.store.putWorkItem({ ...f.item, status });
+        const recipe = await f.store.putRecipe({ ...f.recipe, id: "selected-rule" });
+        const run = { ...f.run, id: "trial-run", recipe_id: recipe.id, status: "running", start_state: "pending" };
+        const input = { run, expected_item: item, retry: intent, rebind: intent };
+        assert.equal(await f.store.claimWorkRunStart({ ...input, rebind: undefined }), false);
+        assert.deepEqual(await f.store.getWorkItem(ORG, item.id), item);
+        assert.equal(await f.store.claimWorkRunStart(input), true);
+        const saved = await f.store.getWorkItem(ORG, item.id);
+        assert.equal(saved.recipe_id, recipe.id);
+        assert.equal(saved.status, "running");
+        assert.equal(saved.current_run_id, run.id);
+        assert.equal(saved.version, item.version + 1);
+        assert.equal(saved.head_event_id, item.head_event_id);
+        assert.equal((await f.store.getWorkRun(ORG, run.id)).recipe_id, recipe.id);
+        assert.deepEqual(await f.store.getWorkRun(ORG, oldRun.id), oldRun);
+        await f.reopen();
+        assert.deepEqual(await f.store.getWorkItem(ORG, item.id), saved);
+      });
+    }
+
+    it("does not rebind open work already owned by another rule through a manual trial", async (t) => {
+      const f = await fixture(t, driver);
+      await f.store.putWorkRun({ ...f.run, status: "failed", start_state: undefined });
+      await f.store.putRecipe({ ...f.recipe, id: "selected-rule" });
+      const item = await f.store.putWorkItem({ ...f.item, status: "open" });
+      const run = { ...f.run, id: "trial-run", recipe_id: "selected-rule", status: "running", start_state: "pending" };
+      assert.equal(await f.store.claimWorkRunStart({
+        run, expected_item: item, retry: "manual", rebind: "manual",
+      }), false);
+      assert.deepEqual(await f.store.getWorkItem(ORG, item.id), item);
+      const unbound = await f.store.putWorkItem({ ...item, recipe_id: undefined });
+      assert.equal(await f.store.claimWorkRunStart({
+        run, expected_item: unbound, retry: "manual", rebind: "manual",
+      }), true);
+      assert.equal((await f.store.getWorkItem(ORG, item.id)).recipe_id, run.recipe_id);
+    });
+
+    it("checks capacity on the selected rule without changing the old binding", async (t) => {
+      const f = await fixture(t, driver);
+      await f.store.putWorkRun({ ...f.run, status: "failed", start_state: undefined });
+      await f.store.putRecipe({ ...f.recipe, id: "selected-rule" });
+      await f.store.putWorkItem({
+        ...f.item, id: "occupied", unit_key: "occupied", recipe_id: "selected-rule",
+      });
+      const item = await f.store.putWorkItem({ ...f.item, status: "failed" });
+      const run = { ...f.run, id: "trial-run", recipe_id: "selected-rule", status: "running", start_state: "pending" };
+      assert.equal(await f.store.claimWorkRunStart({
+        run, expected_item: item, retry: "automatic", rebind: "automatic", max_concurrent: 1,
+      }), false);
+      assert.deepEqual(await f.store.getWorkItem(ORG, item.id), item);
+      assert.equal(await f.store.getWorkRun(ORG, run.id), null);
+    });
+
+    it("preserves the original binding on stale, active, missing-rule and unresolved-delivery conflicts", async (t) => {
+      const f = await fixture(t, driver);
+      const item = await f.store.putWorkItem({ ...f.item, status: "failed" });
+      await f.store.putRecipe({ ...f.recipe, id: "selected-rule" });
+      const run = { ...f.run, id: "trial-run", recipe_id: "selected-rule", status: "running", start_state: "pending" };
+      const input = { run, expected_item: item, retry: "manual", rebind: "manual" };
+      assert.equal(await f.store.claimWorkRunStart(input), false, "Old live run blocks rebind");
+      await f.store.putWorkRun({ ...f.run, status: "failed", start_state: undefined });
+      const newer = await f.store.putWorkItem(item);
+      assert.equal(await f.store.claimWorkRunStart(input), false);
+      const current = { ...input, expected_item: newer };
+      assert.equal(await f.store.claimWorkRunStart({
+        ...current, run: { ...run, recipe_id: "missing-rule" },
+      }), false);
+      await f.store.putWorkDelivery(enqueueWriteBack({
+        org_id: ORG, work_item_id: item.id, recipe_id: f.recipe.id, kind: "push",
+        unit_key: item.unit_key, payload: { summary: "Old pending result" }, now: LATER,
+      }));
+      assert.equal(await f.store.claimWorkRunStart(current), false);
+      assert.deepEqual(await f.store.getWorkItem(ORG, item.id), newer);
+      assert.equal(await f.store.getWorkRun(ORG, run.id), null);
+      assert.equal((await f.store.listWorkDeliveries(ORG))[0].status, "queued");
+    });
+
     for (const [status, retry] of [
       ["failed", "automatic"], ["failed", "manual"], ["done", "manual"], ["skipped", "manual"],
     ]) {
@@ -1015,6 +1101,26 @@ for (const driver of drivers) {
 
 for (const driver of drivers.filter((d) => d.name.startsWith("sqlite"))) {
   describe(`${driver.name} observation rollback`, () => {
+    it("rolls back both rule rebinding and new run on failure", async (t) => {
+      const f = await fixture(t, driver);
+      await f.store.putWorkRun({ ...f.run, status: "failed", start_state: undefined });
+      const item = await f.store.putWorkItem({ ...f.item, status: "done" });
+      await f.store.putRecipe({ ...f.recipe, id: "selected-rule" });
+      const db = new Database(f.path);
+      try {
+        db.exec(`CREATE TRIGGER reject_binding BEFORE UPDATE ON work_items
+          BEGIN SELECT RAISE(ABORT, 'binding rejected'); END`);
+        await assert.rejects(f.store.claimWorkRunStart({
+          expected_item: item, retry: "manual", rebind: "manual",
+          run: { ...f.run, id: "trial-run", recipe_id: "selected-rule", status: "running", start_state: "pending" },
+        }), /binding rejected/);
+        assert.deepEqual(await f.store.getWorkItem(ORG, item.id), item);
+        assert.equal(await f.store.getWorkRun(ORG, "trial-run"), null);
+      } finally {
+        db.close();
+      }
+    });
+
     it("rolls back a retry run if the final item update fails, without an intermediate open state", async (t) => {
       const f = await fixture(t, driver);
       await f.store.putWorkRun({ ...f.run, status: "failed", start_state: undefined });
@@ -1152,6 +1258,30 @@ it("fences manual and automatic retries across independent SQLite writer workers
     })));
   assert.equal(results.filter(Boolean).length, 1);
   assert.equal((await second.getWorkItem(ORG, item.id)).version, item.version + 1);
+  assert.equal((await second.listWorkRuns(ORG, item.id)).length, 2);
+});
+
+it("fences competing rule selections across independent SQLite writer workers", async (t) => {
+  const driver = drivers.find((d) => d.name === "sqlite writer RPC");
+  const f = await fixture(t, driver);
+  await f.store.putWorkRun({ ...f.run, status: "failed", start_state: undefined });
+  const item = await f.store.putWorkItem({ ...f.item, status: "failed" });
+  const second = await SqliteSplitAuthorityStore.open(f.path);
+  t.after(() => second.close());
+  for (const id of ["selected-0", "selected-1"]) {
+    await f.store.putRecipe({ ...f.recipe, id });
+  }
+  const results = await Promise.all([f.store, second].map((store, index) =>
+    store.claimWorkRunStart({
+      expected_item: item, retry: "manual", rebind: "manual",
+      run: { ...f.run, id: `trial-${index}`, recipe_id: `selected-${index}`, status: "running", start_state: "pending" },
+    })));
+  assert.equal(results.filter(Boolean).length, 1);
+  const winner = results.indexOf(true);
+  const saved = await second.getWorkItem(ORG, item.id);
+  assert.equal(saved.recipe_id, `selected-${winner}`);
+  assert.equal(saved.current_run_id, `trial-${winner}`);
+  assert.equal(saved.version, item.version + 1);
   assert.equal((await second.listWorkRuns(ORG, item.id)).length, 2);
 });
 

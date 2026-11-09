@@ -219,6 +219,7 @@ export class MemoryWorkStore implements WorkStore, ExecutorStore {
     this.items.set(item.id, {
       ...item,
       status: "running",
+      recipe_id: run.recipe_id,
       current_run_id: run.id,
       version: (item.version ?? 0) + 1,
       updated_at: run.updated_at,

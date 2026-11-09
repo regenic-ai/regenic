@@ -871,14 +871,7 @@ export class PersonalWorkService implements OnModuleDestroy {
         existing.status === "failed" ||
         existing.status === "done" ||
         existing.status === "skipped")
-        ? await authority.putWorkItem({
-            ...existing,
-            status: "open",
-            recipe_id: recipe.id,
-            record_class: subject.record_class,
-            thread_facet: subject.thread_facet,
-            updated_at: now,
-          })
+        ? existing
         : await authority.putWorkItem({
             id: `work-${randomUUID()}`,
             org_id: orgId,
@@ -894,24 +887,19 @@ export class PersonalWorkService implements OnModuleDestroy {
           });
     const allowWriteBack =
       input?.write_back === true && Boolean(recipe.can_write_back);
-    this.supervise.setWriteBackOverride(item.id, allowWriteBack);
-    try {
-      const pending = await authority.getWorkDeliveryByItem(orgId, item.id);
-      if (pending && pending.status !== "acked") {
-        const stopped = await authority.transitionWorkDelivery({
-          org_id: orgId, delivery_id: pending.id, kind: "cancel", now,
-        });
-        if (stopped.outcome === "conflict") throw new PersonalConnectorError(
-          "delivery_claim_conflict", `Delivery cancellation rejected: ${stopped.reason}`, 409,
-        );
-      }
-      const result = await this.runWorkItem(item.id);
-      this.inbox.touchInboxDigest();
-      return { ...result, thread_id: threadId };
-    } catch (error) {
-      this.supervise.clearWriteBackOverride(item.id);
-      throw error;
+    const run = await this.dispatch.startItem(item, recipe, undefined, "manual", {
+      write_back: allowWriteBack, rebind: true,
+    });
+    let latest = await authority.getWorkItem(orgId, item.id);
+    if (!latest || !run) throw new Error("Trial start did not persist its work item and run");
+    const queued = await authority.getWorkDeliveryByItem(orgId, item.id);
+    if (queued?.run_id === run.id && shouldFlushDelivery(queued, new Date().toISOString())) {
+      await this.flush.flushOne(latest, recipe, queued);
+      latest = await authority.getWorkItem(orgId, item.id);
+      if (!latest) throw new Error("Trial work item disappeared after delivery");
     }
+    this.inbox.touchInboxDigest();
+    return { work_item: latest, run, thread_id: threadId };
   }
 
   async getPrefs(): Promise<UiPrefsView> {

@@ -10,6 +10,7 @@ const { WorkDeliveryNotSentError } = require("../dist/personal-errors");
 function recipeServiceFixture() {
   const recipes = new Map();
   const items = [];
+  const starts = [];
   const capabilities = new Map([["writable", true], ["readonly", false]]);
   const authority = {
     getRecipe: async (_org, id) => recipes.get(id),
@@ -19,6 +20,8 @@ function recipeServiceFixture() {
     listInbox: async () => [],
     putWorkItem: async (item) => { items.push(item); return item; },
     getWorkDeliveryByItem: async () => null,
+    getWorkItem: async (_org, id) => starts.findLast((start) => start.item.id === id)?.item
+      ?? items.find((item) => item.id === id),
   };
   const ports = {
     authority,
@@ -42,7 +45,12 @@ function recipeServiceFixture() {
     runtime, drivers, { ensureMounted: async () => {} }, { touchInboxDigest() {} }, {}, {},
   );
   service.afterConnectorTick = async () => {};
-  service.runWorkItem = async () => ({ status: "running" });
+  service.dispatch = {
+    startItem: async (item, rule, _text, mode, options) => {
+      starts.push({ item: { ...item, recipe_id: rule.id, status: "running" }, mode, options });
+      return { id: "trial-run", status: "running" };
+    },
+  };
   const input = {
     name: "Result delivery",
     match: { thread_id: "readonly:source" },
@@ -52,17 +60,18 @@ function recipeServiceFixture() {
     can_write_back: true,
     write_back_thread_id: "writable:results",
   };
-  return { service, recipes, items, capabilities, input, authority };
+  return { service, recipes, items, starts, capabilities, input, authority };
 }
 
 describe("recipe destination validation", () => {
   it("saves a read-only source to a writable destination, independent of the executor", async () => {
-    const { service, input } = recipeServiceFixture();
+    const { service, input, starts } = recipeServiceFixture();
     const saved = await service.putRecipe(input);
     assert.equal(saved.can_write_back, true);
     assert.equal(saved.write_back_thread_id, "writable:results");
     const trial = await service.tryRecipe(saved.id, { write_back: true });
     assert.equal(trial.thread_id, "readonly:source");
+    assert.deepEqual(starts[0].options, { write_back: true, rebind: true });
   });
 
   it("rejects new unsupported or unknown send destinations rather than silently keeping results local", async () => {
@@ -106,7 +115,7 @@ describe("recipe destination validation", () => {
   });
 
   it("rejects unavailable/disabled send trials before creating work, but permits keep-here trials", async () => {
-    const { service, input, capabilities, items } = recipeServiceFixture();
+    const { service, input, capabilities, items, starts } = recipeServiceFixture();
     const saved = await service.putRecipe(input);
     capabilities.delete("writable");
     await assert.rejects(service.tryRecipe(saved.id, { write_back: true }),
@@ -114,6 +123,7 @@ describe("recipe destination validation", () => {
     assert.equal(items.length, 0);
     await service.tryRecipe(saved.id, { write_back: false });
     assert.equal(items.length, 1);
+    assert.deepEqual(starts[0].options, { write_back: false, rebind: true });
     await service.putRecipe({ can_write_back: false }, saved.id);
     await assert.rejects(service.tryRecipe(saved.id, { write_back: true }), /Send back is not enabled/);
     assert.equal(items.length, 1);
@@ -129,8 +139,9 @@ describe("recipe destination validation", () => {
     await assert.rejects(service.tryRecipe(saved.id, { thread_id: "readonly:source", write_back: true }),
       /Write-back destination is unavailable/);
     assert.equal(items.length, 0);
-    await service.tryRecipe(saved.id, { thread_id: "writable:source", write_back: true });
-    assert.equal(items.length, 1);
+    const result = await service.tryRecipe(saved.id, { thread_id: "writable:source", write_back: true });
+    assert.equal(result.work_item.id, "sample");
+    assert.equal(items.length, 0, "Reusing a sample must not reopen it through ordinary put");
   });
 });
 

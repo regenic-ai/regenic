@@ -46,6 +46,44 @@ function fixture() {
 }
 
 describe("work retry start eligibility", () => {
+  for (const status of ["open", "failed", "done", "skipped"]) {
+    it(`requires explicit rule binding intent for ${status} and preserves the snapshot`, () => {
+      const { item, run } = fixture();
+      item.status = status;
+      run.recipe_id = "new-rule";
+      run.start_state = "pending";
+      const original = structuredClone(item);
+      assert.equal(canClaimWorkRunStartItem({
+        run, retry: "manual", expected_item: item,
+      }, item), false);
+      assert.equal(canClaimWorkRunStartItem({
+        run, retry: "manual", rebind: "manual", expected_item: item,
+      }, item), status !== "open");
+      assert.equal(canClaimWorkRunStartItem({
+        run, retry: "automatic", rebind: "automatic", expected_item: item,
+      }, item), status === "open" || status === "failed");
+      assert.deepEqual(item, original);
+    });
+  }
+
+  it("allows binding unbound open work but rejects malformed or stale binding intent", () => {
+    const { item, run } = fixture();
+    item.status = "open";
+    delete item.recipe_id;
+    run.start_state = "pending";
+    const input = { run, retry: "manual", rebind: "manual", expected_item: item };
+    assert.equal(canClaimWorkRunStartItem(input, item), true);
+    assert.equal(canClaimWorkRunStartItem(input, { ...item, version: 1 }), false);
+    assert.throws(() => canClaimWorkRunStartItem({ ...input, expected_item: undefined }, item),
+      /expected item snapshot/);
+    assert.throws(() => canClaimWorkRunStartItem({ ...input, retry: "automatic" }, item),
+      /matching retry intent/);
+    assert.throws(() => canClaimWorkRunStartItem({ ...input, rebind: "automatic" }, item),
+      /matching retry intent/);
+    assert.throws(() => canClaimWorkRunStartItem({ ...input, rebind: "unsupported" }, item),
+      /Unknown work start binding mode/);
+  });
+
   for (const status of ["open", "running", "waiting_human", "failed", "done", "skipped"]) {
     it(`checks explicit retry intent against ${status} without changing the item`, () => {
       const { item, run } = fixture();

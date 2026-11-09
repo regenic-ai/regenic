@@ -228,6 +228,8 @@ export interface WorkRunStartClaim {
   expected_item?: WorkItem;
   /** Retry eligibility is applied inside the same transaction as the new run. */
   retry?: "automatic" | "manual";
+  /** Bind the selected rule only when the expected item is atomically reserved. */
+  rebind?: "automatic" | "manual";
   /** Auto-start limit; manual starts may omit it. */
   max_concurrent?: number;
 }

@@ -396,9 +396,9 @@ export async function claimWorkRunStart(db: PgSql, input: WorkRunStartClaim): Pr
     `, [run.org_id, run.recipe_id], client);
     if (!recipe) return false;
     const item = await db.queryOne<WorkItemRow>(`
-      SELECT * FROM work_items WHERE org_id = $1 AND id = $2 AND recipe_id = $3
+      SELECT * FROM work_items WHERE org_id = $1 AND id = $2
         FOR UPDATE
-    `, [run.org_id, run.work_item_id, run.recipe_id], client);
+    `, [run.org_id, run.work_item_id], client);
     if (!item || !canClaimWorkRunStartItem(input, toWorkItem(item))) return false;
     const active = await db.queryOne(`
       SELECT id FROM work_runs WHERE org_id = $1 AND work_item_id = $2
@@ -420,8 +420,8 @@ export async function claimWorkRunStart(db: PgSql, input: WorkRunStartClaim): Pr
       throw new Error(`Work run already exists: ${run.id}`);
     }
     await putWorkRun(db, run, client, false);
-    await db.execute("UPDATE work_items SET status = 'running', current_run_id = $1, version = version + 1, updated_at = $2 WHERE org_id = $3 AND id = $4",
-      [run.id, run.updated_at, run.org_id, run.work_item_id], client);
+    await db.execute("UPDATE work_items SET status = 'running', recipe_id = $1, current_run_id = $2, version = version + 1, updated_at = $3 WHERE org_id = $4 AND id = $5",
+      [run.recipe_id, run.id, run.updated_at, run.org_id, run.work_item_id], client);
     return true;
   });
 }

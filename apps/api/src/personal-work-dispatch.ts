@@ -430,6 +430,7 @@ export class PersonalWorkDispatch {
     recipe: Recipe,
     evidenceText?: string,
     mode: "auto" | "manual" | "auxiliary" = "auto",
+    options?: { write_back: boolean; rebind: boolean },
   ): Promise<WorkRun | undefined> {
     const host = this.runtime.requireHost();
     if (
@@ -491,6 +492,7 @@ export class PersonalWorkDispatch {
         executor,
         evidenceText,
         mode,
+        options,
       );
     } finally {
       this.starting.delete(item.id);
@@ -534,6 +536,7 @@ export class PersonalWorkDispatch {
     executor: TaskExecutor,
     evidenceText: string | undefined,
     mode: "auto" | "manual" | "auxiliary",
+    options?: { write_back: boolean; rebind: boolean },
   ): Promise<WorkRun | undefined> {
     const host = this.runtime.requireHost();
     const now = new Date().toISOString();
@@ -563,7 +566,7 @@ export class PersonalWorkDispatch {
       thread_overflow: thread.overflow,
     });
     const authority = host.get("authority");
-    const writeBackRequired = this.supervise.allowsWriteBack(item.id, recipe);
+    const writeBackRequired = options?.write_back ?? this.supervise.allowsWriteBack(item.id, recipe);
     const writeBackTarget = writeBackRequired
       ? await this.channel.freezeWriteBackTarget(recipe.write_back_thread_id ?? item.thread_id)
       : undefined;
@@ -585,6 +588,9 @@ export class PersonalWorkDispatch {
       run,
       expected_item: item,
       retry: mode === "manual" ? "manual" : item.status === "failed" ? "automatic" : undefined,
+      rebind: mode === "manual" && options?.rebind ? "manual"
+        : mode === "auto" && recipe.trigger.kind === "push" && item.recipe_id !== recipe.id
+          && (recipe.match.text_contains || recipe.match.text_excludes) ? "automatic" : undefined,
       max_concurrent: mode === "manual" ? undefined : recipe.max_concurrent,
     });
     if (!claimed) {
@@ -866,18 +872,8 @@ export class PersonalWorkDispatch {
     );
     if (byUnit) {
       if (recipe && recipeAllowsPushDispatch(recipe)) {
-        const bound =
-          (recipe.match.text_contains || recipe.match.text_excludes) &&
-          (byUnit.status === "open" || byUnit.status === "failed") &&
-          byUnit.recipe_id !== recipe.id
-            ? await authority.putWorkItem({
-                ...byUnit,
-                recipe_id: recipe.id,
-                updated_at: new Date().toISOString(),
-              })
-            : byUnit;
         await this.retryOrResume(
-          bound,
+          byUnit,
           recipe,
           input.body.body_text,
           recipe.max_concurrent !== undefined,

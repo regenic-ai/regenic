@@ -48,7 +48,7 @@ function isTerminalWorkRun(run: WorkRun): boolean {
 }
 
 export function canClaimWorkRunStartItem(input: WorkRunStartClaim, item: WorkItem): boolean {
-  const { run, expected_item: expected, retry } = input;
+  const { run, expected_item: expected, retry, rebind } = input;
   if (run.status !== "running" || run.start_state !== "pending") {
     throw new Error("Work start claim requires a pending running attempt");
   }
@@ -56,11 +56,23 @@ export function canClaimWorkRunStartItem(input: WorkRunStartClaim, item: WorkIte
     throw new Error("Unknown work start retry mode");
   }
   if (retry && !expected) throw new Error("Work retry requires an expected item snapshot");
+  if (rebind !== undefined && rebind !== "automatic" && rebind !== "manual") {
+    throw new Error("Unknown work start binding mode");
+  }
+  if (rebind && (!expected || (rebind === "manual" && retry !== "manual")
+    || (rebind === "automatic" && retry === "manual"))) {
+    throw new Error("Work start binding requires an expected snapshot and matching retry intent");
+  }
   if (expected && (expected.org_id !== run.org_id || expected.id !== run.work_item_id)) {
     throw new Error("Work start snapshot must belong to the same organization and work item");
   }
-  if (item.org_id !== run.org_id || item.id !== run.work_item_id || item.recipe_id !== run.recipe_id
+  if (item.org_id !== run.org_id || item.id !== run.work_item_id
     || (expected && !sameSnapshot(item, expected))) return false;
+  if (item.recipe_id !== run.recipe_id) {
+    if (!rebind) return false;
+    if (rebind === "manual" && item.recipe_id && isActiveWorkStatus(item.status)) return false;
+    if (rebind === "automatic" && item.status !== "open" && item.status !== "failed") return false;
+  }
   if (item.status === "open") return true;
   if (item.status === "failed") return retry === "automatic" || retry === "manual";
   return retry === "manual" && (item.status === "done" || item.status === "skipped");
