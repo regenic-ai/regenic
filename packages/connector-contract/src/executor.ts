@@ -57,6 +57,8 @@ export interface WorkRun {
   id: string;
   org_id: string;
   work_item_id: string;
+  /** Persisted row version; omitted only by pre-migration callers and fixtures. */
+  version?: number;
   recipe_id: string;
   executor_type: string;
   external_run_id?: string;

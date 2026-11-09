@@ -151,7 +151,7 @@
 | `connector_sync_work` | UNIQUE `(installation_id, stream_key, lane, generation)`；状态、优先权、租约等 | 执行器同步资源；其 run_id 指同步运行，不是 WorkRun |
 | `context_projection_outbox` | 消息 event_id 唯一；状态、租约、重试等 | 消息上下文投影；不复用作生命周期队列 |
 
-当前 `work_runs.work_item_id` 和 `work_deliveries.work_item_id` 引用 WorkItem；`head_event_id` 引用消息 Event。对话通过 `(org_id, thread_id)` 逻辑关联，没有独立 Conversation 表。自 SQLite／PostgreSQL schema 56 起，Recipe 固定回写目标已覆盖保存、读取及两种数据库映射，既有导入导出继续保留该字段；这不代表运行级投递快照已实现。
+当前 `work_runs.work_item_id` 和 `work_deliveries.work_item_id` 引用 WorkItem；`head_event_id` 引用消息 Event。对话通过 `(org_id, thread_id)` 逻辑关联，没有独立 Conversation 表。自 SQLite／PostgreSQL schema 56 起，Recipe 固定回写目标已覆盖保存、读取及两种数据库映射，既有导入导出继续保留该字段；这不代表运行级投递快照已实现。Schema 57 增加 WorkItem 的 `current_run_id` 与 WorkItem／WorkRun 行版本；历史行从版本 0 起，但运行指针保持 NULL，不从时间或“唯一旧运行”推断。
 
 ## 6. 最终表结构变更
 
@@ -381,13 +381,14 @@ live Prompt 不属于同一数据库事务，不以“此刻远端没有 Prompt�
 | 原子观察提交 | 已接入兼容实现 | `commitWorkObservation()` 在一次提交中保存 Run、Item 和投递变更；SQLite 使用 immediate 事务，PostgreSQL 在同一连接锁定相关行并提交，内存无 await 地准备后提交，SQLite split 通过单个写 RPC 执行 |
 | 陈旧观察与忽略保护 | 已接入兼容实现 | 比较事务内完整快照而非只比时间；冲突明确返回，已忽略项不再被观察路径伪造远端取消，终态尝试不能被观察改回活跃 |
 | 完成结果观察保护 | 已接入兼容实现 | 完成后的观察不能改写 summary／content／evidence；冲突明确提示新建尝试。重复完成不再入队或放弃投递，不因规则修改或试跑开关释放而改变已完成义务；首次完成缺少结果时使用 Run 已有结果，历史未知结果不补造 |
-| 原子端口与存储迁移整体 | 未完成 | 人工操作、启动失败等入口及折叠／列表投影尚未纳入同一事务；正式 version CAS、对话级锁、审计与取消任务尚未落地 |
+| 当前运行身份与行版本 | 已接入兼容实现 | Schema 57 为 WorkItem 增加 `current_run_id`、为 WorkItem／WorkRun 增加单调行版本；内存、SQLite、PostgreSQL、SQLite 写 RPC 的启动事务写入当前 Run 并递增 Item 版本，观察以明确当前 Run 与版本快照围栏；历史 NULL 指针保持未知，旧 Run 在新 Run 启动后不能再结算 Item |
+| 原子端口与存储迁移整体 | 未完成 | 人工操作、启动失败等入口及折叠／列表投影尚未纳入同一事务；所有写入口统一的版本 CAS、对话级锁、审计与取消任务尚未落地 |
 | 规则回写目标持久化 | 已完成 | schema 56 补齐 SQLite／PostgreSQL 新建与升级、写入／读取映射；覆盖 writer RPC、重启、API 局部更新／清除及既有导入导出；旧版 SQLite 修复先恢复至 v55 再执行后续迁移，历史目标保留未知 |
-| 不可变投递与运行快照 | 未完成 | 目前仍为既有每工单一条投递及现有回写路径 |
+| 不可变投递与运行快照 | 未完成 | 仍为既有每工单一条投递；尚无冻结的运行投递义务、每运行投递账本、精确 receipt 身份或 claim token，不能安全结算／重试历史投递 |
 | 管理面与最终可见性策略 | 未启用 | 失败折叠、完成即折叠仍为兼容行为；需在原子提交及异常入口就绪后统一切换 |
 
 原子观察提交已覆盖内存、SQLite 直连／写 worker 和 PostgreSQL 的实现与契约用例；当前环境没有 PostgreSQL 测试连接，真实 PostgreSQL 契约用例需通过 TEST_DATABASE_URL 执行，不能将类型检查当成真实数据库验收。
 
-当前快照冲突保护只是兼容阶段的围栏，不能替代正式单调版本号，也不解决对话新消息插入与折叠的竞态。后续必须将对话级锁及全部写入口共同迁移，才能启用最终可见性策略；不得把本次 Run／Item／投递事务宣称为整个生命周期已原子化。
+当前运行身份与行版本只覆盖原子启动和观察围栏；其他直接更新路径尚未全部迁移为版本 CAS，也不解决对话新消息插入与折叠的竞态。后续必须将对话级锁及全部写入口共同迁移，才能启用最终可见性策略；不得把本次 Run／Item／投递事务宣称为整个生命周期已原子化。
 
-完成结果保护目前作用于纯观察计划及原子观察入口；既有直接 put 接口尚未全部迁移，不能宣称所有写路径都已具有不可变账本约束。重复完成只保留已存在的投递事实，不尝试替历史运行推断投递义务；真正的恢复需依赖后续持久化运行快照及精确 run_id 关联。
+完成结果保护目前作用于纯观察计划及原子观察入口；既有直接 put 接口尚未全部迁移，不能宣称所有写路径都已具有不可变账本约束。重复完成只保留已存在的投递事实，不尝试替历史运行推断投递义务；当前运行指针阻止旧 Run 观察覆盖新尝试，但旧 receipt 仍不能靠快照或 WorkItem 指针安全归属，必须等待不可变 run_id 投递账本及精确 claim／receipt 身份实现。

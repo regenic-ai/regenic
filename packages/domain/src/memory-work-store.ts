@@ -97,8 +97,14 @@ export class MemoryWorkStore implements WorkStore, ExecutorStore {
   }
 
   async putWorkItem(item: WorkItem): Promise<WorkItem> {
-    this.items.set(item.id, { ...item });
-    return { ...item };
+    const current = this.items.get(item.id);
+    const saved = {
+      ...item,
+      ...(current ? { current_run_id: current.current_run_id } : { current_run_id: undefined }),
+      version: current ? (current.version ?? 0) + 1 : item.version ?? 0,
+    };
+    this.items.set(item.id, saved);
+    return { ...saved };
   }
 
   async listWorkRuns(orgId: string, workItemId?: string): Promise<WorkRun[]> {
@@ -120,21 +126,20 @@ export class MemoryWorkStore implements WorkStore, ExecutorStore {
     orgId: string,
     workItemId: string,
   ): Promise<WorkRun | null> {
-    const active = [...this.runs.values()].filter(
-      (run) =>
-        run.org_id === orgId &&
-        run.work_item_id === workItemId &&
-        (run.status === "running" || run.status === "waiting_human"),
-    );
-    active.sort((left, right) =>
-      left.updated_at < right.updated_at ? 1 : -1,
-    );
-    return active[0] ? cloneRun(active[0]) : null;
+    const item = this.items.get(workItemId);
+    if (!item || item.org_id !== orgId || !item.current_run_id) return null;
+    const current = this.runs.get(item.current_run_id);
+    return current && current.org_id === orgId && current.work_item_id === workItemId
+      && (current.status === "running" || current.status === "waiting_human")
+      ? cloneRun(current)
+      : null;
   }
 
   async putWorkRun(run: WorkRun): Promise<WorkRun> {
-    this.runs.set(run.id, cloneRun(run));
-    return cloneRun(run);
+    const current = this.runs.get(run.id);
+    const saved = { ...cloneRun(run), version: current ? (current.version ?? 0) + 1 : run.version ?? 0 };
+    this.runs.set(run.id, saved);
+    return cloneRun(saved);
   }
 
   async commitWorkObservation(input: CommitWorkObservation): Promise<CommitWorkObservationResult> {
@@ -180,8 +185,14 @@ export class MemoryWorkStore implements WorkStore, ExecutorStore {
     if (this.runs.has(run.id)) {
       throw new Error(`Work run already exists: ${run.id}`);
     }
-    this.runs.set(run.id, cloneRun(run));
-    this.items.set(item.id, { ...item, status: "running", updated_at: run.updated_at });
+    this.runs.set(run.id, { ...cloneRun(run), version: run.version ?? 0 });
+    this.items.set(item.id, {
+      ...item,
+      status: "running",
+      current_run_id: run.id,
+      version: (item.version ?? 0) + 1,
+      updated_at: run.updated_at,
+    });
     return true;
   }
 

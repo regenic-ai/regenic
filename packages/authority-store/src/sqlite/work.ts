@@ -151,17 +151,18 @@ export async function getWorkItemByUnitKey(db: Database.Database, orgId: string,
   }
 
 export async function putWorkItem(db: Database.Database, item: WorkItem): Promise<WorkItem> {
-    return writeWorkItem(db, item);
+    writeWorkItem(db, item, true);
+    return (await getWorkItem(db, item.org_id, item.id)) ?? item;
   }
 
-function writeWorkItem(db: Database.Database, item: WorkItem): WorkItem {
+function writeWorkItem(db: Database.Database, item: WorkItem, advanceVersion = false): WorkItem {
     db
       .prepare(
         `
           INSERT INTO work_items (
             id, org_id, thread_id, unit_key, head_event_id, record_class, thread_facet,
-            status, recipe_id, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            status, recipe_id, created_at, updated_at, current_run_id, version
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(id) DO UPDATE SET
             thread_id = excluded.thread_id,
             unit_key = excluded.unit_key,
@@ -170,7 +171,9 @@ function writeWorkItem(db: Database.Database, item: WorkItem): WorkItem {
             thread_facet = excluded.thread_facet,
             status = excluded.status,
             recipe_id = excluded.recipe_id,
-            updated_at = excluded.updated_at
+            updated_at = excluded.updated_at,
+            current_run_id = work_items.current_run_id,
+            version = ${advanceVersion ? "work_items.version + 1" : "excluded.version"}
         `,
       )
       .run(
@@ -185,6 +188,8 @@ function writeWorkItem(db: Database.Database, item: WorkItem): WorkItem {
         item.recipe_id ?? null,
         item.created_at,
         item.updated_at,
+        null,
+        item.version ?? 0,
       );
     return item;
   }
@@ -215,10 +220,11 @@ export async function getWorkRun(db: Database.Database, orgId: string, id: strin
 export async function getActiveWorkRun(db: Database.Database, orgId: string, workItemId: string): Promise<WorkRun | null> {
     const row = db
       .prepare(
-        `SELECT * FROM work_runs
-         WHERE org_id = ? AND work_item_id = ?
-           AND status IN ('running', 'waiting_human')
-         ORDER BY updated_at DESC, id DESC
+        `SELECT r.* FROM work_runs r
+         JOIN work_items w ON w.org_id = r.org_id AND w.id = r.work_item_id
+           AND w.current_run_id = r.id
+         WHERE r.org_id = ? AND r.work_item_id = ?
+           AND r.status IN ('running', 'waiting_human')
          LIMIT 1`,
       )
       .get(orgId, workItemId) as WorkRunRow | undefined;
@@ -245,7 +251,8 @@ export async function listHiddenExecutorThreadIds(db: Database.Database, orgId: 
   }
 
 export async function putWorkRun(db: Database.Database, run: WorkRun): Promise<WorkRun> {
-    return writeWorkRun(db, run);
+    writeWorkRun(db, run, true);
+    return (await getWorkRun(db, run.org_id, run.id)) ?? run;
   }
 
 export async function commitWorkObservation(
@@ -275,14 +282,14 @@ export async function commitWorkObservation(
   }).immediate();
 }
 
-function writeWorkRun(db: Database.Database, run: WorkRun): WorkRun {
+function writeWorkRun(db: Database.Database, run: WorkRun, advanceVersion = false): WorkRun {
     db
       .prepare(
         `
           INSERT INTO work_runs (
             id, org_id, work_item_id, recipe_id, executor_type, external_run_id,
-            agent_thread_id, status, start_state, result_json, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            agent_thread_id, status, start_state, result_json, created_at, updated_at, version
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(id) DO UPDATE SET
             recipe_id = excluded.recipe_id,
             executor_type = excluded.executor_type,
@@ -291,7 +298,8 @@ function writeWorkRun(db: Database.Database, run: WorkRun): WorkRun {
             status = excluded.status,
             start_state = excluded.start_state,
             result_json = excluded.result_json,
-            updated_at = excluded.updated_at
+            updated_at = excluded.updated_at,
+            version = ${advanceVersion ? "work_runs.version + 1" : "excluded.version"}
         `,
       )
       .run(
@@ -307,6 +315,7 @@ function writeWorkRun(db: Database.Database, run: WorkRun): WorkRun {
         run.result ? JSON.stringify(run.result) : null,
         run.created_at,
         run.updated_at,
+        run.version ?? 0,
       );
     return run;
   }
@@ -334,8 +343,8 @@ export async function claimWorkRunStart(db: Database.Database, input: WorkRunSta
       throw new Error(`Work run already exists: ${run.id}`);
     }
     writeWorkRun(db, run);
-    db.prepare("UPDATE work_items SET status = 'running', updated_at = ? WHERE org_id = ? AND id = ?")
-      .run(run.updated_at, run.org_id, run.work_item_id);
+    db.prepare("UPDATE work_items SET status = 'running', current_run_id = ?, version = version + 1, updated_at = ? WHERE org_id = ? AND id = ?")
+      .run(run.id, run.updated_at, run.org_id, run.work_item_id);
     return true;
   }).immediate();
 }
@@ -608,6 +617,8 @@ interface WorkItemRow {
   thread_facet: WorkItem["thread_facet"];
   status: WorkItem["status"];
   recipe_id: string | null;
+  current_run_id: string | null;
+  version: number;
   created_at: string;
   updated_at: string;
 }
@@ -644,6 +655,7 @@ interface WorkRunRow {
   status: WorkRun["status"];
   start_state: WorkRun["start_state"] | null;
   result_json: string | null;
+  version: number;
   created_at: string;
   updated_at: string;
 }
@@ -718,6 +730,8 @@ function toWorkItem(row: WorkItemRow): WorkItem {
     thread_facet: row.thread_facet,
     status: row.status,
     recipe_id: row.recipe_id ?? undefined,
+    current_run_id: row.current_run_id ?? undefined,
+    version: row.version,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -737,6 +751,7 @@ function toWorkRun(row: WorkRunRow): WorkRun {
     result: row.result_json
       ? (JSON.parse(row.result_json) as WorkRun["result"])
       : undefined,
+    version: row.version,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };

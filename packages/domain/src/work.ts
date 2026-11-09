@@ -122,6 +122,10 @@ export interface WorkItem {
   thread_id: string;
   /** Work-unit identity. A session may have many jobs over time. */
   unit_key: string;
+  /** Persisted row version; omitted only by pre-migration callers and fixtures. */
+  version?: number;
+  /** Explicit current attempt. Historical rows with no pointer remain unknown. */
+  current_run_id?: string;
   head_event_id?: string;
   record_class: RecordClass;
   thread_facet: ThreadFacet;
@@ -236,6 +240,7 @@ export interface WorkStore {
   putWorkItem(item: WorkItem): Promise<WorkItem>;
   listWorkRuns(orgId: string, workItemId?: string): Promise<WorkRun[]>;
   getWorkRun(orgId: string, id: string): Promise<WorkRun | null>;
+  /** Resolves only current_run_id; NULL historical identity is never guessed from timestamps. */
   getActiveWorkRun(
     orgId: string,
     workItemId: string,

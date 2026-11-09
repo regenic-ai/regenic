@@ -1,4 +1,4 @@
-export const LATEST_SCHEMA_VERSION = 56;
+export const LATEST_SCHEMA_VERSION = 57;
 
 export const CUSTOMER_SERVICE_TASKS_SQL = `
   CREATE TABLE IF NOT EXISTS customer_service_tasks (
@@ -1114,5 +1114,13 @@ export const MIGRATIONS = [
   {
     version: 56,
     sql: "ALTER TABLE recipes ADD COLUMN write_back_thread_id TEXT;",
+  },
+  {
+    version: 57,
+    sql: `
+      ALTER TABLE work_items ADD COLUMN current_run_id TEXT REFERENCES work_runs(id);
+      ALTER TABLE work_items ADD COLUMN version INTEGER NOT NULL DEFAULT 0 CHECK (version >= 0);
+      ALTER TABLE work_runs ADD COLUMN version INTEGER NOT NULL DEFAULT 0 CHECK (version >= 0);
+    `,
   },
 ] as const;

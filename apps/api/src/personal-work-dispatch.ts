@@ -587,13 +587,16 @@ export class PersonalWorkDispatch {
       }
       return undefined;
     }
-    const runningItem: WorkItem = { ...item, status: "running", updated_at: now };
+    const runningItem = await authority.getWorkItem(item.org_id, item.id);
+    if (!runningItem || runningItem.current_run_id !== run.id) {
+      throw new Error(`Claimed work item identity disappeared: ${item.id}`);
+    }
     let handle;
     try {
       handle = await executor.start(
         {
           run_id: run.id,
-          work_item: item,
+          work_item: runningItem,
           recipe,
           task_instruction: taskInstructionOf(recipe.executor_config),
           evidence_text: formatWorkEvidence({
@@ -715,8 +718,8 @@ export class PersonalWorkDispatch {
       result: handle.result ?? saved.result,
       updated_at: new Date().toISOString(),
     };
-    await authority.putWorkRun(acknowledged);
-    await this.supervise.applyHandle(runningItem, recipe, acknowledged, handle);
+    const persistedAcknowledged = await authority.putWorkRun(acknowledged);
+    await this.supervise.applyHandle(runningItem, recipe, persistedAcknowledged, handle);
     const latest = await host.get("authority").getActiveWorkRun(item.org_id, item.id);
     const latestItem = await host.get("authority").getWorkItem(item.org_id, item.id);
     if (latest && latestItem && isActiveWorkStatus(latestItem.status)) {

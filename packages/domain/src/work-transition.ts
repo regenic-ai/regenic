@@ -38,7 +38,7 @@ export type CommitWorkObservationResult =
   | { outcome: "ignored"; reason: "work_skipped" }
   | {
       outcome: "conflict";
-      reason: "missing_work" | "stale_observation" | "completed_result_changed";
+      reason: "missing_work" | "stale_observation" | "completed_result_changed" | "not_current_run";
     };
 
 export type PreparedWorkObservation =
@@ -68,6 +68,9 @@ export function prepareWorkObservation(
   }
   if (item.status === "skipped") {
     return { outcome: "ignored", reason: "work_skipped" };
+  }
+  if (!item.current_run_id || item.current_run_id !== expectedRun.id) {
+    return { outcome: "conflict", reason: "not_current_run" };
   }
   if (!sameSnapshot(item, expectedItem) || !sameSnapshot(run, expectedRun)) {
     return { outcome: "conflict", reason: "stale_observation" };
@@ -106,7 +109,10 @@ export function prepareWorkObservation(
 }
 
 function sameSnapshot(current: WorkItem | WorkRun, expected: WorkItem | WorkRun): boolean {
-  return sameJson(current, expected);
+  return sameJson(
+    { ...current, version: current.version ?? 0 },
+    { ...expected, version: expected.version ?? 0 },
+  );
 }
 
 function sameJson(current: unknown, expected: unknown): boolean {
@@ -138,6 +144,7 @@ export function planWorkObservation(input: {
   }
   const nextRun: WorkRun = {
     ...run,
+    version: (run.version ?? 0) + 1,
     start_state: undefined,
     external_run_id: handle.external_run_id,
     agent_thread_id: handle.agent_thread_id ?? run.agent_thread_id,
@@ -148,7 +155,7 @@ export function planWorkObservation(input: {
   const status = workStatusFromRun(nextRun.status);
   const nextItem = item.status === status
     ? item
-    : { ...item, status, updated_at: now };
+    : { ...item, status, version: (item.version ?? 0) + 1, updated_at: now };
   const delivery: ObservedWorkDelivery = handle.status !== "completed" || run.status === "completed"
     ? { kind: "keep" }
     : input.can_write_back

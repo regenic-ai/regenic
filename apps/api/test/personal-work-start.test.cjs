@@ -1,6 +1,6 @@
 const assert = require("node:assert/strict");
-const { mkdtemp, rm } = require("node:fs/promises");
-const { tmpdir } = require("node:os");
+const { mkdir, rm } = require("node:fs/promises");
+const { randomUUID } = require("node:crypto");
 const { join } = require("node:path");
 const { describe, it } = require("node:test");
 const { SqliteAuthorityStore } = require("@regenic/authority-store/sqlite");
@@ -17,7 +17,8 @@ const ORG = "local-owner";
 const code = (expected) => (error) => error.code === expected;
 
 async function fixture(t, maxConcurrent) {
-  const root = await mkdtemp(join(tmpdir(), "regenic-work-start-"));
+  const root = join(process.cwd(), `.test-work-start-${randomUUID()}`);
+  await mkdir(root, { recursive: true });
   const path = join(root, "authority.db");
   const ports = { authority: new SqliteAuthorityStore(path) };
   t.after(async () => {
@@ -354,11 +355,11 @@ describe("durable executor start", () => {
       recipe_id: recipe.id,
       thread_id: "system:search-answer:search-answer:1",
       unit_key: "search-answer:1",
-      status: "running",
+      status: "open",
     };
     await f.ports.authority.putRecipe(recipe);
     await f.ports.authority.putWorkItem(item);
-    await f.ports.authority.putWorkRun({
+    const run = {
       id: "run-search-answer",
       org_id: ORG,
       work_item_id: item.id,
@@ -367,9 +368,11 @@ describe("durable executor start", () => {
       external_run_id: "dsh:answer-1",
       agent_thread_id: "dsh:answer-1",
       status: "running",
+      start_state: "pending",
       created_at: now,
       updated_at: now,
-    });
+    };
+    assert.equal(await f.ports.authority.claimWorkRunStart({ run }), true);
     const service = f.service();
     assert.equal((await service.activeSessionIds()).has(item.thread_id), false);
     assert.equal((await service.inboxFaces([item.thread_id])).has(item.thread_id), false);
@@ -392,13 +395,13 @@ describe("durable executor start", () => {
       recipe_id: recipe.id,
       thread_id: "system:search-answer:search-answer:timeout",
       unit_key: "search-answer:timeout",
-      status: "running",
+      status: "open",
       created_at: createdAt,
       updated_at: createdAt,
     };
     await f.ports.authority.putRecipe(recipe);
     await f.ports.authority.putWorkItem(item);
-    await f.ports.authority.putWorkRun({
+    const run = {
       id: "run-search-answer-timeout",
       org_id: ORG,
       work_item_id: item.id,
@@ -407,9 +410,12 @@ describe("durable executor start", () => {
       external_run_id: "dsh:answer-timeout",
       agent_thread_id: "dsh:answer-timeout",
       status: "running",
+      start_state: "pending",
       created_at: createdAt,
       updated_at: createdAt,
-    });
+    };
+    assert.equal(await f.ports.authority.claimWorkRunStart({ run }), true);
+    await f.ports.authority.putWorkRun({ ...run, start_state: undefined });
     await f.ports.authority.putSearchAnswer({
       id: "timeout",
       org_id: ORG,
@@ -541,18 +547,18 @@ describe("durable executor start", () => {
       const now = new Date().toISOString();
       const healthyRecipe = { ...f.recipe, id: "recipe-healthy", can_write_back: true };
       const failedItem = {
-        ...f.item, status: "running",
+        ...f.item, status: "open",
         created_at: new Date(Date.now() - 1_000).toISOString(),
       };
       const healthyItem = {
         ...f.item, id: "work-healthy", recipe_id: healthyRecipe.id,
         thread_id: "feishu:oc_healthy", unit_key: "task-healthy",
-        status: "running", created_at: now,
+        status: "open", created_at: now,
       };
       const failedRun = {
         id: "run-offline", org_id: ORG, work_item_id: failedItem.id,
         recipe_id: f.recipe.id, executor_type: "session",
-        external_run_id: "offline", status: "running",
+        external_run_id: "offline", status: "running", start_state: "pending",
         created_at: failedItem.created_at, updated_at: now,
       };
       const healthyRun = {
@@ -564,8 +570,10 @@ describe("durable executor start", () => {
       await authority.putRecipe(healthyRecipe);
       await authority.putWorkItem(failedItem);
       await authority.putWorkItem(healthyItem);
-      await authority.putWorkRun(failedRun);
-      await authority.putWorkRun(healthyRun);
+      assert.equal(await authority.claimWorkRunStart({ run: failedRun }), true);
+      assert.equal(await authority.claimWorkRunStart({ run: healthyRun }), true);
+      await authority.putWorkRun({ ...failedRun, start_state: "submitted" });
+      await authority.putWorkRun({ ...healthyRun, start_state: "submitted" });
       const beforeRun = await authority.getWorkRun(ORG, failedRun.id);
       const beforeItem = await authority.getWorkItem(ORG, failedItem.id);
       const calls = { offline: 0, healthy: 0 };
@@ -608,7 +616,11 @@ describe("durable executor start", () => {
         });
         assert.ok(args[2] instanceof Error);
       }
-      await assert.rejects(supervisor.refreshOne(failedItem, f.recipe, failedRun));
+      await assert.rejects(supervisor.refreshOne(
+        await authority.getWorkItem(ORG, failedItem.id),
+        f.recipe,
+        await authority.getWorkRun(ORG, failedRun.id),
+      ));
     });
   }
 

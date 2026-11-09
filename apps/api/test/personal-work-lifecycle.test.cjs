@@ -36,34 +36,42 @@ async function fixture(options = {}) {
     created_at: NOW,
     updated_at: NOW,
   };
-  const item = {
+  const initialItem = {
     id: "work-1",
     org_id: ORG,
     thread_id: "source:conversation",
     unit_key: "unit-1",
     record_class: "task",
     thread_facet: "ticket",
-    status: "running",
+    status: "open",
     recipe_id: recipe.id,
     created_at: NOW,
     updated_at: NOW,
   };
-  const run = {
+  const initialRun = {
     id: "run-1",
     org_id: ORG,
-    work_item_id: item.id,
+    work_item_id: initialItem.id,
     recipe_id: recipe.id,
     executor_type: "test",
     external_run_id: "external-1",
     agent_thread_id: "executor:conversation",
     status: "running",
-    start_state: "submitted",
+    start_state: "pending",
     created_at: NOW,
     updated_at: NOW,
   };
   await authority.putRecipe(recipe);
-  await authority.putWorkItem(item);
-  await authority.putWorkRun(run);
+  await authority.putWorkItem(initialItem);
+  assert.equal(await authority.claimWorkRunStart({ run: initialRun }), true);
+  const item = await authority.getWorkItem(ORG, initialItem.id);
+  let run = await authority.getWorkRun(ORG, initialRun.id);
+  run = await authority.putWorkRun({
+    ...run,
+    external_run_id: "external-1",
+    agent_thread_id: "executor:conversation",
+    start_state: "submitted",
+  });
   const dropped = [];
   let digestChanges = 0;
   const updated = [];
@@ -192,9 +200,9 @@ describe("work observation compatibility before RFC 0011 policy activation", () 
   it("retains a known executor thread and previous result when absent from the observation", async () => {
     const f = await fixture();
     const run = { ...f.run, result: { summary: "Earlier result" } };
-    await f.authority.putWorkRun(run);
+    const savedRun = await f.authority.putWorkRun(run);
     await f.supervisor.applyHandle(
-      f.item, f.recipe, run, f.handle("running", { agent_thread_id: undefined, result: undefined }),
+      f.item, f.recipe, savedRun, f.handle("running", { agent_thread_id: undefined, result: undefined }),
     );
     const next = await f.authority.getWorkRun(ORG, run.id);
     assert.equal(next.agent_thread_id, run.agent_thread_id);

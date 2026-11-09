@@ -1,4 +1,4 @@
-export const PG_SCHEMA_VERSION = 56;
+export const PG_SCHEMA_VERSION = 57;
 
 /** Applied when an existing postgres authority DB is already at a prior baseline. */
 export const PG_MIGRATIONS = [
@@ -577,6 +577,14 @@ ALTER TABLE recipes ADD COLUMN trigger_timezone TEXT;
     version: 56,
     sql: "ALTER TABLE recipes ADD COLUMN write_back_thread_id TEXT;",
   },
+  {
+    version: 57,
+    sql: `
+ALTER TABLE work_items ADD COLUMN current_run_id TEXT REFERENCES work_runs(id) DEFERRABLE INITIALLY DEFERRED;
+ALTER TABLE work_items ADD COLUMN version INTEGER NOT NULL DEFAULT 0 CHECK (version >= 0);
+ALTER TABLE work_runs ADD COLUMN version INTEGER NOT NULL DEFAULT 0 CHECK (version >= 0);
+`,
+  },
 ] as const;
 
 export const PG_BASELINE_SQL = `
@@ -784,6 +792,10 @@ CREATE TABLE work_runs (
   created_at TIMESTAMPTZ NOT NULL,
   updated_at TIMESTAMPTZ NOT NULL
 );
+
+ALTER TABLE work_items ADD COLUMN current_run_id TEXT REFERENCES work_runs(id) DEFERRABLE INITIALLY DEFERRED;
+ALTER TABLE work_items ADD COLUMN version INTEGER NOT NULL DEFAULT 0 CHECK (version >= 0);
+ALTER TABLE work_runs ADD COLUMN version INTEGER NOT NULL DEFAULT 0 CHECK (version >= 0);
 
 CREATE INDEX work_runs_item_idx ON work_runs (org_id, work_item_id, updated_at);
 

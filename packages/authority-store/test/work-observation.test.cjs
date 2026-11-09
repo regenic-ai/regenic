@@ -1,7 +1,6 @@
 const assert = require("node:assert/strict");
 const { randomUUID } = require("node:crypto");
-const { mkdtemp, rm } = require("node:fs/promises");
-const { tmpdir } = require("node:os");
+const { mkdir, rm } = require("node:fs/promises");
 const { join } = require("node:path");
 const { describe, it } = require("node:test");
 const Database = require("better-sqlite3");
@@ -48,7 +47,8 @@ drivers.push({
 });
 
 async function fixture(t, driver) {
-  const root = await mkdtemp(join(tmpdir(), "regenic-work-observation-"));
+  const root = join(process.cwd(), `.test-work-observation-${randomUUID()}`);
+  await mkdir(root, { recursive: true });
   const path = join(root, "authority.db");
   let binding;
   t.after(async () => {
@@ -73,16 +73,24 @@ async function fixture(t, driver) {
   await store.putRecipe(recipe);
   await store.putWorkItem({
     id: "work-1", org_id: ORG, thread_id: "source:conversation", unit_key: "unit-1",
-    record_class: "task", thread_facet: "ticket", status: "running",
+    record_class: "task", thread_facet: "ticket", status: "open",
     recipe_id: recipe.id, created_at: NOW, updated_at: NOW,
   });
-  await store.putWorkRun({
+  const initialRun = {
     id: "run-1", org_id: ORG, work_item_id: "work-1", recipe_id: recipe.id,
-    executor_type: "test", external_run_id: "external-1", status: "running",
-    start_state: "submitted", created_at: NOW, updated_at: NOW,
-  });
+    executor_type: "test", status: "running", start_state: "pending",
+    created_at: NOW, updated_at: NOW,
+  };
+  assert.equal(await store.claimWorkRunStart({ run: initialRun }), true);
   const item = await store.getWorkItem(ORG, "work-1");
-  const run = await store.getWorkRun(ORG, "run-1");
+  assert.equal(item.current_run_id, initialRun.id);
+  assert.equal(item.version, 1);
+  const pendingRun = await store.getWorkRun(ORG, "run-1");
+  assert.equal(pendingRun.version, 0);
+  const run = await store.putWorkRun({
+    ...pendingRun, external_run_id: "external-1", start_state: "submitted",
+    updated_at: NOW,
+  });
   const input = {
     expected_item: item,
     expected_run: run,
@@ -104,7 +112,12 @@ for (const driver of drivers) {
       assert.equal(result.transition.changed, true);
       assert.equal(result.transition.settled, true);
       assert.equal((await f.store.getWorkRun(ORG, f.run.id)).status, "completed");
-      assert.equal((await f.store.getWorkItem(ORG, f.item.id)).status, "done");
+      const savedRun = await f.store.getWorkRun(ORG, f.run.id);
+      const savedItem = await f.store.getWorkItem(ORG, f.item.id);
+      assert.equal(savedRun.status, "completed");
+      assert.equal(savedRun.version, f.run.version + 1);
+      assert.equal(savedItem.status, "done");
+      assert.equal(savedItem.version, f.item.version + 1);
       const delivery = await f.store.getWorkDeliveryByItem(ORG, f.item.id);
       assert.equal(delivery.status, "queued");
       assert.equal(delivery.payload.summary, "Handled");
@@ -113,8 +126,7 @@ for (const driver of drivers) {
 
     it("does not apply an observation whose item snapshot was superseded", async (t) => {
       const f = await fixture(t, driver);
-      const changed = { ...f.item, status: "waiting_human" };
-      await f.store.putWorkItem(changed);
+      const changed = await f.store.putWorkItem({ ...f.item, status: "waiting_human" });
       assert.deepEqual(await f.store.commitWorkObservation(f.input), {
         outcome: "conflict", reason: "stale_observation",
       });
@@ -142,8 +154,7 @@ for (const driver of drivers) {
 
     it("fences stale run results even when timestamps have not changed", async (t) => {
       const f = await fixture(t, driver);
-      const changed = { ...f.run, result: { summary: "A newer observation" } };
-      await f.store.putWorkRun(changed);
+      const changed = await f.store.putWorkRun({ ...f.run, result: { summary: "A newer observation" } });
       assert.deepEqual(await f.store.commitWorkObservation(f.input), {
         outcome: "conflict", reason: "stale_observation",
       });
@@ -187,6 +198,62 @@ for (const driver of drivers) {
       assert.deepEqual(await f.store.getWorkItem(ORG, f.item.id), item);
       assert.deepEqual(await f.store.getWorkRun(ORG, f.run.id), run);
       assert.deepEqual(await f.store.getWorkDeliveryByItem(ORG, f.item.id), delivery);
+    });
+
+    it("does not let an old completed attempt settle the item after a newer run starts", async (t) => {
+      const f = await fixture(t, driver);
+      assert.equal((await f.store.commitWorkObservation(f.input)).outcome, "applied");
+      const oldRun = await f.store.getWorkRun(ORG, f.run.id);
+      const reopened = await f.store.putWorkItem({
+        ...await f.store.getWorkItem(ORG, f.item.id),
+        status: "open",
+        updated_at: LATER,
+      });
+      const newRun = {
+        id: "run-2", org_id: ORG, work_item_id: f.item.id, recipe_id: f.recipe.id,
+        executor_type: "test", status: "running", start_state: "pending",
+        created_at: LATER, updated_at: LATER,
+      };
+      assert.equal(await f.store.claimWorkRunStart({ run: newRun }), true);
+      await f.store.putWorkItem({ ...reopened, status: "running" });
+      const currentItem = await f.store.getWorkItem(ORG, f.item.id);
+      assert.equal(currentItem.current_run_id, newRun.id);
+      assert.ok(currentItem.version > reopened.version);
+      assert.deepEqual(await f.store.commitWorkObservation({
+        ...f.input,
+        expected_item: currentItem,
+        expected_run: oldRun,
+        handle: { status: "completed", external_run_id: oldRun.external_run_id, result: oldRun.result },
+      }), { outcome: "conflict", reason: "not_current_run" });
+      assert.equal((await f.store.getWorkItem(ORG, f.item.id)).status, "running");
+      assert.equal((await f.store.getActiveWorkRun(ORG, f.item.id)).id, newRun.id);
+      assert.deepEqual(await f.store.getWorkRun(ORG, oldRun.id), oldRun);
+    });
+
+    it("keeps historical run identity unknown instead of guessing it from the only run", async (t) => {
+      const f = await fixture(t, driver);
+      const item = await f.store.putWorkItem({
+        ...f.item,
+        id: "legacy-work",
+        thread_id: "source:legacy-conversation",
+        unit_key: "legacy-unit",
+        current_run_id: undefined,
+        status: "running",
+        version: 0,
+      });
+      const run = await f.store.putWorkRun({
+        ...f.run,
+        id: "legacy-run",
+        work_item_id: item.id,
+        version: 0,
+      });
+      assert.equal(item.current_run_id, undefined);
+      assert.equal(run.version, 0);
+      assert.deepEqual(await f.store.commitWorkObservation({
+        ...f.input, expected_item: item, expected_run: run,
+      }), { outcome: "conflict", reason: "not_current_run" });
+      assert.equal((await f.store.getWorkItem(ORG, item.id)).current_run_id, undefined);
+      assert.deepEqual(await f.store.getWorkRun(ORG, run.id), run);
     });
 
     it("rejects changes to completed summary, content and evidence even with current snapshots", async (t) => {
@@ -249,10 +316,8 @@ for (const driver of drivers) {
 
     it("does not invent delivery obligations or unknown results for historical completed work", async (t) => {
       const f = await fixture(t, driver);
-      const item = { ...f.item, status: "done" };
-      const run = { ...f.run, status: "completed", start_state: undefined };
-      await f.store.putWorkItem(item);
-      await f.store.putWorkRun(run);
+      const item = await f.store.putWorkItem({ ...f.item, status: "done" });
+      const run = await f.store.putWorkRun({ ...f.run, status: "completed", start_state: undefined });
       const repeated = await f.store.commitWorkObservation({
         ...f.input, expected_item: item, expected_run: run,
         handle: { ...f.input.handle, result: undefined },
@@ -269,8 +334,7 @@ for (const driver of drivers) {
 
     it("uses the last known result when the first completed observation omits it", async (t) => {
       const f = await fixture(t, driver);
-      const run = { ...f.run, result: { summary: "Known result" } };
-      await f.store.putWorkRun(run);
+      const run = await f.store.putWorkRun({ ...f.run, result: { summary: "Known result" } });
       const result = await f.store.commitWorkObservation({
         ...f.input, expected_run: run,
         handle: { ...f.input.handle, result: undefined },
@@ -392,4 +456,44 @@ it("fences competing observations from two SQLite writer workers", async (t) => 
   assert.equal(results.filter((r) => r.outcome === "applied").length, 1);
   assert.equal(results.filter((r) => r.outcome === "conflict").length, 1);
   assert.equal((await second.listWorkDeliveries(ORG)).length, 1);
+});
+
+it("migrates schema 56 without inferring historical current-run identity", async (t) => {
+  const root = join(process.cwd(), `.test-work-migration-${randomUUID()}`);
+  await mkdir(root, { recursive: true });
+  const path = join(root, "authority.db");
+  let store = new SqliteAuthorityStore(path);
+  t.after(async () => {
+    store?.close();
+    await rm(root, { recursive: true, force: true });
+  });
+  await store.putWorkItem({
+    id: "legacy-work", org_id: ORG, thread_id: "source:legacy",
+    unit_key: "legacy-unit", record_class: "task", thread_facet: "ticket",
+    status: "done", created_at: NOW, updated_at: NOW,
+  });
+  await store.putWorkRun({
+    id: "legacy-run", org_id: ORG, work_item_id: "legacy-work",
+    recipe_id: "legacy-recipe", executor_type: "test", status: "completed",
+    created_at: NOW, updated_at: NOW,
+  });
+  store.close();
+  store = undefined;
+  const db = new Database(path);
+  db.exec(`
+    ALTER TABLE work_items DROP COLUMN current_run_id;
+    ALTER TABLE work_items DROP COLUMN version;
+    ALTER TABLE work_runs DROP COLUMN version;
+  `);
+  db.pragma("user_version = 56");
+  db.close();
+  store = new SqliteAuthorityStore(path);
+  assert.equal(store.schemaVersion, 57);
+  assert.deepEqual(await store.getWorkItem(ORG, "legacy-work"), {
+    id: "legacy-work", org_id: ORG, thread_id: "source:legacy",
+    unit_key: "legacy-unit", head_event_id: undefined, record_class: "task",
+    thread_facet: "ticket", status: "done", recipe_id: undefined,
+    current_run_id: undefined, version: 0, created_at: NOW, updated_at: NOW,
+  });
+  assert.equal((await store.getWorkRun(ORG, "legacy-run")).version, 0);
 });

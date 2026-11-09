@@ -159,13 +159,18 @@ export async function getWorkItemByUnitKey(db: PgSql, orgId: string, threadId: s
     return row ? toWorkItem(row) : null;
   }
 
-export async function putWorkItem(db: PgSql, item: WorkItem, client?: PoolClient): Promise<WorkItem> {
+export async function putWorkItem(
+  db: PgSql,
+  item: WorkItem,
+  client?: PoolClient,
+  advanceVersion = true,
+): Promise<WorkItem> {
     await db.execute(
       `
         INSERT INTO work_items (
           id, org_id, thread_id, unit_key, head_event_id, record_class, thread_facet,
-          status, recipe_id, created_at, updated_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+          status, recipe_id, created_at, updated_at, current_run_id, version
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
         ON CONFLICT (id) DO UPDATE SET
           thread_id = EXCLUDED.thread_id,
           unit_key = EXCLUDED.unit_key,
@@ -174,7 +179,9 @@ export async function putWorkItem(db: PgSql, item: WorkItem, client?: PoolClient
           thread_facet = EXCLUDED.thread_facet,
           status = EXCLUDED.status,
           recipe_id = EXCLUDED.recipe_id,
-          updated_at = EXCLUDED.updated_at
+          updated_at = EXCLUDED.updated_at,
+          current_run_id = work_items.current_run_id,
+          version = ${advanceVersion ? "work_items.version + 1" : "EXCLUDED.version"}
       `,
       [
         item.id,
@@ -188,9 +195,12 @@ export async function putWorkItem(db: PgSql, item: WorkItem, client?: PoolClient
         item.recipe_id ?? null,
         item.created_at,
         item.updated_at,
+        null,
+        item.version ?? 0,
       ], client,
     );
-    return item;
+    if (!advanceVersion) return item;
+    return await getWorkItem(db, item.org_id, item.id) ?? item;
   }
 
 export async function listWorkRuns(db: PgSql, orgId: string, workItemId?: string): Promise<WorkRun[]> {
@@ -219,8 +229,8 @@ export async function getActiveWorkRun(db: PgSql, orgId: string, workItemId: str
     const row = await db.queryOne<WorkRunRow>(
       `SELECT * FROM work_runs
        WHERE org_id = $1 AND work_item_id = $2
+         AND id = (SELECT current_run_id FROM work_items WHERE org_id = $1 AND id = $2)
          AND status IN ('running', 'waiting_human')
-       ORDER BY updated_at DESC, id DESC
        LIMIT 1`,
       [orgId, workItemId],
     );
@@ -245,13 +255,18 @@ export async function listHiddenExecutorThreadIds(db: PgSql, orgId: string): Pro
     return rows.map((row) => row.thread_id);
   }
 
-export async function putWorkRun(db: PgSql, run: WorkRun, client?: PoolClient): Promise<WorkRun> {
+export async function putWorkRun(
+  db: PgSql,
+  run: WorkRun,
+  client?: PoolClient,
+  advanceVersion = true,
+): Promise<WorkRun> {
     await db.execute(
       `
         INSERT INTO work_runs (
           id, org_id, work_item_id, recipe_id, executor_type, external_run_id,
-          agent_thread_id, status, start_state, result_json, created_at, updated_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+          agent_thread_id, status, start_state, result_json, created_at, updated_at, version
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
         ON CONFLICT (id) DO UPDATE SET
           recipe_id = EXCLUDED.recipe_id,
           executor_type = EXCLUDED.executor_type,
@@ -260,7 +275,8 @@ export async function putWorkRun(db: PgSql, run: WorkRun, client?: PoolClient): 
           status = EXCLUDED.status,
           start_state = EXCLUDED.start_state,
           result_json = EXCLUDED.result_json,
-          updated_at = EXCLUDED.updated_at
+          updated_at = EXCLUDED.updated_at,
+          version = ${advanceVersion ? "work_runs.version + 1" : "EXCLUDED.version"}
       `,
       [
         run.id,
@@ -275,10 +291,12 @@ export async function putWorkRun(db: PgSql, run: WorkRun, client?: PoolClient): 
         jsonb(run.result),
         run.created_at,
         run.updated_at,
+        run.version ?? 0,
       ],
       client,
     );
-    return run;
+    if (!advanceVersion) return run;
+    return await getWorkRun(db, run.org_id, run.id) ?? run;
   }
 
 export async function commitWorkObservation(
@@ -305,10 +323,10 @@ export async function commitWorkObservation(
       delivery: delivery ? toWorkDelivery(delivery) : null,
     });
     if (prepared.outcome !== "applied") return prepared;
-    await putWorkRun(db, prepared.transition.run, client);
+    await putWorkRun(db, prepared.transition.run, client, false);
     if (prepared.delivery) await putWorkDelivery(db, prepared.delivery, client);
     if (prepared.transition.item.status !== input.expected_item.status) {
-      await putWorkItem(db, prepared.transition.item, client);
+      await putWorkItem(db, prepared.transition.item, client, false);
     }
     return { outcome: "applied", transition: prepared.transition };
   });
@@ -341,9 +359,9 @@ export async function claimWorkRunStart(db: PgSql, { run, max_concurrent }: Work
     if (await db.queryOne("SELECT id FROM work_runs WHERE id = $1", [run.id], client)) {
       throw new Error(`Work run already exists: ${run.id}`);
     }
-    await putWorkRun(db, run, client);
-    await db.execute("UPDATE work_items SET status = 'running', updated_at = $1 WHERE org_id = $2 AND id = $3",
-      [run.updated_at, run.org_id, run.work_item_id], client);
+    await putWorkRun(db, run, client, false);
+    await db.execute("UPDATE work_items SET status = 'running', current_run_id = $1, version = version + 1, updated_at = $2 WHERE org_id = $3 AND id = $4",
+      [run.id, run.updated_at, run.org_id, run.work_item_id], client);
     return true;
   });
 }
@@ -610,6 +628,8 @@ interface WorkItemRow {
   thread_facet: WorkItem["thread_facet"];
   status: WorkItem["status"];
   recipe_id: string | null;
+  current_run_id: string | null;
+  version: number | string;
   created_at: unknown;
   updated_at: unknown;
 }
@@ -646,6 +666,7 @@ interface WorkRunRow {
   status: WorkRun["status"];
   start_state: WorkRun["start_state"] | null;
   result_json: unknown;
+  version: number | string;
   created_at: unknown;
   updated_at: unknown;
 }
@@ -722,6 +743,8 @@ function toWorkItem(row: WorkItemRow): WorkItem {
     thread_facet: row.thread_facet,
     status: row.status,
     recipe_id: row.recipe_id ?? undefined,
+    current_run_id: row.current_run_id ?? undefined,
+    version: asNumber(row.version),
     created_at: toIso(row.created_at),
     updated_at: toIso(row.updated_at),
   };
@@ -741,6 +764,7 @@ function toWorkRun(row: WorkRunRow): WorkRun {
     result: row.result_json
       ? asJson<WorkRun["result"]>(row.result_json)
       : undefined,
+    version: asNumber(row.version),
     created_at: toIso(row.created_at),
     updated_at: toIso(row.updated_at),
   };

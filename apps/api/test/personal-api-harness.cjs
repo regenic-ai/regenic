@@ -1,7 +1,7 @@
 const { createServer } = require("node:http");
 const { WebSocketServer } = require("ws");
-const { mkdtemp, rm } = require("node:fs/promises");
-const { tmpdir } = require("node:os");
+const { mkdir, rm } = require("node:fs/promises");
+const { randomUUID } = require("node:crypto");
 const { join } = require("node:path");
 const { afterEach } = require("node:test");
 const {
@@ -42,7 +42,8 @@ async function waitForSyncRun(origin, runId, timeoutMs = 8_000) {
 }
 
 async function createRoot() {
-  const root = await mkdtemp(join(tmpdir(), "regenic-personal-api-"));
+  const root = join(process.cwd(), `.test-personal-api-${randomUUID()}`);
+  await mkdir(root, { recursive: true });
   roots.push(root);
   return root;
 }
@@ -331,7 +332,7 @@ async function seedHostedWork(authority, input) {
     created_at: now,
     updated_at: now,
   });
-  await authority.putWorkItem({
+  const item = await authority.putWorkItem({
     id: input.workId,
     org_id: "local-owner",
     thread_id: input.threadId,
@@ -339,12 +340,12 @@ async function seedHostedWork(authority, input) {
     head_event_id: input.eventId,
     record_class: "task",
     thread_facet: "ticket",
-    status: input.status,
+    status: "open",
     recipe_id: input.recipeId,
     created_at: now,
     updated_at: now,
   });
-  await authority.putWorkRun({
+  const run = {
     id: input.runId,
     org_id: "local-owner",
     work_item_id: input.workId,
@@ -353,9 +354,15 @@ async function seedHostedWork(authority, input) {
     external_run_id: "dsh:seed-sysout",
     agent_thread_id: "dsh:seed-sysout",
     status: "running",
+    start_state: "pending",
     created_at: now,
     updated_at: now,
-  });
+  };
+  await authority.claimWorkRunStart({ run });
+  await authority.putWorkRun({ ...run, start_state: undefined });
+  if (input.status !== "running") {
+    await authority.putWorkItem({ ...item, status: input.status });
+  }
 }
 
 async function startPersonalApi(database, blobRoot, extraEnv = {}) {
