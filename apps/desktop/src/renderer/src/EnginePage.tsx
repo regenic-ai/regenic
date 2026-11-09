@@ -478,6 +478,7 @@ export function EnginePage({
                 await updateConnectorConfig(installation.id, config);
               })
             }
+            error={actionError}
             onRefresh={onChanged}
             onPairingCode={(id, code) => {
               setPairingCodes((current) => ({ ...current, [id]: code }));

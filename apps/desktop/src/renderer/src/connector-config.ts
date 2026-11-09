@@ -12,8 +12,11 @@ export type CatalogField = {
   option_labels_key?: string;
 };
 
-export function splitValues(value: string | undefined): string[] {
-  return (value ?? "")
+export function splitValues(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.filter((entry): entry is string => typeof entry === "string");
+  }
+  return (typeof value === "string" ? value : "")
     .split(",")
     .map((entry) => entry.trim())
     .filter((entry) => entry.length > 0);
@@ -40,7 +43,7 @@ export function optionTitle(option: CatalogOption): string {
 export function filterCatalogFieldOptions(
   field: Pick<CatalogField, "filter_options_by"> | undefined,
   options: CatalogOption[],
-  values: Record<string, string>,
+  values: Record<string, unknown>,
 ): CatalogOption[] {
   const filterKey = field?.filter_options_by;
   if (!filterKey) {
@@ -68,7 +71,7 @@ export function resolveCatalogFieldOptions(
   field: CatalogField | undefined,
   fieldOptions: CatalogOption[] | undefined,
   remoteOptions: CatalogOption[] | undefined,
-  values: Record<string, string>,
+  values: Record<string, unknown>,
 ): CatalogOption[] | undefined {
   const source = remoteOptions ?? fieldOptions;
   if (!source) {

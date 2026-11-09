@@ -1,3 +1,5 @@
+import type { DriverCatalogField, DriverCatalogFieldWhen, ConnectorCatalogFieldOption } from "@regenic/connector-contract";
+
 export type NavId = "inbox" | "search" | "follow-ups" | "recipes" | "engine" | "settings";
 
 export interface CustomerServiceTaskView {
@@ -689,11 +691,7 @@ export interface IngestAttempt {
   error_code?: string;
 }
 
-export interface ConnectorFieldWhen {
-  field: string;
-  value?: string;
-  values?: string[];
-}
+export type ConnectorFieldWhen = DriverCatalogFieldWhen;
 
 export interface ConnectorInstallConfirm {
   when: ConnectorFieldWhen;
@@ -701,26 +699,17 @@ export interface ConnectorInstallConfirm {
   ack: string;
 }
 
-export interface ConnectorFieldOption {
-  value: string;
+export interface ConnectorFieldOption extends Omit<ConnectorCatalogFieldOption, "label"> {
   label: string;
-  kind?: string;
-  title?: string;
 }
 
-export interface ConnectorField {
-  key: string;
+export interface ConnectorField extends Omit<DriverCatalogField, "label" | "placeholder" | "description" | "group" | "options"> {
   label: string;
   required: boolean;
   placeholder?: string;
-  widget?: "directory";
-  default?: string;
-  multiple?: boolean;
-  secret?: boolean;
+  description?: string;
+  group?: string;
   options?: ConnectorFieldOption[];
-  filter_options_by?: string;
-  option_labels_key?: string;
-  visible_when?: ConnectorFieldWhen;
 }
 
 export interface ConnectorPrerequisite {
@@ -766,6 +755,7 @@ export interface ConnectorCatalogItem {
   instance_count: number;
   setup_ready: boolean;
   singleton: boolean;
+  form_version?: 2;
   fields: ConnectorField[];
   prerequisites: ConnectorPrerequisite[];
   setup_steps: ConnectorSetupStep[];
@@ -781,7 +771,7 @@ export interface EngineInstallationView {
   status: "enabled" | "disabled" | "needs_attention";
   label: string;
   detail: string | null;
-  settings?: Record<string, string>;
+  settings?: Record<string, string | number | boolean | string[]>;
   syncable: boolean;
   can_reply: boolean;
   can_create: boolean;

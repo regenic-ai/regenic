@@ -391,6 +391,48 @@ token 是前置条件，不是表单字段。内核不会替用户装 CLI 或起
 
 监测写在驱动的 `probeCatalog()` 里。API 把上次探测结果缓存后立刻返回引擎快照，不在这条请求上等待 CLI / 远端。表单选项走 `GET /v1/me/engine/catalog-options`。加来源不用改 API 或桌面。
 
+### 类型化表单
+
+Core 定义字段与组件协议，连接器声明参数并在后端执行专属校验和归一化，
+PC 只渲染统一组件，不加载连接器提供的 UI 代码。DSH、飞书和 Cursor 已声明
+`form_version: 2`；每个字段的 `type` 是 `string`、`number`、`boolean`
+或 `string_array`。默认值使用同类型。安装与编辑在调用驱动 `install` 前
+走相同的 Core 校验，隐藏字段保留在编辑草稿中，但不提交。V2 的 `settings`
+保留数组、数字和布尔值；旧 catalog 保留字符串/CSV 回填，安装和编辑入口仍
+能适配旧客户端提交的 CSV 多选值。
+
+字段值校验和条件显示共用 `@regenic/connector-contract/form` 的纯规则；
+这个浏览器安全入口不加载宿主、存储或连接器运行时代码。PC 从契约派生字段类型，
+只补充本地化文案；API 把规则错误转成 HTTP 错误并执行最终校验，
+来源专属校验仍由驱动负责。
+
+组件支持 `text`、`password`、`directory`、`select`、`multi_select`、
+`number` 和 `switch`。`description`、`group` 使用连接器自己的 `CopyRef`，
+`advanced: true` 把对应分组默认折叠；数字可以声明 `min` / `max`。
+`allow_custom: true` 把静态选项当作建议，而不是封闭枚举；Cursor 模型使用此标记，
+保留自定义模型 ID 的能力。
+
+声明 `dynamic_options: true` 后，PC 调用 `POST /v1/me/engine/catalog-options`，
+提交 `connector_type`、`field`、`query`、`cursor`、`limit`（1–100，默认 50）
+和 `values`。Core 只向加载器传递 `options_depends_on` 明确列出的非秘密字段，
+响应包含 `options` 和可选的 `next_cursor`。连接器可以实现
+`listCatalogFieldOptionsPage`，使用来源原生搜索与分页；没有该方法时，API
+对原有 `listCatalogFieldOptions` 返回的列表做本地化搜索、依赖过滤和分页，
+这一兼容路径仍会读取来源列表。PC 对搜索做防抖，取消过期请求，跨页保留
+已选 ID 与名称。旧 GET 入口继续可用。加载失败返回
+`catalog_options_failed`（502），不再伪装成成功的空列表。
+选项请求与组件渲染分离；搜索、依赖或连接器变化时，游标和结果一起重置，
+旧请求的页面不能混入新结果。重叠页面按选项 ID 合并。动态结果不是封闭枚举，
+只有未声明 `allow_custom` 的静态选项限制值的集合。
+
+`secret: true` 或密码组件标记的字段不回显原值。
+`GET /v1/me/connectors/:id/credentials` 只返回各字段是否已保存的布尔状态，
+不包括环境变量兜底凭据。编辑提交时，省略或空字符串表示保持，非空字符串
+表示替换，显式 `null` 表示清除；必填凭据不能清除。点击“移除”只改变草稿，
+保存时才执行。使用独立旧凭据存储的连接器可以实现
+`catalogCredentialStatus`、`clearCatalogCredential` 后端钩子；Cursor 通过
+这两个钩子兼容。读取或清除失败会显式报错，不当作“未设置”。
+
 内置 DSH / 飞书 / Cursor 的能力表、kind 映射和安装前置见[内置驱动](CONNECTOR_DRIVERS.md)。
 
 ## 范围外

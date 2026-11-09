@@ -23,6 +23,7 @@ import {
   cursorKeychainRef,
   readCursorApiKey,
   writeCursorApiKey,
+  deleteCursorApiKey,
 } from "./cursor-credentials";
 import { isLocalCursorAgentId } from "./cursor-ids";
 import {
@@ -188,6 +189,7 @@ export const cursorAgentDriver: ChannelDriver = {
 
   installCatalog() {
     return {
+      form_version: 2 as const,
       title: "catalog.title",
       channel_label: "catalog.channelLabel",
       description: "catalog.description",
@@ -195,6 +197,7 @@ export const cursorAgentDriver: ChannelDriver = {
       fields: [
         {
           key: "api_key",
+          type: "string" as const,
           label: "field.apiKey",
           required: false,
           secret: true,
@@ -202,6 +205,8 @@ export const cursorAgentDriver: ChannelDriver = {
         },
         {
           key: "model",
+          type: "string" as const,
+          allow_custom: true,
           label: "field.model",
           required: true,
           default: DEFAULT_CURSOR_MODEL,
@@ -209,6 +214,8 @@ export const cursorAgentDriver: ChannelDriver = {
         },
         {
           key: "cwd",
+          type: "string" as const,
+          widget: "directory" as const,
           label: "field.cwd",
           required: false,
           placeholder: "field.cwd.placeholder",
@@ -238,6 +245,16 @@ export const cursorAgentDriver: ChannelDriver = {
         },
       ],
     };
+  },
+
+  async catalogCredentialStatus(installation) {
+    const account = cursorKeychainAccount(installation.credentials_ref) ?? installation.id;
+    return { api_key: Boolean(await readCursorApiKey(account)) };
+  },
+
+  async clearCatalogCredential(installation, field) {
+    if (field !== "api_key") throw new ChannelDriverError("invalid_config", "Unknown credential field");
+    deleteCursorApiKey(cursorKeychainAccount(installation.credentials_ref) ?? installation.id);
   },
 
   presentInstall(installation) {

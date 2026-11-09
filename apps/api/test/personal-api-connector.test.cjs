@@ -70,6 +70,18 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
         await readInstallSecret("dsh-session", installation.id, "token"),
         "replacement-token",
       );
+      const credentials = await fetch(`${origin}/v1/me/connectors/${installation.id}/credentials`);
+      assert.equal(credentials.status, 200);
+      assert.deepEqual(await credentials.json(), { token: true });
+      const cleared = await fetch(`${origin}/v1/me/connectors/${installation.id}/config`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ config: { transport: "web", session_id: "desk-token", token: null } }),
+      });
+      assert.equal(cleared.status, 201);
+      assert.equal(await readInstallSecret("dsh-session", installation.id, "token"), undefined);
+      assert.deepEqual(await (await fetch(`${origin}/v1/me/connectors/${installation.id}/credentials`)).json(),
+        { token: false });
     } finally {
       await app.close();
     }
@@ -205,7 +217,7 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
       const feishuBody = await feishu.json();
       assert.equal(feishu.status, 201, JSON.stringify(feishuBody));
       assert.equal(feishuBody.label, "All conversations");
-      assert.equal(feishuBody.settings.kinds, "group,p2p");
+      assert.deepEqual(feishuBody.settings.kinds, ["group", "p2p"]);
 
       const feishuUpdated = await fetch(
         `${origin}/v1/me/connectors/${feishuBody.id}/config`,
@@ -220,7 +232,7 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
       const feishuUpdatedBody = await feishuUpdated.json();
       assert.equal(feishuUpdated.status, 201, JSON.stringify(feishuUpdatedBody));
       assert.equal(feishuUpdatedBody.label, "All direct messages");
-      assert.equal(feishuUpdatedBody.settings.kinds, "p2p");
+      assert.deepEqual(feishuUpdatedBody.settings.kinds, ["p2p"]);
 
       const removed = await fetch(
         `${origin}/v1/me/connectors/${installation.id}`,

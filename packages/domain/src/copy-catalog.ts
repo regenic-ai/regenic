@@ -25,11 +25,20 @@ export interface ResolvedCatalogField {
   label: string;
   required?: boolean;
   placeholder?: string;
-  widget?: "directory";
-  default?: string;
+  description?: string;
+  group?: string;
+  advanced?: boolean;
+  type?: DriverCatalogField["type"];
+  widget?: DriverCatalogField["widget"];
+  default?: DriverCatalogField["default"];
+  min?: number;
+  max?: number;
   multiple?: boolean;
   secret?: boolean;
   options?: { value: string; label: string; kind?: string; title?: string }[];
+  allow_custom?: boolean;
+  dynamic_options?: boolean;
+  options_depends_on?: string[];
   filter_options_by?: string;
   option_labels_key?: string;
   visible_when?: DriverCatalogField["visible_when"];
@@ -72,6 +81,7 @@ export interface ResolvedInstallCatalog {
   channel_label?: string;
   sync_unavailable_hint?: string;
   singleton?: boolean;
+  form_version?: 2;
   fields?: ResolvedCatalogField[];
   prerequisites?: ResolvedCatalogPrerequisite[];
   setup_steps?: ResolvedCatalogSetupStep[];
@@ -99,6 +109,7 @@ export function resolveInstallCatalog(
     ...(copyOptional(tables, locale, catalog.channel_label, "channel_label")),
     ...(copyOptional(tables, locale, catalog.sync_unavailable_hint, "sync_unavailable_hint")),
     ...(catalog.singleton ? { singleton: true } : {}),
+    ...(catalog.form_version ? { form_version: catalog.form_version } : {}),
     fields: (catalog.fields ?? []).map((field) => resolveField(field, tables, locale)),
     prerequisites: (catalog.prerequisites ?? []).map((item) =>
       resolvePrerequisite(item, tables, locale),
@@ -201,10 +212,20 @@ function resolveField(
     label: resolveCopyText(tables, locale, field.label),
     ...(field.required ? { required: true } : {}),
     ...(copyOptional(tables, locale, field.placeholder, "placeholder")),
+    ...(copyOptional(tables, locale, field.description, "description")),
+    ...(copyOptional(tables, locale, field.group, "group")),
+    ...(field.advanced ? { advanced: true } : {}),
+    ...(field.type ? { type: field.type } : {}),
     ...(field.widget ? { widget: field.widget } : {}),
-    ...(field.default ? { default: field.default } : {}),
+    ...(field.default !== undefined && !field.secret && field.widget !== "password"
+      ? { default: field.default } : {}),
+    ...(field.min !== undefined ? { min: field.min } : {}),
+    ...(field.max !== undefined ? { max: field.max } : {}),
     ...(field.multiple ? { multiple: true } : {}),
     ...(field.secret ? { secret: true } : {}),
+    ...(field.dynamic_options ? { dynamic_options: true } : {}),
+    ...(field.allow_custom ? { allow_custom: true } : {}),
+    ...(field.options_depends_on ? { options_depends_on: field.options_depends_on } : {}),
     ...(field.options
       ? {
           options: field.options.map((option) => ({

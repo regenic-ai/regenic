@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import {
   DEFAULT_COPY_LOCALE,
   persistInstallSecrets,
+  readInstallSecret,
   loadSyncProgress,
   type ConnectorInstallation,
   type ConnectorRuntimeStore,
@@ -22,6 +23,7 @@ import type { ConnectorInstallInput } from "./personal-connector-types";
 import {
   wrapDriverError,
 } from "./personal-connector-poll";
+import { validateConnectorForm } from "./personal-connector-form";
 
 export async function install(state: ConnectorState, input: ConnectorInstallInput): Promise<EngineInstallationView> {
   const store = state.runtime.requireHost().get("authority");
@@ -75,12 +77,15 @@ export async function updateConfig(
       400,
     );
   }
+  const catalog = driver.installCatalog?.({ env: process.env });
+  const credentials = await credentialStatus(state, installationId);
+  const validatedConfig = validateConnectorForm(catalog, config, true, credentials, true);
   let nextConfig: ConnectorInstallation["config"];
   try {
     nextConfig = driver.install({
       id: current.id,
       org_id: current.org_id,
-      config,
+      config: validatedConfig,
       now: new Date().toISOString(),
       secrets: state.installSecrets(),
     }).config;
@@ -89,6 +94,11 @@ export async function updateConfig(
   }
   await state.drivers.stopInstallation(current, state.runtime.requireHost(), "reconfigure");
   try {
+    for (const field of catalog?.fields ?? []) {
+      if ((field.secret || field.widget === "password") && config[field.key] === null) {
+        await driver.clearCatalogCredential?.(current, field.key);
+      }
+    }
     nextConfig = persistInstallSecrets({
       connector_type: current.connector_type,
       installation_id: current.id,
@@ -117,6 +127,26 @@ export async function updateConfig(
     void state.catchUp(updated.id);
   }
   return viewOf(state, store, updated);
+}
+
+export async function credentialStatus(
+  state: ConnectorState,
+  installationId: string,
+): Promise<Record<string, boolean>> {
+  const installation = await state.requireInstallation(
+    state.runtime.requireHost().get("authority"), installationId,
+  );
+  const driver = state.drivers.get(installation.connector_type);
+  const fields = driver?.installCatalog?.({ env: process.env }).fields ?? [];
+  const owned = await driver?.catalogCredentialStatus?.(installation) ?? {};
+  return Object.fromEntries(await Promise.all(fields
+    .filter((field) => field.secret || field.widget === "password")
+    .map(async (field) => [
+      field.key,
+      Boolean(await readInstallSecret(installation.connector_type, installation.id, field.key)) ||
+        owned[field.key] === true ||
+        (typeof installation.config[field.key] === "string" && Boolean(installation.config[field.key])),
+    ])));
 }
 
 export async function uninstall(state: ConnectorState, installationId: string): Promise<{ id: string; removed: true }> {
@@ -186,11 +216,12 @@ function buildInstallation(
       400,
     );
   }
+  const config = validateConnectorForm(driver.installCatalog?.({ env: process.env }), input.config ?? {}, false, {}, true);
   try {
     return driver.install({
       id: randomUUID(),
       org_id: state.runtime.orgId(),
-      config: input.config ?? {},
+      config,
       now,
       secrets: state.installSecrets(),
     });
