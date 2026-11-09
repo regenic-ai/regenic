@@ -10,7 +10,6 @@ import {
   DEFAULT_PERSONAL_DISPATCH_POLICY,
   DEFAULT_PERSONAL_FOLLOW_UP_POLICY,
   DEFAULT_LOCAL_EXECUTOR_ID,
-  cancelWorkRun,
   hiddenExecutorThreadIds,
   isActiveWorkStatus,
   ACTIVE_WORK_STATUSES,
@@ -386,10 +385,10 @@ export class PersonalWorkService implements OnModuleDestroy {
         ) {
           continue;
         }
-        const cancelled = await this.cancelAuxiliaryExecution(item.id, {
+        const cancelled = await this.cancelAuxiliaryItem(item, {
           emit: false,
         });
-        if (cancelled.run?.status !== "cancelled") {
+        if (cancelled.work_item.status !== "skipped") {
           continue;
         }
         await authority.putSearchAnswer({
@@ -608,11 +607,12 @@ export class PersonalWorkService implements OnModuleDestroy {
     if (active) {
       await this.supervise.refreshOne(item, recipe, active);
     }
-    const [latestItem, runs] = await Promise.all([
-      host.get("authority").getWorkItem(orgId, item.id),
-      host.get("authority").listWorkRuns(orgId, item.id),
-    ]);
-    return { work_item: latestItem ?? item, run: runs[0] };
+    const latestItem = await host.get("authority").getWorkItem(orgId, item.id);
+    if (!latestItem) throw new Error("Auxiliary work item disappeared during refresh");
+    const run = latestItem.current_run_id
+      ? await host.get("authority").getWorkRun(orgId, latestItem.current_run_id)
+      : null;
+    return { work_item: latestItem, run: run ?? undefined };
   }
 
   async cancelAuxiliaryExecution(
@@ -626,38 +626,47 @@ export class PersonalWorkService implements OnModuleDestroy {
     if (!item || !isSystemRecipeId(item.recipe_id)) {
       throw new PersonalConnectorError("not_found", "Execution not found", 404);
     }
+    return this.cancelAuxiliaryItem(item, options);
+  }
+
+  private async cancelAuxiliaryItem(
+    item: WorkItem,
+    options: { emit?: boolean },
+  ): Promise<WorkRunView> {
+    const host = this.runtime.requireHost();
+    const authority = host.get("authority");
     if (!isActiveWorkStatus(item.status)) {
       return {
         work_item: item,
-        run: (await host.get("authority").listWorkRuns(orgId, item.id))[0],
+        run: item.current_run_id
+          ? (await authority.getWorkRun(item.org_id, item.current_run_id)) ?? undefined
+          : undefined,
       };
     }
     const now = new Date().toISOString();
-    const run = await host.get("authority").getActiveWorkRun(orgId, item.id);
-    if (run) {
+    const dismissed = await authority.dismissWorkItem({ expected_item: item, now });
+    if (dismissed.outcome !== "applied") throw new PersonalConnectorError(
+      "work_dismissal_conflict", `Auxiliary cancellation rejected: ${dismissed.reason}. Refresh the execution.`, 409,
+    );
+    const { run } = dismissed;
+    if (run) this.waits.drop(run.id);
+    if (run && (run.status === "running" || run.status === "waiting_human")
+      && (run.external_run_id || run.agent_thread_id)) {
       const executor = host.get("executors").get(run.executor_type);
       if (executor?.cancel) {
         try {
           await executor.cancel(run, this.channel.contextFor(executor));
-        } catch {
-          // Ledger cancellation still stands if the executor ignores cancel.
+        } catch (error) {
+          console.error("personal auxiliary remote cancellation unconfirmed", run.id, error);
         }
       }
-      await host.get("authority").putWorkRun(cancelWorkRun(run, now));
-      this.waits.drop(run.id);
     }
-    const next = await host.get("authority").putWorkItem({
-      ...item,
-      status: "skipped",
-      updated_at: now,
-    });
     if (options.emit !== false) {
       this.events.workUpdated(item.id);
     }
     return {
-      work_item: next,
-      run:
-        (await host.get("authority").listWorkRuns(orgId, item.id))[0],
+      work_item: dismissed.item,
+      run: run ?? undefined,
     };
   }
 

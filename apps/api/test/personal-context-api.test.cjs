@@ -189,7 +189,10 @@ async function startExecutorStub(summary) {
   });
   await listenServer(server);
   servers.push(server);
-  return { baseUrl: `http://127.0.0.1:${server.address().port}`, requests };
+  return {
+    baseUrl: `http://127.0.0.1:${server.address().port}`, requests,
+    setSummary(value) { summary = value; },
+  };
 }
 
 async function installHttpExecutor(origin, baseUrl) {
@@ -1090,10 +1093,10 @@ describe("personal context API", () => {
     assert.equal(result.answer, "Recovered answer [1].");
     assert.deepEqual(result.citations, [{ ref: 1, event_id: eventId }]);
   });
-  it("cancels a running executor answer", async () => {
+  it("keeps a locally cancelled answer hidden while recording the remote late result", async () => {
     const root = await createRoot();
     const executor = await startExecutorStub();
-    const { origin } = await startApi(root, { driver: "none" }, undefined, ingestConversationEvidence);
+    const { origin, database } = await startApi(root, { driver: "none" }, undefined, ingestConversationEvidence);
     const executorType = await installHttpExecutor(origin, executor.baseUrl);
     const conversation = JSON.parse((await postJson(`${origin}/v1/me/context/search/expand`, {
       query: "pending-answer-question",
@@ -1109,6 +1112,32 @@ describe("personal context API", () => {
     const cancelled = await postJson(`${origin}/v1/me/context/search/answers/${job.answer_id}/cancel`, {});
     assert.equal(JSON.parse(cancelled.text).status, "cancelled");
     assert.ok(executor.requests.some((request) => request.url === "/v1/runs/run-1/cancel"));
+    let authority = new SqliteAuthorityStore(database);
+    try {
+      const item = await authority.getWorkItem("local-owner", job.work_item_id);
+      assert.equal(item.status, "skipped");
+      assert.equal((await authority.getWorkRun("local-owner", item.current_run_id)).status, "running");
+    } finally {
+      authority.close();
+    }
+    executor.setSummary("Late answer [1].");
+    const late = await fetch(`${origin}/v1/me/context/search/answers/${job.answer_id}`);
+    assert.equal(late.status, 200);
+    const result = await late.json();
+    assert.equal(result.status, "cancelled");
+    assert.equal(result.answer, undefined);
+    assert.equal(result.citations, undefined);
+    authority = new SqliteAuthorityStore(database);
+    try {
+      const item = await authority.getWorkItem("local-owner", job.work_item_id);
+      const run = await authority.getWorkRun("local-owner", item.current_run_id);
+      assert.equal(item.status, "skipped");
+      assert.equal(run.status, "completed");
+      assert.equal(run.result.summary, "Late answer [1].");
+      assert.deepEqual(await authority.listWorkDeliveries("local-owner"), []);
+    } finally {
+      authority.close();
+    }
   });
   it("skips an unreadable neighbor without reporting it as omitted context", async () => {
     const root = await createRoot();

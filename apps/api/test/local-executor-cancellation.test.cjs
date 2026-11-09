@@ -26,7 +26,7 @@ function fixture({
   const rows = [row];
   let item = {
     id: "work", org_id: "org", recipe_id: "recipe", thread_id: "managed:thread",
-    status: "running",
+    status: "running", current_run_id: "run",
   };
   let run = {
     id: "run", org_id: "org", work_item_id: item.id, recipe_id: item.recipe_id,
@@ -39,6 +39,7 @@ function fixture({
     findInstallation: async (id) => connector?.id === id ? connector : null,
     listInstallations: async () => connector ? [connector] : [],
     getWorkItem: async () => item,
+    getWorkRun: async () => run,
     dismissWorkItem: async ({ expected_item, now }) => {
       assert.equal(expected_item, item);
       item = { ...item, status: "skipped", updated_at: now };
@@ -131,10 +132,10 @@ for (const managed of [true, false]) {
         } else {
           await f.work.dismissWorkItem("work");
         }
-        assert.equal(f.run.status, operation === "auxiliary" ? "cancelled" : "running");
+        assert.equal(f.run.status, "running");
         assert.deepEqual(f.calls, [
-          ...(cancel ? ["cancel:owned-agent-run"] : []),
           ...(operation === "auxiliary" ? ["drop:run"] : []),
+          ...(cancel ? ["cancel:owned-agent-run"] : []),
         ]);
       });
     }
@@ -151,13 +152,13 @@ for (const operation of ["dismiss", "auxiliary"]) {
     } else {
       await f.work.dismissWorkItem("work");
     }
-    assert.equal(f.run.status, operation === "auxiliary" ? "cancelled" : "running");
-    assert.equal(f.calls[0], "cancel:owned-agent-run");
+    assert.equal(f.run.status, "running");
+    assert.equal(f.calls.includes("cancel:owned-agent-run"), true);
     assert.equal(f.calls.includes("activate"), false);
   });
 }
 
-test("auxiliary cancellation completes ledger cleanup when cancel throws synchronously", async () => {
+test("auxiliary cancellation preserves local stop without forging exit when cancel throws synchronously", async (t) => {
   const f = fixture();
   f.auxiliary();
   f.plugin.cancel = function () {
@@ -165,12 +166,14 @@ test("auxiliary cancellation completes ledger cleanup when cancel throws synchro
     throw new Error("cancel failed synchronously");
   };
   await f.mounts.ensureMounted();
+  const logged = t.mock.method(console, "error", () => {});
 
   const result = await f.work.cancelAuxiliaryExecution("work");
 
   assert.equal(result.work_item.status, "skipped");
-  assert.equal(f.run.status, "cancelled");
+  assert.equal(f.run.status, "running");
   assert.deepEqual(f.calls, ["drop:run"]);
+  assert.equal(logged.mock.callCount(), 1);
 });
 
 test("runtime mounting wires pinned managed executors to the same installation fence", async () => {

@@ -89,6 +89,153 @@ async function fixture(t, maxConcurrent) {
 }
 
 describe("durable executor start", () => {
+  async function auxiliary(t, { unstarted = false, aged = false } = {}) {
+    const f = await fixture(t);
+    const now = aged ? new Date(Date.now() - 6 * 60_000).toISOString() : f.item.created_at;
+    const recipe = await f.ports.authority.putRecipe({
+      ...f.recipe, id: "system:search-answer:session", trigger: { kind: "manual" },
+    });
+    const initial = await f.ports.authority.putWorkItem({
+      ...f.item, id: "search-answer:auxiliary", recipe_id: recipe.id,
+      thread_id: "system:search-answer:auxiliary", unit_key: "auxiliary",
+      created_at: now, updated_at: now,
+    });
+    const run = {
+      id: "auxiliary-run", org_id: ORG, work_item_id: initial.id, recipe_id: recipe.id,
+      executor_type: "session", status: "running", start_state: "pending",
+      write_back_required: false, trigger_kind: "manual", created_at: now, updated_at: now,
+    };
+    assert.equal(await f.ports.authority.claimWorkRunStart({ run, expected_item: initial }), true);
+    const savedRun = unstarted
+      ? await f.ports.authority.getWorkRun(ORG, run.id)
+      : await f.ports.authority.putWorkRun({
+        ...run, start_state: "submitted", external_run_id: "remote-auxiliary",
+      });
+    const item = await f.ports.authority.getWorkItem(ORG, initial.id);
+    const updates = [];
+    const service = f.service({ workUpdated: (id) => updates.push(id) });
+    service.channel = f.channel;
+    service.supervise = f.supervise();
+    let cancelCalls = 0;
+    f.setExecutor({
+      executor_type: "session", capabilities: () => ({}),
+      status: async () => ({ status: "completed", external_run_id: savedRun.external_run_id, result: { summary: "Late result" } }),
+      cancel: async (target) => {
+        cancelCalls++;
+        assert.equal(target.id, savedRun.id);
+        assert.equal((await f.ports.authority.getWorkItem(ORG, item.id)).status, "skipped");
+      },
+    });
+    return { ...f, service, item, recipe, run: savedRun, updates, cancelCalls: () => cancelCalls };
+  }
+
+  it("atomically stops auxiliary work before remote cancellation without forging its exit", async (t) => {
+    const f = await auxiliary(t);
+    const put = t.mock.method(f.ports.authority, "putWorkRun");
+    const result = await f.service.cancelAuxiliaryExecution(f.item.id);
+    assert.equal(result.work_item.status, "skipped");
+    assert.equal(result.work_item.version, f.item.version + 1);
+    assert.deepEqual(result.run, f.run);
+    assert.equal(put.mock.callCount(), 0);
+    assert.equal(f.cancelCalls(), 1);
+    assert.deepEqual(f.updates, [f.item.id]);
+    const repeated = await f.service.cancelAuxiliaryExecution(f.item.id);
+    assert.deepEqual(repeated, result);
+    assert.equal(f.cancelCalls(), 1);
+    assert.deepEqual(f.updates, [f.item.id]);
+    f.reopen();
+    assert.deepEqual(await f.ports.authority.getWorkRun(ORG, f.run.id), f.run);
+    const refreshed = await f.service.refreshAuxiliaryExecution(f.item.id);
+    assert.equal(refreshed.work_item.status, "skipped");
+    assert.equal(refreshed.run.status, "completed");
+    assert.equal(refreshed.run.result.summary, "Late result");
+    assert.deepEqual(await f.ports.authority.listWorkDeliveries(ORG), []);
+  });
+
+  it("does not cancel a successor when the auxiliary snapshot is stale", async (t) => {
+    const f = await auxiliary(t);
+    const drop = t.mock.method(f.service.waits, "drop", () => {});
+    const dismiss = f.ports.authority.dismissWorkItem.bind(f.ports.authority);
+    let successor;
+    t.mock.method(f.ports.authority, "dismissWorkItem", async (input) => {
+      await f.ports.authority.putWorkRun({ ...f.run, status: "completed", result: { summary: "Original completed" } });
+      const done = await f.ports.authority.putWorkItem({ ...f.item, status: "done" });
+      assert.equal(await f.ports.authority.claimWorkRunStart({
+        expected_item: done, retry: "manual",
+        run: { ...f.run, id: "auxiliary-successor", status: "running", start_state: "pending" },
+      }), true);
+      successor = await f.ports.authority.getWorkItem(ORG, f.item.id);
+      return dismiss(input);
+    });
+    await assert.rejects(f.service.cancelAuxiliaryExecution(f.item.id), code("work_dismissal_conflict"));
+    assert.deepEqual(await f.ports.authority.getWorkItem(ORG, f.item.id), successor);
+    assert.equal(f.cancelCalls(), 0);
+    assert.equal(drop.mock.callCount(), 0);
+    assert.deepEqual(f.updates, []);
+  });
+
+  it("ignores an auxiliary unconfirmed start locally without guessing a cancel target", async (t) => {
+    const f = await auxiliary(t, { unstarted: true });
+    const result = await f.service.cancelAuxiliaryExecution(f.item.id, { emit: false });
+    assert.equal(result.work_item.status, "skipped");
+    assert.deepEqual(result.run, f.run);
+    assert.equal(f.cancelCalls(), 0);
+    assert.deepEqual(f.updates, []);
+  });
+
+  it("returns the exact current auxiliary run rather than the newest history timestamp", async (t) => {
+    const f = await auxiliary(t);
+    await f.ports.authority.putWorkRun({
+      ...f.run, id: "unrelated-newer-history", status: "failed",
+      updated_at: new Date(Date.now() + 60_000).toISOString(),
+    });
+    const cancelled = await f.service.cancelAuxiliaryExecution(f.item.id);
+    assert.equal(cancelled.run.id, f.run.id);
+    const refreshed = await f.service.refreshAuxiliaryExecution(f.item.id);
+    assert.equal(refreshed.run.id, f.run.id);
+    assert.equal(refreshed.run.status, "completed");
+  });
+
+  it("does not timeout auxiliary work completed after the timeout scan selected it", async (t) => {
+    const f = await auxiliary(t, { aged: true });
+    await f.ports.authority.putSearchAnswer({
+      id: "auxiliary", org_id: ORG, work_item_id: f.item.id,
+      query: "Question", event_ids: [], created_at: f.item.created_at, updated_at: f.item.updated_at,
+    });
+    const dismiss = f.ports.authority.dismissWorkItem.bind(f.ports.authority);
+    let done;
+    t.mock.method(f.ports.authority, "dismissWorkItem", async (input) => {
+      await f.ports.authority.putWorkRun({ ...f.run, status: "completed", result: { summary: "Finished before timeout" } });
+      done = await f.ports.authority.putWorkItem({ ...f.item, status: "done" });
+      return dismiss(input);
+    });
+    await f.service.expireSearchAnswers(Date.now());
+    assert.deepEqual(await f.ports.authority.getWorkItem(ORG, f.item.id), done);
+    assert.equal((await f.ports.authority.getSearchAnswer(ORG, "auxiliary")).outcome, undefined);
+    assert.equal(f.cancelCalls(), 0);
+    assert.deepEqual(f.updates, []);
+  });
+
+  it("preserves the timeout scan snapshot instead of cancelling newly changed work", async (t) => {
+    const f = await auxiliary(t, { aged: true });
+    await f.ports.authority.putSearchAnswer({
+      id: "auxiliary", org_id: ORG, work_item_id: f.item.id,
+      query: "Question", event_ids: [], created_at: f.item.created_at, updated_at: f.item.updated_at,
+    });
+    const get = f.ports.authority.getWorkItem.bind(f.ports.authority);
+    let updated;
+    t.mock.method(f.ports.authority, "getWorkItem", async (orgId, itemId) => {
+      updated = await f.ports.authority.putWorkItem({ ...f.item, status: "waiting_human" });
+      return get(orgId, itemId);
+    });
+    await f.service.expireSearchAnswers(Date.now());
+    assert.deepEqual(await get(ORG, f.item.id), updated);
+    assert.equal(updated.status, "waiting_human");
+    assert.equal((await f.ports.authority.getSearchAnswer(ORG, "auxiliary")).outcome, undefined);
+    assert.equal(f.cancelCalls(), 0);
+    assert.deepEqual(f.updates, []);
+  });
+
   it("does not dismiss or cancel work that changed after the human action loaded it", async (t) => {
     const f = await fixture(t);
     await f.dispatch().startItem(f.item, f.recipe, "evidence");
@@ -976,7 +1123,7 @@ describe("durable executor start", () => {
         ORG,
         "run-search-answer-timeout",
       )).status,
-      "cancelled",
+      "running",
     );
     assert.equal(
       (await f.ports.authority.getWorkItem(ORG, item.id)).status,

@@ -178,13 +178,15 @@ function view(
   const answer = run?.result?.summary?.trim().slice(0, SEARCH_ANSWER_TEXT_MAX);
   const status: SearchAnswerStatus = record.outcome === "timed_out"
     ? "timed_out"
-    : run?.status === "completed" && answer
-      ? "completed"
-      : run?.status === "running" || run?.status === "waiting_human"
-        ? run.status
-        : run?.status === "cancelled" || itemStatus === "skipped"
-          ? "cancelled"
-          : "failed";
+    : itemStatus === "skipped"
+      ? "cancelled"
+      : run?.status === "completed" && answer
+        ? "completed"
+        : run?.status === "running" || run?.status === "waiting_human"
+          ? run.status
+          : run?.status === "cancelled"
+            ? "cancelled"
+            : "failed";
   return {
     answer_id: record.id,
     work_item_id: record.work_item_id,
