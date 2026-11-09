@@ -1784,6 +1784,7 @@ export class SqliteAuthorityStore
           work_item_id TEXT NOT NULL REFERENCES work_items(id),
           query TEXT NOT NULL,
           event_ids_json TEXT NOT NULL CHECK (json_valid(event_ids_json)),
+          scope_json TEXT CHECK (scope_json IS NULL OR json_valid(scope_json)),
           outcome TEXT CHECK (outcome IN ('timed_out')),
           created_at TEXT NOT NULL,
           updated_at TEXT NOT NULL

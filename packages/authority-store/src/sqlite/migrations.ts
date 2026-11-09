@@ -1,4 +1,4 @@
-export const LATEST_SCHEMA_VERSION = 55;
+export const LATEST_SCHEMA_VERSION = 56;
 
 export const CUSTOMER_SERVICE_TASKS_SQL = `
   CREATE TABLE IF NOT EXISTS customer_service_tasks (
@@ -1110,5 +1110,10 @@ export const MIGRATIONS = [
     // Those same databases skipped this table, because version 48 was taken.
     version: 55,
     sql: CUSTOMER_SERVICE_TASKS_SQL,
+  },
+  {
+    version: 56,
+    sql: `ALTER TABLE search_answers ADD COLUMN scope_json TEXT
+      CHECK (scope_json IS NULL OR json_valid(scope_json));`,
   },
 ] as const;

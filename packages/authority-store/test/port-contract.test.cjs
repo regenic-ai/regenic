@@ -470,6 +470,15 @@ for (const driver of drivers) {
         work_item_id: itemId,
         query: "Who was selected?",
         event_ids: ["event-1", "event-2"],
+        scope: {
+          intent: "aggregate",
+          complete: true,
+          total_count: 2,
+          included_count: 2,
+          omitted_count: 0,
+          occurred_after: "2026-08-01T00:00:00.000Z",
+          occurred_before: "2026-08-24T00:00:00.000Z",
+        },
         created_at: now,
         updated_at: now,
       };

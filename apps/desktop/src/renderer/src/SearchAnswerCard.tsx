@@ -3,7 +3,7 @@ import { cancelSearchAnswer, fetchExecutors, fetchSearchAnswer, startSearchAnswe
 import {
   searchAnswerConversations,
   searchAnswerSegments,
-  type SearchTimeRange,
+  type SearchAnswerFilters,
 } from "./context-search";
 import { KernelRequestError } from "./kernel-request";
 import { useLocale } from "./LocaleContext";
@@ -18,10 +18,11 @@ function isActive(answer: PersonalSearchAnswer | null): boolean {
 }
 
 /** Asks an installed executor to answer from the visible cards; the kernel never calls a model for this. */
-export function SearchAnswerCard({ query, conversations, timeRange, onCite }: {
+export function SearchAnswerCard({ query, conversations, intent, filters, onCite }: {
   query: string;
   conversations: PersonalSearchConversation[];
-  timeRange?: SearchTimeRange;
+  intent: "lookup" | "aggregate" | "list";
+  filters?: SearchAnswerFilters;
   onCite: (eventId: string) => void;
 }) {
   const { t } = useLocale();
@@ -84,9 +85,10 @@ export function SearchAnswerCard({ query, conversations, timeRange, onCite }: {
     try {
       setAnswer(await startSearchAnswer({
         query,
-        conversations: searchAnswerConversations(conversations, timeRange),
+        conversations: searchAnswerConversations(conversations, filters),
+        intent,
         ...(executor ? { executor_type: executor } : {}),
-        ...(timeRange ? { filters: timeRange } : {}),
+        ...(filters ? { filters } : {}),
       }));
     } catch (caught) {
       setError(caught instanceof KernelRequestError && caught.code === "executor_unavailable"
@@ -149,6 +151,14 @@ export function SearchAnswerCard({ query, conversations, timeRange, onCite }: {
   } else if (answer.status === "completed" && answer.answer) {
     body = (
       <>
+        {answer.scope && answer.scope.intent !== "lookup" ? (
+          <p className={answer.scope.complete ? "muted" : "search-warning"} role="status">
+            {t(answer.scope.complete ? "search.answer.scopeComplete" : "search.answer.scopePartial", {
+              included: answer.scope.included_count,
+              total: answer.scope.total_count ?? "?",
+            })}
+          </p>
+        ) : null}
         <p className="search-answer-text">
           {searchAnswerSegments(answer.answer, answer.citations ?? []).map((segment, index) => "text" in segment
             ? <Fragment key={index}>{segment.text}</Fragment>
