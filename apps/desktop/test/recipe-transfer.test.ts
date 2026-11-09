@@ -79,6 +79,15 @@ describe("recipe transfer", () => {
     assert.equal(parsed.recipes[0]?.can_write_back, true);
   });
 
+  it("preserves unavailable destination intent, including while keeping results local", () => {
+    for (const can_write_back of [true, false]) {
+      const recipe = { ...sample, can_write_back, write_back_thread_id: "removed:old-room" };
+      const [parsed] = parseRecipeBundle(stringifyRecipeBundle(buildRecipeBundle([recipe]))).recipes;
+      assert.equal(parsed?.write_back_thread_id, recipe.write_back_thread_id);
+      assert.equal(parsed?.can_write_back, can_write_back);
+    }
+  });
+
   it("rejects malformed destinations instead of silently reverting to the source", () => {
     for (const destination of [42, null, "", "   "]) {
       assert.throws(() => parseRecipeBundle(JSON.stringify({

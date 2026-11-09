@@ -10,6 +10,7 @@ import {
   starterDraft,
   recipeCardLine,
   writeBackAvailable,
+  writeBackChoices,
 } from "../src/renderer/src/recipe-draft.ts";
 import type { RecipeView } from "../src/renderer/src/types.ts";
 
@@ -132,6 +133,39 @@ describe("recipe draft", () => {
     };
     const draft = draftFromRecipe(sourceRule);
     assert.deepEqual(draftMatch(draft), sourceRule.match);
+  });
+
+  it("only offers positively sendable destinations without replacing an unavailable saved target", () => {
+    const conversations = [
+      { id: "feishu:chat-1", label: "Read only", can_send: false },
+      { id: "other:results", label: "Writable", can_send: true },
+      { id: "other:unknown", label: "Unknown" },
+    ];
+    const draft = draftFromRecipe({ ...rule, can_write_back: true, write_back_thread_id: "missing:old" });
+    assert.deepEqual(writeBackChoices(draft, conversations, t), [
+      { value: "other:results", label: "Writable" },
+    ]);
+    assert.equal(writeBackAvailable(draft, conversations), false);
+    assert.equal(draft.can_write_back, true);
+    assert.equal(draft.write_back_thread_id, "missing:old");
+    const writable = { ...draft, write_back_thread_id: "other:results" };
+    assert.equal(writeBackAvailable(writable, conversations), true);
+    assert.equal(writeBackAvailable({ ...writable, write_back_thread_id: "" }, conversations), false);
+    assert.deepEqual(writeBackChoices(draft, [], t), []);
+    assert.equal(writeBackAvailable(draft, []), false);
+  });
+
+  it("checks the trial's original conversation and ignores a hidden scope selection", () => {
+    const conversations = [
+      { id: "feishu:chat-1", label: "Read only", source: "feishu", record_class: "task" as const, unit_kind: "message", can_send: false },
+      { id: "other:results", label: "Writable", source: "other", record_class: "task" as const, unit_kind: "message", can_send: true },
+    ];
+    const draft = { ...draftFromRecipe(rule), scope: "tasks" as const };
+    assert.equal(writeBackAvailable(draft, conversations), true);
+    assert.equal(writeBackAvailable(draft, conversations, "feishu:chat-1"), false);
+    assert.equal(writeBackAvailable(draft, conversations, "other:results"), true);
+    assert.equal(writeBackChoices(draft, conversations, t)[0]?.value, "");
+    assert.equal(writeBackAvailable({ ...draft, scope: "source", source: "feishu" }, conversations), false);
   });
 
   it("drops hidden fields once the scope changes", () => {
