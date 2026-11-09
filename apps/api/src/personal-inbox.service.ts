@@ -1,9 +1,9 @@
 import { Inject, Injectable, forwardRef } from "@nestjs/common";
+import { connectorOptionsPage, loadConnectorOptions } from "./personal-connector-options";
 import {
   ChannelDriverError,
   ChannelDriverRegistry,
   DEFAULT_COPY_LOCALE,
-  DEFAULT_CATALOG_OPTIONS_TIMEOUT_MS,
   resolveCopy,
   asConnectorHost,
   type CopyLocale,
@@ -59,7 +59,6 @@ import {
   type SyncStore,
   type SyncRun,
   type SyncReadinessView,
-  withDeadline,
 } from "@regenic/domain";
 import {
   resolveInboxBodies,
@@ -377,6 +376,14 @@ export class PersonalInboxService {
     this.catalogProbes.schedule(this.drivers);
   }
 
+  async listCatalogFieldOptionsPage(
+    connectorType: string,
+    request: import("@regenic/domain").ConnectorFieldOptionsRequest,
+    locale: CopyLocale = DEFAULT_COPY_LOCALE,
+  ) {
+    return connectorOptionsPage(this.drivers.get(connectorType), request, locale);
+  }
+
   async listCatalogFieldOptions(
     connectorType: string,
     locale: CopyLocale = DEFAULT_COPY_LOCALE,
@@ -392,42 +399,37 @@ export class PersonalInboxService {
       return {};
     }
     const tables = driver.locales?.() ?? [];
-    try {
-      const kernel = this.runtime.requireHost();
-      const installations = await kernel
-        .get("authority")
-        .listInstallations(this.runtime.orgId());
-      const installation =
-        installations.find(
-          (item) => item.connector_type === type && item.status === "enabled",
-        ) ?? installations.find((item) => item.connector_type === type);
-      const raw = await withDeadline(
-        driver.listCatalogFieldOptions({
-          env: process.env,
-          ...(installation
-            ? { installation, host: asConnectorHost(kernel) }
-            : {}),
-        }),
-        DEFAULT_CATALOG_OPTIONS_TIMEOUT_MS,
-        `catalog options ${type}`,
-      );
-      const resolved: Record<
-        string,
-        { value: string; label: string; kind?: string; title?: string }[]
-      > = {};
-      for (const [key, options] of Object.entries(raw ?? {})) {
-        resolved[key] = (options ?? []).map((option) => ({
-          value: option.value,
-          label:
-            resolveCopy(tables, locale, option.label) ?? String(option.label),
-          ...(option.kind ? { kind: option.kind } : {}),
-          ...(option.title ? { title: option.title } : {}),
-        }));
-      }
-      return resolved;
-    } catch {
-      return {};
+    const kernel = this.runtime.requireHost();
+    const installations = await kernel
+      .get("authority")
+      .listInstallations(this.runtime.orgId());
+    const installation =
+      installations.find(
+        (item) => item.connector_type === type && item.status === "enabled",
+      ) ?? installations.find((item) => item.connector_type === type);
+    const raw = await loadConnectorOptions(
+      driver.listCatalogFieldOptions({
+        env: process.env,
+        ...(installation
+          ? { installation, host: asConnectorHost(kernel) }
+          : {}),
+      }),
+      type,
+    );
+    const resolved: Record<
+      string,
+      { value: string; label: string; kind?: string; title?: string }[]
+    > = {};
+    for (const [key, options] of Object.entries(raw ?? {})) {
+      resolved[key] = (options ?? []).map((option) => ({
+        value: option.value,
+        label:
+          resolveCopy(tables, locale, option.label) ?? String(option.label),
+        ...(option.kind ? { kind: option.kind } : {}),
+        ...(option.title ? { title: option.title } : {}),
+      }));
     }
+    return resolved;
   }
 
   private async summarizeInboxCached(

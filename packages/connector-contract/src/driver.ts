@@ -198,6 +198,19 @@ export interface ConnectorCatalogProbe {
   field_options?: Record<string, ConnectorCatalogFieldOption[]>;
 }
 
+export interface ConnectorFieldOptionsRequest {
+  field: string;
+  query?: string;
+  cursor?: string;
+  limit?: number;
+  values?: Record<string, string | number | boolean | string[]>;
+}
+
+export interface ConnectorFieldOptionsPage {
+  options: ConnectorCatalogFieldOption[];
+  next_cursor?: string;
+}
+
 /** Drivers declare their own install card. The host does not keep a parallel catalog. */
 export interface DriverCatalogFieldWhen {
   field: string;
@@ -216,12 +229,24 @@ export interface DriverCatalogField {
   label: CopyRef;
   required?: boolean;
   placeholder?: CopyRef;
-  /** Desktop renders a folder picker instead of a plain text field. */
-  widget?: "directory";
-  default?: string;
+  description?: CopyRef;
+  group?: CopyRef;
+  advanced?: boolean;
+  /** Omitted for legacy string/CSV fields. */
+  type?: "string" | "number" | "boolean" | "string_array";
+  widget?: "text" | "password" | "directory" | "select" | "multi_select" | "number" | "switch";
+  default?: string | number | boolean | string[];
+  min?: number;
+  max?: number;
   multiple?: boolean;
   secret?: boolean;
   options?: ConnectorCatalogFieldOption[];
+  /** Accept values outside suggested static options. */
+  allow_custom?: boolean;
+  /** Load options through listCatalogFieldOptions rather than from the catalog. */
+  dynamic_options?: boolean;
+  /** Non-secret field keys supplied to the backend option loader. */
+  options_depends_on?: string[];
   /** Restrict this field's options to the CSV values of another field. */
   filter_options_by?: string;
   /** Persist resolved option titles under this config key. */
@@ -279,6 +304,8 @@ export interface DriverInstallCatalog {
    */
   channel_label?: CopyRef;
   singleton?: boolean;
+  /** Version 2 uses typed field values and core validation. Omit for legacy catalogs. */
+  form_version?: 2;
   fields?: DriverCatalogField[];
   /**
    * After install or config save, pin one local executor to this installation
@@ -558,6 +585,12 @@ export interface ChannelDriver
     installation?: ConnectorInstallation;
     host?: ConnectorHost;
   }): Promise<NonNullable<ConnectorCatalogProbe["field_options"]>>;
+  listCatalogFieldOptionsPage?(input: ConnectorFieldOptionsRequest & {
+    env: NodeJS.ProcessEnv;
+  }): Promise<ConnectorFieldOptionsPage>;
+  /** Only needed for credentials held in a connector-owned legacy store. */
+  catalogCredentialStatus?(installation: ConnectorInstallation): Promise<Record<string, boolean>>;
+  clearCatalogCredential?(installation: ConnectorInstallation, field: string): Promise<void>;
   resolveConversationLabels?(
     installation: ConnectorInstallation,
     threads: ConversationThread[],

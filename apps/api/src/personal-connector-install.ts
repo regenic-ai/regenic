@@ -3,6 +3,7 @@ import {
   DEFAULT_COPY_LOCALE,
   asConnectorHost,
   persistInstallSecrets,
+  readInstallSecret,
   loadSyncProgress,
   type ConnectorInstallation,
   type ConnectorRuntimeStore,
@@ -24,6 +25,7 @@ import type { ConnectorInstallInput } from "./personal-connector-types";
 import {
   wrapDriverError,
 } from "./personal-connector-poll";
+import { prepareConnectorForm } from "./personal-connector-form";
 
 export async function install(state: ConnectorState, input: ConnectorInstallInput): Promise<EngineInstallationView> {
   const store = state.runtime.requireHost().get("authority");
@@ -45,16 +47,14 @@ export async function install(state: ConnectorState, input: ConnectorInstallInpu
     }
   }
   const now = new Date().toISOString();
-  const drafted = buildInstallation(state, input, now);
+  const { drafted, catalog, credentialChanges } = buildInstallation(state, input, now);
   const created = await store.createInstallation({
     ...drafted,
     config: persistInstallSecrets({
       connector_type: drafted.connector_type,
       installation_id: drafted.id,
-      catalog: state.drivers.get(drafted.connector_type)?.installCatalog?.({
-        env: process.env,
-      }),
-      incoming: input.config ?? {},
+      catalog,
+      incoming: credentialChanges,
       stored: drafted.config ?? {},
     }),
   });
@@ -77,12 +77,15 @@ export async function updateConfig(
       400,
     );
   }
+  const catalog = driver.installCatalog?.({ env: process.env });
+  const credentials = await credentialStatus(state, installationId);
+  const form = prepareConnectorForm(catalog, config, true, credentials, true);
   let nextConfig: ConnectorInstallation["config"];
   try {
     nextConfig = driver.install({
       id: current.id,
       org_id: current.org_id,
-      config,
+      config: form.config,
       now: new Date().toISOString(),
       secrets: state.installSecrets(),
     }).config;
@@ -91,11 +94,14 @@ export async function updateConfig(
   }
   await state.drivers.stopInstallation(current, state.runtime.requireHost(), "reconfigure");
   try {
+    for (const key of Object.keys(form.credentialChanges)) {
+      await driver.clearCatalogCredential?.(current, key);
+    }
     nextConfig = persistInstallSecrets({
       connector_type: current.connector_type,
       installation_id: current.id,
-      catalog: driver.installCatalog?.({ env: process.env }),
-      incoming: config,
+      catalog,
+      incoming: form.credentialChanges,
       stored: nextConfig,
     });
   } catch (error) {
@@ -119,6 +125,26 @@ export async function updateConfig(
     void state.catchUp(updated.id);
   }
   return viewOf(state, store, updated);
+}
+
+export async function credentialStatus(
+  state: ConnectorState,
+  installationId: string,
+): Promise<Record<string, boolean>> {
+  const installation = await state.requireInstallation(
+    state.runtime.requireHost().get("authority"), installationId,
+  );
+  const driver = state.drivers.get(installation.connector_type);
+  const fields = driver?.installCatalog?.({ env: process.env }).fields ?? [];
+  const owned = await driver?.catalogCredentialStatus?.(installation) ?? {};
+  return Object.fromEntries(await Promise.all(fields
+    .filter((field) => field.secret || field.widget === "password")
+    .map(async (field) => [
+      field.key,
+      Boolean(await readInstallSecret(installation.connector_type, installation.id, field.key)) ||
+        owned[field.key] === true ||
+        (typeof installation.config[field.key] === "string" && Boolean(installation.config[field.key])),
+    ])));
 }
 
 export async function uninstall(state: ConnectorState, installationId: string): Promise<{ id: string; removed: true }> {
@@ -188,14 +214,17 @@ function buildInstallation(
       400,
     );
   }
+  const catalog = driver.installCatalog?.({ env: process.env });
+  const form = prepareConnectorForm(catalog, input.config ?? {}, false, {}, true);
   try {
-    return driver.install({
+    const drafted = driver.install({
       id: randomUUID(),
       org_id: state.runtime.orgId(),
-      config: input.config ?? {},
+      config: form.config,
       now,
       secrets: state.installSecrets(),
     });
+    return { drafted, catalog, credentialChanges: form.credentialChanges };
   } catch (error) {
     throw wrapDriverError(error, "invalid_config");
   }

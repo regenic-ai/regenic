@@ -130,6 +130,7 @@ export interface EmbeddingJobStore {
     now: string;
     lease_ms: number;
     limit: number;
+    order?: "oldest" | "newest";
   }): Promise<EmbeddingJob[]>;
   renew(job: EmbeddingJob, owner: string, now: string, leaseMs: number): Promise<boolean>;
   complete(input: {

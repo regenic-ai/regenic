@@ -724,26 +724,57 @@ export async function fetchCatalogFieldOptions(
     connector_type: type,
     locale: activeLocale(),
   });
-  try {
-    const response = await kernelFetch(
+  const response = await kernelFetch(
       `/v1/me/engine/catalog-options?${params.toString()}`,
       { signal: AbortSignal.timeout(ENGINE_FETCH_MS + 2_000) },
     );
-    if (!response.ok) {
-      return {};
-    }
-    const body = (await response.json()) as {
+  if (!response.ok) {
+    throw new Error(`Catalog options request failed (${response.status})`);
+  }
+  const body = (await response.json()) as {
       field_options?: Record<
         string,
         { value: string; label: string; kind?: string; title?: string }[]
       >;
     };
-    return body.field_options && typeof body.field_options === "object"
-      ? body.field_options
-      : {};
-  } catch {
-    return {};
+  if (!body.field_options || typeof body.field_options !== "object") {
+    throw new Error("Invalid catalog options response");
   }
+  return body.field_options;
+}
+
+export async function fetchCatalogOptionsPage(
+  connectorType: string,
+  input: {
+    field: string;
+    query?: string;
+    cursor?: string;
+    values?: Record<string, unknown>;
+  },
+  signal?: AbortSignal,
+): Promise<{ options: import("./types").ConnectorFieldOption[]; next_cursor?: string }> {
+  const response = await kernelFetch("/v1/me/engine/catalog-options", {
+    method: "POST",
+    headers: { "content-type": "application/json", "accept-language": activeLocale() },
+    body: JSON.stringify({ connector_type: connectorType, ...input, limit: 50 }),
+    signal: signal ?? AbortSignal.timeout(ENGINE_FETCH_MS + 2_000),
+  });
+  const body = await response.json();
+  if (!response.ok) throwKernelError(body, `catalog options ${response.status}`);
+  if (!Array.isArray(body.options)) throw new Error("Invalid catalog options response");
+  return body;
+}
+
+export async function fetchConnectorCredentials(
+  id: string,
+): Promise<Record<string, boolean>> {
+  const response = await kernelFetch(`/v1/me/connectors/${encodeURIComponent(id)}/credentials`);
+  const body = await response.json();
+  if (!response.ok) throwKernelError(body, `credentials ${response.status}`);
+  if (!body || typeof body !== "object" || Object.values(body).some((value) => typeof value !== "boolean")) {
+    throw new Error("Invalid credential status response");
+  }
+  return body;
 }
 
 function catalogPlugins(
@@ -981,7 +1012,7 @@ export async function retryConnectorQuarantines(
 
 export async function installConnector(
   connectorType: string,
-  config: Record<string, string>,
+  config: Record<string, unknown>,
 ): Promise<EngineInstallationView> {
   const response = await fetch(`${origin()}/v1/me/connectors`, {
     method: "POST",
@@ -1018,7 +1049,7 @@ export async function fetchConnectorPairingCode(id: string): Promise<string> {
 
 export async function updateConnectorConfig(
   id: string,
-  config: Record<string, string>,
+  config: Record<string, unknown>,
 ): Promise<EngineInstallationView> {
   const response = await fetch(`${origin()}/v1/me/connectors/${id}/config`, {
     method: "POST",
@@ -1589,6 +1620,7 @@ export async function startSearchAnswer(
     query: string;
     conversations: Array<{ thread_id: string; event_ids: string[] }>;
     executor_type?: string;
+    filters?: { occurred_after: string; occurred_before: string };
   },
   signal?: AbortSignal,
 ): Promise<PersonalSearchAnswer> {

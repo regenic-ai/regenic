@@ -481,9 +481,13 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
       const optionRes = await fetch(
         `${origin}/v1/me/engine/catalog-options?connector_type=feishu-chat`,
       );
-      assert.equal(optionRes.status, 200);
       const optionBody = await optionRes.json();
-      assert.equal(typeof optionBody.field_options, "object");
+      if (optionRes.status === 200) {
+        assert.equal(typeof optionBody.field_options, "object");
+      } else {
+        assert.equal(optionRes.status, 502);
+        assert.equal(optionBody.error.code, "catalog_options_failed");
+      }
     } finally {
       await app.close();
     }
@@ -600,10 +604,14 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
   });
 
   it("returns 503 for inbox when the personal kernel is not configured", async () => {
+    const root = await createRoot();
     setEnv({
       REGENIC_AUTHORITY_DRIVER: undefined,
       REGENIC_DATABASE: undefined,
       REGENIC_BLOB_ROOT: undefined,
+      REGENIC_PLUGIN_DIR: join(root, "plugins"),
+      REGENIC_CHANNEL_PLUGIN: undefined,
+      REGENIC_CRM_CONNECTOR: undefined,
       PORT: "4370",
       LISTEN_HOST: "127.0.0.1",
     });

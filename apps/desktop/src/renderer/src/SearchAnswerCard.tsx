@@ -1,6 +1,10 @@
 import { Fragment, useEffect, useState } from "react";
 import { cancelSearchAnswer, fetchExecutors, fetchSearchAnswer, startSearchAnswer } from "./api";
-import { searchAnswerConversations, searchAnswerSegments } from "./context-search";
+import {
+  searchAnswerConversations,
+  searchAnswerSegments,
+  type SearchTimeRange,
+} from "./context-search";
 import { KernelRequestError } from "./kernel-request";
 import { useLocale } from "./LocaleContext";
 import type { ExecutorCatalogEntry, PersonalSearchAnswer, PersonalSearchConversation } from "./types";
@@ -14,9 +18,10 @@ function isActive(answer: PersonalSearchAnswer | null): boolean {
 }
 
 /** Asks an installed executor to answer from the visible cards; the kernel never calls a model for this. */
-export function SearchAnswerCard({ query, conversations, onCite }: {
+export function SearchAnswerCard({ query, conversations, timeRange, onCite }: {
   query: string;
   conversations: PersonalSearchConversation[];
+  timeRange?: SearchTimeRange;
   onCite: (eventId: string) => void;
 }) {
   const { t } = useLocale();
@@ -79,8 +84,9 @@ export function SearchAnswerCard({ query, conversations, onCite }: {
     try {
       setAnswer(await startSearchAnswer({
         query,
-        conversations: searchAnswerConversations(conversations),
+        conversations: searchAnswerConversations(conversations, timeRange),
         ...(executor ? { executor_type: executor } : {}),
+        ...(timeRange ? { filters: timeRange } : {}),
       }));
     } catch (caught) {
       setError(caught instanceof KernelRequestError && caught.code === "executor_unavailable"

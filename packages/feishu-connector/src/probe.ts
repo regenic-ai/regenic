@@ -1,5 +1,6 @@
 import {
   DEFAULT_CATALOG_OPTIONS_TIMEOUT_MS,
+  ChannelDriverError,
   type CopyRef,
 } from "@regenic/connector-contract";
 import {
@@ -80,6 +81,7 @@ export async function listFeishuCatalogChats(options: {
   spawn?: FeishuSpawn;
   now?: () => number;
   budget_ms?: number;
+  strict?: boolean;
 } = {}): Promise<FeishuChat[]> {
   const budget =
     options.budget_ms ?? DEFAULT_CATALOG_OPTIONS_TIMEOUT_MS - 250;
@@ -88,9 +90,11 @@ export async function listFeishuCatalogChats(options: {
   const deadline = budget > 0 ? Date.now() + budget : undefined;
   const probe = await probeLarkCli(options);
   if (!larkCliReady(probe)) {
+    if (options.strict) throw new ChannelDriverError("missing_credentials", "Sign in with lark-cli to load conversations");
     return [];
   }
   if (deadline !== undefined && Date.now() >= deadline) {
+    if (options.strict) throw new ChannelDriverError("sync_failed", "Conversation options timed out");
     return [];
   }
   try {
@@ -116,7 +120,8 @@ export async function listFeishuCatalogChats(options: {
     return await client.listAllChats(CATALOG_CHAT_PAGES, undefined, {
       deadline,
     });
-  } catch {
+  } catch (error) {
+    if (options.strict) throw error;
     return [];
   }
 }

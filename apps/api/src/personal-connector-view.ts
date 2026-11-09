@@ -36,11 +36,20 @@ export interface ConnectorField {
   label: string;
   required: boolean;
   placeholder?: string;
-  widget?: "directory";
-  default?: string;
+  description?: string;
+  group?: string;
+  advanced?: boolean;
+  type?: "string" | "number" | "boolean" | "string_array";
+  widget?: "text" | "password" | "directory" | "select" | "multi_select" | "number" | "switch";
+  default?: string | number | boolean | string[];
+  min?: number;
+  max?: number;
   multiple?: boolean;
   secret?: boolean;
   options?: { value: string; label: string; kind?: string; title?: string }[];
+  allow_custom?: boolean;
+  dynamic_options?: boolean;
+  options_depends_on?: string[];
   filter_options_by?: string;
   option_labels_key?: string;
   visible_when?: ConnectorFieldWhen;
@@ -82,6 +91,7 @@ export interface ConnectorCatalogItem {
   instance_count: number;
   setup_ready: boolean;
   singleton: boolean;
+  form_version?: 2;
   fields: ConnectorField[];
   prerequisites: ConnectorPrerequisite[];
   setup_steps: ConnectorSetupStep[];
@@ -116,6 +126,7 @@ interface CatalogDefinition {
   credential_hint: string;
   sync_unavailable_hint?: string;
   singleton?: boolean;
+  form_version?: 2;
   fields: ConnectorField[];
   prerequisites: Omit<ConnectorPrerequisite, "ready">[];
   setup_steps: ConnectorSetupStep[];
@@ -156,17 +167,27 @@ function catalogDefinitionFromDriver(
     credential_hint: resolved.credential_hint,
     sync_unavailable_hint: resolved.sync_unavailable_hint,
     singleton: resolved.singleton,
+    form_version: resolved.form_version,
     unit_kinds: resolveSubjectKinds(driver.subjectCatalog?.(), tables, locale),
     fields: (resolved.fields ?? []).map((field) => ({
       key: field.key,
       label: field.label,
       required: field.required === true,
       placeholder: field.placeholder,
+      description: field.description,
+      group: field.group,
+      advanced: field.advanced,
+      type: field.type,
       widget: field.widget,
       default: field.default,
+      min: field.min,
+      max: field.max,
       multiple: field.multiple,
       secret: field.secret === true,
       options: field.options,
+      allow_custom: field.allow_custom,
+      dynamic_options: field.dynamic_options,
+      options_depends_on: field.options_depends_on,
       filter_options_by: field.filter_options_by,
       option_labels_key: field.option_labels_key,
       visible_when: field.visible_when,
@@ -302,7 +323,7 @@ export interface EngineInstallationView {
   status: ConnectorInstallationStatus;
   label: string;
   detail: string | null;
-  settings: Record<string, string>;
+  settings: Record<string, string | number | boolean | string[]>;
   syncable: boolean;
   can_reply: boolean;
   can_create: boolean;
@@ -343,7 +364,10 @@ export function toInstallationView(
     label,
     detail,
     settings: {
-      ...installationSettings(installation.config),
+      ...installationSettings(
+        installation.config,
+        driver?.installCatalog?.({ env: process.env }),
+      ),
       ...(extras?.secrets ?? {}),
     },
     syncable: enabled && capabilities.sync,
@@ -490,19 +514,26 @@ export async function installationSecretSettings(
 
 export function installationSettings(
   config: Record<string, unknown>,
-): Record<string, string> {
-  const settings: Record<string, string> = {};
+  catalog?: DriverInstallCatalog,
+): Record<string, string | number | boolean | string[]> {
+  const settings: Record<string, string | number | boolean | string[]> = {};
+  const fields = new Map((catalog?.fields ?? []).map((field) => [field.key, field]));
   for (const [key, value] of Object.entries(config)) {
-    if (SECRET_SETTING_KEYS.has(key) || key.endsWith("_token") || key.endsWith("_secret")) {
+    const field = fields.get(key);
+    if (field?.secret || field?.widget === "password" || SECRET_SETTING_KEYS.has(key) || key.endsWith("_token") || key.endsWith("_secret")) {
       continue;
     }
     if (typeof value === "string") {
       settings[key] = value;
+    } else if ((typeof value === "number" && Number.isFinite(value)) || typeof value === "boolean") {
+      if (field?.type === "number" || field?.type === "boolean") settings[key] = value;
     } else if (
       Array.isArray(value) &&
       value.every((entry) => typeof entry === "string")
     ) {
-      settings[key] = value.join(",");
+      settings[key] = catalog?.form_version === 2
+        ? value
+        : value.join(",");
     }
   }
   return settings;
@@ -520,15 +551,15 @@ export function configString(
 
 export function matchesWhen(
   when: ConnectorFieldWhen | undefined,
-  values: Record<string, string>,
+  values: Record<string, unknown>,
 ): boolean {
   return matchesCatalogFieldWhen(when, values);
 }
 
-function defaultFieldValues(fields: ConnectorField[]): Record<string, string> {
-  const values: Record<string, string> = {};
+function defaultFieldValues(fields: ConnectorField[]): Record<string, unknown> {
+  const values: Record<string, unknown> = {};
   for (const field of fields) {
-    if (field.default) {
+    if (field.default !== undefined) {
       values[field.key] = field.default;
     }
   }

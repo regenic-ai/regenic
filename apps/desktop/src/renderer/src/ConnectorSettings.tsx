@@ -1,16 +1,21 @@
-import { useEffect, useRef, useState } from "react";
-import { fetchConnectorPairingCode, fetchCatalogFieldOptions, importConnectorFile } from "./api";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { fetchConnectorPairingCode, fetchCatalogFieldOptions, fetchConnectorCredentials, importConnectorFile } from "./api";
+import { ConnectorFormFields } from "./ConnectorFormFields";
 import {
   importConnectorFiles,
   connectorImportSummary,
 } from "./connector-import";
 import {
-  catalogFieldUsesSelect,
-  configWithOptionNames,
   resolveCatalogFieldOptions,
-  splitValues,
-  toggleCsvValue,
 } from "./connector-config";
+import {
+  connectorFieldMissing,
+  connectorFieldInvalid,
+  connectorFormPayload,
+  initialConnectorValues,
+  initialConnectorOptions,
+  type ConnectorFormValues,
+} from "./connector-form";
 import {
   catalogInstallConfirm,
   matchesCatalogFieldWhen,
@@ -22,11 +27,11 @@ import {
   syncProgressSummary,
 } from "./format";
 import { openExternal } from "./CatalogDocs";
-import { pickDirectory } from "./api";
 import { useLocale } from "./LocaleContext";
 import type {
   ConnectorCatalogItem,
   ConnectorSetupStep,
+  ConnectorFieldOption,
   EngineInstallationView,
   SyncRunMode,
 } from "./types";
@@ -39,6 +44,7 @@ export function ConnectorKind({
   installing,
   pendingUninstall,
   pairingCode,
+  error,
   onOpenInstall,
   onCloseInstall,
   onInstall,
@@ -57,15 +63,16 @@ export function ConnectorKind({
   installing: boolean;
   pendingUninstall: boolean;
   pairingCode?: Record<string, string>;
+  error?: string | null;
   onOpenInstall: () => void;
   onCloseInstall: () => void;
-  onInstall: (config: Record<string, string>) => void;
+  onInstall: (config: ConnectorFormValues) => void;
   onSync: (id: string, mode: SyncRunMode) => void;
   onRetryQuarantines: (id: string) => void;
   onToggle: (installation: EngineInstallationView) => void;
   onUpdate: (
     installation: EngineInstallationView,
-    config: Record<string, string>,
+    config: ConnectorFormValues,
   ) => Promise<boolean>;
   onRefresh?: () => Promise<void>;
   onUninstall: (installation: EngineInstallationView) => void;
@@ -136,6 +143,7 @@ export function ConnectorKind({
           )}
           kind={kind}
           busy={busyId === kind.connector_type}
+          error={error}
           submitLabel={t("connector.install")}
           busyLabel={t("connector.installing")}
           showSetup
@@ -152,6 +160,7 @@ export function ConnectorKind({
           busy={busyId === installation.id || syncingAll}
           editing={editingId === installation.id}
           pairingCode={pairingCode?.[installation.id]}
+          error={error}
           onEdit={() =>
             setEditingId((current) =>
               current === installation.id ? null : installation.id,
@@ -259,7 +268,9 @@ function ConnectorSettingsDialog({
   title,
   kind,
   busy,
+  error,
   initialValues,
+  installationId,
   submitLabel,
   busyLabel,
   showSetup = false,
@@ -269,11 +280,13 @@ function ConnectorSettingsDialog({
   title: string;
   kind: ConnectorCatalogItem;
   busy: boolean;
-  initialValues?: Record<string, string>;
+  error?: string | null;
+  initialValues?: ConnectorFormValues;
+  installationId?: string;
   submitLabel: string;
   busyLabel: string;
   showSetup?: boolean;
-  onSubmit: (config: Record<string, string>) => void;
+  onSubmit: (config: ConnectorFormValues) => void;
   onClose: () => void;
 }) {
   const { t } = useLocale();
@@ -305,7 +318,9 @@ function ConnectorSettingsDialog({
         <ConnectorSettingsForm
           kind={kind}
           busy={busy}
+          error={error}
           initialValues={initialValues}
+          installationId={installationId}
           submitLabel={submitLabel}
           busyLabel={busyLabel}
           showSetup={showSetup}
@@ -319,7 +334,9 @@ function ConnectorSettingsDialog({
 function ConnectorSettingsForm({
   kind,
   busy,
+  error,
   initialValues,
+  installationId,
   submitLabel,
   busyLabel,
   showSetup = false,
@@ -327,31 +344,57 @@ function ConnectorSettingsForm({
 }: {
   kind: ConnectorCatalogItem;
   busy: boolean;
-  initialValues?: Record<string, string>;
+  error?: string | null;
+  initialValues?: ConnectorFormValues;
+  installationId?: string;
   submitLabel: string;
   busyLabel: string;
   showSetup?: boolean;
-  onSubmit: (config: Record<string, string>) => void;
+  onSubmit: (config: ConnectorFormValues) => void;
 }) {
   const { t } = useLocale();
-  const [values, setValues] = useState<Record<string, string>>(() => ({
-    ...defaultFieldValues(kind),
-    ...initialValues,
-  }));
+  const [values, setValues] = useState<ConnectorFormValues>(() =>
+    initialConnectorValues(kind.fields, initialValues),
+  );
   const [installConfirmed, setInstallConfirmed] = useState(false);
-  const [shownSecrets, setShownSecrets] = useState<Record<string, boolean>>({});
   const installConfirm = catalogInstallConfirm(kind, values);
   const [remoteOptions, setRemoteOptions] = useState<
-    Record<string, { value: string; label: string }[]>
-  >({});
+    Record<string, ConnectorFieldOption[]>
+  >(() => initialConnectorOptions(kind.fields, initialValues));
   const [loadingOptions, setLoadingOptions] = useState(false);
+  const [optionsError, setOptionsError] = useState(false);
+  const [optionsAttempt, setOptionsAttempt] = useState(0);
+  const [credentials, setCredentials] = useState<Record<string, boolean>>({});
+  const [credentialsPending, setCredentialsPending] = useState(Boolean(installationId));
+  const [credentialsError, setCredentialsError] = useState(false);
+  const [credentialsAttempt, setCredentialsAttempt] = useState(0);
+  useEffect(() => {
+    if (!installationId) return;
+    let cancelled = false;
+    setCredentialsPending(true);
+    setCredentialsError(false);
+    void fetchConnectorCredentials(installationId).then((value) => {
+      if (!cancelled) setCredentials(value);
+    }).catch(() => {
+      if (!cancelled) setCredentialsError(true);
+    }).finally(() => {
+      if (!cancelled) setCredentialsPending(false);
+    });
+    return () => { cancelled = true; };
+  }, [installationId, credentialsAttempt]);
+  const rememberOptions = useCallback((key: string, options: ConnectorFieldOption[]) => {
+    setRemoteOptions((current) => ({
+      ...current,
+      [key]: [...new Map([...(current[key] ?? []), ...options].map((option) => [option.value, option])).values()],
+    }));
+  }, []);
   const prerequisites = visiblePrerequisites(kind, values);
   const prerequisitesReady = prerequisites.every(
     (item) => !item.required || item.ready,
   );
   const needsRemote = kind.fields
     .filter((field) => matchesCatalogFieldWhen(field.visible_when, values))
-    .some(fieldNeedsRemoteOptions);
+    .some((field) => !field.dynamic_options && fieldNeedsRemoteOptions(field));
   useEffect(() => {
     if (!installConfirm && installConfirmed) {
       setInstallConfirmed(false);
@@ -363,11 +406,15 @@ function ConnectorSettingsForm({
     }
     let cancelled = false;
     setLoadingOptions(true);
+    setOptionsError(false);
     void fetchCatalogFieldOptions(kind.connector_type)
       .then((options) => {
         if (!cancelled) {
           setRemoteOptions(options);
         }
+      })
+      .catch(() => {
+        if (!cancelled) setOptionsError(true);
       })
       .finally(() => {
         if (!cancelled) {
@@ -377,9 +424,8 @@ function ConnectorSettingsForm({
     return () => {
       cancelled = true;
     };
-  }, [kind.connector_type, needsRemote, prerequisitesReady]);
-  const fields = kind.fields
-    .map((field) => ({
+  }, [kind.connector_type, needsRemote, prerequisitesReady, optionsAttempt]);
+  const resolvedFields = kind.fields.map((field) => ({
       ...field,
       options: resolveCatalogFieldOptions(
         field,
@@ -387,12 +433,15 @@ function ConnectorSettingsForm({
         remoteOptions[field.key],
         values,
       ),
-    }))
-    .filter((field) => matchesCatalogFieldWhen(field.visible_when, values));
+    }));
+  const fields = resolvedFields.filter((field) =>
+    matchesCatalogFieldWhen(field.visible_when, values),
+  );
   const blocked = prerequisites.some((item) => item.required && !item.ready);
   const missingRequired = fields.some(
-    (field) => field.required && !(values[field.key] ?? "").trim(),
+    (field) => connectorFieldMissing(field, values[field.key], credentials[field.key]),
   );
+  const invalid = fields.some((field) => connectorFieldInvalid(field, values[field.key]));
   const guardBlocked = installConfirm !== undefined && !installConfirmed;
   return (
     <form
@@ -402,7 +451,8 @@ function ConnectorSettingsForm({
         if (busy || guardBlocked) {
           return;
         }
-        onSubmit(configWithOptionNames(values, fields));
+        if (blocked || missingRequired || invalid || credentialsPending || credentialsError) return;
+        onSubmit(connectorFormPayload(resolvedFields, values));
       }}
     >
       {showSetup ? (
@@ -413,122 +463,25 @@ function ConnectorSettingsForm({
         />
       ) : null}
       <PrerequisiteList items={prerequisites} />
-      {fields.map((field) => {
-        const body = field.multiple ? (
-          <CheckOptionList
-            field={field}
-            selected={splitValues(values[field.key])}
-            loading={loadingOptions && fieldNeedsRemoteOptions(field)}
-            onToggle={(value) =>
-              setValues((current) => ({
-                ...current,
-                [field.key]: toggleCsvValue(current[field.key], value),
-              }))
-            }
-          />
-        ) : catalogFieldUsesSelect(field.options) ? (
-          <select
-            value={values[field.key] ?? field.default ?? ""}
-            onChange={(event) =>
-              setValues((current) => ({
-                ...current,
-                [field.key]: event.target.value,
-              }))
-            }
-          >
-            {selectOptions(field, values[field.key]).map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        ) : field.widget === "directory" ? (
-          <span className="directory-field">
-            <input
-              type="text"
-              value={values[field.key] ?? ""}
-              placeholder={field.placeholder}
-              required={field.required}
-              onChange={(event) =>
-                setValues((current) => ({
-                  ...current,
-                  [field.key]: event.target.value,
-                }))
-              }
-            />
-            <button
-              type="button"
-              className="ghost"
-              onClick={() => {
-                void pickDirectory().then((picked) => {
-                  if (!picked) return;
-                  setValues((current) => ({ ...current, [field.key]: picked }));
-                });
-              }}
-            >
-              {t("connector.chooseDirectory")}
-            </button>
-          </span>
-        ) : field.secret ? (
-          <span className="directory-field">
-            <input
-              type={shownSecrets[field.key] ? "text" : "password"}
-              value={values[field.key] ?? ""}
-              placeholder={field.placeholder}
-              required={field.required}
-              autoComplete="off"
-              onChange={(event) =>
-                setValues((current) => ({
-                  ...current,
-                  [field.key]: event.target.value,
-                }))
-              }
-            />
-            <button
-              type="button"
-              className="ghost"
-              onClick={() =>
-                setShownSecrets((current) => ({
-                  ...current,
-                  [field.key]: !current[field.key],
-                }))
-              }
-            >
-              {shownSecrets[field.key] ? t("connector.hideSecret") : t("connector.showSecret")}
-            </button>
-          </span>
-        ) : (
-          <input
-            type="text"
-            value={values[field.key] ?? ""}
-            placeholder={field.placeholder}
-            required={field.required}
-            onChange={(event) =>
-              setValues((current) => ({
-                ...current,
-                [field.key]: event.target.value,
-              }))
-            }
-          />
-        );
-        const heading = (
-          <span>
-            {field.label}
-            {field.required ? " *" : ""}
-          </span>
-        );
-        return field.multiple ? (
-          <div key={field.key} className="field">
-            {heading}
-            {body}
-          </div>
-        ) : (
-          <label key={field.key} className="field">
-            {heading}
-            {body}
-          </label>
-        );
-      })}
+      {optionsError && needsRemote ? (
+        <div className="action-error" role="alert">
+          {t("connector.optionsFailed")}{" "}
+          <button type="button" className="ghost" onClick={() => setOptionsAttempt((attempt) => attempt + 1)}>
+            {t("connector.retryOptions")}
+          </button>
+        </div>
+      ) : null}
+      {credentialsError ? <div className="action-error" role="alert">{t("connector.credentialsFailed")}{" "}
+        <button type="button" className="ghost" onClick={() => setCredentialsAttempt((value) => value + 1)}>
+          {t("connector.retryOptions")}
+        </button>
+      </div> : null}
+      <ConnectorFormFields connectorType={kind.connector_type} fields={fields} values={values}
+        credentials={credentials} busy={busy || credentialsPending} loading={loadingOptions}
+        optionsEnabled={prerequisitesReady}
+        onChange={(key, value) => setValues((current) => ({ ...current, [key]: value }))}
+        onOptions={rememberOptions}
+      />
       {installConfirm ? (
         <div className="install-guard">
           <p className="action-error">{installConfirm.warning}</p>
@@ -542,10 +495,11 @@ function ConnectorSettingsForm({
           </label>
         </div>
       ) : null}
+      {error ? <p className="action-error" role="alert">{error}</p> : null}
       <button
         type="submit"
         className="primary"
-        disabled={busy || blocked || missingRequired || guardBlocked}
+        disabled={busy || blocked || missingRequired || invalid || guardBlocked || credentialsPending || credentialsError}
       >
         {busy
           ? busyLabel
@@ -553,6 +507,8 @@ function ConnectorSettingsForm({
             ? t("connector.installConfirmRequired")
             : blocked
               ? t("connector.prereqFirst")
+              : invalid
+                ? t("connector.invalidFields")
               : missingRequired
                 ? t("connector.fillRequired")
                 : submitLabel}
@@ -564,91 +520,8 @@ function ConnectorSettingsForm({
 function fieldNeedsRemoteOptions(
   field: ConnectorCatalogItem["fields"][number],
 ): boolean {
-  return field.multiple === true && (field.options?.length ?? 0) === 0;
-}
-
-function CheckOptionList({
-  field,
-  selected,
-  loading = false,
-  onToggle,
-}: {
-  field: ConnectorCatalogItem["fields"][number];
-  selected: string[];
-  loading?: boolean;
-  onToggle: (value: string) => void;
-}) {
-  const { t } = useLocale();
-  const [query, setQuery] = useState("");
-  const options = field.options ?? [];
-  if (options.length === 0) {
-    return (
-      <p className="field-empty">
-        {loading
-          ? t("connector.loadingOptions")
-          : (field.placeholder ?? t("connector.noOptions"))}
-      </p>
-    );
-  }
-  const searchable = options.length > 4;
-  const visible = filterCheckOptions(options, query);
-  return (
-    <div className="check-options">
-      {searchable ? (
-        <input
-          type="search"
-          value={query}
-          placeholder={t("connector.search", { label: field.label.toLowerCase() })}
-          aria-label={t("connector.search", { label: field.label.toLowerCase() })}
-          autoComplete="off"
-          spellCheck={false}
-          onChange={(event) => setQuery(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              event.preventDefault();
-            }
-          }}
-        />
-      ) : null}
-      {visible.length === 0 ? (
-        <p className="field-empty">{t("connector.noMatches")}</p>
-      ) : (
-        <ul className="check-list">
-          {visible.map((option) => {
-            const checked = selected.includes(option.value);
-            return (
-              <li key={option.value}>
-                <label className={`check-item${checked ? " active" : ""}`}>
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    onChange={() => onToggle(option.value)}
-                  />
-                  <span>{option.label}</span>
-                </label>
-              </li>
-            );
-          })}
-        </ul>
-      )}
-    </div>
-  );
-}
-
-function filterCheckOptions(
-  options: { value: string; label: string; title?: string }[],
-  query: string,
-): { value: string; label: string; title?: string }[] {
-  const needle = query.trim().toLowerCase();
-  if (!needle) {
-    return options;
-  }
-  return options.filter(
-    (option) =>
-      option.label.toLowerCase().includes(needle) ||
-      option.value.toLowerCase().includes(needle) ||
-      (option.title ?? "").toLowerCase().includes(needle),
-  );
+  return field.dynamic_options === true ||
+    (field.multiple === true && field.type === undefined && (field.options?.length ?? 0) === 0);
 }
 
 function SetupStepList({
@@ -657,7 +530,7 @@ function SetupStepList({
   collapsible,
 }: {
   steps: ConnectorSetupStep[];
-  values: Record<string, string>;
+  values: ConnectorFormValues;
   collapsible: boolean;
 }) {
   const { t } = useLocale();
@@ -771,31 +644,13 @@ function PrerequisiteList({ items }: { items: ConnectorCatalogItem["prerequisite
   );
 }
 
-function selectOptions(
-  field: ConnectorCatalogItem["fields"][number],
-  current: string | undefined,
-): { value: string; label: string }[] {
-  const options = field.options ?? [];
-  const value = current?.trim();
-  if (value && !options.some((option) => option.value === value)) {
-    return [{ value, label: value }, ...options];
-  }
-  return options;
-}
-
-function defaultFieldValues(kind: ConnectorCatalogItem): Record<string, string> {
-  const initial: Record<string, string> = {};
-  for (const field of kind.fields) {
-    if (field.default) {
-      initial[field.key] = field.default;
-    }
-  }
-  return initial;
+function defaultFieldValues(kind: ConnectorCatalogItem): ConnectorFormValues {
+  return initialConnectorValues(kind.fields);
 }
 
 function visiblePrerequisites(
   kind: ConnectorCatalogItem,
-  values: Record<string, string>,
+  values: ConnectorFormValues,
 ): ConnectorCatalogItem["prerequisites"] {
   return (kind.prerequisites ?? []).filter((item) =>
     matchesCatalogFieldWhen(item.visible_when, values),
@@ -809,6 +664,7 @@ function ConnectorRow({
   busy,
   editing,
   pairingCode,
+  error,
   onEdit,
   onSync,
   onRetryQuarantines,
@@ -823,11 +679,12 @@ function ConnectorRow({
   busy: boolean;
   editing: boolean;
   pairingCode?: string;
+  error?: string | null;
   onEdit: () => void;
   onSync: (mode: SyncRunMode) => void;
   onRetryQuarantines: () => void;
   onToggle: () => void;
-  onSave: (config: Record<string, string>) => void;
+  onSave: (config: ConnectorFormValues) => void;
   onUninstall: () => void;
   onPairingCode?: (id: string, code: string) => void;
 }) {
@@ -935,7 +792,9 @@ function ConnectorRow({
           })}
           kind={kind}
           busy={busy}
+          error={error}
           initialValues={installation.settings}
+          installationId={installation.id}
           submitLabel={t("connector.save")}
           busyLabel={t("connector.saving")}
           onSubmit={onSave}

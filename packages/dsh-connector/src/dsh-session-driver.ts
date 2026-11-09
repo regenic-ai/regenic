@@ -228,6 +228,7 @@ export const dshSessionDriver: ChannelDriver = {
     const env = input.env ?? process.env;
     if (env.REGENIC_DSH_BASE_URL?.trim()) {
       return {
+        form_version: 2 as const,
         title: "catalog.title",
         channel_label: "catalog.channelLabel",
         description: "catalog.descriptionHosted",
@@ -235,12 +236,14 @@ export const dshSessionDriver: ChannelDriver = {
         fields: [
           {
             key: "session_id",
+            type: "string" as const,
             label: "field.sessionId",
             required: false,
             placeholder: "field.sessionId.placeholder",
           },
           {
             key: "token",
+            type: "string" as const,
             label: "field.token",
             required: false,
             secret: true,
@@ -272,6 +275,7 @@ export const dshSessionDriver: ChannelDriver = {
       };
     }
     return {
+      form_version: 2 as const,
       title: "catalog.title",
       channel_label: "catalog.channelLabel",
       description: "catalog.description",
@@ -279,6 +283,7 @@ export const dshSessionDriver: ChannelDriver = {
       fields: [
         {
           key: "transport",
+          type: "string" as const,
           label: "field.transport",
           required: true,
           default: "web",
@@ -289,6 +294,7 @@ export const dshSessionDriver: ChannelDriver = {
         },
         {
           key: "session_id",
+          type: "string" as const,
           label: "field.sessionId",
           required: false,
           placeholder: "field.sessionId.placeholder",
@@ -296,6 +302,7 @@ export const dshSessionDriver: ChannelDriver = {
         },
         {
           key: "token",
+          type: "string" as const,
           label: "field.token",
           required: false,
           secret: true,
@@ -303,6 +310,7 @@ export const dshSessionDriver: ChannelDriver = {
         },
         {
           key: "base_url",
+          type: "string" as const,
           label: "field.baseUrl",
           required: false,
           default: "http://127.0.0.1:3080",
@@ -311,6 +319,7 @@ export const dshSessionDriver: ChannelDriver = {
         },
         {
           key: "mailbox",
+          type: "string" as const,
           label: "field.mailbox",
           required: false,
           placeholder: "field.mailbox.placeholder",
