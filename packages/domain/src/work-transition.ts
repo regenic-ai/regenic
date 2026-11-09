@@ -6,6 +6,7 @@ import {
   type WorkRun,
   type WorkDelivery,
   type RecipeTriggerKind,
+  type WorkRunStartClaim,
 } from "./work";
 import type { WorkDeliveryPayload } from "./work-delivery";
 import { planWorkDeliveryCommand, enqueueWriteBack } from "./work-delivery";
@@ -44,6 +45,25 @@ export function assertWorkRunWrite(run: WorkRun, current?: WorkRun): void {
 
 function isTerminalWorkRun(run: WorkRun): boolean {
   return run.status === "completed" || run.status === "failed" || run.status === "cancelled";
+}
+
+export function canClaimWorkRunStartItem(input: WorkRunStartClaim, item: WorkItem): boolean {
+  const { run, expected_item: expected, retry } = input;
+  if (run.status !== "running" || run.start_state !== "pending") {
+    throw new Error("Work start claim requires a pending running attempt");
+  }
+  if (retry !== undefined && retry !== "automatic" && retry !== "manual") {
+    throw new Error("Unknown work start retry mode");
+  }
+  if (retry && !expected) throw new Error("Work retry requires an expected item snapshot");
+  if (expected && (expected.org_id !== run.org_id || expected.id !== run.work_item_id)) {
+    throw new Error("Work start snapshot must belong to the same organization and work item");
+  }
+  if (item.org_id !== run.org_id || item.id !== run.work_item_id || item.recipe_id !== run.recipe_id
+    || (expected && !sameSnapshot(item, expected))) return false;
+  if (item.status === "open") return true;
+  if (item.status === "failed") return retry === "automatic" || retry === "manual";
+  return retry === "manual" && (item.status === "done" || item.status === "skipped");
 }
 
 export type WorkRunStartCheckpoint = {

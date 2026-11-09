@@ -127,6 +127,108 @@ async function startCheckpointFixture(t, driver) {
 
 for (const driver of drivers) {
   describe(`${driver.name} atomic work observation`, { skip: driver.skip }, () => {
+    for (const [status, retry] of [
+      ["failed", "automatic"], ["failed", "manual"], ["done", "manual"], ["skipped", "manual"],
+    ]) {
+      it(`reserves a ${retry} retry directly from ${status} with one item version change`, async (t) => {
+        const f = await fixture(t, driver);
+        const terminal = await f.store.putWorkRun({
+          ...f.run, status: status === "done" ? "completed" : status === "skipped" ? "cancelled" : "failed",
+          start_state: undefined,
+        });
+        const item = await f.store.putWorkItem({ ...f.item, status });
+        const run = { ...f.run, id: "retry-run", status: "running", start_state: "pending", version: 0 };
+        assert.equal(await f.store.claimWorkRunStart({ run, retry, expected_item: item }), true);
+        const saved = await f.store.getWorkItem(ORG, item.id);
+        assert.equal(saved.status, "running");
+        assert.equal(saved.version, item.version + 1);
+        assert.equal(saved.current_run_id, run.id);
+        assert.deepEqual(await f.store.getWorkRun(ORG, terminal.id), terminal);
+        assert.equal((await f.store.getWorkRun(ORG, run.id)).version, 0);
+        await f.reopen();
+        assert.deepEqual(await f.store.getWorkItem(ORG, item.id), saved);
+        assert.deepEqual(await f.store.getWorkRun(ORG, terminal.id), terminal);
+      });
+    }
+
+    it("never revives ignored work from a stale failure or open snapshot", async (t) => {
+      const f = await fixture(t, driver);
+      await f.store.putWorkRun({ ...f.run, status: "failed", start_state: undefined });
+      const failed = await f.store.putWorkItem({ ...f.item, status: "failed" });
+      const skipped = await f.store.putWorkItem({ ...failed, status: "skipped" });
+      const run = { ...f.run, id: "retry-run", status: "running", start_state: "pending" };
+      for (const retry of ["manual", "automatic"]) {
+        assert.equal(await f.store.claimWorkRunStart({ run, retry, expected_item: failed }), false);
+        assert.equal(await f.store.claimWorkRunStart({ run, retry, expected_item: f.item }), false);
+      }
+      assert.deepEqual(await f.store.getWorkItem(ORG, f.item.id), skipped);
+      assert.equal(await f.store.getWorkRun(ORG, run.id), null);
+    });
+
+    for (const status of ["open", "failed"]) {
+      it(`rejects a stale ${status} version even with the same status, pointer and timestamp`, async (t) => {
+        const f = await fixture(t, driver);
+        await f.store.putWorkRun({ ...f.run, status: "failed", start_state: undefined });
+        const expected = await f.store.putWorkItem({ ...f.item, status });
+        const newer = await f.store.putWorkItem(expected);
+        const input = {
+          expected_item: expected, retry: "manual",
+          run: { ...f.run, id: "retry-run", status: "running", start_state: "pending" },
+        };
+        assert.equal(await f.store.claimWorkRunStart(input), false);
+        assert.deepEqual(await f.store.getWorkItem(ORG, f.item.id), newer);
+        assert.equal(await f.store.getWorkRun(ORG, input.run.id), null);
+        assert.equal(await f.store.claimWorkRunStart({ ...input, expected_item: newer }), true);
+      });
+    }
+
+    it("does not bypass missing retry intent, active attempts or unresolved historical deliveries", async (t) => {
+      const f = await fixture(t, driver);
+      const failed = await f.store.putWorkItem({ ...f.item, status: "failed" });
+      const run = { ...f.run, id: "retry-run", status: "running", start_state: "pending" };
+      assert.equal(await f.store.claimWorkRunStart({ run, retry: "manual", expected_item: failed }), false);
+      assert.deepEqual(await f.store.getWorkRun(ORG, f.run.id), f.run);
+      await f.store.putWorkRun({ ...f.run, status: "failed", start_state: undefined });
+      assert.equal(await f.store.claimWorkRunStart({ run, expected_item: failed }), false);
+      const delivery = enqueueWriteBack({
+        org_id: ORG, work_item_id: f.item.id, recipe_id: f.recipe.id, kind: "push",
+        unit_key: f.item.unit_key, payload: { summary: "Old result" }, now: LATER,
+      });
+      for (const status of ["queued", "write_back", "dead", "uncertain"]) {
+        await f.store.putWorkDelivery({ ...delivery, status });
+        assert.equal(await f.store.claimWorkRunStart({ run, retry: "manual", expected_item: failed }), false);
+        assert.deepEqual(await f.store.getWorkItem(ORG, f.item.id), failed);
+      }
+      await f.store.putWorkDelivery({ ...delivery, status: "acked", write_back: "sent" });
+      assert.equal(await f.store.claimWorkRunStart({ run, retry: "manual", expected_item: failed }), true);
+    });
+
+    it("serializes concurrent manual and automatic retries of one failed snapshot", async (t) => {
+      const f = await fixture(t, driver);
+      await f.store.putWorkRun({ ...f.run, status: "failed", start_state: undefined });
+      const item = await f.store.putWorkItem({ ...f.item, status: "failed" });
+      const results = await Promise.all(["manual", "automatic"].map((retry) =>
+        f.store.claimWorkRunStart({
+          expected_item: item, retry,
+          run: { ...f.run, id: `retry-${retry}`, status: "running", start_state: "pending" },
+        })));
+      assert.equal(results.filter(Boolean).length, 1);
+      assert.equal((await f.store.getWorkItem(ORG, item.id)).version, item.version + 1);
+      assert.equal((await f.store.listWorkRuns(ORG, item.id)).length, 2);
+    });
+
+    it("preserves the failed status and pointer if retry capacity is full", async (t) => {
+      const f = await fixture(t, driver);
+      await f.store.putWorkRun({ ...f.run, status: "failed", start_state: undefined });
+      const item = await f.store.putWorkItem({ ...f.item, status: "failed" });
+      assert.equal(await f.store.claimWorkRunStart({
+        expected_item: item, retry: "automatic", max_concurrent: 0,
+        run: { ...f.run, id: "retry-run", status: "running", start_state: "pending" },
+      }), false);
+      assert.deepEqual(await f.store.getWorkItem(ORG, item.id), item);
+      assert.equal(await f.store.getWorkRun(ORG, "retry-run"), null);
+    });
+
     it("checkpoints session binding and submission without changing frozen obligations", async (t) => {
       const { f, input } = await startCheckpointFixture(t, driver);
       const bound = await f.store.checkpointWorkRunStart({
@@ -913,6 +1015,32 @@ for (const driver of drivers) {
 
 for (const driver of drivers.filter((d) => d.name.startsWith("sqlite"))) {
   describe(`${driver.name} observation rollback`, () => {
+    it("rolls back a retry run if the final item update fails, without an intermediate open state", async (t) => {
+      const f = await fixture(t, driver);
+      await f.store.putWorkRun({ ...f.run, status: "failed", start_state: undefined });
+      const item = await f.store.putWorkItem({ ...f.item, status: "failed" });
+      const db = new Database(f.path);
+      try {
+        db.exec(`CREATE TRIGGER reject_retry BEFORE UPDATE ON work_items
+          BEGIN SELECT RAISE(ABORT, 'retry item write rejected'); END`);
+        await assert.rejects(f.store.claimWorkRunStart({
+          expected_item: item, retry: "manual",
+          run: { ...f.run, id: "retry-run", status: "running", start_state: "pending" },
+        }), /retry item write rejected/);
+        assert.deepEqual(await f.store.getWorkItem(ORG, item.id), item);
+        assert.equal(await f.store.getWorkRun(ORG, "retry-run"), null);
+        db.exec("DROP TRIGGER reject_retry");
+        db.exec(`CREATE TRIGGER reject_intermediate_open BEFORE UPDATE ON work_items
+          WHEN NEW.status = 'open' BEGIN SELECT RAISE(ABORT, 'intermediate open forbidden'); END`);
+        assert.equal(await f.store.claimWorkRunStart({
+          expected_item: item, retry: "manual",
+          run: { ...f.run, id: "retry-run", status: "running", start_state: "pending" },
+        }), true);
+      } finally {
+        db.close();
+      }
+    });
+
     for (const kind of ["failed", "uncertain"]) {
       it(`rolls back the ${kind} checkpoint if the item write fails`, async (t) => {
         const { f, input } = await startCheckpointFixture(t, driver);
@@ -1008,6 +1136,23 @@ it("fences competing startup checkpoints across independent SQLite writer worker
   const winner = results.find((result) => result.outcome === "applied");
   assert.deepEqual(await second.getWorkItem(ORG, winner.item.id), winner.item);
   assert.deepEqual(await second.getWorkRun(ORG, winner.run.id), winner.run);
+});
+
+it("fences manual and automatic retries across independent SQLite writer workers", async (t) => {
+  const driver = drivers.find((d) => d.name === "sqlite writer RPC");
+  const f = await fixture(t, driver);
+  await f.store.putWorkRun({ ...f.run, status: "failed", start_state: undefined });
+  const item = await f.store.putWorkItem({ ...f.item, status: "failed" });
+  const second = await SqliteSplitAuthorityStore.open(f.path);
+  t.after(() => second.close());
+  const results = await Promise.all([f.store, second].map((store, index) =>
+    store.claimWorkRunStart({
+      expected_item: item, retry: index === 0 ? "manual" : "automatic",
+      run: { ...f.run, id: `retry-${index}`, status: "running", start_state: "pending" },
+    })));
+  assert.equal(results.filter(Boolean).length, 1);
+  assert.equal((await second.getWorkItem(ORG, item.id)).version, item.version + 1);
+  assert.equal((await second.listWorkRuns(ORG, item.id)).length, 2);
 });
 
 it("migrates the v57 delivery table without changing request identities or inventing snapshots", async (t) => {

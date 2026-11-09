@@ -20,6 +20,7 @@ import {
   type WorkItemStatus,
   prepareWorkObservation,
   assertWorkRunWrite,
+  canClaimWorkRunStartItem,
   prepareWorkRunStartCheckpoint,
   type WorkRunStartCheckpoint,
   type WorkRunStartCheckpointResult,
@@ -367,14 +368,14 @@ export async function claimWorkRunStart(db: Database.Database, input: WorkRunSta
   const { run, max_concurrent } = input;
   return db.transaction(() => {
     const item = db.prepare(`
-      SELECT w.id FROM work_items w JOIN recipes r ON r.id = w.recipe_id AND r.org_id = w.org_id
-      WHERE w.org_id = ? AND w.id = ? AND w.recipe_id = ? AND w.status = 'open'
+      SELECT w.* FROM work_items w JOIN recipes r ON r.id = w.recipe_id AND r.org_id = w.org_id
+      WHERE w.org_id = ? AND w.id = ? AND w.recipe_id = ?
         AND NOT EXISTS (
           SELECT 1 FROM work_runs WHERE org_id = w.org_id AND work_item_id = w.id
             AND status IN ('running', 'waiting_human')
         )
-    `).get(run.org_id, run.work_item_id, run.recipe_id);
-    if (!item) return false;
+    `).get(run.org_id, run.work_item_id, run.recipe_id) as WorkItemRow | undefined;
+    if (!item || !canClaimWorkRunStartItem(input, toWorkItem(item))) return false;
     if (db.prepare(
       "SELECT id FROM work_deliveries WHERE org_id = ? AND work_item_id = ? AND status <> 'acked' LIMIT 1",
     ).get(run.org_id, run.work_item_id)) return false;

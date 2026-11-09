@@ -18,6 +18,7 @@ import {
   prepareWorkObservation,
   assertWorkRunSnapshot,
   assertWorkRunWrite,
+  canClaimWorkRunStartItem,
   prepareWorkRunStartCheckpoint,
   type WorkRunStartCheckpoint,
   type WorkRunStartCheckpointResult,
@@ -190,13 +191,13 @@ export class MemoryWorkStore implements WorkStore, ExecutorStore {
     return { outcome: "applied", transition: prepared.transition };
   }
 
-  async claimWorkRunStart({ run, max_concurrent }: WorkRunStartClaim): Promise<boolean> {
+  async claimWorkRunStart(input: WorkRunStartClaim): Promise<boolean> {
+    const { run, max_concurrent } = input;
     assertWorkRunSnapshot(run);
     const item = this.items.get(run.work_item_id);
     const recipe = this.recipes.get(run.recipe_id);
     if (
-      !item || item.org_id !== run.org_id || item.status !== "open" ||
-      item.recipe_id !== run.recipe_id || recipe?.org_id !== run.org_id ||
+      !item || !canClaimWorkRunStartItem(input, item) || recipe?.org_id !== run.org_id ||
       [...this.deliveries.values()].some((delivery) =>
         delivery.org_id === run.org_id && delivery.work_item_id === item.id && delivery.status !== "acked") ||
       [...this.runs.values()].some((current) =>

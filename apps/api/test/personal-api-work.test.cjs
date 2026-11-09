@@ -139,7 +139,7 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
     }
   });
 
-  it("reserves a new attempt after cancelling a dismissed item's leftover run", async () => {
+  it("blocks retry of ignored work while its previous execution remains active", async () => {
     const root = await createRoot();
     const database = join(root, "authority.db");
     const blobRoot = join(root, "blobs");
@@ -175,6 +175,8 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
     });
     const recipe = await authority.getRecipe("local-owner", "recipe-leftover");
     await authority.putRecipe({ ...recipe, enabled: false, can_write_back: false });
+    const originalRun = await authority.getWorkRun("local-owner", "run-leftover-1");
+    const originalItem = await authority.getWorkItem("local-owner", "work-leftover-1");
     authority.close();
     const dsh = await startDshWebStub({ dropCreateResponse: true });
     const { app, origin } = await startPersonalApi(database, blobRoot);
@@ -194,7 +196,8 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
         body: "{}",
       });
       assert.equal(started.status, 409);
-      assert.match(await started.text(), /execution_start_uncertain/);
+      assert.match(await started.text(), /execution_start_conflict/);
+      assert.equal(dsh.created.length, 0);
     } finally {
       await app.close();
       await dsh.close();
@@ -202,12 +205,12 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
     const store = new SqliteAuthorityStore(database);
     try {
       const leftover = await store.getWorkRun("local-owner", "run-leftover-1");
-      assert.equal(leftover.status, "cancelled");
+      assert.deepEqual(leftover, originalRun);
       const item = await store.getWorkItem("local-owner", "work-leftover-1");
-      assert.equal(item.status, "waiting_human");
+      assert.deepEqual(item, originalItem);
       const active = await store.getActiveWorkRun("local-owner", item.id);
-      assert.notEqual(active.id, leftover.id);
-      assert.equal(active.start_state, "uncertain");
+      assert.equal(active.id, leftover.id);
+      assert.equal((await store.listWorkRuns("local-owner", item.id)).length, 1);
     } finally {
       store.close();
     }

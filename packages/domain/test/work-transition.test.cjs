@@ -1,6 +1,8 @@
 const assert = require("node:assert/strict");
 const { describe, it } = require("node:test");
-const { assertWorkRunWrite, planWorkObservation, prepareWorkRunStartCheckpoint } = require("../dist");
+const {
+  assertWorkRunWrite, planWorkObservation, prepareWorkRunStartCheckpoint, canClaimWorkRunStartItem,
+} = require("../dist");
 
 const BEFORE = "2026-11-09T08:00:00.000Z";
 const NOW = "2026-11-09T08:01:00.000Z";
@@ -42,6 +44,40 @@ function fixture() {
     now: NOW,
   };
 }
+
+describe("work retry start eligibility", () => {
+  for (const status of ["open", "running", "waiting_human", "failed", "done", "skipped"]) {
+    it(`checks explicit retry intent against ${status} without changing the item`, () => {
+      const { item, run } = fixture();
+      item.status = status;
+      run.start_state = "pending";
+      const original = structuredClone(item);
+      for (const retry of [undefined, "automatic", "manual"]) {
+        const eligible = status === "open" || (status === "failed" && retry !== undefined)
+          || (retry === "manual" && (status === "done" || status === "skipped"));
+        assert.equal(canClaimWorkRunStartItem({ run, retry, expected_item: item }, item), eligible);
+      }
+      assert.deepEqual(item, original);
+    });
+  }
+
+  it("requires a retry snapshot and rejects stale versions even when timestamps match", () => {
+    const { item, run } = fixture();
+    item.status = "failed";
+    run.start_state = "pending";
+    assert.throws(() => canClaimWorkRunStartItem({ run, retry: "manual" }, item), /expected item snapshot/);
+    assert.throws(() => canClaimWorkRunStartItem({
+      run, retry: "unknown", expected_item: item,
+    }, item), /Unknown work start retry mode/);
+    assert.throws(() => canClaimWorkRunStartItem({
+      run, expected_item: { ...item, org_id: "foreign" },
+    }, item), /same organization and work item/);
+    assert.equal(canClaimWorkRunStartItem({
+      run, retry: "manual", expected_item: { ...item, version: 0 },
+    }, { ...item, version: 1 }), false);
+    assert.equal(canClaimWorkRunStartItem({ run, expected_item: item }, item), false);
+  });
+});
 
 describe("work start checkpoint planning", () => {
   function checkpointFixture() {

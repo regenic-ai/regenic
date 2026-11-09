@@ -1184,31 +1184,23 @@ export class PersonalWorkService implements OnModuleDestroy {
       );
     }
     if (active) {
-      await host.get("authority").putWorkRun(
-        cancelWorkRun(active, new Date().toISOString()),
+      throw new PersonalConnectorError(
+        "execution_start_conflict", "A previous execution is still active. Refresh the work item.", 409,
       );
     }
-    const opened =
-      item.status === "open"
-        ? item
-        : await host.get("authority").putWorkItem({
-            ...item,
-            status: "open",
-            updated_at: new Date().toISOString(),
-          });
-    const run = await this.dispatch.startItem(opened, recipe, undefined, "manual");
+    const run = await this.dispatch.startItem(item, recipe, undefined, "manual");
     const latest =
-      (await host.get("authority").getWorkItem(orgId, opened.id)) ?? opened;
-    const queued = await host.get("authority").getWorkDeliveryByItem(orgId, opened.id);
+      (await host.get("authority").getWorkItem(orgId, item.id)) ?? item;
+    const queued = await host.get("authority").getWorkDeliveryByItem(orgId, item.id);
     if (
       queued &&
       shouldFlushDelivery(queued, new Date().toISOString()) &&
-      (queued.run_id || this.supervise.allowsWriteBack(opened.id, recipe))
+      (queued.run_id || this.supervise.allowsWriteBack(item.id, recipe))
     ) {
       await this.flush.flushOne(latest, recipe, queued);
     }
     return {
-      work_item: (await host.get("authority").getWorkItem(orgId, opened.id)) ?? latest,
+      work_item: (await host.get("authority").getWorkItem(orgId, item.id)) ?? latest,
       run,
     };
   }

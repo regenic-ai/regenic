@@ -89,6 +89,98 @@ async function fixture(t, maxConcurrent) {
 }
 
 describe("durable executor start", () => {
+  async function failedWork(f) {
+    const now = new Date(Date.now() - 3_600_000).toISOString();
+    await f.ports.authority.putWorkRun({
+      id: "failed-run", org_id: ORG, work_item_id: f.item.id, recipe_id: f.recipe.id,
+      executor_type: "session", status: "failed", result: { summary: "Failed" },
+      created_at: now, updated_at: now,
+    });
+    return f.ports.authority.putWorkItem({ ...f.item, status: "failed", updated_at: now });
+  }
+
+  it("automatically retries failed work without first reopening it", async (t) => {
+    const f = await fixture(t);
+    const failed = await failedWork(f);
+    const before = await f.ports.authority.getWorkRun(ORG, "failed-run");
+    const put = t.mock.method(f.ports.authority, "putWorkItem");
+    await f.dispatch().retryOrResume(failed, f.recipe, "evidence");
+    assert.equal(f.calls.spawn, 1);
+    assert.equal(put.mock.callCount(), 0);
+    const item = await f.ports.authority.getWorkItem(ORG, f.item.id);
+    assert.equal(item.status, "running");
+    assert.equal(item.version, failed.version + 1);
+    assert.notEqual(item.current_run_id, "failed-run");
+    assert.deepEqual(await f.ports.authority.getWorkRun(ORG, before.id), before);
+  });
+
+  for (const mode of ["automatic", "manual"]) {
+    it(`does not undo a concurrent ignore at ${mode} retry reservation`, async (t) => {
+      const f = await fixture(t);
+      const failed = await failedWork(f);
+      const claim = f.ports.authority.claimWorkRunStart.bind(f.ports.authority);
+      let ignored;
+      t.mock.method(f.ports.authority, "claimWorkRunStart", async (input) => {
+        assert.equal(input.expected_item.status, "failed");
+        ignored = await f.ports.authority.putWorkItem({ ...failed, status: "skipped" });
+        return claim(input);
+      });
+      if (mode === "automatic") {
+        await f.dispatch().retryOrResume(failed, f.recipe, "evidence");
+      } else {
+        const service = f.service();
+        service.dispatch = f.dispatch();
+        await assert.rejects(service.runWorkItem(f.item.id), code("execution_start_conflict"));
+      }
+      assert.deepEqual(await f.ports.authority.getWorkItem(ORG, f.item.id), ignored);
+      assert.equal((await f.ports.authority.listWorkRuns(ORG, f.item.id)).length, 1);
+      assert.equal(f.calls.spawn, 0);
+      assert.equal(f.calls.stdin, 0);
+    });
+  }
+
+  it("keeps a failed item failed when an automatic retry has no capacity", async (t) => {
+    const f = await fixture(t, 1);
+    const failed = await failedWork(f);
+    await f.ports.authority.putWorkItem({
+      ...f.item, id: "occupied", unit_key: "occupied", status: "running",
+    });
+    await f.dispatch().retryOrResume(failed, f.recipe, "evidence");
+    assert.deepEqual(await f.ports.authority.getWorkItem(ORG, f.item.id), failed);
+    assert.equal(f.calls.spawn, 0);
+    assert.equal((await f.ports.authority.listWorkRuns(ORG, f.item.id)).length, 1);
+  });
+
+  it("manually retries a settled item without rewriting its old run or opening an intermediate state", async (t) => {
+    const f = await fixture(t);
+    const failed = await failedWork(f);
+    const service = f.service();
+    service.dispatch = f.dispatch();
+    const put = t.mock.method(f.ports.authority, "putWorkItem");
+    const result = await service.runWorkItem(f.item.id);
+    assert.equal(put.mock.callCount(), 0);
+    assert.equal(result.work_item.version, failed.version + 1);
+    assert.equal(result.work_item.status, "running");
+    assert.equal(result.work_item.current_run_id, result.run.id);
+    assert.equal((await f.ports.authority.getWorkRun(ORG, "failed-run")).status, "failed");
+    assert.equal(f.calls.spawn, 1);
+  });
+
+  it("does not fake cancellation when ignored work still has a live or uncertain attempt", async (t) => {
+    const f = await fixture(t);
+    await f.dispatch().startItem(f.item, f.recipe, "evidence");
+    const live = await f.ports.authority.getActiveWorkRun(ORG, f.item.id);
+    const skipped = await f.ports.authority.putWorkItem({
+      ...await f.ports.authority.getWorkItem(ORG, f.item.id), status: "skipped",
+    });
+    const service = f.service();
+    service.dispatch = f.dispatch();
+    await assert.rejects(service.runWorkItem(f.item.id), code("execution_start_conflict"));
+    assert.deepEqual(await f.ports.authority.getWorkRun(ORG, live.id), live);
+    assert.deepEqual(await f.ports.authority.getWorkItem(ORG, f.item.id), skipped);
+    assert.equal(f.calls.spawn, 1);
+  });
+
   it("persists the selected destination before starting and ignores later recipe edits", async (t) => {
     const f = await fixture(t);
     const recipe = { ...f.recipe, can_write_back: true, write_back_thread_id: "source:results" };
@@ -835,8 +927,10 @@ describe("durable executor start", () => {
     );
     await dispatch.startItem(f.item, f.recipe, "evidence");
     assert.equal(seen[0], undefined);
-    await f.ports.authority.putWorkItem({ ...f.item, status: "open", updated_at: new Date().toISOString() });
-    const run = await dispatch.startItem(f.item, { ...f.recipe, include_context: true }, "evidence");
+    const reopened = await f.ports.authority.putWorkItem({
+      ...f.item, status: "open", updated_at: new Date().toISOString(),
+    });
+    const run = await dispatch.startItem(reopened, { ...f.recipe, include_context: true }, "evidence");
     assert.deepEqual(seen[1].task, { thread_id: f.item.thread_id });
     assert.equal(seen[1].access.run_id, run.id);
     assert.equal(seen[1].access.agent_key, "rgk1.sig");

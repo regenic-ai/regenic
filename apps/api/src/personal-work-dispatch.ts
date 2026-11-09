@@ -371,13 +371,7 @@ export class PersonalWorkDispatch {
     ) {
       return;
     }
-    const opened = await authority.putWorkItem({
-      ...item,
-      status: "open",
-      recipe_id: recipe.id,
-      updated_at: new Date().toISOString(),
-    });
-    await this.beginStart(opened, recipe, evidenceText, schedule);
+    await this.beginStart(item, recipe, evidenceText, schedule);
   }
 
   private beginStart(
@@ -589,6 +583,8 @@ export class PersonalWorkDispatch {
     };
     const claimed = await authority.claimWorkRunStart({
       run,
+      expected_item: item,
+      retry: mode === "manual" ? "manual" : item.status === "failed" ? "automatic" : undefined,
       max_concurrent: mode === "manual" ? undefined : recipe.max_concurrent,
     });
     if (!claimed) {

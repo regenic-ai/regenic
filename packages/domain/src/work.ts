@@ -224,6 +224,10 @@ export interface WorkFace {
 
 export interface WorkRunStartClaim {
   run: WorkRun & { status: "running"; start_state: "pending" };
+  /** Required for retries; omitted only by legacy open-item callers. */
+  expected_item?: WorkItem;
+  /** Retry eligibility is applied inside the same transaction as the new run. */
+  retry?: "automatic" | "manual";
   /** Auto-start limit; manual starts may omit it. */
   max_concurrent?: number;
 }
@@ -260,7 +264,7 @@ export interface WorkStore {
   listHiddenExecutorThreadIds(orgId: string): Promise<string[]>;
   /** Preserves terminal status and completed results; does not settle the item or enqueue a delivery. */
   putWorkRun(run: WorkRun): Promise<WorkRun>;
-  /** Atomically reserve an open item and persist its run before external start. */
+  /** Atomically reserve the expected eligible item and persist its run before external start. */
   claimWorkRunStart(input: WorkRunStartClaim): Promise<boolean>;
   /** Atomically checkpoint a current reserved start and its matching item status. */
   checkpointWorkRunStart(input: WorkRunStartCheckpoint): Promise<WorkRunStartCheckpointResult>;

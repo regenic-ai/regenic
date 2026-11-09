@@ -20,6 +20,7 @@ import {
   type WorkItemStatus,
   prepareWorkObservation,
   assertWorkRunWrite,
+  canClaimWorkRunStartItem,
   prepareWorkRunStartCheckpoint,
   type WorkRunStartCheckpoint,
   type WorkRunStartCheckpointResult,
@@ -386,18 +387,19 @@ export async function commitWorkObservation(
   });
 }
 
-export async function claimWorkRunStart(db: PgSql, { run, max_concurrent }: WorkRunStartClaim): Promise<boolean> {
+export async function claimWorkRunStart(db: PgSql, input: WorkRunStartClaim): Promise<boolean> {
+  const { run, max_concurrent } = input;
   return db.withTx(async (client) => {
     // Recipe lock also serializes capacity checks for different work items.
     const recipe = await db.queryOne(`
       SELECT id FROM recipes WHERE org_id = $1 AND id = $2 FOR UPDATE
     `, [run.org_id, run.recipe_id], client);
     if (!recipe) return false;
-    const item = await db.queryOne(`
-      SELECT id FROM work_items WHERE org_id = $1 AND id = $2 AND recipe_id = $3
-        AND status = 'open' FOR UPDATE
+    const item = await db.queryOne<WorkItemRow>(`
+      SELECT * FROM work_items WHERE org_id = $1 AND id = $2 AND recipe_id = $3
+        FOR UPDATE
     `, [run.org_id, run.work_item_id, run.recipe_id], client);
-    if (!item) return false;
+    if (!item || !canClaimWorkRunStartItem(input, toWorkItem(item))) return false;
     const active = await db.queryOne(`
       SELECT id FROM work_runs WHERE org_id = $1 AND work_item_id = $2
         AND status IN ('running', 'waiting_human') LIMIT 1
