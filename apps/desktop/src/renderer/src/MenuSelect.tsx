@@ -10,6 +10,7 @@ export function MenuSelect({
   value,
   options,
   placeholder,
+  valueLabel,
   disabled,
   searchable,
   className,
@@ -19,6 +20,7 @@ export function MenuSelect({
   value: string;
   options: MenuSelectOption[];
   placeholder?: string;
+  valueLabel?: string;
   disabled?: boolean;
   searchable?: boolean;
   className?: string;
@@ -125,7 +127,7 @@ export function MenuSelect({
     <div className={`menu-select${className ? ` ${className}` : ""}`} ref={rootRef}>
       <button
         type="button"
-        className={`menu-select-btn${selected ? "" : " is-placeholder"}${open ? " is-open" : ""}`}
+        className={`menu-select-btn${selected || valueLabel ? "" : " is-placeholder"}${open ? " is-open" : ""}`}
         aria-label={ariaLabel}
         aria-haspopup="listbox"
         aria-expanded={open}
@@ -172,7 +174,7 @@ export function MenuSelect({
           }
         }}
       >
-        <span>{selected?.label || placeholder}</span>
+        <span>{selected?.label || valueLabel || placeholder}</span>
         <ChevronIcon />
       </button>
       {open ? (

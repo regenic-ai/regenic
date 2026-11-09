@@ -85,6 +85,10 @@ importers:
         version: 8.22.1
 
   apps/desktop:
+    dependencies:
+      '@regenic/connector-contract':
+        specifier: workspace:*
+        version: link:../../packages/connector-contract
     devDependencies:
       '@types/react':
         specifier: ^19.1.8

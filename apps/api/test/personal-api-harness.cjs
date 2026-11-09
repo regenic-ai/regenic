@@ -367,6 +367,9 @@ async function startPersonalApi(database, blobRoot, extraEnv = {}) {
     async read(service, account) {
       return secrets.get(`${service}:${account}`);
     },
+    delete(service, account) {
+      secrets.delete(`${service}:${account}`);
+    },
   });
   setEnv({
     REGENIC_AUTHORITY_DRIVER: "sqlite",

@@ -28,6 +28,14 @@ export default defineConfig({
     },
   },
   renderer: {
+    optimizeDeps: {
+      include: ["@regenic/connector-contract/form"],
+    },
+    build: {
+      commonjsOptions: {
+        include: [/node_modules/, /connector-contract\/dist\/form\.js$/],
+      },
+    },
     resolve: {
       alias: {
         "@renderer": resolve("src/renderer/src"),

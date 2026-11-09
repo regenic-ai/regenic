@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -19,13 +19,41 @@ export type CursorSecretWriter = (
 
 let readOverride: CursorSecretReader | undefined;
 let writeOverride: CursorSecretWriter | undefined;
+let deleteOverride: ((service: string, account: string) => void) | undefined;
 
 export function setCursorSecretStoreForTests(input: {
   read?: CursorSecretReader;
   write?: CursorSecretWriter;
+  delete?: (service: string, account: string) => void;
 } = {}): void {
   readOverride = input.read;
   writeOverride = input.write;
+  deleteOverride = input.delete;
+}
+
+export function deleteCursorApiKey(account: string): void {
+  if (!account || /[\\\/]/.test(account) || account === "." || account === "..") {
+    throw new Error("Invalid Cursor credential account");
+  }
+  if (deleteOverride) {
+    deleteOverride(CURSOR_KEYCHAIN_SERVICE, account);
+    return;
+  }
+  if (readOverride || writeOverride) throw new Error("Test Cursor credential store does not support deletion");
+  if (process.platform === "darwin") {
+    const result = spawnSync("security", ["delete-generic-password", "-s", CURSOR_KEYCHAIN_SERVICE, "-a", account],
+      { encoding: "utf8" });
+    if (result.error) throw result.error;
+    if (result.status !== 0 && result.status !== 44) {
+      throw new Error(result.stderr.trim() || "Could not remove the Cursor API key");
+    }
+    return;
+  }
+  try {
+    unlinkSync(credentialPath(account));
+  } catch (error) {
+    if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
+  }
 }
 
 export function cursorKeychainRef(account: string): string {
@@ -80,25 +108,15 @@ export async function readCursorApiKey(account: string): Promise<string | undefi
     return emptyToUndef(await readOverride(CURSOR_KEYCHAIN_SERVICE, account));
   }
   if (process.platform === "darwin") {
-    try {
-      return emptyToUndef(
-        await runSecurity([
-          "find-generic-password",
-          "-s",
-          CURSOR_KEYCHAIN_SERVICE,
-          "-a",
-          account,
-          "-w",
-        ]),
-      );
-    } catch {
-      return undefined;
-    }
+    return emptyToUndef(await runSecurity([
+      "find-generic-password", "-s", CURSOR_KEYCHAIN_SERVICE, "-a", account, "-w",
+    ]));
   }
   try {
     return emptyToUndef(await readFile(credentialPath(account), "utf8"));
-  } catch {
-    return undefined;
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return undefined;
+    throw error;
   }
 }
 
@@ -124,6 +142,7 @@ function runSecurity(args: string[]): Promise<string> {
     });
     child.on("error", reject);
     child.on("close", (code) => {
+      if (code === 44) { resolve(""); return; }
       if (code === 0) {
         resolve(stdout.replace(/\n$/, ""));
         return;

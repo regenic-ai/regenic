@@ -411,6 +411,10 @@ export class PersonalConnectorService implements OnModuleDestroy {
     });
   }
 
+  async credentialStatus(installationId: string): Promise<Record<string, boolean>> {
+    return connectorInstall.credentialStatus(this.connectorState(), installationId);
+  }
+
   async revealPairingCode(
     installationId: string,
   ): Promise<{ pairing_code: string }> {

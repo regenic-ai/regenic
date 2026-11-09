@@ -31,6 +31,8 @@ export type {
   ChannelSinkPort,
   ChannelSourcePort,
   ConnectorCatalogFieldOption,
+  ConnectorFieldOptionsRequest,
+  ConnectorFieldOptionsPage,
   ConnectorCatalogProbe,
   ConnectorCatalogServiceState,
   ConnectorImportInput,

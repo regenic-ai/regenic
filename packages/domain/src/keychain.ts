@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -13,7 +13,7 @@ export type { KeychainSecretRef };
 export { installSecretRef } from "@regenic/connector-contract";
 
 interface SecretCatalog {
-  fields?: Array<{ key: string; secret?: boolean }>;
+  fields?: Array<{ key: string; secret?: boolean; widget?: string }>;
 }
 
 export type KeychainReader = (
@@ -28,15 +28,43 @@ export type KeychainWriter = (
 
 let readOverride: KeychainReader | undefined;
 let writeOverride: KeychainWriter | undefined;
+let deleteOverride: ((service: string, account: string) => void) | undefined;
 
 export function setKeychainStoreForTests(
   input: {
     read?: KeychainReader;
     write?: KeychainWriter;
+    delete?: (service: string, account: string) => void;
   } = {},
 ): void {
   readOverride = input.read;
   writeOverride = input.write;
+  deleteOverride = input.delete;
+}
+
+export function deleteKeychainSecret(ref: KeychainSecretRef): void {
+  if (!ref.service.trim() || !ref.account.trim()) throw new Error("Invalid keychain reference");
+  if (deleteOverride) {
+    deleteOverride(ref.service, ref.account);
+    return;
+  }
+  if (readOverride || writeOverride) throw new Error("Test keychain store does not support deletion");
+  if (process.platform === "darwin") {
+    const result = spawnSync("security", [
+      "delete-generic-password", "-s", ref.service, "-a", ref.account,
+    ], { encoding: "utf8" });
+    if (result.error) throw result.error;
+    // security exits with 44 when the item is already absent.
+    if (result.status !== 0 && result.status !== 44) {
+      throw new Error(result.stderr.trim() || "Could not remove the secret");
+    }
+    return;
+  }
+  try {
+    unlinkSync(credentialPath(ref.service, ref.account));
+  } catch (error) {
+    if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
+  }
 }
 
 export function writeKeychainSecret(
@@ -84,25 +112,15 @@ export async function readKeychainSecret(
     return emptyToUndef(await readOverride(service, account));
   }
   if (process.platform === "darwin") {
-    try {
-      return emptyToUndef(
-        await runSecurity([
-          "find-generic-password",
-          "-s",
-          service,
-          "-a",
-          account,
-          "-w",
-        ]),
-      );
-    } catch {
-      return undefined;
-    }
+    return emptyToUndef(await runSecurity([
+      "find-generic-password", "-s", service, "-a", account, "-w",
+    ]));
   }
   try {
     return emptyToUndef(await readFile(credentialPath(service, account), "utf8"));
-  } catch {
-    return undefined;
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return undefined;
+    throw error;
   }
 }
 
@@ -119,6 +137,11 @@ export function persistInstallSecrets(input: {
   }
   const next: Record<string, JsonValue> = { ...input.stored };
   for (const key of keys) {
+    if (input.incoming[key] === null) {
+      deleteKeychainSecret(installSecretRef(input.connector_type, input.installation_id, key));
+      delete next[key];
+      continue;
+    }
     const leftover = stringValue(input.stored[key]);
     if (leftover) {
       writeKeychainSecret(
@@ -141,7 +164,7 @@ export function readInstallSecret(
 
 function secretFieldKeys(catalog: SecretCatalog | null | undefined): string[] {
   return (catalog?.fields ?? []).flatMap((field) =>
-    field.secret && field.key.trim() ? [field.key.trim()] : [],
+    (field.secret || field.widget === "password") && field.key.trim() ? [field.key.trim()] : [],
   );
 }
 
@@ -181,6 +204,7 @@ function runSecurity(args: string[]): Promise<string> {
     });
     child.on("error", reject);
     child.on("close", (code) => {
+      if (code === 44) { resolve(""); return; }
       if (code === 0) {
         resolve(stdout.replace(/\n$/, ""));
         return;

@@ -2,6 +2,7 @@ import { formatNextRunWhen, formatTime } from "./format.ts";
 import { configForRecipeEdit, configFromCatalog } from "./recipe-params.ts";
 import {
   competesForChat,
+  matchingConversations,
   previewRecipeMatch,
   recipeOutranks,
   recipesCanShareSubject,
@@ -573,12 +574,31 @@ export function recipeCardLine(
 }
 
 export function writeBackAvailable(
-  draft: Pick<RecipeDraft, "thread_id" | "write_back_thread_id">,
+  draft: RecipeDraft,
   conversations: RecipeConversationOption[],
+  sampleThreadId?: string,
 ): boolean {
-  const destination = draft.write_back_thread_id || draft.thread_id;
-  const picked = conversations.find((item) => item.id === destination);
-  return picked?.can_send !== false;
+  const destination =
+    draft.write_back_thread_id || sampleThreadId || draftMatch(draft).thread_id;
+  if (destination) {
+    return conversations.some((item) => item.id === destination && item.can_send === true);
+  }
+  return (matchingConversations(draftScopeMatch(draft), conversations, draft.trigger_kind) ?? [])
+    .some((item) => item.can_send === true);
+}
+
+export function writeBackChoices(
+  draft: RecipeDraft,
+  conversations: RecipeConversationOption[],
+  t: Translate,
+): Array<{ value: string; label: string }> {
+  return [
+    ...(writeBackAvailable({ ...draft, write_back_thread_id: "" }, conversations)
+      ? [{ value: "", label: t("recipes.writeBackOriginal") }]
+      : []),
+    ...conversations.filter((item) => item.can_send === true)
+      .map((item) => ({ value: item.id, label: item.label })),
+  ];
 }
 
 export function runStatusCopy(status: string, t: Translate): string | null {

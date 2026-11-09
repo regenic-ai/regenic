@@ -118,13 +118,14 @@ describe("cursorAgentDriver", () => {
     });
   });
 
-  it("installs with an env credential ref and no token in config", () => {
+  it("installs with an env credential ref and no token in config", async () => {
     const secrets = new Map();
     setCursorSecretStoreForTests({
       read: async (_service, account) => secrets.get(account),
       write: (_service, account, secret) => {
         secrets.set(account, secret);
       },
+      delete: (_service, account) => { secrets.delete(account); },
     });
     const created = cursorAgentDriver.install({
       id: "cursor-1",
@@ -137,6 +138,9 @@ describe("cursorAgentDriver", () => {
     assert.equal(JSON.stringify(created).includes("cursor_secret"), false);
     assert.equal(JSON.stringify(created).includes("should-not-store"), false);
     assert.equal(secrets.get("cursor-1"), "cursor_secret");
+    assert.deepEqual(await cursorAgentDriver.catalogCredentialStatus(created), { api_key: true });
+    await cursorAgentDriver.clearCatalogCredential(created, "api_key");
+    assert.deepEqual(await cursorAgentDriver.catalogCredentialStatus(created), { api_key: false });
     setCursorSecretStoreForTests();
   });
 

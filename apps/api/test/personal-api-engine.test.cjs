@@ -63,7 +63,7 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
       assert.equal(engine.catalog[1].fields[0].key, "sync_mode");
       assert.equal(engine.catalog[1].fields[1].key, "selection");
       assert.equal(engine.catalog[1].fields[2].key, "kinds");
-      assert.equal(engine.catalog[1].fields[2].default, "group,p2p");
+      assert.deepEqual(engine.catalog[1].fields[2].default, ["group", "p2p"]);
       assert.equal(engine.catalog[1].fields[3].key, "chat_ids");
       assert.equal(engine.catalog[1].fields[3].multiple, true);
       assert.equal(engine.catalog[1].prerequisites[0].key, "lark-cli");

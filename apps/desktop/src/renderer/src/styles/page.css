@@ -991,6 +991,36 @@
   padding: 0 0 12px 12px;
 }
 
+.connector-field-group {
+  display: grid;
+  gap: 10px;
+}
+
+.connector-form-fields {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+  display: grid;
+  gap: 14px;
+}
+
+.credential-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.connector-field-group h3 {
+  margin: 4px 0 0;
+  font-size: 13px;
+}
+
+.connector-field-group[open] > summary {
+  margin-bottom: 10px;
+}
+
 .prereq-list {
   margin: 8px 0 0;
   padding: 0;
@@ -1146,13 +1176,15 @@
   margin-bottom: 12px;
 }
 
-.directory-field {
+.directory-field,
+.connector-custom-value {
   display: flex;
   gap: 8px;
   align-items: center;
 }
 
-.directory-field input {
+.directory-field input,
+.connector-custom-value input {
   flex: 1;
   min-width: 0;
 }
@@ -1204,6 +1236,13 @@
 .field select {
   height: 32px;
   padding: 0 10px;
+}
+
+.field input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  accent-color: var(--focus);
 }
 
 .field textarea {
