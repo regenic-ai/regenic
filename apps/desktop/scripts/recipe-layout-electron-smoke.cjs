@@ -558,6 +558,59 @@ async function rendererSmoke() {
     assert.equal(await window.webContents.executeJavaScript(
       'document.querySelector(\'.recipe-form button[type="submit"]\').disabled',
     ), false, "Keeping a new rule local needs no sendable conversation");
+    await window.webContents.executeJavaScript(`window.__setConversations([{
+      id: "smoke:room", label: "Filter smoke chat", source: "smoke",
+      record_class: "task", thread_facet: "ticket", can_send: true, body_text: "draft"
+    }])`);
+    await clickText("Send back");
+    for (const scope of ["All tasks", "One channel"]) {
+      await clickText(scope);
+      if (scope === "One channel") {
+        await window.webContents.executeJavaScript(`(() => {
+          const row = [...document.querySelectorAll(".recipe-row")]
+            .find(item => item.querySelector(".recipe-row-label")?.textContent.trim() === "Source");
+          row.querySelector(".menu-select-btn").click();
+        })()`);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        await window.webContents.executeJavaScript(`(() => {
+          [...document.querySelectorAll('[role="option"]')]
+            .find(item => item.textContent.trim() === "Smoke channel").click();
+        })()`);
+        await new Promise((resolve) => setTimeout(resolve, 75));
+      }
+      await addCondition("Body contains");
+      await addCondition("Body does not contain");
+      for (const [contains, excludes] of [["MISSING", "other"], ["draft", "draft"]]) {
+        await setFilters(contains, excludes);
+        assert.match(await window.webContents.executeJavaScript(
+          'document.querySelector(".recipe-preview-body").textContent',
+        ), /No matching chats/, "Preview must still apply current message conditions");
+        await pickDestination("Original conversation");
+        assert.equal(await window.webContents.executeJavaScript(
+          'document.querySelector(\'.recipe-form button[type="submit"]\').disabled',
+        ), false, "Dynamic original capability must not depend on current text matches");
+        await saveAndReopen();
+        const saved = await window.webContents.executeJavaScript('window.__savedRecipe');
+        assert.equal(saved.can_write_back, true);
+        assert.equal(saved.write_back_thread_id, null);
+        assert.equal(saved.match.text_contains, contains);
+        assert.equal(saved.match.text_excludes, excludes);
+        assert.equal(saved.match.source, scope === "One channel" ? "smoke" : undefined);
+        assert.equal(await window.webContents.executeJavaScript(`(() => {
+          return [...document.querySelectorAll(".recipe-form-foot button")]
+            .find(item => item.textContent.trim() === "Try once").disabled;
+        })()`), true, "No current matching message means no trial sample, even though saving is allowed");
+      }
+      await window.webContents.executeJavaScript(
+        'document.querySelector(\'button[aria-label="Remove contains condition"]\').click()',
+      );
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      await window.webContents.executeJavaScript(
+        'document.querySelector(\'button[aria-label="Remove does-not-contain condition"]\').click()',
+      );
+      await new Promise((resolve) => setTimeout(resolve, 75));
+    }
+    console.log("Dynamic original destination ignores body filters; save and trial remain distinct");
     console.log("Destination intent, candidates, empty/legacy states, save/edit and send-trial smoke passed");
   } finally {
     window.destroy();
@@ -617,7 +670,7 @@ async function launchSmoke() {
       <div className="shell">
         <header className="titlebar">Recipe layout smoke</header>
         <nav className="rail" />
-        <div className="workspace"><RecipesPage sources={[]} conversations={conversations} seed={seed} /></div>
+        <div className="workspace"><RecipesPage sources={[{ id: "smoke", label: "Smoke channel" }]} conversations={conversations} seed={seed} /></div>
       </div>
       );
     }

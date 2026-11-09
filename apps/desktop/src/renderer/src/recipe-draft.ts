@@ -583,7 +583,7 @@ export function writeBackAvailable(
   if (destination) {
     return conversations.some((item) => item.id === destination && item.can_send === true);
   }
-  return (matchingConversations(draftMatch(draft), conversations, draft.trigger_kind) ?? [])
+  return (matchingConversations(draftScopeMatch(draft), conversations, draft.trigger_kind) ?? [])
     .some((item) => item.can_send === true);
 }
 

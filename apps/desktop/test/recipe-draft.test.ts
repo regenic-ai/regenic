@@ -13,6 +13,7 @@ import {
   writeBackChoices,
 } from "../src/renderer/src/recipe-draft.ts";
 import type { RecipeView } from "../src/renderer/src/types.ts";
+import { matchingConversations } from "../src/renderer/src/recipe-preview.ts";
 
 const t = (key: string, vars?: Record<string, string | number>) =>
   vars ? `${key}:${JSON.stringify(vars)}` : key;
@@ -171,6 +172,32 @@ describe("recipe draft", () => {
   it("drops hidden fields once the scope changes", () => {
     const draft = { ...draftFromRecipe(rule), scope: "tasks" as const };
     assert.deepEqual(draftMatch(draft), { record_class: "task", unit_kind: "message" });
+  });
+
+  it("keeps dynamic original destinations independent of current message conditions", () => {
+    const conversations = [
+      { id: "chat:writable", label: "Writable", source: "chat", record_class: "task" as const, can_send: true, body_text: "draft" },
+      { id: "chat:readonly", label: "Read only", source: "chat", record_class: "task" as const, can_send: false, body_text: "draft" },
+    ];
+    for (const scope of ["tasks", "source"] as const) {
+      for (const filters of [
+        { text_contains: "[customer]", text_excludes: "" },
+        { text_contains: "", text_excludes: "draft" },
+      ]) {
+        const draft = { ...emptyDraft(), scope, source: "chat", ...filters };
+        assert.equal(writeBackAvailable(draft, conversations), true);
+        assert.equal(writeBackChoices(draft, conversations, t)[0]?.value, "");
+        assert.deepEqual(matchingConversations(draftMatch(draft), conversations, "push"), [],
+          "Current trial candidates and execution previews still apply body filters");
+        assert.equal(writeBackAvailable(draft, conversations, "chat:readonly"), false);
+        assert.equal(writeBackAvailable({ ...draft, write_back_thread_id: "chat:readonly" }, conversations), false);
+        assert.equal(writeBackAvailable({ ...draft, write_back_thread_id: "missing:target" }, conversations), false);
+        assert.equal(writeBackAvailable({ ...draft, write_back_thread_id: "chat:writable" }, conversations), true);
+        assert.equal(writeBackAvailable({ ...draft, source: "outside", scope: "source" }, conversations), false,
+          "Structural scope must still restrict dynamic destinations");
+        assert.equal(writeBackAvailable(draft, conversations.map((item) => ({ ...item, can_send: false }))), false);
+      }
+    }
   });
 
   it("refuses a channel rule with no channel picked", () => {
