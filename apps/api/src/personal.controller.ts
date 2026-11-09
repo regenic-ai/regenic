@@ -351,6 +351,17 @@ export class PersonalController {
     }));
   }
 
+  @Post("engine/catalog-options")
+  listCatalogFieldOptionsPage(
+    @Body() body: import("@regenic/domain").ConnectorFieldOptionsRequest & { connector_type: string },
+    @Headers("accept-language") acceptLanguage?: string,
+  ) {
+    return this.guard(() => this.inbox.listCatalogFieldOptionsPage(
+      body?.connector_type ?? "", body ?? { field: "" },
+      requestLocale(undefined, acceptLanguage),
+    ));
+  }
+
   @Get("connector-market")
   getConnectorMarket(@Query("refresh") refresh?: string) {
     return this.connectorMarket.getMarket(refresh === "1");
@@ -810,6 +821,11 @@ export class PersonalController {
   @Post("connectors/:id/disable")
   disableConnector(@Param("id") id: string) {
     return this.guard(() => this.connectors.setStatus(id, "disabled"));
+  }
+
+  @Get("connectors/:id/credentials")
+  connectorCredentialStatus(@Param("id") id: string) {
+    return this.guard(() => this.connectors.credentialStatus(id));
   }
 
   @Get("connectors/:id/pairing-code")

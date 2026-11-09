@@ -207,7 +207,7 @@ describe("connector catalog hints", () => {
     assert.equal(feishu.fields[0].default, "conversation");
     assert.equal(feishu.fields[1].key, "selection");
     assert.equal(feishu.fields[2].key, "kinds");
-    assert.equal(feishu.fields[2].default, "group,p2p");
+    assert.deepEqual(feishu.fields[2].default, ["group", "p2p"]);
     assert.equal(feishu.fields[3].multiple, true);
     assert.equal(feishu.fields[3].filter_options_by, "kinds");
     assert.equal(feishu.fields[3].option_labels_key, "chat_names");
@@ -237,7 +237,7 @@ describe("connector catalog hints", () => {
     assert.equal(view.label, "All conversations");
     assert.equal(view.channel, "feishu");
     assert.equal(view.channel_label, "Feishu");
-    assert.equal(view.settings.kinds, "group,p2p");
+    assert.deepEqual(view.settings.kinds, ["group", "p2p"]);
     assert.equal(view.sync, undefined);
   });
 

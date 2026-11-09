@@ -480,7 +480,7 @@ keep a parallel list. `singleton: true` allows one install.
 `presentInstall` labels an installed row; without it the host uses
 `instance_label` / `instance_detail_key`, then the installation id. The
 desktop does not hard-code fields, titles, or importers per type. Installations
-include `settings` (non-secret config as strings) so the edit form can
+include `settings` (non-secret config; legacy arrays are CSV strings) so the edit form can
 prefill. The engine catalog also carries the driver's `source` and
 `subjectCatalog` vocabulary so the Recipes page can pick `unit_kind`.
 
@@ -508,7 +508,7 @@ for that option. The host does not keep a synonym list.
 
 | Field | Description |
 | --- | --- |
-| `fields` | `key`, `label` (`CopyRef`), required, default, `visible_when`, optional `multiple` + `options` |
+| `fields` | `key`, `label` (`CopyRef`), `required`, `default`, `visible_when`, optional `multiple` + `options`. See typed forms below |
 | `prerequisites` | Environment variable or local service, with `ready` and a `hint` (`CopyRef`) |
 | `setup_steps` | Numbered setup: `title` (`CopyRef`), optional `body` / `command` / `href` / `visible_when`. `href` is a URL or `{ en, zh }`. Rendered above the dialog form; `command` is copyable. The desktop does not hard-code steps per channel |
 | `import_files` | File picker on the Engine card: `accept`, optional `max_bytes` / `title` / `description` (`CopyRef`). Requires `parseImport`. `POST /v1/me/imports` is the generic route |
@@ -525,6 +525,72 @@ cached `ready` / `hint` on `GET /v1/me/engine` and does not wait on CLI
 or network. Form dropdowns load from `GET /v1/me/engine/catalog-options`.
 The desktop only renders the catalog. Adding a source does not change
 the API or the desktop.
+
+### Typed forms
+
+Existing catalogs continue to use string values and CSV for `multiple` fields.
+A connector can opt into core validation with `form_version: 2` and a `type`
+on every field: `string`, `number`, `boolean`, or `string_array`. Defaults
+use the same type. The API applies defaults and validates visible fields on
+both install and update before calling the driver's `install`; the driver
+still owns source-specific validation and normalization. Hidden typed fields
+are retained in the desktop draft but omitted on submission. Version 2
+settings preserve arrays, numbers and booleans. Legacy catalogs may declare
+`type: "string_array"` to use arrays in the desktop form while retaining their
+existing API settings format.
+DSH, Feishu and Cursor now declare version 2. Install/update retain a CSV
+input adapter for old clients, but new clients submit and receive typed arrays.
+
+Pure field-value validation and conditional visibility rules are shared through
+`@regenic/connector-contract/form`. This browser-safe entry point imports no host,
+storage or connector runtime. The desktop derives field types from the contract
+and adds only localized labels; the API translates rule failures to HTTP errors
+and remains authoritative. Source-specific validation stays in the driver.
+
+The desktop supports `widget: "text"`, `"password"`, `"directory"`,
+`"select"`, `"multi_select"`, `"number"`, and `"switch"`; the default widget
+is inferred from the type and options. `description` and `group` are `CopyRef`s;
+`advanced: true` places a group in a collapsed section. Numeric fields may
+declare `min` and `max`. Declare `dynamic_options: true` to load options
+through the generic options API; failures are shown with a retry action.
+Existing multiple fields without static options retain their legacy loading
+behavior.
+`allow_custom: true` treats static options as suggestions rather than a closed
+enum (Cursor models use this to preserve support for arbitrary model IDs).
+Multi-select and dynamic-option controls also expose an add-value input when
+`allow_custom` is enabled. Values are trimmed and deduplicated; typed arrays
+preserve commas within an individual value. Custom selections can be removed
+like suggested options.
+
+`POST /v1/me/engine/catalog-options` accepts `connector_type`, `field`,
+`query`, `cursor`, `limit` (1-100; default 50), and `values`. It returns
+`options` and an optional `next_cursor`. Only non-secret keys listed in
+`options_depends_on` are passed to the connector. A connector may implement
+`listCatalogFieldOptionsPage` to use native source search/pagination. Without
+it, the API adapts the existing `listCatalogFieldOptions` result with localized
+search, dependency filtering and offset pagination; this fallback still loads
+the source list. The desktop debounces search, cancels stale requests and keeps
+selected IDs/titles across pages. The legacy GET endpoint remains available.
+Option loading is isolated from widget rendering. Search, dependency and connector
+changes reset the cursor and results together; stale pages cannot append to a new
+request. Overlapping pages are merged by option ID. Dynamic results are not a
+closed enum; only static options without `allow_custom` constrain values.
+Load failures return `catalog_options_failed` (502), never a successful empty list.
+
+Mark credentials `secret: true` (or use the password widget) so they are not
+returned in installation settings and are stored using the existing keychain
+mechanism. `GET /v1/me/connectors/:id/credentials` returns only a map of
+field keys to saved/not-saved booleans. In config updates, omitted or blank
+credentials mean keep, a non-empty string means replace, and explicit `null`
+means remove. Required credentials cannot be removed. Removal is applied only
+when saving, not when the user clicks the form toggle. The status describes
+installation-owned credentials, not an environment-variable fallback.
+The API prepares credential removals separately from driver input. Only visible,
+validated removal intents reach either the generic keychain or connector-owned
+storage hooks; `null` on a hidden field is ignored.
+Connectors with a legacy private credential store can implement
+`catalogCredentialStatus` and `clearCatalogCredential`; Cursor uses these hooks.
+Keychain errors are surfaced rather than reported as missing credentials.
 
 Capability tables, kind maps, and setup for DSH / Feishu / Cursor are in
 [Built-in drivers](CONNECTOR_DRIVERS.md).

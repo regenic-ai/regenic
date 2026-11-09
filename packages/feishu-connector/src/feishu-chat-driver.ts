@@ -99,6 +99,7 @@ export const feishuChatDriver: ChannelDriver = {
 
   installCatalog() {
     return {
+      form_version: 2 as const,
       title: "catalog.title",
       channel_label: "catalog.channelLabel",
       description: "catalog.description",
@@ -106,7 +107,11 @@ export const feishuChatDriver: ChannelDriver = {
       fields: [
         {
           key: "sync_mode",
+          type: "string" as const,
           label: "field.syncMode",
+          description: "field.syncMode.description",
+          group: "group.advanced",
+          advanced: true,
           required: true,
           default: "conversation",
           options: [
@@ -117,7 +122,10 @@ export const feishuChatDriver: ChannelDriver = {
         },
         {
           key: "selection",
+          type: "string" as const,
           label: "field.selection",
+          group: "group.scope",
+          description: "field.selection.description",
           required: true,
           default: "recent",
           options: [
@@ -129,9 +137,12 @@ export const feishuChatDriver: ChannelDriver = {
         {
           key: "kinds",
           label: "field.kinds",
+          group: "group.scope",
+          type: "string_array" as const,
+          widget: "multi_select" as const,
           required: true,
           multiple: true,
-          default: "group,p2p",
+          default: ["group", "p2p"],
           options: [
             { value: "group", label: "option.kinds.group" },
             { value: "p2p", label: "option.kinds.p2p" },
@@ -141,6 +152,11 @@ export const feishuChatDriver: ChannelDriver = {
         {
           key: "chat_ids",
           label: "field.chatIds",
+          group: "group.scope",
+          type: "string_array" as const,
+          widget: "multi_select" as const,
+          dynamic_options: true,
+          options_depends_on: ["kinds"],
           required: true,
           multiple: true,
           placeholder: "field.chatIds.placeholder",
@@ -498,7 +514,7 @@ export const feishuChatDriver: ChannelDriver = {
 
   async listCatalogFieldOptions({ env }) {
     return runInLarkSlot("interactive", async () => {
-      const chats = await listFeishuCatalogChats({ env });
+      const chats = await listFeishuCatalogChats({ env, strict: true });
       return {
         chat_ids: chats.map((chat) => ({
           value: chat.chat_id,
