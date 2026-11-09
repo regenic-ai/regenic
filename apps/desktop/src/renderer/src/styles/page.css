@@ -1176,13 +1176,15 @@
   margin-bottom: 12px;
 }
 
-.directory-field {
+.directory-field,
+.connector-custom-value {
   display: flex;
   gap: 8px;
   align-items: center;
 }
 
-.directory-field input {
+.directory-field input,
+.connector-custom-value input {
   flex: 1;
   min-width: 0;
 }

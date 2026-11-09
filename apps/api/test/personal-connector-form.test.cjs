@@ -1,6 +1,6 @@
 const assert = require("node:assert/strict");
 const { describe, it } = require("node:test");
-const { validateConnectorForm } = require("../dist/personal-connector-form");
+const { validateConnectorForm, prepareConnectorForm } = require("../dist/personal-connector-form");
 const { catalogFromDrivers, installationSettings } = require("../dist/personal-connector-view");
 
 describe("connector form v2", () => {
@@ -81,6 +81,32 @@ describe("connector form v2", () => {
     assert.doesNotThrow(() => validateConnectorForm(secret, {}, true, { credential: true }));
     assert.throws(() => validateConnectorForm(secret, { credential: null }, true, { credential: true }),
       { code: "invalid_config" });
+  });
+
+  it("separates validated credential changes from driver input and ignores hidden or undeclared clears", () => {
+    const secret = { ...catalog, fields: [
+      { key: "mode", label: "Mode", type: "string", default: "web" },
+      { key: "token", label: "Token", type: "string", secret: true,
+        visible_when: { field: "mode", value: "web" } },
+      { key: "password", label: "Password", type: "string", widget: "password",
+        visible_when: { field: "mode", value: "web" } },
+    ] };
+    assert.deepEqual(prepareConnectorForm(secret, { token: null, password: null }, true),
+      { config: { mode: "web" }, credentialChanges: { token: null, password: null } });
+    assert.deepEqual(prepareConnectorForm(secret, { mode: "cli", token: null, password: null }, true),
+      { config: { mode: "cli" }, credentialChanges: {} });
+    assert.deepEqual(prepareConnectorForm(secret, { token: "", password: "replacement", extra: null }, true), {
+      config: { mode: "web", token: "", password: "replacement", extra: null }, credentialChanges: {},
+    });
+    assert.deepEqual(prepareConnectorForm(secret, {}, true),
+      { config: { mode: "web" }, credentialChanges: {} });
+    assert.deepEqual(prepareConnectorForm(secret, { mode: "cli", token: null }, false),
+      { config: { mode: "cli" }, credentialChanges: {} });
+    const legacy = { ...secret, form_version: undefined };
+    assert.deepEqual(prepareConnectorForm(legacy, { mode: "web", token: null }, true),
+      { config: { mode: "web", token: null }, credentialChanges: { token: null } });
+    assert.deepEqual(prepareConnectorForm(legacy, { mode: "cli", token: null }, true),
+      { config: { mode: "cli", token: null }, credentialChanges: {} });
   });
 
   it("adapts old API CSV inputs without weakening strict validation", () => {

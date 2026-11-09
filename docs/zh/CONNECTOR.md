@@ -411,6 +411,9 @@ PC 只渲染统一组件，不加载连接器提供的 UI 代码。DSH、飞书�
 `advanced: true` 把对应分组默认折叠；数字可以声明 `min` / `max`。
 `allow_custom: true` 把静态选项当作建议，而不是封闭枚举；Cursor 模型使用此标记，
 保留自定义模型 ID 的能力。
+多选和动态选项组件也会在声明 `allow_custom` 时提供自定义值输入。
+添加时去除首尾空白并避免重复；类型化数组保留单个值中的逗号，
+自定义选中项和建议选项一样可以移除。
 
 声明 `dynamic_options: true` 后，PC 调用 `POST /v1/me/engine/catalog-options`，
 提交 `connector_type`、`field`、`query`、`cursor`、`limit`（1–100，默认 50）
@@ -432,6 +435,8 @@ PC 只渲染统一组件，不加载连接器提供的 UI 代码。DSH、飞书�
 保存时才执行。使用独立旧凭据存储的连接器可以实现
 `catalogCredentialStatus`、`clearCatalogCredential` 后端钩子；Cursor 通过
 这两个钩子兼容。读取或清除失败会显式报错，不当作“未设置”。
+API 把凭据清除操作与驱动输入分离，只有可见且通过校验的清除意图，
+才能进入通用密钥存储或连接器自己的清除钩子；隐藏字段上的 `null` 不执行清除。
 
 内置 DSH / 飞书 / Cursor 的能力表、kind 映射和安装前置见[内置驱动](CONNECTOR_DRIVERS.md)。
 

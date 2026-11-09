@@ -129,6 +129,7 @@ function ConnectorOptionsField({
   onOptions: (key: string, options: ConnectorFieldOption[]) => void;
 }) {
   const { t } = useLocale();
+  const [customValue, setCustomValue] = useState("");
   const { query, setQuery, page, pending, error, retry, loadMore } =
     useConnectorFieldOptions(connectorType, field, values, enabled, onOptions);
   const value = values[field.key];
@@ -141,7 +142,32 @@ function ConnectorOptionsField({
     .map((value) => field.options?.find((item) => item.value === value) ?? { value, label: value });
   const options = [...missing, ...visible];
   const nextCursor = page.next_cursor;
+  const custom = customValue.trim();
+  const customDisabled = field.dynamic_options && !enabled;
+  const addCustom = () => {
+    if (!custom || selected.includes(custom) || customDisabled) return;
+    const option = field.options?.find((item) => item.value === custom) ??
+      page.options.find((item) => item.value === custom) ?? { value: custom, label: custom, title: custom };
+    onOptions(field.key, [option]);
+    const next = [...selected, custom];
+    onChange(multiple ? field.type === "string_array" ? next : next.join(",") : custom);
+    setCustomValue("");
+  };
   return <div className="check-options">
+    {field.allow_custom ? <div className="connector-custom-value">
+      <input type="text" value={customValue} disabled={customDisabled}
+        aria-label={t("connector.customValue", { label: field.label })}
+        placeholder={t("connector.customValue", { label: field.label })}
+        onChange={(event) => setCustomValue(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+            event.preventDefault();
+            addCustom();
+          }
+        }} />
+      <button type="button" className="ghost" disabled={!custom || selected.includes(custom) || customDisabled}
+        onClick={addCustom}>{t("connector.addValue")}</button>
+    </div> : null}
     {field.dynamic_options || source.length > 4 ? <input type="search" value={query}
       aria-label={t("connector.search", { label: field.label })}
       placeholder={t("connector.search", { label: field.label })}

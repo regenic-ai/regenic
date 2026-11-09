@@ -31,7 +31,7 @@ async function rendererSmoke() {
     await waitFor('document.querySelector(".check-list")?.textContent.includes("a-first")');
     await more();
     await waitFor('document.querySelector(".check-list").textContent.includes("a-second")');
-    assert.equal(await evaluate('document.querySelectorAll(".check-list li").length'), 3,
+    assert.equal(await evaluate('document.querySelector(".check-list").querySelectorAll("li").length'), 3,
       "Overlapping pages must not duplicate options or lose the saved selection");
     await more();
     await waitFor('window.__requests.some(request => request.cursor === "100")');
@@ -64,7 +64,69 @@ async function rendererSmoke() {
       "Retry must load a new first page");
     assert.equal(await evaluate('document.querySelector("#fixture").checkValidity()'), true,
       "Numeric fields must accept fractional values permitted by Core");
-    console.log("Connector form dependency, pagination, debounce, cancellation and retry smoke passed");
+    assert.equal(await evaluate('document.querySelectorAll(\'input[aria-label="Custom value for Tags"]\').length'), 1,
+      "allow_custom multi-select fields must expose a custom-value input");
+    const customInput = 'input[aria-label="Custom value for Tags"]';
+    const addCustom = async (value, enter = false) => {
+      await evaluate(`(() => {
+        const input = document.querySelector(${JSON.stringify(customInput)});
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(input, ${JSON.stringify(value)});
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      })()`);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      await evaluate(enter
+        ? `document.querySelector(${JSON.stringify(customInput)}).dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }))`
+        : 'document.querySelector(\'input[aria-label="Custom value for Tags"]\').parentElement.querySelector("button").click()');
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    };
+    await addCustom(" Team, West ");
+    assert.deepEqual(await evaluate('window.__formValues.tags'), ["known", "Team, West"],
+      "Adding a custom tag must preserve commas and existing selections");
+    await addCustom("Team, West", true);
+    assert.deepEqual(await evaluate('window.__formValues.tags'), ["known", "Team, West"],
+      "Adding the same tag must not duplicate it");
+    await addCustom("  ", true);
+    assert.deepEqual(await evaluate('window.__formValues.tags'), ["known", "Team, West"],
+      "Blank custom values must not be added");
+    await addCustom("Another", true);
+    assert.deepEqual(await evaluate('window.__formValues.tags'), ["known", "Team, West", "Another"]);
+    assert.equal(await evaluate('window.__formSubmits'), 0, "Enter must not submit the enclosing form");
+    await evaluate(`(() => {
+      const input = [...document.querySelectorAll('input[name="tags"]')]
+        .find(input => input.parentElement.textContent.includes("Team, West"));
+      input.click();
+    })()`);
+    await waitFor('window.__formValues.tags.length === 2');
+    assert.deepEqual(await evaluate('window.__formValues.tags'), ["known", "Another"],
+      "Custom values must remain removable");
+    assert.equal(await evaluate('document.querySelectorAll(\'input[aria-label="Custom value for IDs"]\').length'), 0,
+      "Closed option fields must not expose custom input");
+    await evaluate(`(() => {
+      const input = document.querySelector('input[aria-label="Custom value for Remote"]');
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(input, "custom,remote");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    })()`);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await evaluate('document.querySelector(\'input[aria-label="Custom value for Remote"]\').parentElement.querySelector("button").click()');
+    await waitFor('window.__formValues.remote === "custom,remote"');
+    assert.deepEqual(await evaluate('window.__optionUpdates.find(update => update.key === "remote" && update.page[0].value === "custom,remote").page'),
+      [{ value: "custom,remote", label: "custom,remote", title: "custom,remote" }],
+      "Custom values must populate option metadata for payload labels");
+    await evaluate(`(() => {
+      [...document.querySelectorAll('input[name="remote"]')]
+        .find(input => input.parentElement.textContent.includes("Suggested remote")).click();
+    })()`);
+    await waitFor('window.__formValues.remote === "suggested-remote"');
+    await evaluate(`(() => {
+      [...document.querySelectorAll('input[name="tags"]')]
+        .find(input => input.parentElement.textContent.trim() === "Known").click();
+    })()`);
+    await waitFor('!window.__formValues.tags.includes("known")');
+    await addCustom("known", true);
+    await waitFor('window.__formValues.tags.includes("known")');
+    assert.deepEqual(await evaluate('window.__optionUpdates.filter(update => update.key === "tags").at(-1).page'),
+      [{ value: "known", label: "Known" }], "Adding a suggestion by value must preserve its label");
+    console.log("Connector form pagination, cancellation, retry and custom-value smoke passed");
   } finally {
     window.destroy();
     app.quit();
@@ -81,10 +143,15 @@ async function launchSmoke() {
     import { createRoot } from "react-dom/client";
     import { ConnectorFormFields } from "/src/ConnectorFormFields";
     window.__requests = [];
+    window.__optionUpdates = [];
+    window.__formSubmits = 0;
     window.fetch = async (input, init) => {
       if (new URL(String(input), location.href).pathname !== "/v1/me/engine/catalog-options")
         throw new Error("Unexpected connector form request");
       const request = JSON.parse(init.body);
+      if (request.field === "remote") return new Response(JSON.stringify({
+        options: [{ value: "suggested-remote", label: "Suggested remote" }]
+      }), { headers: { "content-type": "application/json" } });
       window.__requests.push(request);
       const mode = request.values.mode;
       if (request.cursor === "100" || request.query === "slow")
@@ -100,18 +167,27 @@ async function launchSmoke() {
       }), { headers: { "content-type": "application/json" } });
     };
     function Fixture() {
-      const [values, setValues] = useState({ mode: "a", ids: ["saved"], limit: 0.5 });
+      const [values, setValues] = useState({ mode: "a", ids: ["saved"], limit: 0.5, tags: ["known"] });
+      window.__formValues = values;
       const [options, setOptions] = useState([{ value: "saved", label: "Saved title", title: "Saved title" }]);
-      const remember = useCallback((key, page) => setOptions(current =>
-        [...new Map([...current, ...page].map(option => [option.value, option])).values()]), []);
-      return <form id="fixture">
+      const remember = useCallback((key, page) => {
+        window.__optionUpdates.push({ key, page });
+        if (key === "ids") setOptions(current =>
+          [...new Map([...current, ...page].map(option => [option.value, option])).values()]);
+      }, []);
+      return <form id="fixture" onSubmit={event => {
+        event.preventDefault(); window.__formSubmits = (window.__formSubmits ?? 0) + 1;
+      }}>
         <button id="dependency" type="button" onClick={() => setValues(current => ({ ...current, mode: "b" }))}>
           Change dependency
         </button>
         <ConnectorFormFields connectorType="fixture" fields={[
           { key: "ids", label: "IDs", type: "string_array", required: true, dynamic_options: true,
             options_depends_on: ["mode"], options },
-          { key: "limit", label: "Limit", type: "number", required: true, min: 0, max: 1 }
+          { key: "limit", label: "Limit", type: "number", required: true, min: 0, max: 1 },
+          { key: "tags", label: "Tags", type: "string_array", required: false, allow_custom: true,
+            options: [{ value: "known", label: "Known" }] },
+          { key: "remote", label: "Remote", type: "string", required: false, allow_custom: true, dynamic_options: true }
         ]} values={values} credentials={{}} busy={false} loading={false} optionsEnabled={true}
           onChange={(key, value) => setValues(current => ({ ...current, [key]: value }))}
           onOptions={remember} />

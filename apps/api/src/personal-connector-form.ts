@@ -1,18 +1,31 @@
 import { connectorFieldValueIssue, matchesCatalogFieldWhen, type DriverInstallCatalog } from "@regenic/domain";
 import { PersonalConnectorError } from "./personal-errors";
 
-export function validateConnectorForm(
+interface PreparedConnectorForm {
+  config: Record<string, unknown>;
+  credentialChanges: Record<string, null>;
+}
+
+export function prepareConnectorForm(
   catalog: DriverInstallCatalog | undefined,
   config: Record<string, unknown>,
   editing: boolean,
   credentials: Record<string, boolean> = {},
   acceptLegacyCsv = false,
-): Record<string, unknown> {
+): PreparedConnectorForm {
   if (catalog?.form_version !== undefined && catalog.form_version !== 2) {
     throw new PersonalConnectorError("invalid_config", "Unsupported connector form version", 400);
   }
-  if (catalog?.form_version !== 2) return config;
-  const fields = catalog.fields ?? [];
+  const fields = catalog?.fields ?? [];
+  if (catalog?.form_version !== 2) {
+    return {
+      config,
+      credentialChanges: Object.fromEntries(fields
+        .filter((field) => (field.secret || field.widget === "password") &&
+          matchesCatalogFieldWhen(field.visible_when, config) && config[field.key] === null)
+        .map((field) => [field.key, null])),
+    };
+  }
   const keys = new Set<string>();
   const widgets: Record<string, readonly string[]> = {
     string: ["text", "password", "directory", "select"],
@@ -47,6 +60,7 @@ export function validateConnectorForm(
     }
   }
   const normalized = { ...values };
+  const credentialChanges: Record<string, null> = {};
   for (const field of fields) {
     if (!matchesCatalogFieldWhen(field.visible_when, values)) {
       delete normalized[field.key];
@@ -60,8 +74,19 @@ export function validateConnectorForm(
       throw new PersonalConnectorError("invalid_config", message, 400);
     }
     if ((field.secret || field.widget === "password") && value === null) {
+      credentialChanges[field.key] = null;
       delete normalized[field.key];
     }
   }
-  return normalized;
+  return { config: normalized, credentialChanges };
+}
+
+export function validateConnectorForm(
+  catalog: DriverInstallCatalog | undefined,
+  config: Record<string, unknown>,
+  editing: boolean,
+  credentials: Record<string, boolean> = {},
+  acceptLegacyCsv = false,
+): Record<string, unknown> {
+  return prepareConnectorForm(catalog, config, editing, credentials, acceptLegacyCsv).config;
 }

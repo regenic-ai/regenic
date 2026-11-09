@@ -557,6 +557,10 @@ Existing multiple fields without static options retain their legacy loading
 behavior.
 `allow_custom: true` treats static options as suggestions rather than a closed
 enum (Cursor models use this to preserve support for arbitrary model IDs).
+Multi-select and dynamic-option controls also expose an add-value input when
+`allow_custom` is enabled. Values are trimmed and deduplicated; typed arrays
+preserve commas within an individual value. Custom selections can be removed
+like suggested options.
 
 `POST /v1/me/engine/catalog-options` accepts `connector_type`, `field`,
 `query`, `cursor`, `limit` (1-100; default 50), and `values`. It returns
@@ -581,6 +585,9 @@ credentials mean keep, a non-empty string means replace, and explicit `null`
 means remove. Required credentials cannot be removed. Removal is applied only
 when saving, not when the user clicks the form toggle. The status describes
 installation-owned credentials, not an environment-variable fallback.
+The API prepares credential removals separately from driver input. Only visible,
+validated removal intents reach either the generic keychain or connector-owned
+storage hooks; `null` on a hidden field is ignored.
 Connectors with a legacy private credential store can implement
 `catalogCredentialStatus` and `clearCatalogCredential`; Cursor uses these hooks.
 Keychain errors are surfaced rather than reported as missing credentials.
