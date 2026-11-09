@@ -357,7 +357,7 @@ function cloneRecipe(recipe: Recipe): Recipe {
 function cloneRun(run: WorkRun): WorkRun {
   return {
     ...run,
-    result: run.result ? { ...run.result } : undefined,
+    result: run.result ? structuredClone(run.result) : undefined,
   };
 }
 
@@ -368,7 +368,7 @@ function cloneDelivery(delivery: WorkDelivery): WorkDelivery {
       ? {
           summary: delivery.payload.summary,
           ...(delivery.payload.content
-            ? { content: [...delivery.payload.content] }
+            ? { content: structuredClone(delivery.payload.content) }
             : {}),
         }
       : undefined,

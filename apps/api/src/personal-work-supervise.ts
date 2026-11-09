@@ -261,7 +261,9 @@ export class PersonalWorkSupervise {
     if (result.outcome === "conflict") {
       throw new PersonalConnectorError(
         "execution_observation_conflict",
-        "Work changed while its executor was being observed. Refresh the work item before applying another observation.",
+        result.reason === "completed_result_changed"
+          ? "Completed work results are immutable. Start a new attempt to change the result."
+          : "Work changed while its executor was being observed. Refresh the work item before applying another observation.",
         409,
       );
     }

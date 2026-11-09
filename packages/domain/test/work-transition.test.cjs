@@ -152,14 +152,68 @@ describe("work observation transitions", () => {
     });
   }
 
-  it("preserves empty result validation for the existing delivery path", () => {
+  it("uses the retained result when completion does not repeat the result envelope", () => {
     const input = fixture();
     delete input.handle.result;
     input.run.result = { summary: "Previous result" };
     const plan = planWorkObservation(input);
     assert.deepEqual(plan.run.result, input.run.result);
     assert.deepEqual(plan.delivery, {
+      kind: "enqueue", payload: { summary: "Previous result", content: undefined },
+    });
+  });
+
+  it("keeps empty result validation when no result was ever observed", () => {
+    const input = fixture();
+    delete input.handle.result;
+    assert.deepEqual(planWorkObservation(input).delivery, {
       kind: "enqueue", payload: { summary: "", content: undefined },
     });
+  });
+
+  it("does not recreate or abandon delivery on repeated completion after recipe edits", () => {
+    for (const can_write_back of [true, false]) {
+      const input = fixture();
+      input.item.status = "done";
+      input.run.status = "completed";
+      input.run.result = { summary: "Handled" };
+      input.can_write_back = can_write_back;
+      const plan = planWorkObservation(input);
+      assert.equal(plan.changed, false);
+      assert.deepEqual(plan.delivery, { kind: "keep" });
+      delete input.handle.result;
+      assert.deepEqual(planWorkObservation(input).run.result, input.run.result);
+      assert.deepEqual(planWorkObservation(input).delivery, { kind: "keep" });
+    }
+  });
+
+  it("rejects a changed completed result including previously unknown historical results", () => {
+    for (const result of [undefined, { summary: "Original" }]) {
+      const input = fixture();
+      input.run.status = "completed";
+      input.run.result = result;
+      assert.throws(() => planWorkObservation(input), /Completed work results are immutable/);
+    }
+  });
+
+  it("compares result objects semantically while preserving evidence and content ordering", () => {
+    const input = fixture();
+    input.item.status = "done";
+    input.run.status = "completed";
+    input.run.result = {
+      summary: "Handled",
+      content: [{ role: "body", media_type: "text/plain", text: "Details" }],
+      evidence_event_ids: ["event-1", "event-2"],
+    };
+    input.handle.result = {
+      evidence_event_ids: ["event-1", "event-2"],
+      content: [{ text: "Details", media_type: "text/plain", role: "body" }],
+      summary: "Handled",
+    };
+    const plan = planWorkObservation(input);
+    assert.equal(plan.run.result, input.run.result);
+    assert.equal(plan.changed, false);
+    input.handle.result.evidence_event_ids.reverse();
+    assert.throws(() => planWorkObservation(input), /Completed work results are immutable/);
   });
 });

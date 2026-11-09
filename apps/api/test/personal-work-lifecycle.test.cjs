@@ -226,6 +226,38 @@ describe("work observation compatibility before RFC 0011 policy activation", () 
     assert.deepEqual(f.dropped, [f.run.id]);
   });
 
+  it("does not restore trial write-back after its in-memory override has been released", async () => {
+    const f = await fixture();
+    f.supervisor.setWriteBackOverride(f.item.id, false);
+    await f.supervisor.applyHandle(f.item, f.recipe, f.run, f.handle());
+    const item = await f.authority.getWorkItem(ORG, f.item.id);
+    const run = await f.authority.getWorkRun(ORG, f.run.id);
+    assert.equal(f.supervisor.allowsWriteBack(item.id, f.recipe), true);
+    await f.supervisor.applyHandle(item, f.recipe, run, f.handle());
+    assert.equal(await f.authority.getWorkDeliveryByItem(ORG, item.id), null);
+    assert.deepEqual(f.updated, [item.id]);
+  });
+
+  it("rejects a rewritten completed result before emitting success notifications", async () => {
+    const f = await fixture();
+    await f.supervisor.applyHandle(f.item, f.recipe, f.run, f.handle());
+    const item = await f.authority.getWorkItem(ORG, f.item.id);
+    const run = await f.authority.getWorkRun(ORG, f.run.id);
+    const delivery = await f.authority.getWorkDeliveryByItem(ORG, f.item.id);
+    await assert.rejects(
+      f.supervisor.applyHandle(item, f.recipe, run, f.handle("completed", {
+        result: { summary: "Rewritten" },
+      })),
+      (error) => error.code === "execution_observation_conflict"
+        && error.httpStatus === 409
+        && /Start a new attempt/.test(error.message),
+    );
+    assert.deepEqual(await f.authority.getWorkRun(ORG, run.id), run);
+    assert.deepEqual(await f.authority.getWorkDeliveryByItem(ORG, item.id), delivery);
+    assert.deepEqual(f.updated, [item.id]);
+    assert.equal(f.writes.length, 2);
+  });
+
   it("reports a stale observation without changing the new work or notifying success", async () => {
     const f = await fixture();
     await f.authority.putWorkItem({ ...f.item, head_event_id: "new-trigger" });

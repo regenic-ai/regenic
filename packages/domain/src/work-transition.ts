@@ -36,7 +36,10 @@ export interface CommitWorkObservation {
 export type CommitWorkObservationResult =
   | { outcome: "applied"; transition: WorkObservationTransition }
   | { outcome: "ignored"; reason: "work_skipped" }
-  | { outcome: "conflict"; reason: "missing_work" | "stale_observation" };
+  | {
+      outcome: "conflict";
+      reason: "missing_work" | "stale_observation" | "completed_result_changed";
+    };
 
 export type PreparedWorkObservation =
   | {
@@ -73,6 +76,9 @@ export function prepareWorkObservation(
     && input.handle.status !== run.status) {
     return { outcome: "conflict", reason: "stale_observation" };
   }
+  if (completedResultChanged(run, input.handle)) {
+    return { outcome: "conflict", reason: "completed_result_changed" };
+  }
   const transition = planWorkObservation({
     item,
     run,
@@ -100,10 +106,20 @@ export function prepareWorkObservation(
 }
 
 function sameSnapshot(current: WorkItem | WorkRun, expected: WorkItem | WorkRun): boolean {
+  return sameJson(current, expected);
+}
+
+function sameJson(current: unknown, expected: unknown): boolean {
   return isDeepStrictEqual(
-    JSON.parse(JSON.stringify(current)),
-    JSON.parse(JSON.stringify(expected)),
+    JSON.parse(JSON.stringify(current ?? null)),
+    JSON.parse(JSON.stringify(expected ?? null)),
   );
+}
+
+function completedResultChanged(run: WorkRun, handle: ExecutorRunHandle): boolean {
+  return run.status === "completed"
+    && handle.result !== undefined
+    && !sameJson(run.result, handle.result);
 }
 
 export function planWorkObservation(input: {
@@ -117,27 +133,30 @@ export function planWorkObservation(input: {
   if (run.org_id !== item.org_id || run.work_item_id !== item.id) {
     throw new Error("Work observation must belong to the same organization and work item");
   }
+  if (completedResultChanged(run, handle)) {
+    throw new Error("Completed work results are immutable; start a new attempt to change the result");
+  }
   const nextRun: WorkRun = {
     ...run,
     start_state: undefined,
     external_run_id: handle.external_run_id,
     agent_thread_id: handle.agent_thread_id ?? run.agent_thread_id,
     status: handle.status,
-    result: handle.result ?? run.result,
+    result: run.status === "completed" ? run.result : handle.result ?? run.result,
     updated_at: now,
   };
   const status = workStatusFromRun(nextRun.status);
   const nextItem = item.status === status
     ? item
     : { ...item, status, updated_at: now };
-  const delivery: ObservedWorkDelivery = handle.status !== "completed"
+  const delivery: ObservedWorkDelivery = handle.status !== "completed" || run.status === "completed"
     ? { kind: "keep" }
     : input.can_write_back
       ? {
           kind: "enqueue",
           payload: {
-            summary: handle.result?.summary ?? "",
-            content: handle.result?.content,
+            summary: nextRun.result?.summary ?? "",
+            content: nextRun.result?.content,
           },
         }
       : { kind: "abandon" };

@@ -152,6 +152,28 @@ for (const driver of drivers) {
       assert.equal(await f.store.getWorkDeliveryByItem(ORG, f.item.id), null);
     });
 
+    it("does not expose persisted completed results through mutable reads", async (t) => {
+      const f = await fixture(t, driver);
+      f.input.handle.result = {
+        summary: "Handled",
+        content: [{ role: "body", media_type: "text/plain", text: "Original" }],
+        evidence_event_ids: ["event-1"],
+      };
+      await f.store.commitWorkObservation(f.input);
+      const run = await f.store.getWorkRun(ORG, f.run.id);
+      const delivery = await f.store.getWorkDeliveryByItem(ORG, f.item.id);
+      run.result.content[0].text = "Changed through read";
+      run.result.evidence_event_ids.push("event-2");
+      delivery.payload.content[0].text = "Changed delivery through read";
+      const storedRun = await f.store.getWorkRun(ORG, f.run.id);
+      assert.equal(storedRun.result.content[0].text, "Original");
+      assert.deepEqual(storedRun.result.evidence_event_ids, ["event-1"]);
+      assert.equal(
+        (await f.store.getWorkDeliveryByItem(ORG, f.item.id)).payload.content[0].text,
+        "Original",
+      );
+    });
+
     it("does not revive a terminal attempt even if its latest snapshot is supplied", async (t) => {
       const f = await fixture(t, driver);
       await f.store.commitWorkObservation(f.input);
@@ -165,6 +187,97 @@ for (const driver of drivers) {
       assert.deepEqual(await f.store.getWorkItem(ORG, f.item.id), item);
       assert.deepEqual(await f.store.getWorkRun(ORG, f.run.id), run);
       assert.deepEqual(await f.store.getWorkDeliveryByItem(ORG, f.item.id), delivery);
+    });
+
+    it("rejects changes to completed summary, content and evidence even with current snapshots", async (t) => {
+      const f = await fixture(t, driver);
+      f.input.handle.result = {
+        summary: "Handled",
+        content: [{ role: "body", media_type: "text/plain", text: "Original" }],
+        evidence_event_ids: ["event-1", "event-2"],
+      };
+      await f.store.commitWorkObservation(f.input);
+      const item = await f.store.getWorkItem(ORG, f.item.id);
+      const run = await f.store.getWorkRun(ORG, f.run.id);
+      const delivery = await f.store.getWorkDeliveryByItem(ORG, f.item.id);
+      for (const result of [
+        { ...run.result, summary: "Corrected" },
+        { ...run.result, content: [{ role: "body", media_type: "text/plain", text: "Changed" }] },
+        { ...run.result, evidence_event_ids: ["event-2", "event-1"] },
+        { summary: "Handled" },
+      ]) {
+        assert.deepEqual(await f.store.commitWorkObservation({
+          ...f.input, expected_item: item, expected_run: run,
+          handle: { ...f.input.handle, result },
+        }), { outcome: "conflict", reason: "completed_result_changed" });
+        assert.deepEqual(await f.store.getWorkRun(ORG, f.run.id), run);
+        assert.deepEqual(await f.store.getWorkItem(ORG, f.item.id), item);
+        assert.deepEqual(await f.store.getWorkDeliveryByItem(ORG, f.item.id), delivery);
+      }
+    });
+
+    it("does not replace or abandon delivery evidence on duplicate completion", async (t) => {
+      const f = await fixture(t, driver);
+      await f.store.commitWorkObservation(f.input);
+      const delivery = await f.store.getWorkDeliveryByItem(ORG, f.item.id);
+      for (const [status, write_back] of [
+        ["queued", "pending"], ["write_back", "pending"], ["dead", "failed"],
+        ["acked", "sent"], ["acked", "skipped"],
+      ]) {
+        const recorded = {
+          ...delivery, status, write_back, attempts: 2,
+          channel_receipt: { accepted: true, rpc_id: "receipt-1" },
+          last_error: "Previous attempt evidence",
+        };
+        await f.store.putWorkDelivery(recorded);
+        for (const can_write_back of [false, true]) {
+          for (const result of [undefined, f.input.handle.result]) {
+            const item = await f.store.getWorkItem(ORG, f.item.id);
+            const run = await f.store.getWorkRun(ORG, f.run.id);
+            const repeated = await f.store.commitWorkObservation({
+              ...f.input, expected_item: item, expected_run: run, can_write_back,
+              handle: { ...f.input.handle, result },
+            });
+            assert.equal(repeated.outcome, "applied");
+            assert.equal(repeated.transition.changed, false);
+            assert.deepEqual(repeated.transition.delivery, { kind: "keep" });
+            assert.deepEqual(await f.store.getWorkDeliveryByItem(ORG, f.item.id), recorded);
+          }
+        }
+      }
+    });
+
+    it("does not invent delivery obligations or unknown results for historical completed work", async (t) => {
+      const f = await fixture(t, driver);
+      const item = { ...f.item, status: "done" };
+      const run = { ...f.run, status: "completed", start_state: undefined };
+      await f.store.putWorkItem(item);
+      await f.store.putWorkRun(run);
+      const repeated = await f.store.commitWorkObservation({
+        ...f.input, expected_item: item, expected_run: run,
+        handle: { ...f.input.handle, result: undefined },
+      });
+      assert.equal(repeated.outcome, "applied");
+      assert.equal(await f.store.getWorkDeliveryByItem(ORG, f.item.id), null);
+      assert.equal((await f.store.getWorkRun(ORG, f.run.id)).result, undefined);
+      assert.deepEqual(await f.store.commitWorkObservation({
+        ...f.input,
+        expected_item: await f.store.getWorkItem(ORG, f.item.id),
+        expected_run: await f.store.getWorkRun(ORG, f.run.id),
+      }), { outcome: "conflict", reason: "completed_result_changed" });
+    });
+
+    it("uses the last known result when the first completed observation omits it", async (t) => {
+      const f = await fixture(t, driver);
+      const run = { ...f.run, result: { summary: "Known result" } };
+      await f.store.putWorkRun(run);
+      const result = await f.store.commitWorkObservation({
+        ...f.input, expected_run: run,
+        handle: { ...f.input.handle, result: undefined },
+      });
+      assert.equal(result.outcome, "applied");
+      assert.deepEqual((await f.store.getWorkRun(ORG, f.run.id)).result, run.result);
+      assert.deepEqual((await f.store.getWorkDeliveryByItem(ORG, f.item.id)).payload, run.result);
     });
 
     it("ignores locally skipped work without fabricating a remote cancellation", async (t) => {
