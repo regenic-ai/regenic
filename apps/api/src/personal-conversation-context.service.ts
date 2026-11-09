@@ -202,7 +202,7 @@ export class PersonalConversationContextService {
   ): Promise<ConversationAnswerEvidence> {
     const body = strictObject(
       input,
-      new Set(["query", "conversations", "executor_type"]),
+      new Set(["query", "conversations", "executor_type", "filters"]),
       "body",
     );
     const query = requiredString(body.query, "query");
@@ -210,6 +210,9 @@ export class PersonalConversationContextService {
     const executorType = body.executor_type === undefined
       ? undefined
       : requiredString(body.executor_type, "executor_type");
+    const filters = body.filters === undefined
+      ? undefined
+      : answerFilters(body.filters);
     const requested = answerConversations(body.conversations);
     const conversations: Array<{
       thread_id: string;
@@ -220,18 +223,23 @@ export class PersonalConversationContextService {
       const wanted = new Set(conversation.event_ids);
       const indexes = events.flatMap((event, index) =>
         wanted.has(event.id) ? [index] : []);
-      const { messages } = await this.readMessages(
+      const { messages: currentMessages } = await this.readMessages(
         conversation.thread_id,
         events,
         indexes,
       );
-      if (indexes.length !== wanted.size || messages.length !== indexes.length) {
+      if (indexes.length !== wanted.size || currentMessages.length !== indexes.length) {
         throw new PersonalContextError(
           "context_changed",
           HttpStatus.CONFLICT,
           "Search context changed; search again",
         );
       }
+      const messages = filters
+        ? currentMessages.filter((message) =>
+            Date.parse(message.occurred_at) >= Date.parse(filters.occurred_after) &&
+            Date.parse(message.occurred_at) <= Date.parse(filters.occurred_before))
+        : currentMessages;
       if (messages.length) {
         conversations.push({ thread_id: conversation.thread_id, messages });
       }
@@ -254,12 +262,43 @@ export class PersonalConversationContextService {
         "QUESTION",
         query,
         "",
+        ...(filters ? [
+          "EVIDENCE TIME RANGE",
+          `${filters.occurred_after} through ${filters.occurred_before}`,
+          "",
+        ] : []),
         "CONVERSATIONS",
         transcript.text,
       ].join("\n"),
       refs: transcript.refs,
     };
   }
+}
+
+function answerFilters(value: unknown): {
+  occurred_after: string;
+  occurred_before: string;
+} {
+  const filters = strictObject(
+    value,
+    new Set(["occurred_after", "occurred_before"]),
+    "filters",
+  );
+  const occurredAfter = requiredTimestamp(
+    filters.occurred_after,
+    "filters.occurred_after",
+  );
+  const occurredBefore = requiredTimestamp(
+    filters.occurred_before,
+    "filters.occurred_before",
+  );
+  if (Date.parse(occurredAfter) > Date.parse(occurredBefore)) {
+    invalid("filters.occurred_before cannot precede filters.occurred_after");
+  }
+  return {
+    occurred_after: occurredAfter,
+    occurred_before: occurredBefore,
+  };
 }
 
 function eventKey(event: { occurred_at: string; id: string }): string {
@@ -418,6 +457,13 @@ function requiredString(value: unknown, name: string): string {
     invalid(`${name} is required`);
   }
   return (value as string).trim();
+}
+
+function requiredTimestamp(value: unknown, name: string): string {
+  const text = requiredString(value, name);
+  const timestamp = Date.parse(text);
+  if (!Number.isFinite(timestamp)) invalid(`${name} must be an ISO datetime`);
+  return new Date(timestamp).toISOString();
 }
 
 function boundedInteger(

@@ -46,6 +46,21 @@ function query(index, authorized, extra = {}) {
 }
 
 describe("SQLite vector projection and independent durable jobs", () => {
+  it("can claim newest jobs first without changing the durable default order", async t => {
+    const f = await fixture(t);
+    await reconcile(f.index, [head("old"), head("middle"), head("new")]);
+    assert.deepEqual((await f.index.claim({
+      org_id: "org", generation: generation.id, owner: "recent",
+      now: at, lease_ms: 1000, limit: 3, order: "newest",
+    })).map((job) => job.external_id), ["new", "middle", "old"]);
+
+    await f.index.registerGeneration("other", generation);
+    await reconcile(f.index, [head("old"), head("middle"), head("new")], "other");
+    assert.deepEqual((await claim(
+      f.index, "default", at, "other",
+    )).map((job) => job.external_id), ["old", "middle", "new"]);
+  });
+
   it("revokes visual indexes across generations while preserving contiguous text, namespaces and reindex eligibility", async t => {
     const f = await fixture(t);
     const second = embeddingGeneration(model, 64);
