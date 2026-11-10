@@ -268,6 +268,18 @@ export type ConversationVisibilityUpdateResult =
   | { outcome: "applied"; pref: ConversationPref }
   | { outcome: "conflict"; current_version: number };
 
+export interface ConversationPolicyFold {
+  org_id: string;
+  thread_id: string;
+  expected_visibility_version: number;
+  updated_at: string;
+}
+
+export type ConversationPolicyFoldResult =
+  | { outcome: "applied"; pref: ConversationPref }
+  | { outcome: "unchanged" }
+  | { outcome: "conflict"; current_version: number };
+
 export interface EventListQuery {
   source?: string;
   target?: string;
@@ -417,6 +429,9 @@ export interface AuthorityStore {
   setConversationVisibility(
     input: ConversationVisibilityUpdate,
   ): Promise<ConversationVisibilityUpdateResult>;
+  setConversationPolicyHidden(
+    input: ConversationPolicyFold,
+  ): Promise<ConversationPolicyFoldResult>;
   summarizeStore(orgId: string): Promise<StoreFootprint>;
   clearOperationalData(orgId: string, now: string): Promise<StoreClearResult>;
 }

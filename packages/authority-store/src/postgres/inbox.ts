@@ -349,6 +349,33 @@ export async function setConversationVisibility(
   });
 }
 
+export async function setConversationPolicyHidden(
+  db: PgSql,
+  input: import("@regenic/domain").ConversationPolicyFold,
+): Promise<import("@regenic/domain").ConversationPolicyFoldResult> {
+  return db.withTx(async (client) => {
+    await lockConversationPref(db, client, input.org_id, input.thread_id);
+    const current = await db.queryOne<PrefRow>(`SELECT ${PREF_COLUMNS} FROM conversation_prefs
+      WHERE org_id = $1 AND thread_id = $2 FOR UPDATE`,
+    [input.org_id, input.thread_id], client);
+    const currentVersion = asNumber(current?.visibility_version ?? 0);
+    if (currentVersion !== input.expected_visibility_version) {
+      return { outcome: "conflict", current_version: currentVersion };
+    }
+    if (asBool(current?.hidden) && current?.hidden_reason !== "policy") {
+      return { outcome: "unchanged" };
+    }
+    const pref = await putConversationPrefOn(db, client, {
+      org_id: input.org_id,
+      thread_id: input.thread_id,
+      hidden: true,
+      hidden_reason: "policy",
+      updated_at: input.updated_at,
+    });
+    return { outcome: "applied", pref };
+  });
+}
+
 async function lockConversationPref(db: PgSql, client: PoolClient, orgId: string, threadId: string): Promise<void> {
   await db.queryOne("SELECT pg_advisory_xact_lock(hashtextextended(jsonb_build_array($1, $2)::text, 0))",
     [orgId, threadId], client);

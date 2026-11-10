@@ -104,6 +104,38 @@ describe("durable executor start", () => {
     assert.equal(f.calls.spawn, 0);
     assert.equal((await f.ports.authority.getWorkItem(ORG, f.item.id)).status, current.status);
   });
+
+  it("captures the source visibility version and rejects a preference change racing reservation", async (t) => {
+    const f = await fixture(t);
+    await f.ports.authority.setConversationVisibility({
+      org_id: ORG,
+      thread_id: f.item.thread_id,
+      hidden: true,
+      expected_version: 0,
+      updated_at: new Date().toISOString(),
+    });
+    const claim = f.ports.authority.claimWorkRunStart.bind(f.ports.authority);
+    t.mock.method(f.ports.authority, "claimWorkRunStart", async (input) => {
+      assert.equal(input.visibility_intent_version, 1);
+      assert.equal(input.expected_item.id, f.item.id);
+      await f.ports.authority.setConversationVisibility({
+        org_id: ORG,
+        thread_id: f.item.thread_id,
+        hidden: false,
+        expected_version: 1,
+        updated_at: new Date().toISOString(),
+      });
+      return claim(input);
+    });
+    await assert.rejects(
+      f.dispatch().startItem(f.item, f.recipe, "evidence", "manual"),
+      code("execution_start_conflict"),
+    );
+    assert.equal(f.calls.spawn, 0);
+    assert.equal((await f.ports.authority.getWorkItem(ORG, f.item.id)).status, "open");
+    assert.equal((await f.ports.authority.listWorkRuns(ORG, f.item.id)).length, 0);
+  });
+
   async function preparedAuxiliary(t, maxConcurrent) {
     const f = await fixture(t);
     const service = f.service();

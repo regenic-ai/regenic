@@ -243,8 +243,9 @@ function writeWorkItem(db: Database.Database, item: WorkItem, advanceVersion = f
         `
           INSERT INTO work_items (
             id, org_id, thread_id, unit_key, head_event_id, record_class, thread_facet,
-            status, recipe_id, created_at, updated_at, current_run_id, version
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            status, recipe_id, created_at, updated_at, current_run_id, version,
+            visibility_intent_version
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(id) DO UPDATE SET
             thread_id = excluded.thread_id,
             unit_key = excluded.unit_key,
@@ -272,6 +273,7 @@ function writeWorkItem(db: Database.Database, item: WorkItem, advanceVersion = f
         item.updated_at,
         null,
         item.version ?? 0,
+        item.visibility_intent_version ?? 0,
       );
     return item;
   }
@@ -515,6 +517,15 @@ export async function claimWorkRunStart(db: Database.Database, input: WorkRunSta
         )
     `).get(run.recipe_id, run.org_id, run.work_item_id) as WorkItemRow | undefined;
     if (!item || !canClaimWorkRunStartItem(input, toWorkItem(item))) return false;
+    const workItem = toWorkItem(item);
+    if (input.visibility_intent_version !== undefined) {
+      const currentVisibility = db.prepare(
+        "SELECT visibility_version FROM conversation_prefs WHERE org_id = ? AND thread_id = ?",
+      ).get(run.org_id, workItem.thread_id) as { visibility_version: number } | undefined;
+      if ((currentVisibility?.visibility_version ?? 0) !== input.visibility_intent_version) {
+        return false;
+      }
+    }
     if (db.prepare(
       "SELECT id FROM work_deliveries WHERE org_id = ? AND work_item_id = ? AND status <> 'acked' LIMIT 1",
     ).get(run.org_id, run.work_item_id)) return false;
@@ -529,8 +540,9 @@ export async function claimWorkRunStart(db: Database.Database, input: WorkRunSta
       throw new Error(`Work run already exists: ${run.id}`);
     }
     writeWorkRun(db, run);
-    db.prepare("UPDATE work_items SET status = 'running', recipe_id = ?, current_run_id = ?, version = version + 1, updated_at = ? WHERE org_id = ? AND id = ?")
-      .run(run.recipe_id, run.id, run.updated_at, run.org_id, run.work_item_id);
+    db.prepare("UPDATE work_items SET status = 'running', recipe_id = ?, current_run_id = ?, visibility_intent_version = ?, version = version + 1, updated_at = ? WHERE org_id = ? AND id = ?")
+      .run(run.recipe_id, run.id, input.visibility_intent_version ?? workItem.visibility_intent_version ?? 0,
+        run.updated_at, run.org_id, run.work_item_id);
     return true;
   }).immediate();
 }
@@ -847,6 +859,7 @@ interface WorkItemRow {
   recipe_id: string | null;
   current_run_id: string | null;
   version: number;
+  visibility_intent_version: number;
   created_at: string;
   updated_at: string;
 }
@@ -968,6 +981,7 @@ function toWorkItem(row: WorkItemRow): WorkItem {
     recipe_id: row.recipe_id ?? undefined,
     current_run_id: row.current_run_id ?? undefined,
     version: row.version,
+    visibility_intent_version: row.visibility_intent_version,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };

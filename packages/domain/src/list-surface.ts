@@ -2,6 +2,8 @@ import type { ArrangementDecision, InboxItem } from "./arrangement";
 import type {
   ConversationPref,
   ConversationPrefPatch,
+  ConversationPolicyFold,
+  ConversationPolicyFoldResult,
   EventRecord,
   InboxQuery,
 } from "./ingestion";
@@ -94,6 +96,9 @@ export interface ListSurfaceStore {
     threadId: string,
   ): Promise<ConversationPref | null>;
   putConversationPref(input: ConversationPrefPatch): Promise<ConversationPref>;
+  setConversationPolicyHidden?(
+    input: ConversationPolicyFold,
+  ): Promise<ConversationPolicyFoldResult>;
   listInbox(orgId: string, query?: InboxQuery): Promise<InboxItem[]>;
 }
 
@@ -123,7 +128,10 @@ export async function writeHiddenPref(
 }
 
 export async function foldThreadByPolicy(
-  store: Pick<ListSurfaceStore, "getConversationPref" | "putConversationPref">,
+  store: Pick<
+    ListSurfaceStore,
+    "getConversationPref" | "putConversationPref" | "setConversationPolicyHidden"
+  >,
   orgId: string,
   threadId: string,
   now: string,
@@ -134,6 +142,15 @@ export async function foldThreadByPolicy(
     reason: pref?.hidden_reason,
   });
   if (!next) {
+    return;
+  }
+  if (store.setConversationPolicyHidden) {
+    await store.setConversationPolicyHidden({
+      org_id: orgId,
+      thread_id: threadId,
+      expected_visibility_version: pref?.visibility_version ?? 0,
+      updated_at: now,
+    });
     return;
   }
   await writeHiddenPref(store, orgId, threadId, next, now);

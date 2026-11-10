@@ -144,6 +144,7 @@ export const AUTHORITY_WRITE_METHODS = [
   "projectStandardUsage",
   "putConversationPref",
   "setConversationVisibility",
+  "setConversationPolicyHidden",
   "clearOperationalData",
   "putRecipe",
   "deleteRecipe",

@@ -1,4 +1,4 @@
-export const PG_SCHEMA_VERSION = 60;
+export const PG_SCHEMA_VERSION = 61;
 
 /** Applied when an existing postgres authority DB is already at a prior baseline. */
 export const PG_MIGRATIONS = [
@@ -626,6 +626,12 @@ ALTER TABLE work_deliveries ADD COLUMN cancel_requested_at TIMESTAMPTZ;
 ALTER TABLE conversation_prefs ADD COLUMN visibility_version INTEGER NOT NULL DEFAULT 0 CHECK (visibility_version >= 0);
 `,
   },
+  {
+    version: 61,
+    sql: `
+ALTER TABLE work_items ADD COLUMN visibility_intent_version INTEGER NOT NULL DEFAULT 0 CHECK (visibility_intent_version >= 0);
+`,
+  },
 ] as const;
 
 export const PG_BASELINE_SQL = `
@@ -840,6 +846,7 @@ CREATE TABLE work_runs (
 
 ALTER TABLE work_items ADD COLUMN current_run_id TEXT REFERENCES work_runs(id) DEFERRABLE INITIALLY DEFERRED;
 ALTER TABLE work_items ADD COLUMN version INTEGER NOT NULL DEFAULT 0 CHECK (version >= 0);
+ALTER TABLE work_items ADD COLUMN visibility_intent_version INTEGER NOT NULL DEFAULT 0 CHECK (visibility_intent_version >= 0);
 ALTER TABLE work_runs ADD COLUMN version INTEGER NOT NULL DEFAULT 0 CHECK (version >= 0);
 
 CREATE INDEX work_runs_item_idx ON work_runs (org_id, work_item_id, updated_at);

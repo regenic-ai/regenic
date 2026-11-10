@@ -68,6 +68,14 @@ export function canClaimWorkRunStartItem(input: WorkRunStartClaim, item: WorkIte
   if (expected && (expected.org_id !== run.org_id || expected.id !== run.work_item_id)) {
     throw new Error("Work start snapshot must belong to the same organization and work item");
   }
+  if (
+    input.visibility_intent_version !== undefined &&
+    (!expected ||
+      !Number.isSafeInteger(input.visibility_intent_version) ||
+      input.visibility_intent_version < 0)
+  ) {
+    throw new Error("Work start visibility intent version requires an item snapshot and a non-negative safe integer");
+  }
   if (item.org_id !== run.org_id || item.id !== run.work_item_id
     || (expected && !sameSnapshot(item, expected))) return false;
   if (item.recipe_id !== run.recipe_id) {
@@ -168,6 +176,8 @@ export function prepareWorkItemCreation(input: WorkItemCreation, facts: {
   if (!item.id?.trim() || !item.org_id?.trim() || !item.thread_id?.trim() || !item.unit_key?.trim()
     || !recipe.id?.trim() || item.org_id !== recipe.org_id || item.recipe_id !== recipe.id
     || item.status !== "open" || item.current_run_id !== undefined || (item.version ?? 0) !== 0
+    || !Number.isSafeInteger(item.visibility_intent_version ?? 0)
+    || (item.visibility_intent_version ?? 0) < 0
     || !Number.isFinite(Date.parse(item.created_at)) || item.created_at !== item.updated_at
     || !Number.isFinite(Date.parse(recipe.created_at)) || !Number.isFinite(Date.parse(recipe.updated_at))
     || (expected && (expected.id !== recipe.id || expected.org_id !== recipe.org_id))) {
@@ -190,7 +200,7 @@ export function prepareWorkItemCreation(input: WorkItemCreation, facts: {
   if (!equivalent && !sameJson(current, expected)) return { outcome: "conflict", reason: "stale_recipe" };
   return structuredClone({
     outcome: "applied",
-    item: { ...item, version: 0 },
+    item: { ...item, version: 0, visibility_intent_version: item.visibility_intent_version ?? 0 },
     recipe: equivalent ? current : { ...recipe, created_at: current?.created_at ?? recipe.created_at },
     ...(answer ? { search_answer: answer } : {}),
   });
@@ -473,9 +483,16 @@ export function prepareWorkObservation(
 }
 
 function sameSnapshot(current: WorkItem | WorkRun, expected: WorkItem | WorkRun): boolean {
+  const normalize = (value: WorkItem | WorkRun) => ({
+    ...value,
+    version: value.version ?? 0,
+    ...("thread_id" in value
+      ? { visibility_intent_version: value.visibility_intent_version ?? 0 }
+      : {}),
+  });
   return sameJson(
-    { ...current, version: current.version ?? 0 },
-    { ...expected, version: expected.version ?? 0 },
+    normalize(current),
+    normalize(expected),
   );
 }
 

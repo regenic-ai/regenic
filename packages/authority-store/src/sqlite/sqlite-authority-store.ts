@@ -285,6 +285,7 @@ import {
   listInbox,
   putConversationPref,
   setConversationVisibility,
+  setConversationPolicyHidden,
   putDisposition,
   summarizeInbox,
 } from "./inbox";
@@ -986,6 +987,13 @@ export class SqliteAuthorityStore
   ): Promise<ConversationVisibilityUpdateResult> {
     this.assertWritable();
     return setConversationVisibility(this.database, input);
+  }
+
+  async setConversationPolicyHidden(
+    input: import("@regenic/domain").ConversationPolicyFold,
+  ): Promise<import("@regenic/domain").ConversationPolicyFoldResult> {
+    this.assertWritable();
+    return setConversationPolicyHidden(this.database, input);
   }
 
   async summarizeStore(orgId: string): Promise<StoreFootprint> {

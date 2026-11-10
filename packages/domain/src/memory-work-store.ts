@@ -121,6 +121,9 @@ export class MemoryWorkStore implements WorkStore, ExecutorStore {
     const saved = {
       ...item,
       ...(current ? { current_run_id: current.current_run_id } : { current_run_id: undefined }),
+      visibility_intent_version: current
+        ? current.visibility_intent_version ?? 0
+        : item.visibility_intent_version ?? 0,
       version: current ? (current.version ?? 0) + 1 : item.version ?? 0,
     };
     this.items.set(item.id, saved);
@@ -279,8 +282,13 @@ export class MemoryWorkStore implements WorkStore, ExecutorStore {
     assertWorkRunSnapshot(run);
     const item = this.items.get(run.work_item_id);
     const recipe = this.recipes.get(run.recipe_id);
+    const visibilityVersion = item
+      ? this.conversationVisibilityVersion(run.org_id, item.thread_id)
+      : 0;
     if (
       !item || !canClaimWorkRunStartItem(input, item) || recipe?.org_id !== run.org_id ||
+      (input.visibility_intent_version !== undefined &&
+        visibilityVersion !== input.visibility_intent_version) ||
       [...this.deliveries.values()].some((delivery) =>
         delivery.org_id === run.org_id && delivery.work_item_id === item.id && delivery.status !== "acked") ||
       [...this.runs.values()].some((current) =>
@@ -304,10 +312,16 @@ export class MemoryWorkStore implements WorkStore, ExecutorStore {
       status: "running",
       recipe_id: run.recipe_id,
       current_run_id: run.id,
+      visibility_intent_version:
+        input.visibility_intent_version ?? item.visibility_intent_version ?? 0,
       version: (item.version ?? 0) + 1,
       updated_at: run.updated_at,
     });
     return true;
+  }
+
+  protected conversationVisibilityVersion(_orgId: string, _threadId: string): number {
+    return 0;
   }
 
   async listHiddenExecutorThreadIds(orgId: string): Promise<string[]> {

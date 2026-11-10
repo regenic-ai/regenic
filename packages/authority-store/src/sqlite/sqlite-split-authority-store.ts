@@ -57,6 +57,8 @@ import type {
   ConversationPrefPatch,
   ConversationVisibilityUpdate,
   ConversationVisibilityUpdateResult,
+  ConversationPolicyFold,
+  ConversationPolicyFoldResult,
   EventListQuery,
   EventRecord,
   EventRevision,
@@ -751,6 +753,12 @@ export class SqliteSplitAuthorityStore
     input: ConversationVisibilityUpdate,
   ): Promise<ConversationVisibilityUpdateResult> {
     return this.writer.call("setConversationVisibility", [input]);
+  }
+
+  async setConversationPolicyHidden(
+    input: ConversationPolicyFold,
+  ): Promise<ConversationPolicyFoldResult> {
+    return this.writer.call("setConversationPolicyHidden", [input]);
   }
 
   async summarizeStore(orgId: string): Promise<StoreFootprint> {

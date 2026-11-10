@@ -570,6 +570,9 @@ export class PersonalWorkDispatch {
     const writeBackTarget = writeBackRequired
       ? await this.channel.freezeWriteBackTarget(recipe.write_back_thread_id ?? item.thread_id)
       : undefined;
+    const visibilityIntentVersion =
+      (await authority.getConversationPref(item.org_id, item.thread_id))
+        ?.visibility_version ?? 0;
     const run: WorkRun & { status: "running"; start_state: "pending" } = {
       id: runId,
       org_id: item.org_id,
@@ -592,6 +595,7 @@ export class PersonalWorkDispatch {
         : mode === "auto" && recipe.trigger.kind === "push" && item.recipe_id !== recipe.id
           && (recipe.match.text_contains || recipe.match.text_excludes) ? "automatic" : undefined,
       max_concurrent: mode === "manual" ? undefined : recipe.max_concurrent,
+      visibility_intent_version: visibilityIntentVersion,
     });
     if (!claimed) {
       if (mode !== "auto") {

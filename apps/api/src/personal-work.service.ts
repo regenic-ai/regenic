@@ -1113,6 +1113,7 @@ export class PersonalWorkService implements OnModuleDestroy {
       threadId,
       run?.agent_thread_id,
       now,
+      item.visibility_intent_version ?? 0,
     );
     this.inbox.touchInboxDigest();
   }
@@ -1237,6 +1238,7 @@ export class PersonalWorkService implements OnModuleDestroy {
         next.thread_id,
         run?.agent_thread_id,
         now,
+        next.visibility_intent_version ?? 0,
       );
     }
     this.supervise.clearWriteBackOverride(item.id);

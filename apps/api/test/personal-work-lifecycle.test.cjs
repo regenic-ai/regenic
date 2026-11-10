@@ -441,4 +441,24 @@ describe("finished conversation folding compatibility", () => {
       assert.deepEqual(f.writes.map((p) => p.thread_id), [f.item.thread_id]);
     });
   }
+
+  it("does not policy-fold a source thread after its work visibility intent became stale", async () => {
+    const f = await fixture();
+    f.prefs.set(f.item.thread_id, {
+      org_id: ORG,
+      thread_id: f.item.thread_id,
+      hidden: false,
+      hidden_reason: null,
+      visibility_version: 2,
+    });
+    await foldFinishedWorkThreads(
+      f.authority, ORG, f.item.thread_id, undefined, NOW, 1,
+    );
+    assert.equal(f.writes.length, 0);
+
+    await foldFinishedWorkThreads(
+      f.authority, ORG, f.item.thread_id, undefined, NOW, 2,
+    );
+    assert.equal(f.prefs.get(f.item.thread_id).hidden_reason, "policy");
+  });
 });

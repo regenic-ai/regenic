@@ -8,8 +8,15 @@ export async function foldFinishedWorkThreads(
   sourceThreadId: string,
   agentThreadId: string | undefined,
   now: string,
+  sourceVisibilityIntentVersion?: number,
 ): Promise<void> {
-  await foldThreadByPolicy(store, orgId, sourceThreadId, now);
+  const sourcePref = await store.getConversationPref(orgId, sourceThreadId);
+  if (
+    sourceVisibilityIntentVersion === undefined ||
+    (sourcePref?.visibility_version ?? 0) === sourceVisibilityIntentVersion
+  ) {
+    await foldThreadByPolicy(store, orgId, sourceThreadId, now);
+  }
   const agent = agentThreadId?.trim();
   if (!agent || agent === sourceThreadId) {
     return;

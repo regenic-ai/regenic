@@ -6,6 +6,8 @@ import type {
   BlobStore,
   ConversationPref,
   ConversationPrefPatch,
+  ConversationPolicyFold,
+  ConversationPolicyFoldResult,
   ConversationVisibilityUpdate,
   ConversationVisibilityUpdateResult,
   EventListQuery,
@@ -116,6 +118,10 @@ export class MemoryAuthorityStore
   private readonly blobs = new Map<string, BlobRecord>();
   private readonly dispositions = new Map<string, ArrangementDecision>();
   private readonly prefs = new Map<string, ConversationPref>();
+
+  protected override conversationVisibilityVersion(orgId: string, threadId: string): number {
+    return this.prefs.get(prefKey(orgId, threadId))?.visibility_version ?? 0;
+  }
   private readonly outboundAttempts = new Map<string, OutboundAttemptRecord>();
   private nextId = 1;
 
@@ -434,6 +440,34 @@ export class MemoryAuthorityStore
       hidden,
       hidden_reason: input.hidden ? "human" : null,
       visibility_version: currentVersion + 1,
+      last_read_at: current?.last_read_at ?? null,
+      last_read_external_id: current?.last_read_external_id ?? null,
+      updated_at: input.updated_at,
+    };
+    this.prefs.set(key, next);
+    return { outcome: "applied", pref: { ...next } };
+  }
+
+  async setConversationPolicyHidden(
+    input: ConversationPolicyFold,
+  ): Promise<ConversationPolicyFoldResult> {
+    const key = prefKey(input.org_id, input.thread_id);
+    const current = this.prefs.get(key);
+    const currentVersion = current?.visibility_version ?? 0;
+    if (currentVersion !== input.expected_visibility_version) {
+      return { outcome: "conflict", current_version: currentVersion };
+    }
+    if (current?.hidden === true && current.hidden_reason !== "policy") {
+      return { outcome: "unchanged" };
+    }
+    const next: ConversationPref = {
+      org_id: input.org_id,
+      thread_id: input.thread_id,
+      title: current?.title ?? null,
+      pinned: current?.pinned ?? false,
+      hidden: true,
+      hidden_reason: "policy",
+      visibility_version: currentVersion,
       last_read_at: current?.last_read_at ?? null,
       last_read_external_id: current?.last_read_external_id ?? null,
       updated_at: input.updated_at,

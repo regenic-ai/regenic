@@ -224,6 +224,66 @@ for (const driver of drivers) {
       assert.equal((await store.getConversationPref(orgId, threadId)).visibility_version, 1);
     });
 
+    it("does not let a stale policy fold overwrite a newer manual visibility command", async () => {
+      const { store, orgId } = await openBoundStore();
+      const threadId = "dsh:session-policy-fold";
+      await store.setConversationVisibility({
+        org_id: orgId, thread_id: threadId, hidden: false, expected_version: 0,
+        updated_at: "2026-08-30T00:00:00.000Z",
+      });
+      const changed = await store.setConversationVisibility({
+        org_id: orgId, thread_id: threadId, hidden: true, expected_version: 1,
+        updated_at: "2026-08-30T00:00:01.000Z",
+      });
+      assert.equal(changed.outcome, "applied");
+      const staleFold = await store.setConversationPolicyHidden({
+        org_id: orgId, thread_id: threadId, expected_visibility_version: 1,
+        updated_at: "2026-08-30T00:00:02.000Z",
+      });
+      assert.deepEqual(staleFold, { outcome: "conflict", current_version: 2 });
+      const pref = await store.getConversationPref(orgId, threadId);
+      assert.equal(pref.hidden, true);
+      assert.equal(pref.hidden_reason, "human");
+      assert.equal(pref.visibility_version, 2);
+    });
+
+    it("captures the current conversation visibility version when reserving a work run", async () => {
+      const { store, orgId } = await openBoundStore();
+      const now = "2026-08-30T00:00:00.000Z";
+      const recipeId = `recipe-${randomUUID()}`;
+      const itemId = `work-${randomUUID()}`;
+      const threadId = "dsh:session-visibility";
+      await store.putRecipe({
+        id: recipeId, org_id: orgId, name: "Visibility snapshot",
+        match: { record_class: "task" }, trigger: { kind: "push" },
+        executor_type: "session", executor_config: {}, include_context: false,
+        can_write_back: false, enabled: true, created_at: now, updated_at: now,
+      });
+      await store.putWorkItem({
+        id: itemId, org_id: orgId, recipe_id: recipeId, thread_id: threadId,
+        unit_key: "task-visibility", record_class: "task", thread_facet: "ticket",
+        status: "open", created_at: now, updated_at: now,
+      });
+      await store.setConversationVisibility({
+        org_id: orgId, thread_id: threadId, hidden: true, expected_version: 0,
+        updated_at: now,
+      });
+      const expectedItem = await store.getWorkItem(orgId, itemId);
+      const run = {
+        id: `run-${randomUUID()}`, org_id: orgId, work_item_id: itemId,
+        recipe_id: recipeId, executor_type: "session", status: "running",
+        start_state: "pending", created_at: now, updated_at: now,
+      };
+      assert.equal(await store.claimWorkRunStart({
+        run, expected_item: expectedItem, visibility_intent_version: 0,
+      }), false);
+      assert.equal(await store.claimWorkRunStart({
+        run, expected_item: expectedItem, visibility_intent_version: 1,
+      }), true);
+      const claimed = await store.getWorkItem(orgId, itemId);
+      assert.equal(claimed.visibility_intent_version, 1);
+    });
+
     it("restores shared-body artifacts through lifecycle transitions and preview reads", async () => {
       const { store, orgId } = await openBoundStore();
       const reference = {

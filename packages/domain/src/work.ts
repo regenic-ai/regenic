@@ -135,6 +135,8 @@ export interface WorkItem {
   version?: number;
   /** Explicit current attempt. Historical rows with no pointer remain unknown. */
   current_run_id?: string;
+  /** Manual visibility version captured when this work attempt was reserved. */
+  visibility_intent_version?: number;
   head_event_id?: string;
   record_class: RecordClass;
   thread_facet: ThreadFacet;
@@ -237,6 +239,8 @@ export interface WorkRunStartClaim {
   rebind?: "automatic" | "manual";
   /** Auto-start limit; manual starts may omit it. */
   max_concurrent?: number;
+  /** Conversation visibility version read before reservation; validated in the claim transaction. */
+  visibility_intent_version?: number;
 }
 
 export interface WorkStore {

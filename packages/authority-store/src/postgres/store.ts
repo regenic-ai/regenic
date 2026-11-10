@@ -67,6 +67,8 @@ import type {
   ConversationPrefPatch,
   ConversationVisibilityUpdate,
   ConversationVisibilityUpdateResult,
+  ConversationPolicyFold,
+  ConversationPolicyFoldResult,
   StoreFootprint,
   StoreClearResult,
   Recipe,
@@ -328,6 +330,7 @@ import {
   listInbox,
   putConversationPref,
   setConversationVisibility,
+  setConversationPolicyHidden,
   putConversationPrefOn,
   putDisposition,
   summarizeInbox,
@@ -941,6 +944,12 @@ export class PostgresAuthorityStore
     input: ConversationVisibilityUpdate,
   ): Promise<ConversationVisibilityUpdateResult> {
     return setConversationVisibility(this.sql, input);
+  }
+
+  async setConversationPolicyHidden(
+    input: ConversationPolicyFold,
+  ): Promise<ConversationPolicyFoldResult> {
+    return setConversationPolicyHidden(this.sql, input);
   }
 
   async summarizeStore(orgId: string): Promise<StoreFootprint> {

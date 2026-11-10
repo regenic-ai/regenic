@@ -301,6 +301,7 @@ export class PersonalWorkSupervise {
           item.thread_id,
           nextRun.agent_thread_id,
           now,
+          transition.item.visibility_intent_version ?? 0,
         );
         if (transition.item.status !== item.status) {
           this.touchInboxDigest?.();

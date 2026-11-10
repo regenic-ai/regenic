@@ -89,6 +89,53 @@ describe("conversation prefs", () => {
     assert.equal(shown.pref.pinned, true);
   });
 
+  it("applies policy folding only against the visibility version it observed", async () => {
+    const store = new MemoryAuthorityStore();
+    const shown = await store.setConversationVisibility({
+      org_id: "local-owner",
+      thread_id: "dsh:session-a",
+      hidden: false,
+      expected_version: 0,
+      updated_at: "2026-08-22T00:00:00.000Z",
+    });
+    assert.equal(shown.outcome, "applied");
+    const stale = await store.setConversationPolicyHidden({
+      org_id: "local-owner",
+      thread_id: "dsh:session-a",
+      expected_visibility_version: 0,
+      updated_at: "2026-08-22T00:00:01.000Z",
+    });
+    assert.deepEqual(stale, { outcome: "conflict", current_version: 1 });
+    assert.equal((await store.getConversationPref("local-owner", "dsh:session-a")).hidden, false);
+
+    const folded = await store.setConversationPolicyHidden({
+      org_id: "local-owner",
+      thread_id: "dsh:session-a",
+      expected_visibility_version: 1,
+      updated_at: "2026-08-22T00:00:02.000Z",
+    });
+    assert.equal(folded.outcome, "applied");
+    assert.equal(folded.pref.visibility_version, 1);
+    assert.equal(folded.pref.hidden_reason, "policy");
+
+    const humanShow = await store.setConversationVisibility({
+      org_id: "local-owner",
+      thread_id: "dsh:session-a",
+      hidden: false,
+      expected_version: 1,
+      updated_at: "2026-08-22T00:00:03.000Z",
+    });
+    assert.equal(humanShow.outcome, "applied");
+    const lateFold = await store.setConversationPolicyHidden({
+      org_id: "local-owner",
+      thread_id: "dsh:session-a",
+      expected_visibility_version: 1,
+      updated_at: "2026-08-22T00:00:04.000Z",
+    });
+    assert.deepEqual(lateFold, { outcome: "conflict", current_version: 2 });
+    assert.equal((await store.getConversationPref("local-owner", "dsh:session-a")).hidden, false);
+  });
+
   it("clears operational data and keeps recipes", async () => {
     const store = new MemoryAuthorityStore();
     await store.append({

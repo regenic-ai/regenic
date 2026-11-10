@@ -342,6 +342,31 @@ export async function setConversationVisibility(
   }).immediate();
 }
 
+export async function setConversationPolicyHidden(
+  db: Database.Database,
+  input: import("@regenic/domain").ConversationPolicyFold,
+): Promise<import("@regenic/domain").ConversationPolicyFoldResult> {
+  return db.transaction(() => {
+    const current = db.prepare(`SELECT ${PREF_COLUMNS} FROM conversation_prefs
+      WHERE org_id = ? AND thread_id = ?`).get(input.org_id, input.thread_id) as PrefRow | undefined;
+    const currentVersion = current?.visibility_version ?? 0;
+    if (currentVersion !== input.expected_visibility_version) {
+      return { outcome: "conflict" as const, current_version: currentVersion };
+    }
+    if (Boolean(current?.hidden) && current?.hidden_reason !== "policy") {
+      return { outcome: "unchanged" as const };
+    }
+    const pref = putConversationPrefUnlocked(db, {
+      org_id: input.org_id,
+      thread_id: input.thread_id,
+      hidden: true,
+      hidden_reason: "policy",
+      updated_at: input.updated_at,
+    });
+    return { outcome: "applied" as const, pref };
+  }).immediate();
+}
+
 /** Keep the list face in sync after ingest/disposition without a full-table scan. */
 export function refreshThreadHeadWithinTransaction(db: Database.Database, orgId: string, threadId: string | null | undefined): void {
     const id = threadId?.trim();

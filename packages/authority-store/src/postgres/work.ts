@@ -195,8 +195,9 @@ export async function putWorkItem(
       `
         INSERT INTO work_items (
           id, org_id, thread_id, unit_key, head_event_id, record_class, thread_facet,
-          status, recipe_id, created_at, updated_at, current_run_id, version
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+          status, recipe_id, created_at, updated_at, current_run_id, version,
+          visibility_intent_version
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
         ON CONFLICT (id) DO UPDATE SET
           thread_id = EXCLUDED.thread_id,
           unit_key = EXCLUDED.unit_key,
@@ -223,6 +224,7 @@ export async function putWorkItem(
         item.updated_at,
         null,
         item.version ?? 0,
+        item.visibility_intent_version ?? 0,
       ], client,
     );
     if (!advanceVersion) return item;
@@ -258,11 +260,13 @@ export async function createWorkItem(db: PgSql, input: WorkItemCreation): Promis
       const { item } = result;
       const savedItem = await db.queryOne<WorkItemRow>(`INSERT INTO work_items (
         id, org_id, thread_id, unit_key, head_event_id, record_class, thread_facet,
-        status, recipe_id, created_at, updated_at, current_run_id, version
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NULL, 0)
+        status, recipe_id, created_at, updated_at, current_run_id, version,
+        visibility_intent_version
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NULL, 0, $12)
       ON CONFLICT (id) DO NOTHING RETURNING *`, [
         item.id, item.org_id, item.thread_id, item.unit_key, item.head_event_id ?? null,
         item.record_class, item.thread_facet, item.status, item.recipe_id, item.created_at, item.updated_at,
+        item.visibility_intent_version ?? 0,
       ], client);
       if (!savedItem) throw new WorkItemCreationConflict("work_exists");
       await writeRecipe(db, result.recipe, client);
@@ -571,6 +575,17 @@ export async function recordWorkRunStartFailure(
 export async function claimWorkRunStart(db: PgSql, input: WorkRunStartClaim): Promise<boolean> {
   const { run, max_concurrent } = input;
   return db.withTx(async (client) => {
+    if (input.visibility_intent_version !== undefined) {
+      const threadId = input.expected_item?.thread_id;
+      if (!threadId) {
+        throw new Error("Work start visibility intent version requires an item snapshot");
+      }
+      await db.queryOne(
+        "SELECT pg_advisory_xact_lock(hashtextextended(jsonb_build_array($1, $2)::text, 0))",
+        [run.org_id, threadId],
+        client,
+      );
+    }
     // Recipe lock also serializes capacity checks for different work items.
     const recipe = await db.queryOne(`
       SELECT id FROM recipes WHERE org_id = $1 AND id = $2 FOR UPDATE
@@ -581,6 +596,17 @@ export async function claimWorkRunStart(db: PgSql, input: WorkRunStartClaim): Pr
         FOR UPDATE
     `, [run.org_id, run.work_item_id], client);
     if (!item || !canClaimWorkRunStartItem(input, toWorkItem(item))) return false;
+    const workItem = toWorkItem(item);
+    if (input.visibility_intent_version !== undefined) {
+      const currentVisibility = await db.queryOne<{ visibility_version: number | string }>(
+        "SELECT visibility_version FROM conversation_prefs WHERE org_id = $1 AND thread_id = $2",
+        [run.org_id, workItem.thread_id],
+        client,
+      );
+      if (asNumber(currentVisibility?.visibility_version ?? 0) !== input.visibility_intent_version) {
+        return false;
+      }
+    }
     const active = await db.queryOne(`
       SELECT id FROM work_runs WHERE org_id = $1 AND work_item_id = $2
         AND status IN ('running', 'waiting_human') LIMIT 1
@@ -601,8 +627,9 @@ export async function claimWorkRunStart(db: PgSql, input: WorkRunStartClaim): Pr
       throw new Error(`Work run already exists: ${run.id}`);
     }
     await putWorkRun(db, run, client, false);
-    await db.execute("UPDATE work_items SET status = 'running', recipe_id = $1, current_run_id = $2, version = version + 1, updated_at = $3 WHERE org_id = $4 AND id = $5",
-      [run.recipe_id, run.id, run.updated_at, run.org_id, run.work_item_id], client);
+    await db.execute("UPDATE work_items SET status = 'running', recipe_id = $1, current_run_id = $2, visibility_intent_version = $3, version = version + 1, updated_at = $4 WHERE org_id = $5 AND id = $6",
+      [run.recipe_id, run.id, input.visibility_intent_version ?? workItem.visibility_intent_version ?? 0,
+        run.updated_at, run.org_id, run.work_item_id], client);
     return true;
   });
 }
@@ -925,6 +952,7 @@ interface WorkItemRow {
   recipe_id: string | null;
   current_run_id: string | null;
   version: number | string;
+  visibility_intent_version: number | string;
   created_at: unknown;
   updated_at: unknown;
 }
@@ -1048,6 +1076,7 @@ function toWorkItem(row: WorkItemRow): WorkItem {
     recipe_id: row.recipe_id ?? undefined,
     current_run_id: row.current_run_id ?? undefined,
     version: asNumber(row.version),
+    visibility_intent_version: asNumber(row.visibility_intent_version),
     created_at: toIso(row.created_at),
     updated_at: toIso(row.updated_at),
   };
