@@ -34,7 +34,7 @@ function recipe(trigger) {
 
 describe("recipe pull schedule", () => {
   it("appends the PostgreSQL schedule migration after main's existing migrations", () => {
-    assert.equal(PG_SCHEMA_VERSION, 56);
+    assert.equal(PG_SCHEMA_VERSION, 57);
     assert.deepEqual(PG_MIGRATIONS.filter(({ version }) => version > 54), [
       {
         version: 55,
@@ -46,7 +46,14 @@ ALTER TABLE recipes ADD COLUMN trigger_timezone TEXT;
       },
       {
         version: 56,
-        sql: `ALTER TABLE recipes ADD COLUMN write_back_thread_id TEXT;`,
+        sql: "ALTER TABLE search_answers ADD COLUMN scope_json JSONB;",
+      },
+      {
+        version: 57,
+        sql: `
+ALTER TABLE recipes ADD COLUMN IF NOT EXISTS write_back_thread_id TEXT;
+ALTER TABLE search_answers ADD COLUMN IF NOT EXISTS scope_json JSONB;
+`,
       },
     ]);
   });
@@ -147,6 +154,46 @@ ALTER TABLE recipes ADD COLUMN trigger_timezone TEXT;
         assert.ok(inspect.prepare("SELECT name FROM sqlite_master WHERE name = ?").get(name));
       }
       assert.deepEqual(inspect.pragma("foreign_key_check"), []);
+    } finally {
+      inspect.close();
+    }
+  });
+
+  it("upgrades a branch database that already used version 56 for write-back", async () => {
+    const root = await mkdtemp(join(tmpdir(), "regenic-recipe-write-back-branch-"));
+    roots.push(root);
+    const path = join(root, "authority.db");
+    const legacy = new Database(path);
+    try {
+      legacy.function("conversation_id", (source, externalId, fallbackId) =>
+        conversationId(source, externalId, fallbackId));
+      for (const migration of MIGRATIONS.filter(({ version }) => version <= 55)) {
+        legacy.exec(migration.sql);
+      }
+      legacy.exec("ALTER TABLE recipes ADD COLUMN write_back_thread_id TEXT;");
+      legacy.pragma("user_version = 56");
+    } finally {
+      legacy.close();
+    }
+
+    const store = new SqliteAuthorityStore(path);
+    try {
+      assert.equal(store.schemaVersion, LATEST_SCHEMA_VERSION);
+      await store.putRecipe({
+        ...recipe({ kind: "push" }),
+        write_back_thread_id: "feishu:results",
+      });
+      assert.equal(
+        (await store.getRecipe("local-owner", "weekly")).write_back_thread_id,
+        "feishu:results",
+      );
+    } finally {
+      store.close();
+    }
+    const inspect = new Database(path);
+    try {
+      const columns = inspect.prepare("PRAGMA table_info(search_answers)").all();
+      assert.ok(columns.some((column) => column.name === "scope_json"));
     } finally {
       inspect.close();
     }

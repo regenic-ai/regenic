@@ -1,4 +1,4 @@
-export const PG_SCHEMA_VERSION = 56;
+export const PG_SCHEMA_VERSION = 57;
 
 /** Applied when an existing postgres authority DB is already at a prior baseline. */
 export const PG_MIGRATIONS = [
@@ -575,7 +575,14 @@ ALTER TABLE recipes ADD COLUMN trigger_timezone TEXT;
   },
   {
     version: 56,
-    sql: `ALTER TABLE recipes ADD COLUMN write_back_thread_id TEXT;`,
+    sql: `ALTER TABLE search_answers ADD COLUMN scope_json JSONB;`,
+  },
+  {
+    version: 57,
+    sql: `
+ALTER TABLE recipes ADD COLUMN IF NOT EXISTS write_back_thread_id TEXT;
+ALTER TABLE search_answers ADD COLUMN IF NOT EXISTS scope_json JSONB;
+`,
   },
 ] as const;
 
@@ -793,6 +800,7 @@ CREATE TABLE search_answers (
   work_item_id TEXT NOT NULL REFERENCES work_items(id),
   query TEXT NOT NULL,
   event_ids_json JSONB NOT NULL,
+  scope_json JSONB,
   outcome TEXT CHECK (outcome IN ('timed_out')),
   created_at TIMESTAMPTZ NOT NULL,
   updated_at TIMESTAMPTZ NOT NULL

@@ -1298,6 +1298,7 @@ describe("SQLite context artifact store", () => {
       ALTER TABLE recipes DROP COLUMN trigger_at_minute;
       ALTER TABLE recipes DROP COLUMN trigger_weekdays;
       ALTER TABLE recipes DROP COLUMN trigger_timezone;
+      ALTER TABLE search_answers DROP COLUMN scope_json;
     `);
     // Last migration before preview_json (46) and the preview rebuild (47).
     legacy.pragma("user_version = 45");

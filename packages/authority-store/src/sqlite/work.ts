@@ -324,12 +324,13 @@ export async function putSearchAnswer(
 ): Promise<SearchAnswerRecord> {
   db.prepare(`
     INSERT INTO search_answers (
-      id, org_id, work_item_id, query, event_ids_json, outcome, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      id, org_id, work_item_id, query, event_ids_json, scope_json, outcome, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       work_item_id = excluded.work_item_id,
       query = excluded.query,
       event_ids_json = excluded.event_ids_json,
+      scope_json = excluded.scope_json,
       outcome = excluded.outcome,
       updated_at = excluded.updated_at
   `).run(
@@ -338,6 +339,7 @@ export async function putSearchAnswer(
     record.work_item_id,
     record.query,
     JSON.stringify(record.event_ids),
+    record.scope ? JSON.stringify(record.scope) : null,
     record.outcome ?? null,
     record.created_at,
     record.updated_at,
@@ -617,6 +619,7 @@ interface SearchAnswerRow {
   work_item_id: string;
   query: string;
   event_ids_json: string;
+  scope_json: string | null;
   outcome: SearchAnswerRecord["outcome"] | null;
   created_at: string;
   updated_at: string;
@@ -712,6 +715,9 @@ function toSearchAnswer(row: SearchAnswerRow): SearchAnswerRecord {
     work_item_id: row.work_item_id,
     query: row.query,
     event_ids: JSON.parse(row.event_ids_json) as string[],
+    ...(row.scope_json
+      ? { scope: JSON.parse(row.scope_json) as SearchAnswerRecord["scope"] }
+      : {}),
     ...(row.outcome ? { outcome: row.outcome } : {}),
     created_at: row.created_at,
     updated_at: row.updated_at,

@@ -1686,11 +1686,13 @@ export class SqliteAuthorityStore
         }
         if (migration.version === 54) {
           this.applyRecipeClockColumns();
-        } else if (
-          migration.version === 56 &&
-          this.columnExists("recipes", "write_back_thread_id")
-        ) {
-          // Column was added before this migration ran.
+        } else if (migration.version === 56) {
+          this.applySearchAnswerScopeColumn();
+        } else if (migration.version === 57) {
+          // Branch databases already recorded version 56 as the write-back
+          // column, so this step also fills the scope column they skipped.
+          this.applySearchAnswerScopeColumn();
+          this.applyWriteBackThreadColumn();
         } else {
           this.database.exec(migration.sql);
         }
@@ -1782,6 +1784,7 @@ export class SqliteAuthorityStore
       this.database.exec(OUTBOUND_REJECTION_MIGRATION_SQL);
       this.database.exec(CUSTOMER_SERVICE_TASKS_SQL);
       this.applyRecipeClockColumns();
+      this.applyWriteBackThreadColumn();
       this.database.exec(`
         CREATE TABLE IF NOT EXISTS search_answers (
           id TEXT PRIMARY KEY,
@@ -1789,6 +1792,7 @@ export class SqliteAuthorityStore
           work_item_id TEXT NOT NULL REFERENCES work_items(id),
           query TEXT NOT NULL,
           event_ids_json TEXT NOT NULL CHECK (json_valid(event_ids_json)),
+          scope_json TEXT CHECK (scope_json IS NULL OR json_valid(scope_json)),
           outcome TEXT CHECK (outcome IN ('timed_out')),
           created_at TEXT NOT NULL,
           updated_at TEXT NOT NULL
@@ -1812,6 +1816,21 @@ export class SqliteAuthorityStore
   private columnExists(table: string, column: string): boolean {
     const rows = this.database.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
     return rows.some((row) => row.name === column);
+  }
+
+  private applySearchAnswerScopeColumn(): void {
+    if (!this.tableExists("search_answers") || this.columnExists("search_answers", "scope_json")) {
+      return;
+    }
+    this.database.exec(`ALTER TABLE search_answers ADD COLUMN scope_json TEXT
+      CHECK (scope_json IS NULL OR json_valid(scope_json));`);
+  }
+
+  private applyWriteBackThreadColumn(): void {
+    if (this.columnExists("recipes", "write_back_thread_id")) {
+      return;
+    }
+    this.database.exec("ALTER TABLE recipes ADD COLUMN write_back_thread_id TEXT;");
   }
 
   private applyRecipeClockColumns(): void {
