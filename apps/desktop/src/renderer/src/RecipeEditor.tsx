@@ -345,7 +345,8 @@ export function MoreOptions({
 }) {
   const advancedDirty =
     (draft.trigger_kind === "push" && !draft.coalesce) ||
-    (draft.trigger_kind !== "pull" && Boolean(draft.max_concurrent.trim()));
+    (draft.trigger_kind !== "pull" && Boolean(draft.max_concurrent.trim())) ||
+    draft.hide_on_success;
   const [open, setOpen] = useState(advancedDirty);
   return (
     <div className="recipe-more">
@@ -369,6 +370,17 @@ export function MoreOptions({
       </button>
       {open ? (
       <div className="recipe-more-body">
+        <RecipeRow label={t("recipes.hideOnSuccess")}>
+          <SwitchRow
+            checked={draft.hide_on_success}
+            onChange={(hide_on_success) =>
+              setDraft((current) => ({ ...current, hide_on_success }))
+            }
+          >
+            {""}
+          </SwitchRow>
+          <p className="recipe-hint">{t("recipes.hideOnSuccessHint")}</p>
+        </RecipeRow>
         {draft.trigger_kind === "push" ? (
           <RecipeRow label={t("recipes.coalesceCheck")}>
             <SwitchRow

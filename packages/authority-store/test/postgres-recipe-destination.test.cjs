@@ -12,34 +12,40 @@ const input = {
   id: "destination-rule", org_id: "test-org", name: "Result delivery",
   match: { thread_id: "test:source" }, trigger: { kind: "manual" },
   executor_type: "test", executor_config: {}, can_write_back: true,
-  write_back_thread_id: "test:results", include_context: false, enabled: true,
+  write_back_thread_id: "test:results", hide_on_success: false,
+  include_context: false, enabled: true,
   created_at: now, updated_at: now,
 };
 
-it("includes the PostgreSQL destination in schema, upsert bindings and read mappings (SQL contract only)", async () => {
-  assert.equal(PG_SCHEMA_VERSION, 57);
+it("includes Recipe persistence fields in schema, upsert bindings and read mappings (SQL contract only)", async () => {
+  assert.equal(PG_SCHEMA_VERSION, 58);
   assert.match(PG_BASELINE_SQL, /write_back_thread_id TEXT/);
   assert.match(PG_MIGRATIONS.find(({ version }) => version === 57).sql,
     /ADD COLUMN IF NOT EXISTS write_back_thread_id TEXT/);
+  assert.match(PG_MIGRATIONS.find(({ version }) => version === 58).sql,
+    /ADD COLUMN IF NOT EXISTS hide_on_success BOOLEAN NOT NULL DEFAULT TRUE/);
   for (const destination of ["test:results", undefined]) {
     let statement;
     let args;
     const row = {
       ...input, match_json: input.match, executor_config_json: input.executor_config,
       trigger_kind: "manual", write_back_thread_id: destination ?? null,
+      hide_on_success: false,
     };
     const sql = {
       execute: async (text, values) => { statement = text; args = values; },
       queryOne: async () => row,
       query: async () => [row],
     };
-    await putRecipe(sql, { ...input, write_back_thread_id: destination });
+    await putRecipe(sql, { ...input, write_back_thread_id: destination, hide_on_success: false });
     const columns = statement.match(/INSERT INTO recipes \(([\s\S]*?)\)\s*VALUES/)[1]
       .split(",").map((column) => column.trim());
     assert.equal(args[columns.indexOf("write_back_thread_id")], destination ?? null);
+    assert.equal(args[columns.indexOf("hide_on_success")], false);
     assert.equal(args.length, columns.length);
     assert.match(statement, /write_back_thread_id = EXCLUDED.write_back_thread_id/);
     assert.equal((await getRecipe(sql, input.org_id, input.id)).write_back_thread_id, destination);
+    assert.equal((await getRecipe(sql, input.org_id, input.id)).hide_on_success, false);
     assert.equal((await listRecipes(sql, input.org_id))[0].write_back_thread_id, destination);
   }
 });
@@ -74,6 +80,7 @@ for (const legacy of [undefined, false, true]) {
       if (legacy !== undefined) {
         const saved = await store.getRecipe(input.org_id, input.id);
         assert.equal(saved.write_back_thread_id, legacy ? "test:preserved" : undefined);
+        assert.equal(saved.hide_on_success, true);
         assert.equal(saved.name, input.name);
         assert.deepEqual(saved.match, input.match);
       }

@@ -24,7 +24,7 @@ L6 执行         TaskExecutor 插件（DSH / Cursor / 私有插件）
 
 发言者（L3）只作用于 `utterance`。Agent 会话里的人仍是 `user`。人群里的机器人仍是 `assistant`。这两件事不写到安装上。
 
-Push 观察读取 `current_work` 的事件头，包含普通入站消息，而不只读取 task 或每个会话的最新展示消息。自动分类为 `pending` 的非 task（例如短消息）也参与观察：自动分流不是命中已启用 push Recipe 时的执行否决。人工显式 triage 为 `pending`、不进入当前工作和人工隐藏消息仍不参与自动执行，已排队的普通工作启动前也会重检。执行后的 policy 自动收拢不是人工暂停，不能阻断失败重试或下一条匹配的普通消息。普通消息使用独立、限量的游标扫描，不匹配的流量不会占用任务扫描配额。非 task 只有命中已启用的 push Recipe 才开 WorkItem，且不改变 Inbox disposition。出站消息、本地发送回声、assistant/system 发言不能触发 push。已有事件 unit key 保证已处理消息跨扫描和重启不重复执行。扫描会回访尚未处理的历史，因此新启用或修改的规则可能命中收件箱已有消息。新建具体会话规则不隐含 task 类型；渠道/任务模板仍保留 task 限制。
+Push 观察读取 `current_work` 的事件头，包含普通入站消息，而不只读取 task 或每个会话的最新展示消息。自动分类为 `pending` 的非 task（例如短消息）也参与观察：自动分流不是命中已启用 push Recipe 时的执行否决。人工显式 triage 为 `pending`、不进入当前工作和人工隐藏消息仍不参与自动执行，已排队的普通工作启动前也会重检。规则仅在 Recipe 开启 `hide_on_success` 且运行成功后自动收拢；失败、重试、运行中和待人工处理时保持显示。policy 自动收拢不是人工暂停，不能阻断失败重试或下一条匹配的普通消息。普通消息使用独立、限量的游标扫描，不匹配的流量不会占用任务扫描配额。非 task 只有命中已启用的 push Recipe 才开 WorkItem，且不改变 Inbox disposition。出站消息、本地发送回声、assistant/system 发言不能触发 push。已有事件 unit key 保证已处理消息跨扫描和重启不重复执行。扫描会回访尚未处理的历史，因此新启用或修改的规则可能命中收件箱已有消息。新建具体会话规则不隐含 task 类型；渠道/任务模板仍保留 task 限制。
 
 L6 碰渠道只走 `ExecutorContext`（`spawnSysout` / `writeStdin` / `readTranscript`），或走通用 HTTP 执行器协议。完成看 `WaitStatus`，不看气泡。声明 `wait` 的执行器由内核订阅 `ChannelDriver.waitThread`（DSH web 是 mux `turn/end`），history poll 只做兜底。执行器在引擎页安装：本机连接器或 HTTP API。默认开源树种子一条 absentee `dsh` 本机绑定。Cursor 后接。私有 Agent OS 只留在内部插件包或经 HTTP 调用。
 

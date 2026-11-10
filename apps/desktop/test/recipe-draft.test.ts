@@ -33,6 +33,7 @@ const rule: RecipeView = {
   executor_config: {},
   can_write_back: false,
   include_context: false,
+  hide_on_success: false,
   enabled: true,
   created_at: "",
   updated_at: "",
@@ -69,6 +70,15 @@ describe("recipe draft", () => {
       assert.equal(starterDraft(kind, emptyDraft(), [], []).include_context, true);
     }
     assert.equal(draftFromRecipe(rule).include_context, false);
+  });
+
+  it("defaults new rules to keeping conversations visible and preserves legacy rule behavior", () => {
+    assert.equal(emptyDraft().hide_on_success, false);
+    assert.equal(draftFromRecipe(rule).hide_on_success, false);
+    assert.equal(draftFromRecipe({ ...rule, hide_on_success: true }).hide_on_success, true);
+    const legacy = { ...rule };
+    delete legacy.hide_on_success;
+    assert.equal(draftFromRecipe(legacy).hide_on_success, true);
   });
 
   it("keeps inactive conditions through trigger switching, save/edit and list summaries", () => {

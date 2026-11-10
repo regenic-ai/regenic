@@ -808,6 +808,9 @@ export const en = {
   "recipes.maxConcurrentUnlimited": "No limit",
   "recipes.maxConcurrentHint":
     "How many can run at the same time. Leave empty for no limit.",
+  "recipes.hideOnSuccess": "Hide conversations after success",
+  "recipes.hideOnSuccessHint":
+    "When enabled, hide the source and assistant conversations only after a successful run. Failures stay visible.",
   "recipes.enabledCheck": "On",
   "recipes.advanced": "More",
   "recipes.cancel": "Cancel",
@@ -2159,6 +2162,9 @@ export const zh: Record<MessageKey, string> = {
   "recipes.maxConcurrent": "同时处理",
   "recipes.maxConcurrentUnlimited": "不限制",
   "recipes.maxConcurrentHint": "最多同时处理几条。留空不限制。",
+  "recipes.hideOnSuccess": "成功后隐藏处理会话",
+  "recipes.hideOnSuccessHint":
+    "打开后，仅在规则成功完成时隐藏来源会话和助手会话；失败时仍会显示。",
   "recipes.enabledCheck": "启用",
   "recipes.advanced": "更多",
   "recipes.cancel": "取消",

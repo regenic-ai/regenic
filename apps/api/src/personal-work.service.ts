@@ -497,6 +497,7 @@ export class PersonalWorkService implements OnModuleDestroy {
       executor_type: executorType,
       executor_config: { prompt: input.prompt },
       can_write_back: false,
+      hide_on_success: false,
       include_context: false,
       ...(input.max_concurrent === undefined
         ? {}

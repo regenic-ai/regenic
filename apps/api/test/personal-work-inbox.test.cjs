@@ -46,8 +46,9 @@ async function fixture(t, options = {}) {
     evidenceText: async () => "evidence",
     threadContextLines: async () => ({ lines: [], overflow: false }),
   };
+  const supervise = new PersonalWorkSupervise(runtime, channel);
   const makeDispatch = () => new PersonalWorkDispatch(
-    runtime, channel, new PersonalWorkSupervise(runtime, channel), { attach() {} },
+    runtime, channel, supervise, { attach() {} },
   );
   const recipe = normalizeRecipe({
     id: "messages", name: "Inbox rule",
@@ -60,7 +61,7 @@ async function fixture(t, options = {}) {
   let sequence = 0;
   return {
     get authority() { return authority; },
-    starts, hooks, recipe, now, dispatch: makeDispatch(), makeDispatch,
+    starts, hooks, recipe, now, supervise, dispatch: makeDispatch(), makeDispatch,
     reopen() {
       authority.close();
       authority = new SqliteAuthorityStore(path);
@@ -365,7 +366,10 @@ describe("reconcileInbox ordinary push observation", () => {
   });
 
   it("observes a second short pending message after completion policy-folded the conversation", async (t) => {
-    const f = await fixture(t, { match: { thread_id: "chat:room", text_contains: "[给客户]" } });
+    const f = await fixture(t, {
+      match: { thread_id: "chat:room", text_contains: "[给客户]" },
+      hide_on_success: true,
+    });
     f.hooks.start = () => ({ status: "completed", result: { summary: "done" } });
     await f.ingest("[给客户]");
     await f.dispatch.reconcileInbox();
@@ -379,6 +383,101 @@ describe("reconcileInbox ordinary push observation", () => {
     assert.equal(f.starts.length, 2);
     await f.dispatch.reconcileInbox();
     assert.equal(f.starts.length, 2);
+  });
+
+  async function finishStartedWork(f, dispatch, status) {
+    await dispatch.reconcileInbox();
+    assert.equal(f.starts.length, 1);
+    const [item] = await f.authority.listWorkItems(ORG);
+    const run = await f.authority.getActiveWorkRun(ORG, item.id);
+    const recipe = await f.authority.getRecipe(ORG, item.recipe_id);
+    await f.supervise.applyHandle(item, recipe, run, {
+      external_run_id: "stub-run",
+      status,
+      ...(status === "completed" ? { result: { summary: "done" } } : {}),
+    });
+    return f.authority.getConversationPref(ORG, item.thread_id);
+  }
+
+  it("persists the selected hide setting across SQLite reopen and hides after success when enabled", async (t) => {
+    const f = await fixture(t, { hide_on_success: true });
+    f.reopen();
+    assert.equal((await f.authority.getRecipe(ORG, f.recipe.id)).hide_on_success, true);
+    await f.ingest("approve this release");
+    const pref = await finishStartedWork(f, f.makeDispatch(), "completed");
+    assert.equal(pref.hidden, true);
+    assert.equal(pref.hidden_reason, "policy");
+  });
+
+  it("keeps a successful result visible when hide-on-success is disabled", async (t) => {
+    const f = await fixture(t, { hide_on_success: false });
+    await f.ingest("approve this release");
+    assert.equal(await finishStartedWork(f, f.dispatch, "completed"), null);
+  });
+
+  it("does not hide a failed run even when hide-on-success is enabled", async (t) => {
+    const f = await fixture(t, { hide_on_success: true });
+    await f.ingest("approve this release");
+    assert.equal(await finishStartedWork(f, f.dispatch, "failed"), null);
+    assert.equal((await f.authority.listWorkItems(ORG))[0].status, "failed");
+  });
+
+  for (const kind of ["pull", "manual"]) {
+    it(`applies hide-on-success to ${kind} runs too`, async (t) => {
+      const f = await fixture(t, {
+        trigger: { kind, ...(kind === "pull" ? { interval_ms: 60_000 } : {}) },
+        hide_on_success: true,
+      });
+      const item = {
+        id: `item-${kind}`, org_id: ORG, thread_id: "chat:room", unit_key: `unit-${kind}`,
+        record_class: "utterance", thread_facet: "chat", status: "running",
+        recipe_id: f.recipe.id, created_at: f.now, updated_at: f.now,
+      };
+      const run = {
+        id: `run-${kind}`, org_id: ORG, work_item_id: item.id, recipe_id: f.recipe.id,
+        executor_type: "stub", status: "running", created_at: f.now, updated_at: f.now,
+      };
+      await f.authority.putWorkItem(item);
+      await f.authority.putWorkRun(run);
+      await f.supervise.applyHandle(item, f.recipe, run, {
+        external_run_id: `external-${kind}`, status: "completed",
+      });
+      const pref = await f.authority.getConversationPref(ORG, item.thread_id);
+      assert.equal(pref.hidden, true);
+      assert.equal(pref.hidden_reason, "policy");
+    });
+  }
+
+  it("does not replace a human-hidden conversation preference after success", async (t) => {
+    const f = await fixture(t, { hide_on_success: true });
+    await f.ingest("approve this release");
+    await f.dispatch.reconcileInbox();
+    assert.equal(f.starts.length, 1);
+    const [item] = await f.authority.listWorkItems(ORG);
+    const run = await f.authority.getActiveWorkRun(ORG, item.id);
+    const recipe = await f.authority.getRecipe(ORG, item.recipe_id);
+    await f.authority.putConversationPref({
+      org_id: ORG, thread_id: "chat:room", hidden: true, hidden_reason: "human",
+      updated_at: f.now,
+    });
+    await f.supervise.applyHandle(item, recipe, run, {
+      external_run_id: "stub-run", status: "completed", result: { summary: "done" },
+    });
+    const pref = await f.authority.getConversationPref(ORG, item.thread_id);
+    assert.equal(pref.hidden, true);
+    assert.equal(pref.hidden_reason, "human");
+  });
+
+  it("treats a stored recipe without the new field as a legacy hide-on-success rule", async (t) => {
+    const f = await fixture(t);
+    const legacy = { ...f.recipe };
+    delete legacy.hide_on_success;
+    await f.authority.putRecipe(legacy);
+    assert.equal((await f.authority.getRecipe(ORG, f.recipe.id)).hide_on_success, true);
+    await f.ingest("approve legacy release");
+    const pref = await finishStartedWork(f, f.dispatch, "completed");
+    assert.equal(pref.hidden, true);
+    assert.equal(pref.hidden_reason, "policy");
   });
 
   it("does not trigger again when the completed rule's queued result returns as an outbound echo", async (t) => {

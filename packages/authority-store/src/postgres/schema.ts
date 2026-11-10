@@ -1,4 +1,4 @@
-export const PG_SCHEMA_VERSION = 57;
+export const PG_SCHEMA_VERSION = 58;
 
 /** Applied when an existing postgres authority DB is already at a prior baseline. */
 export const PG_MIGRATIONS = [
@@ -580,6 +580,10 @@ ALTER TABLE recipes ADD COLUMN trigger_timezone TEXT;
   {
     version: 57,
     sql: `ALTER TABLE recipes ADD COLUMN IF NOT EXISTS write_back_thread_id TEXT;`,
+  },
+  {
+    version: 58,
+    sql: `ALTER TABLE recipes ADD COLUMN IF NOT EXISTS hide_on_success BOOLEAN NOT NULL DEFAULT TRUE;`,
   },
 ] as const;
 

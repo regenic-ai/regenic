@@ -55,8 +55,8 @@ export async function putRecipe(db: PgSql, recipe: Recipe): Promise<Recipe> {
           can_write_back, include_context, enabled, trigger_kind,
           trigger_interval_ms, trigger_at_minute, trigger_weekdays, trigger_timezone,
           trigger_coalesce, max_concurrent, next_run_at, created_at, updated_at,
-          write_back_thread_id
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+          write_back_thread_id, hide_on_success
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
         ON CONFLICT (id) DO UPDATE SET
           name = EXCLUDED.name,
           match_json = EXCLUDED.match_json,
@@ -74,6 +74,7 @@ export async function putRecipe(db: PgSql, recipe: Recipe): Promise<Recipe> {
           trigger_coalesce = EXCLUDED.trigger_coalesce,
           max_concurrent = EXCLUDED.max_concurrent,
           next_run_at = EXCLUDED.next_run_at,
+          hide_on_success = EXCLUDED.hide_on_success,
           updated_at = EXCLUDED.updated_at
       `,
       [
@@ -97,6 +98,7 @@ export async function putRecipe(db: PgSql, recipe: Recipe): Promise<Recipe> {
         recipe.created_at,
         recipe.updated_at,
         recipe.write_back_thread_id ?? null,
+        recipe.hide_on_success !== false,
       ],
     );
     return recipe;
@@ -553,6 +555,7 @@ interface RecipeRow {
   can_write_back: unknown;
   write_back_thread_id: string | null;
   include_context: unknown;
+  hide_on_success: unknown;
   enabled: unknown;
   trigger_kind: string | null;
   trigger_interval_ms: number | null;
@@ -666,6 +669,7 @@ function toRecipe(row: RecipeRow): Recipe {
     can_write_back: asBool(row.can_write_back),
     ...(row.write_back_thread_id ? { write_back_thread_id: row.write_back_thread_id } : {}),
     include_context: asBool(row.include_context),
+    hide_on_success: asBool(row.hide_on_success),
     enabled: asBool(row.enabled),
     ...(row.max_concurrent && row.max_concurrent > 0
       ? { max_concurrent: row.max_concurrent }

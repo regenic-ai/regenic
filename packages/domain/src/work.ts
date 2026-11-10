@@ -101,6 +101,8 @@ export interface Recipe {
   can_write_back: boolean;
   /** Optional fixed destination; omitted means the conversation that triggered the work. */
   write_back_thread_id?: string;
+  /** Hide source and executor conversations after a successful run. */
+  hide_on_success: boolean;
   /** Kernel evidence: send visible thread history, not just the head. */
   include_context: boolean;
   /**

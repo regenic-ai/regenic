@@ -337,13 +337,15 @@ export class PersonalWorkSupervise {
       this.writeBackOverride.delete(item.id);
       this.waits?.drop(run.id);
       if (!isSystemRecipeId(recipe.id)) {
-        await foldFinishedWorkThreads(
-          authority,
-          item.org_id,
-          item.thread_id,
-          nextRun.agent_thread_id,
-          now,
-        );
+        if (status === "done" && recipe.hide_on_success) {
+          await foldFinishedWorkThreads(
+            authority,
+            item.org_id,
+            item.thread_id,
+            nextRun.agent_thread_id,
+            now,
+          );
+        }
         if (item.status !== status) {
           this.touchInboxDigest?.();
         }

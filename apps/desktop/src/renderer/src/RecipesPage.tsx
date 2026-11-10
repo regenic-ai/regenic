@@ -263,6 +263,7 @@ export function RecipesPage({
     executor_config: next.config,
     can_write_back: next.can_write_back,
     write_back_thread_id: next.write_back_thread_id || null,
+    hide_on_success: next.hide_on_success,
     include_context: next.include_context,
     max_concurrent:
       next.trigger_kind === "pull" ? null : parseMaxConcurrent(next.max_concurrent),
@@ -380,6 +381,7 @@ export function RecipesPage({
           executor_config: item.executor_config,
           can_write_back: item.can_write_back,
           write_back_thread_id: item.write_back_thread_id ?? null,
+          hide_on_success: item.hide_on_success,
           include_context: item.include_context,
           max_concurrent: item.max_concurrent ?? null,
           enabled: item.enabled,
@@ -439,6 +441,7 @@ export function RecipesPage({
           executor_type: recipe.executor_type,
           executor_config: recipe.executor_config,
           can_write_back: recipe.can_write_back,
+          hide_on_success: recipe.hide_on_success ?? true,
           include_context: recipe.include_context,
           max_concurrent: recipe.max_concurrent ?? null,
           enabled: !recipe.enabled,
