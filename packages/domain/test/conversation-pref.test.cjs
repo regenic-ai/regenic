@@ -43,6 +43,52 @@ describe("conversation prefs", () => {
     assert.equal(await store.getConversationPref("other", "dsh:session-a"), null);
   });
 
+  it("increments only explicit visibility commands and rejects stale versions", async () => {
+    const store = new MemoryAuthorityStore();
+    const first = await store.setConversationVisibility({
+      org_id: "local-owner",
+      thread_id: "dsh:session-a",
+      hidden: true,
+      expected_version: 0,
+      updated_at: "2026-08-22T00:00:00.000Z",
+    });
+    assert.equal(first.outcome, "applied");
+    assert.equal(first.pref.visibility_version, 1);
+    assert.equal(first.pref.hidden, true);
+
+    const stale = await store.setConversationVisibility({
+      org_id: "local-owner",
+      thread_id: "dsh:session-a",
+      hidden: false,
+      expected_version: 0,
+      updated_at: "2026-08-22T00:00:01.000Z",
+    });
+    assert.deepEqual(stale, { outcome: "conflict", current_version: 1 });
+
+    const patched = await store.putConversationPref({
+      org_id: "local-owner",
+      thread_id: "dsh:session-a",
+      title: "Release",
+      pinned: true,
+      updated_at: "2026-08-22T00:00:02.000Z",
+    });
+    assert.equal(patched.visibility_version, 1);
+    assert.equal(patched.hidden, true);
+
+    const shown = await store.setConversationVisibility({
+      org_id: "local-owner",
+      thread_id: "dsh:session-a",
+      hidden: false,
+      expected_version: 1,
+      updated_at: "2026-08-22T00:00:03.000Z",
+    });
+    assert.equal(shown.outcome, "applied");
+    assert.equal(shown.pref.visibility_version, 2);
+    assert.equal(shown.pref.hidden, false);
+    assert.equal(shown.pref.title, "Release");
+    assert.equal(shown.pref.pinned, true);
+  });
+
   it("clears operational data and keeps recipes", async () => {
     const store = new MemoryAuthorityStore();
     await store.append({

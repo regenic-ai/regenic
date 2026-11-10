@@ -1167,6 +1167,7 @@ export async function updateConversationPrefs(input: {
   title?: string | null;
   pinned?: boolean;
   hidden?: boolean;
+  expected_visibility_version?: number;
 }): Promise<ConversationPrefView> {
   const response = await fetch(`${origin()}/v1/me/conversations/prefs`, {
     method: "POST",

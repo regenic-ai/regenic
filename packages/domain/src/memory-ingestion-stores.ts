@@ -6,6 +6,8 @@ import type {
   BlobStore,
   ConversationPref,
   ConversationPrefPatch,
+  ConversationVisibilityUpdate,
+  ConversationVisibilityUpdateResult,
   EventListQuery,
   EventRecord,
   EventRevision,
@@ -399,6 +401,7 @@ export class MemoryAuthorityStore
           ? input.hidden_reason
           : (current?.hidden_reason ?? (input.hidden === true ? "human" : null))
         : null,
+      visibility_version: current?.visibility_version ?? 0,
       last_read_at:
         input.last_read_at !== undefined
           ? input.last_read_at
@@ -411,6 +414,32 @@ export class MemoryAuthorityStore
     };
     this.prefs.set(prefKey(input.org_id, input.thread_id), next);
     return { ...next };
+  }
+
+  async setConversationVisibility(
+    input: ConversationVisibilityUpdate,
+  ): Promise<ConversationVisibilityUpdateResult> {
+    const key = prefKey(input.org_id, input.thread_id);
+    const current = this.prefs.get(key);
+    const currentVersion = current?.visibility_version ?? 0;
+    if (currentVersion !== input.expected_version) {
+      return { outcome: "conflict", current_version: currentVersion };
+    }
+    const hidden = input.hidden;
+    const next: ConversationPref = {
+      org_id: input.org_id,
+      thread_id: input.thread_id,
+      title: input.title !== undefined ? input.title : (current?.title ?? null),
+      pinned: input.pinned !== undefined ? input.pinned : (current?.pinned ?? false),
+      hidden,
+      hidden_reason: input.hidden ? "human" : null,
+      visibility_version: currentVersion + 1,
+      last_read_at: current?.last_read_at ?? null,
+      last_read_external_id: current?.last_read_external_id ?? null,
+      updated_at: input.updated_at,
+    };
+    this.prefs.set(key, next);
+    return { outcome: "applied", pref: { ...next } };
   }
 
   async summarizeStore(orgId: string): Promise<StoreFootprint> {

@@ -272,6 +272,7 @@ export interface InboxViewItem {
   title?: string | null;
   pinned?: boolean;
   hidden?: boolean;
+  visibility_version?: number;
   pref_updated_at?: string | null;
   conversation_label?: string | null;
   conversation_kind?: string | null;
@@ -816,6 +817,7 @@ export interface ConversationPrefView {
   title: string | null;
   pinned: boolean;
   hidden: boolean;
+  visibility_version: number;
   updated_at: string;
 }
 

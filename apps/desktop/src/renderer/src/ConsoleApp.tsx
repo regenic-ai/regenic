@@ -1455,6 +1455,8 @@ export function ConsoleApp() {
         title: patch.title !== undefined ? patch.title : (base.title ?? null),
         pinned: patch.pinned !== undefined ? patch.pinned : Boolean(base.pinned),
         hidden: patch.hidden !== undefined ? patch.hidden : Boolean(base.hidden),
+        visibility_version: patch.hidden !== undefined
+          ? (base.visibility_version ?? 0) + 1 : (base.visibility_version ?? 0),
         updated_at: new Date().toISOString(),
       };
       await commitHeads({
@@ -1466,6 +1468,9 @@ export function ConsoleApp() {
         const saved = await updateConversationPrefs({
           thread_id: thread.id,
           ...patch,
+          ...(patch.hidden !== undefined
+            ? { expected_visibility_version: base.visibility_version ?? 0 }
+            : {}),
         });
         if (
           isActivePrefWrite(
@@ -1480,6 +1485,7 @@ export function ConsoleApp() {
               title: saved.title,
               pinned: saved.pinned,
               hidden: saved.hidden,
+              visibility_version: saved.visibility_version,
               updated_at: saved.updated_at,
             },
           });

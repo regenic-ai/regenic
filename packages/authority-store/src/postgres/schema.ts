@@ -1,4 +1,4 @@
-export const PG_SCHEMA_VERSION = 59;
+export const PG_SCHEMA_VERSION = 60;
 
 /** Applied when an existing postgres authority DB is already at a prior baseline. */
 export const PG_MIGRATIONS = [
@@ -620,6 +620,12 @@ ALTER TABLE work_deliveries ADD COLUMN claim_token TEXT;
 ALTER TABLE work_deliveries ADD COLUMN cancel_requested_at TIMESTAMPTZ;
 `,
   },
+  {
+    version: 60,
+    sql: `
+ALTER TABLE conversation_prefs ADD COLUMN visibility_version INTEGER NOT NULL DEFAULT 0 CHECK (visibility_version >= 0);
+`,
+  },
 ] as const;
 
 export const PG_BASELINE_SQL = `
@@ -759,6 +765,7 @@ CREATE TABLE conversation_prefs (
   pinned BOOLEAN NOT NULL DEFAULT FALSE,
   hidden BOOLEAN NOT NULL DEFAULT FALSE,
   hidden_reason TEXT,
+  visibility_version INTEGER NOT NULL DEFAULT 0 CHECK (visibility_version >= 0),
   last_read_at TIMESTAMPTZ,
   last_read_external_id TEXT,
   updated_at TIMESTAMPTZ NOT NULL,

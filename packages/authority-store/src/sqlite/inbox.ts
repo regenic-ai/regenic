@@ -49,13 +49,14 @@ interface PrefRow {
   pinned: number;
   hidden: number;
   hidden_reason: string | null;
+  visibility_version: number;
   last_read_at: string | null;
   last_read_external_id: string | null;
   updated_at: string;
 }
 
 const PREF_COLUMNS = `
-  org_id, thread_id, title, pinned, hidden, hidden_reason,
+  org_id, thread_id, title, pinned, hidden, hidden_reason, visibility_version,
   last_read_at, last_read_external_id, updated_at
 `;
 
@@ -271,6 +272,7 @@ export function putConversationPrefUnlocked(db: Database.Database, input: Conver
           : normalizeHiddenReason(current?.hidden_reason) ??
             (input.hidden === true ? "human" : null)
         : null,
+      visibility_version: current?.visibility_version ?? 0,
       last_read_at:
         input.last_read_at !== undefined
           ? input.last_read_at
@@ -285,9 +287,9 @@ export function putConversationPrefUnlocked(db: Database.Database, input: Conver
       .prepare(
         `
           INSERT INTO conversation_prefs (
-            org_id, thread_id, title, pinned, hidden, hidden_reason,
+            org_id, thread_id, title, pinned, hidden, hidden_reason, visibility_version,
             last_read_at, last_read_external_id, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(org_id, thread_id) DO UPDATE SET
             title = excluded.title,
             pinned = excluded.pinned,
@@ -305,12 +307,40 @@ export function putConversationPrefUnlocked(db: Database.Database, input: Conver
         next.pinned ? 1 : 0,
         next.hidden ? 1 : 0,
         next.hidden_reason,
+        next.visibility_version,
         next.last_read_at,
         next.last_read_external_id,
         next.updated_at,
       );
     return next;
   }
+
+export async function setConversationVisibility(
+  db: Database.Database,
+  input: import("@regenic/domain").ConversationVisibilityUpdate,
+): Promise<import("@regenic/domain").ConversationVisibilityUpdateResult> {
+  return db.transaction(() => {
+    const current = db.prepare(`SELECT ${PREF_COLUMNS} FROM conversation_prefs
+      WHERE org_id = ? AND thread_id = ?`).get(input.org_id, input.thread_id) as PrefRow | undefined;
+    const currentVersion = current?.visibility_version ?? 0;
+    if (currentVersion !== input.expected_version) {
+      return { outcome: "conflict" as const, current_version: currentVersion };
+    }
+    const pref = putConversationPrefUnlocked(db, {
+      org_id: input.org_id,
+      thread_id: input.thread_id,
+      hidden: input.hidden,
+      hidden_reason: input.hidden ? "human" : null,
+      title: input.title,
+      pinned: input.pinned,
+      updated_at: input.updated_at,
+    });
+    const visibilityVersion = currentVersion + 1;
+    db.prepare(`UPDATE conversation_prefs SET visibility_version = ?
+      WHERE org_id = ? AND thread_id = ?`).run(visibilityVersion, input.org_id, input.thread_id);
+    return { outcome: "applied" as const, pref: { ...pref, visibility_version: visibilityVersion } };
+  }).immediate();
+}
 
 /** Keep the list face in sync after ingest/disposition without a full-table scan. */
 export function refreshThreadHeadWithinTransaction(db: Database.Database, orgId: string, threadId: string | null | undefined): void {
@@ -613,6 +643,7 @@ function toPref(db: Database.Database, row: PrefRow): ConversationPref {
       pinned: row.pinned === 1,
       hidden,
       hidden_reason: hidden ? normalizeHiddenReason(row.hidden_reason) : null,
+      visibility_version: row.visibility_version,
       last_read_at: row.last_read_at,
       last_read_external_id: row.last_read_external_id,
       updated_at: row.updated_at,

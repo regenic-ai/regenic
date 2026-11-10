@@ -143,6 +143,7 @@ export const AUTHORITY_WRITE_METHODS = [
   "cancelAgentRun",
   "projectStandardUsage",
   "putConversationPref",
+  "setConversationVisibility",
   "clearOperationalData",
   "putRecipe",
   "deleteRecipe",

@@ -236,6 +236,7 @@ export interface ConversationPref {
   /** List surface. Independent of tombstone, current_work, and WorkItem. */
   hidden: boolean;
   hidden_reason: "human" | "policy" | null;
+  visibility_version: number;
   last_read_at: string | null;
   last_read_external_id: string | null;
   updated_at: string;
@@ -252,6 +253,20 @@ export interface ConversationPrefPatch {
   last_read_external_id?: string | null;
   updated_at: string;
 }
+
+export interface ConversationVisibilityUpdate {
+  org_id: string;
+  thread_id: string;
+  hidden: boolean;
+  expected_version: number;
+  updated_at: string;
+  title?: string | null;
+  pinned?: boolean;
+}
+
+export type ConversationVisibilityUpdateResult =
+  | { outcome: "applied"; pref: ConversationPref }
+  | { outcome: "conflict"; current_version: number };
 
 export interface EventListQuery {
   source?: string;
@@ -399,6 +414,9 @@ export interface AuthorityStore {
     threadId: string,
   ): Promise<ConversationPref | null>;
   putConversationPref(input: ConversationPrefPatch): Promise<ConversationPref>;
+  setConversationVisibility(
+    input: ConversationVisibilityUpdate,
+  ): Promise<ConversationVisibilityUpdateResult>;
   summarizeStore(orgId: string): Promise<StoreFootprint>;
   clearOperationalData(orgId: string, now: string): Promise<StoreClearResult>;
 }

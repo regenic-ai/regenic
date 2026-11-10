@@ -188,6 +188,42 @@ for (const driver of drivers) {
       assert.equal(inbox[0].event.org_id, orgId);
     });
 
+    it("fences competing conversation visibility commands by version", async () => {
+      const { store, orgId } = await openBoundStore();
+      const threadId = "dsh:session-a";
+      const [left, right] = await Promise.all([
+        store.setConversationVisibility({
+          org_id: orgId,
+          thread_id: threadId,
+          hidden: true,
+          expected_version: 0,
+          updated_at: "2026-08-30T00:00:00.000Z",
+        }),
+        store.setConversationVisibility({
+          org_id: orgId,
+          thread_id: threadId,
+          hidden: false,
+          expected_version: 0,
+          updated_at: "2026-08-30T00:00:01.000Z",
+        }),
+      ]);
+      assert.deepEqual(
+        [left.outcome, right.outcome].sort(),
+        ["applied", "conflict"],
+      );
+      const current = await store.getConversationPref(orgId, threadId);
+      assert.equal(current.visibility_version, 1);
+      const patched = await store.putConversationPref({
+        org_id: orgId,
+        thread_id: threadId,
+        title: "Release",
+        pinned: true,
+        updated_at: "2026-08-30T00:00:02.000Z",
+      });
+      assert.equal(patched.visibility_version, 1);
+      assert.equal((await store.getConversationPref(orgId, threadId)).visibility_version, 1);
+    });
+
     it("restores shared-body artifacts through lifecycle transitions and preview reads", async () => {
       const { store, orgId } = await openBoundStore();
       const reference = {

@@ -61,6 +61,8 @@ import type {
   InboxSummary,
   ConversationPref,
   ConversationPrefPatch,
+  ConversationVisibilityUpdate,
+  ConversationVisibilityUpdateResult,
   StoreFootprint,
   StoreClearResult,
   Recipe,
@@ -282,6 +284,7 @@ import {
   listConversationPrefs,
   listInbox,
   putConversationPref,
+  setConversationVisibility,
   putDisposition,
   summarizeInbox,
 } from "./inbox";
@@ -976,6 +979,13 @@ export class SqliteAuthorityStore
   ): Promise<ConversationPref> {
     this.assertWritable();
     return putConversationPref(this.database, input);
+  }
+
+  async setConversationVisibility(
+    input: ConversationVisibilityUpdate,
+  ): Promise<ConversationVisibilityUpdateResult> {
+    this.assertWritable();
+    return setConversationVisibility(this.database, input);
   }
 
   async summarizeStore(orgId: string): Promise<StoreFootprint> {

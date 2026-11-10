@@ -60,13 +60,14 @@ interface PrefRow {
   pinned: unknown;
   hidden: unknown;
   hidden_reason: string | null;
+  visibility_version: number;
   last_read_at: unknown;
   last_read_external_id: string | null;
   updated_at: unknown;
 }
 
 const PREF_COLUMNS = `
-  org_id, thread_id, title, pinned, hidden, hidden_reason,
+  org_id, thread_id, title, pinned, hidden, hidden_reason, visibility_version,
   last_read_at, last_read_external_id, updated_at
 `;
 
@@ -253,6 +254,7 @@ export async function putConversationPref(db: PgSql, input: ConversationPrefPatc
   }
 
 export async function putConversationPrefOn(db: PgSql, client: PoolClient, input: ConversationPrefPatch): Promise<ConversationPref> {
+    await lockConversationPref(db, client, input.org_id, input.thread_id);
     const current = await db.queryOne<PrefRow>(
       `
         SELECT ${PREF_COLUMNS}
@@ -276,6 +278,7 @@ export async function putConversationPrefOn(db: PgSql, client: PoolClient, input
           : normalizeHiddenReason(current?.hidden_reason) ??
             (input.hidden === true ? "human" : null)
         : null,
+      visibility_version: current?.visibility_version ?? 0,
       last_read_at:
         input.last_read_at !== undefined
           ? input.last_read_at
@@ -289,9 +292,9 @@ export async function putConversationPrefOn(db: PgSql, client: PoolClient, input
     await db.execute(
       `
         INSERT INTO conversation_prefs (
-          org_id, thread_id, title, pinned, hidden, hidden_reason,
+          org_id, thread_id, title, pinned, hidden, hidden_reason, visibility_version,
           last_read_at, last_read_external_id, updated_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
         ON CONFLICT (org_id, thread_id) DO UPDATE SET
           title = EXCLUDED.title,
           pinned = EXCLUDED.pinned,
@@ -308,6 +311,7 @@ export async function putConversationPrefOn(db: PgSql, client: PoolClient, input
         next.pinned,
         next.hidden,
         next.hidden_reason,
+        next.visibility_version,
         next.last_read_at,
         next.last_read_external_id,
         next.updated_at,
@@ -316,6 +320,39 @@ export async function putConversationPrefOn(db: PgSql, client: PoolClient, input
     );
     return next;
   }
+
+export async function setConversationVisibility(
+  db: PgSql,
+  input: import("@regenic/domain").ConversationVisibilityUpdate,
+): Promise<import("@regenic/domain").ConversationVisibilityUpdateResult> {
+  return db.withTx(async (client) => {
+    await lockConversationPref(db, client, input.org_id, input.thread_id);
+    const current = await db.queryOne<PrefRow>(`SELECT ${PREF_COLUMNS} FROM conversation_prefs
+      WHERE org_id = $1 AND thread_id = $2 FOR UPDATE`, [input.org_id, input.thread_id], client);
+    const currentVersion = current?.visibility_version ?? 0;
+    if (currentVersion !== input.expected_version) {
+      return { outcome: "conflict", current_version: currentVersion };
+    }
+    const pref = await putConversationPrefOn(db, client, {
+      org_id: input.org_id,
+      thread_id: input.thread_id,
+      hidden: input.hidden,
+      hidden_reason: input.hidden ? "human" : null,
+      title: input.title,
+      pinned: input.pinned,
+      updated_at: input.updated_at,
+    });
+    const visibilityVersion = currentVersion + 1;
+    await db.execute(`UPDATE conversation_prefs SET visibility_version = $1
+      WHERE org_id = $2 AND thread_id = $3`, [visibilityVersion, input.org_id, input.thread_id], client);
+    return { outcome: "applied", pref: { ...pref, visibility_version: visibilityVersion } };
+  });
+}
+
+async function lockConversationPref(db: PgSql, client: PoolClient, orgId: string, threadId: string): Promise<void> {
+  await db.queryOne("SELECT pg_advisory_xact_lock(hashtextextended(jsonb_build_array($1, $2)::text, 0))",
+    [orgId, threadId], client);
+}
 
 export async function refreshThreadHeadWithinTransaction(db: PgSql, orgId: string, threadId: string | null | undefined, client?: PoolClient): Promise<void> {
     const id = threadId?.trim();
@@ -605,6 +642,7 @@ function toPref(db: PgSql, row: PrefRow): ConversationPref {
       pinned: asBool(row.pinned),
       hidden,
       hidden_reason: hidden ? normalizeHiddenReason(row.hidden_reason) : null,
+      visibility_version: asNumber(row.visibility_version),
       last_read_at: toIsoOrNull(row.last_read_at),
       last_read_external_id: row.last_read_external_id,
       updated_at: toIso(row.updated_at),

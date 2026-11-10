@@ -27,6 +27,7 @@ export interface InboxThread {
   unit_kind_label: string | null;
   pinned: boolean;
   hidden: boolean;
+  visibility_version: number;
   pref_updated_at?: string;
   can_send: boolean;
   await_reply?: boolean;
@@ -65,6 +66,7 @@ export interface ConversationPrefOverlay {
   title: string | null;
   pinned: boolean;
   hidden: boolean;
+  visibility_version?: number;
   updated_at: string;
 }
 
@@ -135,6 +137,9 @@ export function applyPrefOverlay(
       title: local.title,
       pinned: local.pinned,
       hidden: local.hidden,
+      ...(local.visibility_version !== undefined
+        ? { visibility_version: local.visibility_version }
+        : {}),
       pref_updated_at: local.updated_at,
     };
   });
@@ -695,6 +700,7 @@ function buildThread(
     unit_kind_label: threadUnitKindLabel(ordered, previous?.unit_kind_label),
     pinned: pref.pinned,
     hidden: pref.hidden,
+    visibility_version: latest.visibility_version ?? 0,
     pref_updated_at: pref.updated_at,
     can_send: ordered.some((item) => item.can_send),
     await_reply: ordered.some((item) => item.await_reply === true),

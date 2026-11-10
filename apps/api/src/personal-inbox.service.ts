@@ -21,10 +21,8 @@ import {
   isThreadStatusItem,
   parseConversationThread,
   takeRecentInboxItems,
-  foldByHuman,
   normalizeInboxLimit,
   normalizeInboxListView,
-  unfold,
   threadIdOf,
   withSurfaceGeneration,
   type ArrangementDecision,
@@ -163,6 +161,7 @@ export interface ConversationPrefView {
   pinned: boolean;
   hidden: boolean;
   hidden_reason: "human" | "policy" | null;
+  visibility_version: number;
   last_read_at: string | null;
   last_read_external_id: string | null;
   updated_at: string;
@@ -173,6 +172,7 @@ export interface ConversationPrefInput {
   title?: string | null;
   pinned?: boolean;
   hidden?: boolean;
+  expected_visibility_version?: unknown;
 }
 
 export interface ConversationAttentionInput {
@@ -1587,22 +1587,47 @@ export class PersonalInboxService {
         400,
       );
     }
-    const fold =
-      input.hidden === undefined
-        ? undefined
-        : input.hidden
-          ? foldByHuman()
-          : unfold();
-    const pref = await host.get("authority").putConversationPref({
-      org_id: this.runtime.orgId(),
-      thread_id: threadId,
-      title: input.title !== undefined ? normalizeTitle(input.title) : undefined,
-      pinned: input.pinned,
-      ...(fold
-        ? { hidden: fold.hidden, hidden_reason: fold.reason }
-        : {}),
-      updated_at: new Date().toISOString(),
-    });
+    const updatedAt = new Date().toISOString();
+    let pref: ConversationPref;
+    if (input.hidden !== undefined) {
+      const expectedVersion = input.expected_visibility_version;
+      if (
+        typeof expectedVersion !== "number" ||
+        !Number.isSafeInteger(expectedVersion) ||
+        expectedVersion < 0
+      ) {
+        throw new PersonalConnectorError(
+          "invalid_visibility_version",
+          "A valid visibility version is required. Refresh the conversation before changing visibility.",
+          400,
+        );
+      }
+      const result = await host.get("authority").setConversationVisibility({
+        org_id: this.runtime.orgId(),
+        thread_id: threadId,
+        hidden: input.hidden,
+        expected_version: expectedVersion,
+        title: input.title !== undefined ? normalizeTitle(input.title) : undefined,
+        pinned: input.pinned,
+        updated_at: updatedAt,
+      });
+      if (result.outcome === "conflict") {
+        throw new PersonalConnectorError(
+          "visibility_conflict",
+          "Conversation visibility changed since it was displayed. Refresh before changing it.",
+          409,
+        );
+      }
+      pref = result.pref;
+    } else {
+      pref = await host.get("authority").putConversationPref({
+        org_id: this.runtime.orgId(),
+        thread_id: threadId,
+        title: input.title !== undefined ? normalizeTitle(input.title) : undefined,
+        pinned: input.pinned,
+        updated_at: updatedAt,
+      });
+    }
     this.touchInboxDigest({ immediate: true });
     return toPrefView(pref);
   }
@@ -1708,6 +1733,9 @@ export class PersonalInboxService {
     return this.updateConversationPrefs({
       thread_id: conversationId(event.source, event.external_id, event.id),
       hidden,
+      expected_visibility_version: (await authority.getConversationPref(
+        orgId, conversationId(event.source, event.external_id, event.id),
+      ))?.visibility_version ?? 0,
     });
   }
 
@@ -2215,6 +2243,7 @@ function toPrefView(pref: ConversationPref): ConversationPrefView {
     pinned: pref.pinned,
     hidden: pref.hidden === true,
     hidden_reason: pref.hidden_reason ?? null,
+    visibility_version: pref.visibility_version ?? 0,
     last_read_at: pref.last_read_at,
     last_read_external_id: pref.last_read_external_id,
     updated_at: pref.updated_at,

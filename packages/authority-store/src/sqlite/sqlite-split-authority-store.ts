@@ -55,6 +55,8 @@ import type {
   ContextSnapshotIndexQuery,
   ConversationPref,
   ConversationPrefPatch,
+  ConversationVisibilityUpdate,
+  ConversationVisibilityUpdateResult,
   EventListQuery,
   EventRecord,
   EventRevision,
@@ -743,6 +745,12 @@ export class SqliteSplitAuthorityStore
     input: ConversationPrefPatch,
   ): Promise<ConversationPref> {
     return this.writer.call("putConversationPref", [input]);
+  }
+
+  async setConversationVisibility(
+    input: ConversationVisibilityUpdate,
+  ): Promise<ConversationVisibilityUpdateResult> {
+    return this.writer.call("setConversationVisibility", [input]);
   }
 
   async summarizeStore(orgId: string): Promise<StoreFootprint> {

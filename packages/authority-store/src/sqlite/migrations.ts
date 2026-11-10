@@ -1,4 +1,4 @@
-export const LATEST_SCHEMA_VERSION = 59;
+export const LATEST_SCHEMA_VERSION = 60;
 
 export const CUSTOMER_SERVICE_TASKS_SQL = `
   CREATE TABLE IF NOT EXISTS customer_service_tasks (
@@ -1184,6 +1184,12 @@ export const MIGRATIONS = [
       ALTER TABLE work_deliveries ADD COLUMN lease_owner TEXT;
       ALTER TABLE work_deliveries ADD COLUMN claim_token TEXT;
       ALTER TABLE work_deliveries ADD COLUMN cancel_requested_at TEXT;
+    `,
+  },
+  {
+    version: 60,
+    sql: `
+      ALTER TABLE conversation_prefs ADD COLUMN visibility_version INTEGER NOT NULL DEFAULT 0 CHECK (visibility_version >= 0);
     `,
   },
 ] as const;

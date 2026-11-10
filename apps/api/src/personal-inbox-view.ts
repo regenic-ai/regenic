@@ -57,6 +57,7 @@ export interface InboxViewItem {
   title: string | null;
   pinned: boolean;
   hidden: boolean;
+  visibility_version: number;
   pref_updated_at: string | null;
   conversation_label: string | null;
   conversation_kind: string | null;
@@ -120,6 +121,7 @@ export function decorateInboxItem(
     title: pref?.title ?? null,
     pinned: pref?.pinned === true,
     hidden: pref?.hidden === true,
+    visibility_version: pref?.visibility_version ?? 0,
     pref_updated_at: pref?.updated_at ?? null,
     conversation_label:
       surface.conversation_label ?? labels.get(threadId) ?? null,

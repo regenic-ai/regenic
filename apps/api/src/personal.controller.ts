@@ -502,6 +502,7 @@ export class PersonalController {
           title?: string | null;
           pinned?: boolean;
           hidden?: boolean;
+          expected_visibility_version?: unknown;
         }
       | undefined,
   ) {

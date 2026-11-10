@@ -317,6 +317,49 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
       ).json();
       assert.equal(created.title, "Release desk");
       assert.equal(created.pinned, true);
+      assert.equal(created.visibility_version, 0);
+
+      const missingVisibilityVersion = await fetch(`${origin}/v1/me/conversations/prefs`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ thread_id: "dsh:session-title", hidden: true }),
+      });
+      assert.equal(missingVisibilityVersion.status, 400);
+      const hidden = await fetch(`${origin}/v1/me/conversations/prefs`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          thread_id: "dsh:session-title",
+          hidden: true,
+          expected_visibility_version: 0,
+        }),
+      });
+      const hiddenBody = await hidden.json();
+      assert.equal(hidden.status, 201);
+      assert.equal(hiddenBody.hidden, true);
+      assert.equal(hiddenBody.visibility_version, 1);
+      const staleVisibility = await fetch(`${origin}/v1/me/conversations/prefs`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          thread_id: "dsh:session-title",
+          hidden: false,
+          expected_visibility_version: 0,
+        }),
+      });
+      assert.equal(staleVisibility.status, 409);
+      const shown = await fetch(`${origin}/v1/me/conversations/prefs`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          thread_id: "dsh:session-title",
+          hidden: false,
+          expected_visibility_version: 1,
+        }),
+      });
+      assert.equal(shown.status, 201);
+      assert.equal((await shown.json()).visibility_version, 2);
+
       const after = await (await fetch(`${origin}/v1/me/engine?detail=0`)).json();
       assert.equal(after.inbox_count, before.inbox_count);
       assert.notEqual(after.inbox_digest, before.inbox_digest);
@@ -325,6 +368,7 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
       assert.equal(inbox[0].thread_id, "dsh:session-title");
       assert.equal(inbox[0].title, "Release desk");
       assert.equal(inbox[0].pinned, true);
+      assert.equal(inbox[0].visibility_version, 2);
 
       const cleared = await (
         await fetch(`${origin}/v1/me/conversations/prefs`, {

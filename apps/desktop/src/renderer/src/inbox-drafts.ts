@@ -149,6 +149,7 @@ export function mergeDraftThreads(
       unit_kind_label: null,
       pinned: draft.pinned === true,
       hidden: false,
+      visibility_version: 0,
       opened_at: draft.opened_at,
       draft_installation_id: draft.draft_installation_id,
       messages: [],
