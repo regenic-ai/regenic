@@ -111,10 +111,15 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
       const threadBeforeDismiss = inboxBeforeDismiss.find((item) => item.thread_id === "feishu:oc_dismiss");
       assert.equal(typeof threadBeforeDismiss.work.version, "number");
       const expectedVersion = threadBeforeDismiss.work.version;
+      const dismissalCommand = {
+        expected_version: expectedVersion,
+        command_id: "dismiss-command-1",
+        issued_at: new Date().toISOString(),
+      };
       const dismissed = await fetch(`${origin}/v1/me/work-items/${workId}/dismiss`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ expected_version: expectedVersion }),
+        body: JSON.stringify(dismissalCommand),
       });
       assert.ok(dismissed.ok, `dismiss ${dismissed.status}`);
       const body = await dismissed.json();
@@ -123,11 +128,36 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
       assert.equal(body.work_item.version, expectedVersion + 1);
       assert.equal(body.run.status, "running");
       assert.notEqual(body.run.status, "failed");
+      const replayed = await fetch(`${origin}/v1/me/work-items/${workId}/dismiss`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(dismissalCommand),
+      });
+      assert.equal(replayed.status, 201);
+      const replayedBody = await replayed.json();
+      assert.equal(replayedBody.work_item.version, expectedVersion + 1);
+      assert.equal(replayedBody.run.status, "running");
+      const dismissalCommandConflict = await fetch(
+        `${origin}/v1/me/work-items/${workId}/dismiss`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            ...dismissalCommand,
+            expected_version: expectedVersion + 1,
+          }),
+        },
+      );
+      assert.equal(dismissalCommandConflict.status, 409);
       const aliased = await (
         await fetch(`${origin}/v1/me/work-items/${workId}/complete`, {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ expected_version: body.work_item.version }),
+          body: JSON.stringify({
+            expected_version: body.work_item.version,
+            command_id: "dismiss-command-2",
+            issued_at: new Date().toISOString(),
+          }),
         })
       ).json();
       assert.equal(aliased.work_item.status, "skipped");
@@ -135,7 +165,11 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
       const staleDismiss = await fetch(`${origin}/v1/me/work-items/${workId}/dismiss`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ expected_version: expectedVersion }),
+        body: JSON.stringify({
+          expected_version: expectedVersion,
+          command_id: "dismiss-stale-1",
+          issued_at: new Date().toISOString(),
+        }),
       });
       assert.equal(staleDismiss.status, 409);
       const missingVersion = await fetch(`${origin}/v1/me/work-items/${workId}/dismiss`, {
@@ -144,6 +178,12 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
         body: "{}",
       });
       assert.equal(missingVersion.status, 400);
+      const missingCommandId = await fetch(`${origin}/v1/me/work-items/${workId}/dismiss`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ expected_version: body.work_item.version }),
+      });
+      assert.equal(missingCommandId.status, 400);
       const inbox = await (await fetch(`${origin}/v1/me/inbox`)).json();
       const texts = inbox
         .filter((item) => item.thread_id === "feishu:oc_dismiss")

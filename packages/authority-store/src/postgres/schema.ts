@@ -1,4 +1,4 @@
-export const PG_SCHEMA_VERSION = 62;
+export const PG_SCHEMA_VERSION = 63;
 
 /** Applied when an existing postgres authority DB is already at a prior baseline. */
 export const PG_MIGRATIONS = [
@@ -669,6 +669,14 @@ CREATE INDEX conversation_lifecycle_events_command_idx
   ON conversation_lifecycle_events (org_id, command_id);
 `,
   },
+  {
+    version: 63,
+    sql: `
+CREATE UNIQUE INDEX conversation_lifecycle_events_command_unique_idx
+  ON conversation_lifecycle_events (org_id, command_id)
+  WHERE command_id IS NOT NULL;
+`,
+  },
 ] as const;
 
 export const PG_BASELINE_SQL = `
@@ -853,6 +861,9 @@ CREATE INDEX conversation_lifecycle_events_aggregate_idx
   ON conversation_lifecycle_events (org_id, aggregate_type, aggregate_id, aggregate_version);
 CREATE INDEX conversation_lifecycle_events_command_idx
   ON conversation_lifecycle_events (org_id, command_id);
+CREATE UNIQUE INDEX conversation_lifecycle_events_command_unique_idx
+  ON conversation_lifecycle_events (org_id, command_id)
+  WHERE command_id IS NOT NULL;
 
 CREATE TABLE recipes (
   id TEXT PRIMARY KEY,

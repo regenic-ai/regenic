@@ -1,4 +1,5 @@
 import Database from "better-sqlite3";
+import { randomUUID } from "node:crypto";
 import type {
   Recipe,
   WorkItem,
@@ -24,6 +25,7 @@ import {
   prepareWorkRunStartCheckpoint,
   prepareWorkRunStartFailure,
   prepareWorkDismissal,
+  sameWorkDismissalCommand,
   prepareWorkItemCreation,
   type WorkItemCreation,
   type WorkItemCreationResult,
@@ -441,6 +443,29 @@ function writeWorkRun(db: Database.Database, run: WorkRun, advanceVersion = fals
 export async function dismissWorkItem(db: Database.Database, input: WorkDismissal): Promise<WorkDismissalResult> {
   return db.transaction((): WorkDismissalResult => {
     const { org_id: orgId, id } = input.expected_item;
+    if (input.command_id !== undefined) {
+      const event = db.prepare(`SELECT aggregate_type, aggregate_id, event_type, payload_json
+        FROM conversation_lifecycle_events WHERE org_id = ? AND command_id = ?`)
+        .get(orgId, input.command_id) as
+        | { aggregate_type: string; aggregate_id: string; event_type: string; payload_json: string }
+        | undefined;
+      if (event) {
+        const payload = JSON.parse(event.payload_json) as {
+          command?: unknown;
+          item?: WorkItem;
+        };
+        if (
+          event.aggregate_type !== "work_item" ||
+          event.aggregate_id !== id ||
+          event.event_type !== "work_item_transitioned" ||
+          !sameWorkDismissalCommand(payload.command, input) ||
+          !payload.item
+        ) {
+          return { outcome: "conflict", reason: "stale_dismissal" };
+        }
+        return { outcome: "replayed", item: payload.item };
+      }
+    }
     const item = db.prepare("SELECT * FROM work_items WHERE org_id = ? AND id = ?")
       .get(orgId, id) as WorkItemRow | undefined;
     const run = item?.current_run_id
@@ -462,13 +487,41 @@ export async function dismissWorkItem(db: Database.Database, input: WorkDismissa
       WHERE org_id = ? AND id = ? RETURNING *`)
       .get(result.item.version, input.now, orgId, id) as WorkItemRow | undefined;
     if (!savedItem) throw new Error("Dismissed work item disappeared inside its transaction");
+    const savedWorkItem = toWorkItem(savedItem);
+    if (input.command_id !== undefined && input.issued_at !== undefined) {
+      db.prepare(`INSERT INTO conversation_lifecycle_events (
+        id, org_id, thread_id, aggregate_type, aggregate_id, aggregate_version,
+        event_type, command_id, dedupe_key, schema_version, payload_json, occurred_at, created_at
+      ) VALUES (?, ?, ?, 'work_item', ?, ?, 'work_item_transitioned', ?, ?, 1, ?, ?, ?)`)
+        .run(
+          randomUUID(),
+          orgId,
+          savedWorkItem.thread_id,
+          id,
+          savedWorkItem.version ?? 0,
+          input.command_id,
+          JSON.stringify(["work_item", id, savedWorkItem.version ?? 0, "work_item_transitioned"]),
+          JSON.stringify({
+            command: {
+              work_item_id: id,
+              expected_version: input.expected_version ?? input.expected_item.version ?? 0,
+              issued_at: input.issued_at,
+            },
+            before_status: input.expected_item.status,
+            after_status: savedWorkItem.status,
+            item: savedWorkItem,
+          }),
+          input.issued_at,
+          input.now,
+        );
+    }
     const savedAnswer = result.search_answer
       ? db.prepare(`UPDATE search_answers SET outcome = 'timed_out', updated_at = ?
         WHERE org_id = ? AND id = ? RETURNING *`)
         .get(input.now, orgId, result.search_answer.id) as SearchAnswerRow | undefined : undefined;
     if (result.search_answer && !savedAnswer) throw new Error("Timed out search answer disappeared inside its transaction");
     return {
-      outcome: "applied", item: toWorkItem(savedItem), run: result.run, deliveries: savedDeliveries,
+      outcome: "applied", item: savedWorkItem, run: result.run, deliveries: savedDeliveries,
       ...(savedAnswer ? { search_answer: toSearchAnswer(savedAnswer) } : {}),
     };
   }).immediate();

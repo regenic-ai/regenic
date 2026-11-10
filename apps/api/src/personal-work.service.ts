@@ -634,6 +634,9 @@ export class PersonalWorkService implements OnModuleDestroy {
       expected_item: item, now,
       ...(options.timeout ? { search_answer_timeout: options.timeout.record } : {}),
     });
+    if (dismissed.outcome === "replayed") {
+      return { work_item: dismissed.item };
+    }
     if (dismissed.outcome !== "applied") throw new PersonalConnectorError(
       "work_dismissal_conflict", `Auxiliary cancellation rejected: ${dismissed.reason}. Refresh the execution.`, 409,
     );
@@ -1198,7 +1201,12 @@ export class PersonalWorkService implements OnModuleDestroy {
     };
   }
 
-  async dismissWorkItem(id: string, expectedVersion: unknown): Promise<WorkRunView> {
+  async dismissWorkItem(
+    id: string,
+    expectedVersion: unknown,
+    commandId: unknown,
+    issuedAt: unknown,
+  ): Promise<WorkRunView> {
     const host = this.runtime.requireHost();
     const orgId = this.runtime.orgId();
     const item = await host.get("authority").getWorkItem(orgId, id);
@@ -1211,11 +1219,36 @@ export class PersonalWorkService implements OnModuleDestroy {
     if (typeof expectedVersion !== "number" || !Number.isSafeInteger(expectedVersion) || expectedVersion < 0) {
       throw new PersonalConnectorError("invalid_work_version", "A valid work version is required. Refresh the work item.", 400);
     }
-    if ((item.version ?? 0) !== expectedVersion) {
-      throw new PersonalConnectorError("work_dismissal_conflict", "Work item changed since it was displayed. Refresh before dismissing.", 409);
+    if (
+      typeof commandId !== "string" ||
+      commandId.trim().length < 1 ||
+      commandId !== commandId.trim() ||
+      commandId.length > 128 ||
+      typeof issuedAt !== "string" ||
+      !Number.isFinite(Date.parse(issuedAt)) ||
+      Date.parse(issuedAt) < Date.now() - 90 * 24 * 60 * 60 * 1000 ||
+      Date.parse(issuedAt) > Date.now() + 5 * 60 * 1000
+    ) {
+      throw new PersonalConnectorError(
+        "invalid_command",
+        "A valid command_id and issued_at are required. Refresh the work item and try again.",
+        400,
+      );
     }
     const now = new Date().toISOString();
-    const dismissed = await host.get("authority").dismissWorkItem({ expected_item: item, now });
+    const dismissed = await host.get("authority").dismissWorkItem({
+      expected_item: item,
+      expected_version: expectedVersion,
+      now,
+      command_id: commandId,
+      issued_at: issuedAt,
+    });
+    if (dismissed.outcome === "replayed") {
+      const replayRun = dismissed.item.current_run_id
+        ? await host.get("authority").getWorkRun(orgId, dismissed.item.current_run_id)
+        : null;
+      return { work_item: dismissed.item, run: replayRun ?? undefined };
+    }
     if (dismissed.outcome !== "applied") throw new PersonalConnectorError(
       "work_dismissal_conflict", `Work dismissal rejected: ${dismissed.reason}. Refresh the work item.`, 409,
     );
@@ -1250,8 +1283,13 @@ export class PersonalWorkService implements OnModuleDestroy {
   }
 
   /** @deprecated Human dismiss. Does not fake an executor exit or write back. */
-  async completeWorkItem(id: string, expectedVersion: unknown): Promise<WorkRunView> {
-    return this.dismissWorkItem(id, expectedVersion);
+  async completeWorkItem(
+    id: string,
+    expectedVersion: unknown,
+    commandId: unknown,
+    issuedAt: unknown,
+  ): Promise<WorkRunView> {
+    return this.dismissWorkItem(id, expectedVersion, commandId, issuedAt);
   }
 }
 

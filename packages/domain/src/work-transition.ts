@@ -108,7 +108,10 @@ export interface WorkRunStartFailure {
 
 export interface WorkDismissal {
   expected_item: WorkItem;
+  expected_version?: number;
   now: string;
+  command_id?: string;
+  issued_at?: string;
   /** Compare-and-set the timeout cause in the same commit as the local stop. */
   search_answer_timeout?: SearchAnswerRecord;
 }
@@ -208,7 +211,21 @@ export function prepareWorkItemCreation(input: WorkItemCreation, facts: {
 
 export type WorkDismissalResult =
   | { outcome: "applied"; item: WorkItem; run: WorkRun | null; deliveries: WorkDelivery[]; search_answer?: SearchAnswerRecord }
+  | { outcome: "replayed"; item: WorkItem }
   | { outcome: "conflict"; reason: "missing_work" | "stale_dismissal" | "unknown_current_run" | "stale_search_answer" | "inactive_search_answer" };
+
+export function sameWorkDismissalCommand(
+  saved: unknown,
+  input: WorkDismissal,
+): boolean {
+  if (typeof saved !== "object" || saved === null) return false;
+  const command = saved as Record<string, unknown>;
+  return command.work_item_id === input.expected_item.id &&
+    command.expected_version === (input.expected_version ?? input.expected_item.version ?? 0) &&
+    command.issued_at === input.issued_at &&
+    input.search_answer_timeout === undefined &&
+    Object.keys(command).length === 3;
+}
 
 export function prepareWorkDismissal(input: WorkDismissal, facts: {
   item: WorkItem | null;
@@ -217,9 +234,23 @@ export function prepareWorkDismissal(input: WorkDismissal, facts: {
   search_answer?: SearchAnswerRecord | null;
 }): WorkDismissalResult {
   if (!Number.isFinite(Date.parse(input.now))) throw new Error("Work dismissal requires a valid timestamp");
+  if (
+    (input.command_id === undefined) !== (input.issued_at === undefined) ||
+    (input.command_id !== undefined &&
+      (!input.command_id.trim() || input.command_id !== input.command_id.trim() ||
+        input.command_id.length > 128 || !Number.isFinite(Date.parse(input.issued_at!))))
+  ) {
+    throw new Error("Work dismissal command requires a valid command id and timestamp");
+  }
   const { item, run } = facts;
   if (!item) return { outcome: "conflict", reason: "missing_work" };
-  if (!sameSnapshot(item, input.expected_item)) return { outcome: "conflict", reason: "stale_dismissal" };
+  if (
+    !sameSnapshot(item, input.expected_item) ||
+    (input.expected_version !== undefined &&
+      input.expected_version !== (item.version ?? 0))
+  ) {
+    return { outcome: "conflict", reason: "stale_dismissal" };
+  }
   if (item.current_run_id && !run) return { outcome: "conflict", reason: "unknown_current_run" };
   if (run && (run.org_id !== item.org_id || run.work_item_id !== item.id || run.id !== item.current_run_id)) {
     throw new Error("Work dismissal run must belong to the current work item");

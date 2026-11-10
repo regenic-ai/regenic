@@ -120,7 +120,7 @@ import type {
   RecipeSeed,
 } from "./types";
 
-function newVisibilityCommandId(): string {
+function newClientCommandId(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
     return crypto.randomUUID();
   }
@@ -1456,7 +1456,7 @@ export function ConsoleApp() {
     const visibilityCommand = patch.hidden === undefined
       ? {}
       : {
-          command_id: newVisibilityCommandId(),
+          command_id: newClientCommandId(),
           issued_at: new Date().toISOString(),
         };
     const write = async () => {
@@ -1612,7 +1612,12 @@ export function ConsoleApp() {
         return;
       }
       try {
-        await dismissWorkItem(thread.work.id, thread.work.version);
+        await dismissWorkItem(
+          thread.work.id,
+          thread.work.version,
+          newClientCommandId(),
+          new Date().toISOString(),
+        );
         await refresh();
         setError(null);
       } catch (caught) {

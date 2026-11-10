@@ -1,4 +1,5 @@
 import type { PoolClient } from "pg";
+import { randomUUID } from "node:crypto";
 import type {
   Recipe,
   WorkItem,
@@ -24,6 +25,7 @@ import {
   prepareWorkRunStartCheckpoint,
   prepareWorkRunStartFailure,
   prepareWorkDismissal,
+  sameWorkDismissalCommand,
   prepareWorkItemCreation,
   type WorkItemCreation,
   type WorkItemCreationResult,
@@ -501,6 +503,34 @@ export async function commitWorkObservation(
 export async function dismissWorkItem(db: PgSql, input: WorkDismissal): Promise<WorkDismissalResult> {
   return db.withTx(async (client) => {
     const { org_id: orgId, id } = input.expected_item;
+    if (input.command_id !== undefined) {
+      await db.queryOne(
+        "SELECT pg_advisory_xact_lock(hashtextextended(jsonb_build_array($1, 'lifecycle-command', $2)::text, 0))",
+        [orgId, input.command_id],
+        client,
+      );
+      const event = await db.queryOne<{
+        aggregate_type: string;
+        aggregate_id: string;
+        event_type: string;
+        payload_json: unknown;
+      }>(`SELECT aggregate_type, aggregate_id, event_type, payload_json
+        FROM conversation_lifecycle_events WHERE org_id = $1 AND command_id = $2`,
+      [orgId, input.command_id], client);
+      if (event) {
+        const payload = asJson<{ command?: unknown; item?: WorkItem }>(event.payload_json);
+        if (
+          event.aggregate_type !== "work_item" ||
+          event.aggregate_id !== id ||
+          event.event_type !== "work_item_transitioned" ||
+          !sameWorkDismissalCommand(payload.command, input) ||
+          !payload.item
+        ) {
+          return { outcome: "conflict", reason: "stale_dismissal" };
+        }
+        return { outcome: "replayed", item: payload.item };
+      }
+    }
     const item = await db.queryOne<WorkItemRow>(
       "SELECT * FROM work_items WHERE org_id = $1 AND id = $2 FOR UPDATE", [orgId, id], client,
     );
@@ -524,13 +554,41 @@ export async function dismissWorkItem(db: PgSql, input: WorkDismissal): Promise<
     const savedItem = await db.queryOne<WorkItemRow>(`UPDATE work_items SET status = 'skipped', version = $1, updated_at = $2
       WHERE org_id = $3 AND id = $4 RETURNING *`, [result.item.version, input.now, orgId, id], client);
     if (!savedItem) throw new Error("Dismissed work item disappeared inside its transaction");
+    const savedWorkItem = toWorkItem(savedItem);
+    if (input.command_id !== undefined && input.issued_at !== undefined) {
+      await db.execute(`INSERT INTO conversation_lifecycle_events (
+        id, org_id, thread_id, aggregate_type, aggregate_id, aggregate_version,
+        event_type, command_id, dedupe_key, schema_version, payload_json, occurred_at, created_at
+      ) VALUES ($1, $2, $3, 'work_item', $4, $5, 'work_item_transitioned', $6, $7, 1, $8, $9, $10)`,
+      [
+        randomUUID(),
+        orgId,
+        savedWorkItem.thread_id,
+        id,
+        savedWorkItem.version ?? 0,
+        input.command_id,
+        JSON.stringify(["work_item", id, savedWorkItem.version ?? 0, "work_item_transitioned"]),
+        jsonb({
+          command: {
+            work_item_id: id,
+            expected_version: input.expected_version ?? input.expected_item.version ?? 0,
+            issued_at: input.issued_at,
+          },
+          before_status: input.expected_item.status,
+          after_status: savedWorkItem.status,
+          item: savedWorkItem,
+        }),
+        input.issued_at,
+        input.now,
+      ], client);
+    }
     const savedAnswer = result.search_answer ? await db.queryOne<SearchAnswerRow>(
       `UPDATE search_answers SET outcome = 'timed_out', updated_at = $1
         WHERE org_id = $2 AND id = $3 RETURNING *`, [input.now, orgId, result.search_answer.id], client,
     ) : null;
     if (result.search_answer && !savedAnswer) throw new Error("Timed out search answer disappeared inside its transaction");
     return {
-      outcome: "applied", item: toWorkItem(savedItem), run: result.run, deliveries: savedDeliveries,
+      outcome: "applied", item: savedWorkItem, run: result.run, deliveries: savedDeliveries,
       ...(savedAnswer ? { search_answer: toSearchAnswer(savedAnswer) } : {}),
     };
   });

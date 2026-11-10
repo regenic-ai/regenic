@@ -22,6 +22,7 @@ import {
   prepareWorkRunStartCheckpoint,
   prepareWorkRunStartFailure,
   prepareWorkDismissal,
+  sameWorkDismissalCommand,
   prepareWorkItemCreation,
   type WorkItemCreation,
   type WorkItemCreationResult,
@@ -45,6 +46,7 @@ export class MemoryWorkStore implements WorkStore, ExecutorStore {
   private readonly deliveries = new Map<string, WorkDelivery>();
   private readonly uiPrefs = new Map<string, string>();
   private readonly searchAnswers = new Map<string, SearchAnswerRecord>();
+  private readonly dismissalCommands = new Map<string, { command: WorkDismissal; item: WorkItem }>();
   private readonly executors = new Map<string, ExecutorInstallation>();
 
   async listRecipes(orgId: string): Promise<Recipe[]> {
@@ -237,6 +239,25 @@ export class MemoryWorkStore implements WorkStore, ExecutorStore {
   }
 
   async dismissWorkItem(input: WorkDismissal): Promise<WorkDismissalResult> {
+    const commandKey = input.command_id === undefined
+      ? undefined
+      : `${input.expected_item.org_id}\0${input.command_id}`;
+    if (commandKey !== undefined) {
+      const previous = this.dismissalCommands.get(commandKey);
+      if (previous) {
+        return sameWorkDismissalCommand(
+          {
+            work_item_id: previous.command.expected_item.id,
+            expected_version:
+              previous.command.expected_version ?? previous.command.expected_item.version ?? 0,
+            issued_at: previous.command.issued_at,
+          },
+          input,
+        )
+          ? { outcome: "replayed", item: structuredClone(previous.item) }
+          : { outcome: "conflict", reason: "stale_dismissal" };
+      }
+    }
     const item = this.items.get(input.expected_item.id);
     const result = prepareWorkDismissal(input, {
       item: item?.org_id === input.expected_item.org_id ? item : null,
@@ -255,6 +276,12 @@ export class MemoryWorkStore implements WorkStore, ExecutorStore {
     this.items.set(saved.item.id, saved.item);
     for (const delivery of saved.deliveries) this.deliveries.set(delivery.id, delivery);
     if (saved.search_answer) this.searchAnswers.set(saved.search_answer.id, saved.search_answer);
+    if (commandKey !== undefined) {
+      this.dismissalCommands.set(commandKey, {
+        command: structuredClone(input),
+        item: structuredClone(saved.item),
+      });
+    }
     return result;
   }
 
@@ -467,6 +494,9 @@ export class MemoryWorkStore implements WorkStore, ExecutorStore {
 
   dropOperationalWork(orgId: string): number {
     let count = 0;
+    for (const key of this.dismissalCommands.keys()) {
+      if (key.startsWith(`${orgId}\0`)) this.dismissalCommands.delete(key);
+    }
     for (const [id, item] of [...this.items]) {
       if (item.org_id === orgId) {
         this.items.delete(id);

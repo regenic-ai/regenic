@@ -1,4 +1,4 @@
-export const LATEST_SCHEMA_VERSION = 62;
+export const LATEST_SCHEMA_VERSION = 63;
 
 export const CUSTOMER_SERVICE_TASKS_SQL = `
   CREATE TABLE IF NOT EXISTS customer_service_tasks (
@@ -1233,6 +1233,14 @@ export const MIGRATIONS = [
         ON conversation_lifecycle_events (org_id, aggregate_type, aggregate_id, aggregate_version);
       CREATE INDEX conversation_lifecycle_events_command_idx
         ON conversation_lifecycle_events (org_id, command_id);
+    `,
+  },
+  {
+    version: 63,
+    sql: `
+      CREATE UNIQUE INDEX conversation_lifecycle_events_command_unique_idx
+        ON conversation_lifecycle_events (org_id, command_id)
+        WHERE command_id IS NOT NULL;
     `,
   },
 ] as const;
