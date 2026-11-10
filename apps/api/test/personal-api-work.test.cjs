@@ -199,6 +199,19 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
     const dsh = await startDshWebStub({ dropCreateResponse: true });
     const { app, origin } = await startPersonalApi(database, blobRoot);
     try {
+      const missingVersion = await fetch(`${origin}/v1/me/work-items/work-leftover-1/run`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      });
+      assert.equal(missingVersion.status, 400);
+      const staleVersion = await fetch(`${origin}/v1/me/work-items/work-leftover-1/run`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ expected_version: originalItem.version - 1 }),
+      });
+      assert.equal(staleVersion.status, 409);
+      assert.match(await staleVersion.text(), /work_start_conflict/);
       const connector = await fetch(`${origin}/v1/me/connectors`, {
         method: "POST",
         headers: { "content-type": "application/json" },
