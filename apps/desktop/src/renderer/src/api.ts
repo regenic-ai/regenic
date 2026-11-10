@@ -1475,11 +1475,11 @@ export async function tryRecipe(
   return { thread_id };
 }
 
-export async function runWorkItem(id: string): Promise<void> {
+export async function runWorkItem(id: string, expectedVersion: number): Promise<void> {
   const response = await fetch(`${origin()}/v1/me/work-items/${id}/run`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: "{}",
+    body: JSON.stringify({ expected_version: expectedVersion }),
   });
   if (!response.ok) {
     const body = (await response.json()) as { error?: { message?: string } };

@@ -1117,8 +1117,7 @@ export class PersonalWorkService implements OnModuleDestroy {
     this.inbox.touchInboxDigest();
   }
 
-  async runWorkItem(id: string): Promise<WorkRunView> {
-    await this.executors.ensureMounted();
+  async runWorkItem(id: string, expectedVersion: unknown): Promise<WorkRunView> {
     const host = this.runtime.requireHost();
     const orgId = this.runtime.orgId();
     const item = await host.get("authority").getWorkItem(orgId, id);
@@ -1128,6 +1127,13 @@ export class PersonalWorkService implements OnModuleDestroy {
     if (isSystemRecipeId(item.recipe_id)) {
       throw new PersonalConnectorError("not_found", "Work item not found", 404);
     }
+    if (typeof expectedVersion !== "number" || !Number.isSafeInteger(expectedVersion) || expectedVersion < 0) {
+      throw new PersonalConnectorError("invalid_work_version", "A valid work version is required. Refresh the work item.", 400);
+    }
+    if ((item.version ?? 0) !== expectedVersion) {
+      throw new PersonalConnectorError("work_start_conflict", "Work item changed since it was displayed. Refresh before starting it.", 409);
+    }
+    await this.executors.ensureMounted();
     const recipe = item.recipe_id
       ? await host.get("authority").getRecipe(orgId, item.recipe_id)
       : null;

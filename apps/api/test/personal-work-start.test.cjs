@@ -91,6 +91,19 @@ async function fixture(t, maxConcurrent) {
 }
 
 describe("durable executor start", () => {
+  it("rejects a stale manual start before mounting executors or spawning", async (t) => {
+    const f = await fixture(t);
+    const expectedVersion = (await f.ports.authority.getWorkItem(ORG, f.item.id)).version;
+    await f.ports.authority.putWorkItem({ ...f.item });
+    const current = await f.ports.authority.getWorkItem(ORG, f.item.id);
+    assert.ok(current.version > expectedVersion);
+    await assert.rejects(
+      f.service().runWorkItem(f.item.id, expectedVersion),
+      code("work_start_conflict"),
+    );
+    assert.equal(f.calls.spawn, 0);
+    assert.equal((await f.ports.authority.getWorkItem(ORG, f.item.id)).status, current.status);
+  });
   async function preparedAuxiliary(t, maxConcurrent) {
     const f = await fixture(t);
     const service = f.service();
@@ -806,7 +819,9 @@ describe("durable executor start", () => {
     assert.equal(result.work_item.status, "skipped");
     assert.deepEqual(result.run, run);
     assert.deepEqual(await f.ports.authority.getWorkRun(ORG, run.id), run);
-    await assert.rejects(f.service().runWorkItem(f.item.id), code("execution_start_conflict"));
+    await assert.rejects(f.service().runWorkItem(
+      f.item.id, (await f.ports.authority.getWorkItem(ORG, f.item.id)).version,
+    ), code("execution_start_conflict"));
     f.reopen();
     assert.equal((await f.ports.authority.getWorkItem(ORG, f.item.id)).status, "skipped");
     assert.deepEqual(await f.ports.authority.getWorkRun(ORG, run.id), run);
@@ -1011,7 +1026,9 @@ describe("durable executor start", () => {
       } else {
         const service = f.service();
         service.dispatch = f.dispatch();
-        await assert.rejects(service.runWorkItem(f.item.id), code("execution_start_conflict"));
+        await assert.rejects(service.runWorkItem(
+          f.item.id, (await f.ports.authority.getWorkItem(ORG, f.item.id)).version,
+        ), code("execution_start_conflict"));
       }
       assert.deepEqual(await f.ports.authority.getWorkItem(ORG, f.item.id), ignored);
       assert.equal((await f.ports.authority.listWorkRuns(ORG, f.item.id)).length, 1);
@@ -1038,7 +1055,9 @@ describe("durable executor start", () => {
     const service = f.service();
     service.dispatch = f.dispatch();
     const put = t.mock.method(f.ports.authority, "putWorkItem");
-    const result = await service.runWorkItem(f.item.id);
+    const result = await service.runWorkItem(
+      f.item.id, (await f.ports.authority.getWorkItem(ORG, f.item.id)).version,
+    );
     assert.equal(put.mock.callCount(), 0);
     assert.equal(result.work_item.version, failed.version + 1);
     assert.equal(result.work_item.status, "running");
@@ -1056,7 +1075,9 @@ describe("durable executor start", () => {
     });
     const service = f.service();
     service.dispatch = f.dispatch();
-    await assert.rejects(service.runWorkItem(f.item.id), code("execution_start_conflict"));
+    await assert.rejects(service.runWorkItem(
+      f.item.id, (await f.ports.authority.getWorkItem(ORG, f.item.id)).version,
+    ), code("execution_start_conflict"));
     assert.deepEqual(await f.ports.authority.getWorkRun(ORG, live.id), live);
     assert.deepEqual(await f.ports.authority.getWorkItem(ORG, f.item.id), skipped);
     assert.equal(f.calls.spawn, 1);
@@ -1432,7 +1453,9 @@ describe("durable executor start", () => {
     f.reopen();
     assert.equal((await f.ports.authority.getActiveWorkRun(ORG, f.item.id)).start_state, "pending");
     await f.dispatch().retryOrResume(f.item, f.recipe, "evidence");
-    await assert.rejects(f.service().runWorkItem(f.item.id), code("execution_start_uncertain"));
+    await assert.rejects(f.service().runWorkItem(
+      f.item.id, (await f.ports.authority.getWorkItem(ORG, f.item.id)).version,
+    ), code("execution_start_uncertain"));
     assert.equal(f.calls.spawn, 1);
   });
 
@@ -1448,7 +1471,9 @@ describe("durable executor start", () => {
     assert.match(run.result.summary, /Check the executor/);
     await f.supervise().refreshRuns();
     await f.dispatch().retryOrResume(f.item, f.recipe, "evidence");
-    await assert.rejects(f.service().runWorkItem(f.item.id), code("execution_start_uncertain"));
+    await assert.rejects(f.service().runWorkItem(
+      f.item.id, (await f.ports.authority.getWorkItem(ORG, f.item.id)).version,
+    ), code("execution_start_uncertain"));
     await assert.rejects(f.service().afterPrompt(f.item.thread_id), code("execution_start_uncertain"));
     for (const sourceHasPrompt of [false, true]) {
       await assert.rejects(
@@ -1595,7 +1620,7 @@ describe("durable executor start", () => {
     assert.equal((await service.activeSessionIds()).has(item.thread_id), false);
     assert.equal((await service.inboxFaces([item.thread_id])).has(item.thread_id), false);
     assert.equal((await service.boundPromptThreads()).has(item.thread_id), false);
-    await assert.rejects(service.runWorkItem(item.id), code("not_found"));
+    await assert.rejects(service.runWorkItem(item.id, 0), code("not_found"));
     await assert.rejects(service.dismissWorkItem(item.id, 0), code("not_found"));
   });
 

@@ -211,7 +211,7 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
       const started = await fetch(`${origin}/v1/me/work-items/work-leftover-1/run`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: "{}",
+        body: JSON.stringify({ expected_version: originalItem.version }),
       });
       assert.equal(started.status, 409);
       assert.match(await started.text(), /execution_start_conflict/);

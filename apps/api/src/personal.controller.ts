@@ -603,8 +603,8 @@ export class PersonalController {
   }
 
   @Post("work-items/:id/run")
-  runWorkItem(@Param("id") id: string) {
-    return this.guard(() => this.work.runWorkItem(id));
+  runWorkItem(@Param("id") id: string, @Body() body: { expected_version?: unknown } | undefined) {
+    return this.guard(() => this.work.runWorkItem(id, body?.expected_version));
   }
 
   @Get("work-runs/:id/reads")
