@@ -233,6 +233,10 @@ export interface WorkRunStartClaim {
   run: WorkRun & { status: "running"; start_state: "pending" };
   /** Required for retries; omitted only by legacy open-item callers. */
   expected_item?: WorkItem;
+  /** Client-observed version for an explicit start command. */
+  expected_version?: number;
+  command_id?: string;
+  issued_at?: string;
   /** Retry eligibility is applied inside the same transaction as the new run. */
   retry?: "automatic" | "manual";
   /** Bind the selected rule only when the expected item is atomically reserved. */
@@ -242,6 +246,19 @@ export interface WorkRunStartClaim {
   /** Conversation visibility version read before reservation; validated in the claim transaction. */
   visibility_intent_version?: number;
 }
+
+export interface WorkRunStartCommand {
+  org_id: string;
+  work_item_id: string;
+  expected_version: number;
+  command_id: string;
+  issued_at: string;
+}
+
+export type WorkRunStartReplay =
+  | { outcome: "not_found" }
+  | { outcome: "replayed"; run: WorkRun }
+  | { outcome: "conflict" };
 
 export interface WorkStore {
   listRecipes(orgId: string): Promise<Recipe[]>;
@@ -279,6 +296,8 @@ export interface WorkStore {
   listHiddenExecutorThreadIds(orgId: string): Promise<string[]>;
   /** Preserves terminal status and completed results; does not settle the item or enqueue a delivery. */
   putWorkRun(run: WorkRun): Promise<WorkRun>;
+  /** Finds an already-reserved manual start command without starting or refreshing its executor. */
+  getWorkRunStartReplay(command: WorkRunStartCommand): Promise<WorkRunStartReplay>;
   /** Atomically reserve the expected eligible item and persist its run before external start. */
   claimWorkRunStart(input: WorkRunStartClaim): Promise<boolean>;
   /** Atomically checkpoint a current reserved start and its matching item status. */

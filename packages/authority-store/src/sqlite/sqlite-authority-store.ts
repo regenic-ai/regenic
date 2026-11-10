@@ -69,6 +69,8 @@ import type {
   WorkItem,
   WorkRun,
   WorkRunStartClaim,
+  WorkRunStartCommand,
+  WorkRunStartReplay,
   WorkRunStartCheckpoint,
   WorkRunStartCheckpointResult,
   WorkRunStartFailure,
@@ -291,6 +293,7 @@ import {
 } from "./inbox";
 import {
   claimWorkRunStart,
+  getWorkRunStartReplay,
   checkpointWorkRunStart,
   recordWorkRunStartFailure,
   dismissWorkItem,
@@ -1277,6 +1280,10 @@ export class SqliteAuthorityStore
   async putWorkRun(run: WorkRun): Promise<WorkRun> {
     this.assertWritable();
     return putWorkRun(this.database, run);
+  }
+
+  async getWorkRunStartReplay(command: WorkRunStartCommand): Promise<WorkRunStartReplay> {
+    return getWorkRunStartReplay(this.database, command);
   }
 
   async claimWorkRunStart(input: WorkRunStartClaim): Promise<boolean> {

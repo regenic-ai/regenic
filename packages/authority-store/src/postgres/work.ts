@@ -5,6 +5,8 @@ import type {
   WorkItem,
   WorkRun,
   WorkRunStartClaim,
+  WorkRunStartCommand,
+  WorkRunStartReplay,
   WorkDeliveryCommand,
   WorkDeliveryCommandResult,
   WorkDelivery,
@@ -26,6 +28,8 @@ import {
   prepareWorkRunStartFailure,
   prepareWorkDismissal,
   sameWorkDismissalCommand,
+  sameWorkRunStartCommand,
+  workRunStartCommand,
   prepareWorkItemCreation,
   type WorkItemCreation,
   type WorkItemCreationResult,
@@ -630,9 +634,48 @@ export async function recordWorkRunStartFailure(
   });
 }
 
+export async function getWorkRunStartReplay(
+  db: PgSql,
+  command: WorkRunStartCommand,
+): Promise<WorkRunStartReplay> {
+  const event = await db.queryOne<{
+    aggregate_type: string;
+    aggregate_id: string;
+    event_type: string;
+    payload_json: unknown;
+  }>(`SELECT aggregate_type, aggregate_id, event_type, payload_json
+    FROM conversation_lifecycle_events WHERE org_id = $1 AND command_id = $2`,
+  [command.org_id, command.command_id]);
+  if (!event) return { outcome: "not_found" };
+  const payload = asJson<{ command?: unknown; run_id?: unknown }>(event.payload_json);
+  if (event.aggregate_type !== "work_item" || event.aggregate_id !== command.work_item_id
+    || event.event_type !== "work_run_transitioned" || !sameWorkRunStartCommand(payload.command, command)
+    || typeof payload.run_id !== "string") {
+    return { outcome: "conflict" };
+  }
+  const run = await getWorkRun(db, command.org_id, payload.run_id);
+  if (!run || run.work_item_id !== command.work_item_id) {
+    throw new Error("Reserved work start command references a missing or mismatched run");
+  }
+  return { outcome: "replayed", run };
+}
+
 export async function claimWorkRunStart(db: PgSql, input: WorkRunStartClaim): Promise<boolean> {
   const { run, max_concurrent } = input;
   return db.withTx(async (client) => {
+    const command = workRunStartCommand(input);
+    if (command) {
+      await db.queryOne(
+        "SELECT pg_advisory_xact_lock(hashtextextended(jsonb_build_array($1, 'lifecycle-command', $2)::text, 0))",
+        [command.org_id, command.command_id],
+        client,
+      );
+      if (await db.queryOne(
+        "SELECT id FROM conversation_lifecycle_events WHERE org_id = $1 AND command_id = $2",
+        [command.org_id, command.command_id],
+        client,
+      )) return false;
+    }
     if (input.visibility_intent_version !== undefined) {
       const threadId = input.expected_item?.thread_id;
       if (!threadId) {
@@ -688,6 +731,25 @@ export async function claimWorkRunStart(db: PgSql, input: WorkRunStartClaim): Pr
     await db.execute("UPDATE work_items SET status = 'running', recipe_id = $1, current_run_id = $2, visibility_intent_version = $3, version = version + 1, updated_at = $4 WHERE org_id = $5 AND id = $6",
       [run.recipe_id, run.id, input.visibility_intent_version ?? workItem.visibility_intent_version ?? 0,
         run.updated_at, run.org_id, run.work_item_id], client);
+    if (command) {
+      const version = (workItem.version ?? 0) + 1;
+      await db.execute(`INSERT INTO conversation_lifecycle_events (
+        id, org_id, thread_id, aggregate_type, aggregate_id, aggregate_version,
+        event_type, command_id, dedupe_key, schema_version, payload_json, occurred_at, created_at
+      ) VALUES ($1, $2, $3, 'work_item', $4, $5, 'work_run_transitioned', $6, $7, 1, $8, $9, $10)`,
+      [
+        `lifecycle-${randomUUID()}`,
+        command.org_id,
+        workItem.thread_id,
+        command.work_item_id,
+        version,
+        command.command_id,
+        JSON.stringify(["work_item", command.work_item_id, version, "work_run_transitioned"]),
+        jsonb({ command, run_id: run.id }),
+        run.created_at,
+        run.created_at,
+      ], client);
+    }
     return true;
   });
 }

@@ -6,6 +6,8 @@ import type {
   WorkItem,
   WorkRun,
   WorkRunStartClaim,
+  WorkRunStartCommand,
+  WorkRunStartReplay,
   WorkStore,
   WorkDeliveryCommand,
   WorkDeliveryCommandResult,
@@ -23,6 +25,8 @@ import {
   prepareWorkRunStartFailure,
   prepareWorkDismissal,
   sameWorkDismissalCommand,
+  sameWorkRunStartCommand,
+  workRunStartCommand,
   prepareWorkItemCreation,
   type WorkItemCreation,
   type WorkItemCreationResult,
@@ -47,6 +51,7 @@ export class MemoryWorkStore implements WorkStore, ExecutorStore {
   private readonly uiPrefs = new Map<string, string>();
   private readonly searchAnswers = new Map<string, SearchAnswerRecord>();
   private readonly dismissalCommands = new Map<string, { command: WorkDismissal; item: WorkItem }>();
+  private readonly startCommands = new Map<string, { command: WorkRunStartCommand; run_id: string }>();
   private readonly executors = new Map<string, ExecutorInstallation>();
 
   async listRecipes(orgId: string): Promise<Recipe[]> {
@@ -307,6 +312,9 @@ export class MemoryWorkStore implements WorkStore, ExecutorStore {
   async claimWorkRunStart(input: WorkRunStartClaim): Promise<boolean> {
     const { run, max_concurrent } = input;
     assertWorkRunSnapshot(run);
+    const command = workRunStartCommand(input);
+    const commandKey = command ? `${command.org_id}\0${command.command_id}` : undefined;
+    if (commandKey && this.startCommands.has(commandKey)) return false;
     const item = this.items.get(run.work_item_id);
     const recipe = this.recipes.get(run.recipe_id);
     const visibilityVersion = item
@@ -344,7 +352,24 @@ export class MemoryWorkStore implements WorkStore, ExecutorStore {
       version: (item.version ?? 0) + 1,
       updated_at: run.updated_at,
     });
+    if (command && commandKey) {
+      this.startCommands.set(commandKey, { command: structuredClone(command), run_id: run.id });
+    }
     return true;
+  }
+
+  async getWorkRunStartReplay(command: WorkRunStartCommand): Promise<WorkRunStartReplay> {
+    const previous = this.startCommands.get(`${command.org_id}\0${command.command_id}`);
+    if (!previous) return { outcome: "not_found" };
+    if (!sameWorkRunStartCommand(previous.command, command)
+      || previous.command.org_id !== command.org_id) {
+      return { outcome: "conflict" };
+    }
+    const run = this.runs.get(previous.run_id);
+    if (!run || run.org_id !== command.org_id || run.work_item_id !== command.work_item_id) {
+      throw new Error("Reserved work start command references a missing or mismatched run");
+    }
+    return { outcome: "replayed", run: cloneRun(run) };
   }
 
   protected conversationVisibilityVersion(_orgId: string, _threadId: string): number {
@@ -494,6 +519,9 @@ export class MemoryWorkStore implements WorkStore, ExecutorStore {
 
   dropOperationalWork(orgId: string): number {
     let count = 0;
+    for (const key of this.startCommands.keys()) {
+      if (key.startsWith(`${orgId}\0`)) this.startCommands.delete(key);
+    }
     for (const key of this.dismissalCommands.keys()) {
       if (key.startsWith(`${orgId}\0`)) this.dismissalCommands.delete(key);
     }

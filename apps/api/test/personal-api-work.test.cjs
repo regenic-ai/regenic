@@ -245,10 +245,21 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
         body: "{}",
       });
       assert.equal(missingVersion.status, 400);
+      const missingCommand = await fetch(`${origin}/v1/me/work-items/work-leftover-1/run`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ expected_version: originalItem.version }),
+      });
+      assert.equal(missingCommand.status, 400);
+      assert.match(await missingCommand.text(), /invalid_command/);
       const staleVersion = await fetch(`${origin}/v1/me/work-items/work-leftover-1/run`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ expected_version: originalItem.version - 1 }),
+        body: JSON.stringify({
+          expected_version: originalItem.version - 1,
+          command_id: `stale-start-${Date.now()}`,
+          issued_at: new Date().toISOString(),
+        }),
       });
       assert.equal(staleVersion.status, 409);
       assert.match(await staleVersion.text(), /work_start_conflict/);
@@ -264,7 +275,11 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
       const started = await fetch(`${origin}/v1/me/work-items/work-leftover-1/run`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ expected_version: originalItem.version }),
+        body: JSON.stringify({
+          expected_version: originalItem.version,
+          command_id: `blocked-start-${Date.now()}`,
+          issued_at: new Date().toISOString(),
+        }),
       });
       assert.equal(started.status, 409);
       assert.match(await started.text(), /execution_start_conflict/);

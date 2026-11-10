@@ -430,7 +430,18 @@ export class PersonalWorkDispatch {
     recipe: Recipe,
     evidenceText?: string,
     mode: "auto" | "manual" | "auxiliary" = "auto",
-    options?: { write_back: boolean; rebind: boolean },
+    options?: {
+      write_back?: boolean;
+      rebind?: boolean;
+      command?: {
+        org_id: string;
+        work_item_id: string;
+        expected_version: number;
+        command_id: string;
+        issued_at: string;
+      };
+      onReplay?: () => void;
+    },
   ): Promise<WorkRun | undefined> {
     const host = this.runtime.requireHost();
     if (
@@ -477,6 +488,20 @@ export class PersonalWorkDispatch {
     }
     if (this.starting.has(item.id)) {
       if (mode !== "auto") {
+        if (options?.command) {
+          const replay = await host.get("authority").getWorkRunStartReplay(options.command);
+          if (replay.outcome === "replayed") {
+            options.onReplay?.();
+            return replay.run;
+          }
+          if (replay.outcome === "conflict") {
+            throw new PersonalConnectorError(
+              "command_conflict",
+              "This command id was already used for a different operation. Refresh and try again.",
+              409,
+            );
+          }
+        }
         throw new PersonalConnectorError("execution_start_conflict", "Work start is already in progress. Refresh the work item.", 409);
       }
       return undefined;
@@ -536,7 +561,18 @@ export class PersonalWorkDispatch {
     executor: TaskExecutor,
     evidenceText: string | undefined,
     mode: "auto" | "manual" | "auxiliary",
-    options?: { write_back: boolean; rebind: boolean },
+    options?: {
+      write_back?: boolean;
+      rebind?: boolean;
+      command?: {
+        org_id: string;
+        work_item_id: string;
+        expected_version: number;
+        command_id: string;
+        issued_at: string;
+      };
+      onReplay?: () => void;
+    },
   ): Promise<WorkRun | undefined> {
     const host = this.runtime.requireHost();
     const now = new Date().toISOString();
@@ -590,6 +626,11 @@ export class PersonalWorkDispatch {
     const claimed = await authority.claimWorkRunStart({
       run,
       expected_item: item,
+      ...(options?.command ? {
+        expected_version: options.command.expected_version,
+        command_id: options.command.command_id,
+        issued_at: options.command.issued_at,
+      } : {}),
       retry: mode === "manual" ? "manual" : item.status === "failed" ? "automatic" : undefined,
       rebind: mode === "manual" && options?.rebind ? "manual"
         : mode === "auto" && recipe.trigger.kind === "push" && item.recipe_id !== recipe.id
@@ -599,6 +640,20 @@ export class PersonalWorkDispatch {
     });
     if (!claimed) {
       if (mode !== "auto") {
+        if (options?.command) {
+          const replay = await authority.getWorkRunStartReplay(options.command);
+          if (replay.outcome === "replayed") {
+            options.onReplay?.();
+            return replay.run;
+          }
+          if (replay.outcome === "conflict") {
+            throw new PersonalConnectorError(
+              "command_conflict",
+              "This command id was already used for a different operation. Refresh and try again.",
+              409,
+            );
+          }
+        }
         throw new PersonalConnectorError("execution_start_conflict", "Work item changed before start could be reserved. Refresh the work item.", 409);
       }
       return undefined;

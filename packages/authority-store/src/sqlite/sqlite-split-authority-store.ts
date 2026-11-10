@@ -95,6 +95,8 @@ import type {
   WorkItem,
   WorkRun,
   WorkRunStartClaim,
+  WorkRunStartCommand,
+  WorkRunStartReplay,
   WorkDeliveryCommand,
   WorkDeliveryCommandResult,
   CommitWorkObservation,
@@ -839,6 +841,10 @@ export class SqliteSplitAuthorityStore
 
   async putWorkRun(run: WorkRun): Promise<WorkRun> {
     return this.writer.call("putWorkRun", [run]);
+  }
+
+  async getWorkRunStartReplay(command: WorkRunStartCommand): Promise<WorkRunStartReplay> {
+    return this.reader.call("getWorkRunStartReplay", [command]);
   }
 
   async claimWorkRunStart(input: WorkRunStartClaim): Promise<boolean> {

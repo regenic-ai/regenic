@@ -132,6 +132,63 @@ describe("sqlite read/write split", () => {
     }
   });
 
+  it("replays audited manual start commands through the read RPC after restart", async () => {
+    const root = await createRoot();
+    const path = join(root, "authority.db");
+    const now = "2026-08-24T00:00:00.000Z";
+    const recipe = {
+      id: "r1", org_id: "local-owner", name: "Audited starts", match: { record_class: "task" },
+      trigger: { kind: "push" }, executor_type: "session", executor_config: {},
+      include_context: false, can_write_back: false, enabled: true, created_at: now, updated_at: now,
+    };
+    const store = await SqliteSplitAuthorityStore.open(path);
+    let command;
+    let run;
+    try {
+      await store.putRecipe(recipe);
+      const item = await store.putWorkItem({
+        id: "work-start-command", org_id: recipe.org_id, recipe_id: recipe.id,
+        thread_id: "feishu:oc_1", unit_key: "work-start-command", record_class: "task",
+        thread_facet: "ticket", status: "open", created_at: now, updated_at: now,
+      });
+      command = {
+        org_id: recipe.org_id,
+        work_item_id: item.id,
+        expected_version: item.version,
+        command_id: "manual-start-command",
+        issued_at: now,
+      };
+      run = {
+        id: "run-start-command", org_id: recipe.org_id, recipe_id: recipe.id,
+        work_item_id: item.id, executor_type: "session", status: "running",
+        start_state: "pending", created_at: now, updated_at: now,
+      };
+      assert.equal(await store.claimWorkRunStart({
+        run, expected_item: item, expected_version: item.version,
+        command_id: command.command_id, issued_at: command.issued_at,
+      }), true);
+      assert.equal((await store.getWorkRunStartReplay(command)).run.id, run.id);
+    } finally {
+      await store.close();
+    }
+
+    const reopened = await SqliteSplitAuthorityStore.open(path);
+    try {
+      const replay = await reopened.getWorkRunStartReplay(command);
+      assert.equal(replay.outcome, "replayed");
+      assert.equal(replay.run.id, run.id);
+      assert.equal(await reopened.claimWorkRunStart({
+        run: { ...run, id: "new-run" },
+        expected_item: await reopened.getWorkItem(recipe.org_id, run.work_item_id),
+        expected_version: command.expected_version,
+        command_id: command.command_id,
+        issued_at: command.issued_at,
+      }), false);
+    } finally {
+      await reopened.close();
+    }
+  });
+
   it("allows only one outbound claim across independent writers and restart", async () => {
     const root = await createRoot();
     const path = join(root, "authority.db");

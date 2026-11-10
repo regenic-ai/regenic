@@ -75,6 +75,7 @@ export const AUTHORITY_READ_METHODS = [
   "getWorkItemByUnitKey",
   "listWorkRuns",
   "getWorkRun",
+  "getWorkRunStartReplay",
   "getActiveWorkRun",
   "listHiddenExecutorThreadIds",
   "getSearchAnswer",

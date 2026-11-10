@@ -8,6 +8,7 @@ import {
   type WorkDelivery,
   type RecipeTriggerKind,
   type WorkRunStartClaim,
+  type WorkRunStartCommand,
   type Recipe,
 } from "./work";
 import type { WorkDeliveryPayload } from "./work-delivery";
@@ -58,6 +59,28 @@ export function canClaimWorkRunStartItem(input: WorkRunStartClaim, item: WorkIte
     throw new Error("Unknown work start retry mode");
   }
   if (retry && !expected) throw new Error("Work retry requires an expected item snapshot");
+  if ((input.command_id === undefined) !== (input.issued_at === undefined)) {
+    throw new Error("Work start command requires both an id and timestamp");
+  }
+  if (input.command_id !== undefined && (
+    !expected ||
+    typeof input.expected_version !== "number" ||
+    !Number.isSafeInteger(input.expected_version) ||
+    input.expected_version < 0 ||
+    typeof input.issued_at !== "string" ||
+    input.expected_version !== expected.version ||
+    !input.command_id.trim() ||
+    input.command_id !== input.command_id.trim() ||
+    input.command_id.length > 128 ||
+    !Number.isFinite(Date.parse(input.issued_at))
+  )) {
+    throw new Error("Work start command requires a valid expected version, id and timestamp");
+  }
+  if (input.expected_version !== undefined && (
+    !Number.isSafeInteger(input.expected_version) || input.expected_version < 0
+  )) {
+    throw new Error("Work start expected version must be a non-negative safe integer");
+  }
   if (rebind !== undefined && rebind !== "automatic" && rebind !== "manual") {
     throw new Error("Unknown work start binding mode");
   }
@@ -77,7 +100,8 @@ export function canClaimWorkRunStartItem(input: WorkRunStartClaim, item: WorkIte
     throw new Error("Work start visibility intent version requires an item snapshot and a non-negative safe integer");
   }
   if (item.org_id !== run.org_id || item.id !== run.work_item_id
-    || (expected && !sameSnapshot(item, expected))) return false;
+    || (expected && !sameSnapshot(item, expected))
+    || (input.expected_version !== undefined && item.version !== input.expected_version)) return false;
   if (item.recipe_id !== run.recipe_id) {
     if (!rebind) return false;
     if (rebind === "manual" && item.recipe_id && isActiveWorkStatus(item.status)) return false;
@@ -86,6 +110,27 @@ export function canClaimWorkRunStartItem(input: WorkRunStartClaim, item: WorkIte
   if (item.status === "open") return true;
   if (item.status === "failed") return retry === "automatic" || retry === "manual";
   return retry === "manual" && (item.status === "done" || item.status === "skipped");
+}
+
+export function workRunStartCommand(input: WorkRunStartClaim): WorkRunStartCommand | undefined {
+  if (input.command_id === undefined || input.issued_at === undefined || input.expected_version === undefined) {
+    return undefined;
+  }
+  return {
+    org_id: input.run.org_id,
+    work_item_id: input.run.work_item_id,
+    expected_version: input.expected_version,
+    command_id: input.command_id,
+    issued_at: input.issued_at,
+  };
+}
+
+export function sameWorkRunStartCommand(saved: unknown, command: WorkRunStartCommand): boolean {
+  if (typeof saved !== "object" || saved === null) return false;
+  const value = saved as Record<string, unknown>;
+  return value.work_item_id === command.work_item_id
+    && value.expected_version === command.expected_version
+    && value.issued_at === command.issued_at;
 }
 
 export type WorkRunStartCheckpoint = {

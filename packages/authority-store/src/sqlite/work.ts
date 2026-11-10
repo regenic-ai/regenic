@@ -5,6 +5,8 @@ import type {
   WorkItem,
   WorkRun,
   WorkRunStartClaim,
+  WorkRunStartCommand,
+  WorkRunStartReplay,
   WorkDeliveryCommand,
   WorkDeliveryCommandResult,
   WorkDelivery,
@@ -26,6 +28,8 @@ import {
   prepareWorkRunStartFailure,
   prepareWorkDismissal,
   sameWorkDismissalCommand,
+  sameWorkRunStartCommand,
+  workRunStartCommand,
   prepareWorkItemCreation,
   type WorkItemCreation,
   type WorkItemCreationResult,
@@ -558,9 +562,36 @@ export async function recordWorkRunStartFailure(
   }).immediate();
 }
 
+export async function getWorkRunStartReplay(
+  db: Database.Database,
+  command: WorkRunStartCommand,
+): Promise<WorkRunStartReplay> {
+  const event = db.prepare(`SELECT aggregate_type, aggregate_id, event_type, payload_json
+    FROM conversation_lifecycle_events WHERE org_id = ? AND command_id = ?`)
+    .get(command.org_id, command.command_id) as
+    | { aggregate_type: string; aggregate_id: string; event_type: string; payload_json: string }
+    | undefined;
+  if (!event) return { outcome: "not_found" };
+  const payload = JSON.parse(event.payload_json) as { command?: unknown; run_id?: unknown };
+  if (event.aggregate_type !== "work_item" || event.aggregate_id !== command.work_item_id
+    || event.event_type !== "work_run_transitioned" || !sameWorkRunStartCommand(payload.command, command)
+    || typeof payload.run_id !== "string") {
+    return { outcome: "conflict" };
+  }
+  const run = await getWorkRun(db, command.org_id, payload.run_id);
+  if (!run || run.work_item_id !== command.work_item_id) {
+    throw new Error("Reserved work start command references a missing or mismatched run");
+  }
+  return { outcome: "replayed", run };
+}
+
 export async function claimWorkRunStart(db: Database.Database, input: WorkRunStartClaim): Promise<boolean> {
   const { run, max_concurrent } = input;
   return db.transaction(() => {
+    const command = workRunStartCommand(input);
+    if (command && db.prepare(
+      "SELECT id FROM conversation_lifecycle_events WHERE org_id = ? AND command_id = ?",
+    ).get(command.org_id, command.command_id)) return false;
     const item = db.prepare(`
       SELECT w.* FROM work_items w JOIN recipes r ON r.org_id = w.org_id AND r.id = ?
       WHERE w.org_id = ? AND w.id = ?
@@ -596,6 +627,24 @@ export async function claimWorkRunStart(db: Database.Database, input: WorkRunSta
     db.prepare("UPDATE work_items SET status = 'running', recipe_id = ?, current_run_id = ?, visibility_intent_version = ?, version = version + 1, updated_at = ? WHERE org_id = ? AND id = ?")
       .run(run.recipe_id, run.id, input.visibility_intent_version ?? workItem.visibility_intent_version ?? 0,
         run.updated_at, run.org_id, run.work_item_id);
+    if (command) {
+      db.prepare(`INSERT INTO conversation_lifecycle_events (
+        id, org_id, thread_id, aggregate_type, aggregate_id, aggregate_version,
+        event_type, command_id, dedupe_key, schema_version, payload_json, occurred_at, created_at
+      ) VALUES (?, ?, ?, 'work_item', ?, ?, 'work_run_transitioned', ?, ?, 1, ?, ?, ?)`)
+        .run(
+          `lifecycle-${randomUUID()}`,
+          command.org_id,
+          workItem.thread_id,
+          command.work_item_id,
+          (workItem.version ?? 0) + 1,
+          command.command_id,
+          JSON.stringify(["work_item", command.work_item_id, (workItem.version ?? 0) + 1, "work_run_transitioned"]),
+          JSON.stringify({ command, run_id: run.id }),
+          run.created_at,
+          run.created_at,
+        );
+    }
     return true;
   }).immediate();
 }

@@ -804,6 +804,27 @@ describe("work face", () => {
       ...input, run: { ...input.run, id: "run-2-new", work_item_id: "w2" },
     }), false);
     assert.equal((await store.getWorkItem(item.org_id, "w2")).status, "open");
+    const secondItem = await store.getWorkItem(item.org_id, "w2");
+    const command = {
+      org_id: item.org_id, work_item_id: secondItem.id, expected_version: secondItem.version,
+      command_id: "manual-start-1", issued_at: now,
+    };
+    const commandRun = {
+      ...input.run, id: "run-command", work_item_id: secondItem.id,
+    };
+    assert.equal(await store.claimWorkRunStart({
+      run: commandRun, expected_item: secondItem, expected_version: secondItem.version,
+      command_id: command.command_id, issued_at: command.issued_at,
+    }), true);
+    assert.equal((await store.getWorkRunStartReplay(command)).run.id, commandRun.id);
+    assert.equal(await store.claimWorkRunStart({
+      run: { ...commandRun, id: "run-command-retry" },
+      expected_item: secondItem, expected_version: secondItem.version,
+      command_id: command.command_id, issued_at: command.issued_at,
+    }), false);
+    assert.equal((await store.getWorkRunStartReplay({
+      ...command, expected_version: command.expected_version + 1,
+    })).outcome, "conflict");
   });
 
   it("exposes the run summary on the inbox face", () => {

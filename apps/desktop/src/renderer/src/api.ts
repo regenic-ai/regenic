@@ -1479,10 +1479,17 @@ export async function tryRecipe(
 }
 
 export async function runWorkItem(id: string, expectedVersion: number): Promise<void> {
+  const commandId = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID()
+    : `work-start-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const response = await fetch(`${origin()}/v1/me/work-items/${id}/run`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ expected_version: expectedVersion }),
+    body: JSON.stringify({
+      expected_version: expectedVersion,
+      command_id: commandId,
+      issued_at: new Date().toISOString(),
+    }),
   });
   if (!response.ok) {
     const body = (await response.json()) as { error?: { message?: string } };

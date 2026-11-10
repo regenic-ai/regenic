@@ -39,6 +39,7 @@ import {
   type ThreadPrompt,
   type WorkItem,
   type WorkRun,
+  type WorkRunStartCommand,
   type WorkRunStatus,
 } from "@regenic/domain";
 import { resolveInboxBodies } from "./inbox-body";
@@ -1121,18 +1122,50 @@ export class PersonalWorkService implements OnModuleDestroy {
     this.inbox.touchInboxDigest();
   }
 
-  async runWorkItem(id: string, expectedVersion: unknown): Promise<WorkRunView> {
+  async runWorkItem(
+    id: string,
+    expectedVersion: unknown,
+    commandId: unknown,
+    issuedAt: unknown,
+  ): Promise<WorkRunView> {
     const host = this.runtime.requireHost();
     const orgId = this.runtime.orgId();
+    if (typeof expectedVersion !== "number" || !Number.isSafeInteger(expectedVersion) || expectedVersion < 0) {
+      throw new PersonalConnectorError("invalid_work_version", "A valid work version is required. Refresh the work item.", 400);
+    }
+    if (
+      typeof commandId !== "string" ||
+      commandId.trim().length < 1 ||
+      commandId !== commandId.trim() ||
+      commandId.length > 128 ||
+      typeof issuedAt !== "string" ||
+      !Number.isFinite(Date.parse(issuedAt)) ||
+      Date.parse(issuedAt) < Date.now() - 90 * 24 * 60 * 60 * 1000 ||
+      Date.parse(issuedAt) > Date.now() + 5 * 60 * 1000
+    ) {
+      throw new PersonalConnectorError(
+        "invalid_command",
+        "A valid command_id and issued_at are required. Refresh the work item and try again.",
+        400,
+      );
+    }
+    const command = {
+      org_id: orgId,
+      work_item_id: id,
+      expected_version: expectedVersion,
+      command_id: commandId,
+      issued_at: issuedAt,
+    };
+    const replay = await this.replayWorkRunStart(command);
+    if (replay) return replay;
     const item = await host.get("authority").getWorkItem(orgId, id);
     if (!item) {
       throw new PersonalConnectorError("not_found", "Work item not found", 404);
     }
+    const replayAfterLoad = await this.replayWorkRunStart(command);
+    if (replayAfterLoad) return replayAfterLoad;
     if (isSystemRecipeId(item.recipe_id)) {
       throw new PersonalConnectorError("not_found", "Work item not found", 404);
-    }
-    if (typeof expectedVersion !== "number" || !Number.isSafeInteger(expectedVersion) || expectedVersion < 0) {
-      throw new PersonalConnectorError("invalid_work_version", "A valid work version is required. Refresh the work item.", 400);
     }
     if ((item.version ?? 0) !== expectedVersion) {
       throw new PersonalConnectorError("work_start_conflict", "Work item changed since it was displayed. Refresh before starting it.", 409);
@@ -1143,6 +1176,8 @@ export class PersonalWorkService implements OnModuleDestroy {
       : null;
     const delivery = await host.get("authority").getWorkDeliveryByItem(orgId, item.id);
     if (delivery?.status === "uncertain" && !delivery.channel_receipt?.accepted) {
+      const replay = await this.replayWorkRunStart(command);
+      if (replay) return replay;
       throw new PersonalConnectorError(
         "delivery_reconciliation_required", "Delivery acceptance is unknown. Check the original destination before retrying.", 409,
       );
@@ -1159,10 +1194,14 @@ export class PersonalWorkService implements OnModuleDestroy {
       };
     }
     if (!recipe) {
+      const replay = await this.replayWorkRunStart(command);
+      if (replay) return replay;
       throw new PersonalConnectorError("invalid_config", "This work item has no recipe", 400);
     }
     const active = await host.get("authority").getActiveWorkRun(orgId, item.id);
     if (active) {
+      const replayAfterActiveRead = await this.replayWorkRunStart(command);
+      if (replayAfterActiveRead) return replayAfterActiveRead;
       this.assertStartConfirmed(active);
     }
     if (active && shouldRefreshActiveRun(item.status)) {
@@ -1175,6 +1214,8 @@ export class PersonalWorkService implements OnModuleDestroy {
     const unresolved = (await host.get("authority").listWorkDeliveries(orgId))
       .find((row) => row.work_item_id === item.id && row.status !== "acked");
     if (unresolved) {
+      const replay = await this.replayWorkRunStart(command);
+      if (replay) return replay;
       throw new PersonalConnectorError(
         "delivery_unresolved", "Resolve the previous write-back before starting another execution.", 409,
       );
@@ -1184,9 +1225,16 @@ export class PersonalWorkService implements OnModuleDestroy {
         "execution_start_conflict", "A previous execution is still active. Refresh the work item.", 409,
       );
     }
-    const run = await this.dispatch.startItem(item, recipe, undefined, "manual");
+    let replayed = false;
+    const run = await this.dispatch.startItem(item, recipe, undefined, "manual", {
+      command,
+      onReplay: () => { replayed = true; },
+    });
     const latest =
       (await host.get("authority").getWorkItem(orgId, item.id)) ?? item;
+    if (replayed) {
+      return { work_item: latest, ...(run ? { run } : {}) };
+    }
     const queued = await host.get("authority").getWorkDeliveryByItem(orgId, item.id);
     if (
       queued &&
@@ -1199,6 +1247,22 @@ export class PersonalWorkService implements OnModuleDestroy {
       work_item: (await host.get("authority").getWorkItem(orgId, item.id)) ?? latest,
       run,
     };
+  }
+
+  private async replayWorkRunStart(command: WorkRunStartCommand): Promise<WorkRunView | null> {
+    const authority = this.runtime.requireHost().get("authority");
+    const replay = await authority.getWorkRunStartReplay(command);
+    if (replay.outcome === "conflict") {
+      throw new PersonalConnectorError(
+        "command_conflict",
+        "This command id was already used for a different operation. Refresh and try again.",
+        409,
+      );
+    }
+    if (replay.outcome === "not_found") return null;
+    const item = await authority.getWorkItem(command.org_id, command.work_item_id);
+    if (!item) throw new PersonalConnectorError("not_found", "Work item not found", 404);
+    return { work_item: item, run: replay.run };
   }
 
   async dismissWorkItem(

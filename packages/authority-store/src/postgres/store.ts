@@ -75,6 +75,8 @@ import type {
   WorkItem,
   WorkRun,
   WorkRunStartClaim,
+  WorkRunStartCommand,
+  WorkRunStartReplay,
   WorkRunStartCheckpoint,
   WorkRunStartCheckpointResult,
   WorkRunStartFailure,
@@ -337,6 +339,7 @@ import {
 } from "./inbox";
 import {
   claimWorkRunStart,
+  getWorkRunStartReplay,
   checkpointWorkRunStart,
   recordWorkRunStartFailure,
   dismissWorkItem,
@@ -1245,6 +1248,10 @@ export class PostgresAuthorityStore
 
   async putWorkRun(run: WorkRun): Promise<WorkRun> {
     return putWorkRun(this.sql, run);
+  }
+
+  async getWorkRunStartReplay(command: WorkRunStartCommand): Promise<WorkRunStartReplay> {
+    return getWorkRunStartReplay(this.sql, command);
   }
 
   async claimWorkRunStart(input: WorkRunStartClaim): Promise<boolean> {

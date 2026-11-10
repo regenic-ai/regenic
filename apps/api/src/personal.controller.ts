@@ -606,8 +606,13 @@ export class PersonalController {
   }
 
   @Post("work-items/:id/run")
-  runWorkItem(@Param("id") id: string, @Body() body: { expected_version?: unknown } | undefined) {
-    return this.guard(() => this.work.runWorkItem(id, body?.expected_version));
+  runWorkItem(
+    @Param("id") id: string,
+    @Body() body: { expected_version?: unknown; command_id?: unknown; issued_at?: unknown } | undefined,
+  ) {
+    return this.guard(() => this.work.runWorkItem(
+      id, body?.expected_version, body?.command_id, body?.issued_at,
+    ));
   }
 
   @Get("work-runs/:id/reads")
