@@ -1527,10 +1527,13 @@ describe("FeishuChatEgress", () => {
         },
         async listChatMembers(chatId) {
           lookups.push(chatId);
-          return [
-            { id: "ou_fe497f2d8fa7522ce42f78109618ecbc", name: "\u718a\u5cf0" },
-            { id: "ou_other", name: "Ada" },
-          ];
+          return {
+            complete: true,
+            items: [
+              { id: "ou_fe497f2d8fa7522ce42f78109618ecbc", name: "\u718a\u5cf0" },
+              { id: "ou_other", name: "Ada" },
+            ],
+          };
         },
       },
       { installation_id: "feishu-1", chat_id: "oc_1" },
@@ -1562,8 +1565,20 @@ describe("FeishuChatEgress", () => {
     ]);
     assert.equal(shared.has("\u718a\u5cf0"), false);
     assert.equal(
-      applyFeishuPlainMentions("\u8bf7@\u718a\u5cf0\uff0c\u770b\u4e00\u4e0b user@host.com @\u6240\u6709\u4eba", shared),
-      "\u8bf7@\u718a\u5cf0\uff0c\u770b\u4e00\u4e0b user@host.com <at user_id=\"all\">\u6240\u6709\u4eba</at>",
+      applyFeishuPlainMentions("\u8bf7@\u718a\u5cf0\uff0c\u770b\u4e00\u4e0b user@host.com @\u6240\u6709\u4eba @all @everyone", shared),
+      "\u8bf7@\u718a\u5cf0\uff0c\u770b\u4e00\u4e0b user@host.com <at user_id=\"all\">\u6240\u6709\u4eba</at> @all @everyone",
+    );
+    const spaced = feishuMentionNameIndex([
+      { id: "ou_short", name: "John" },
+      { id: "ou_long", name: "John Smith" },
+    ]);
+    assert.equal(
+      applyFeishuPlainMentions("@John Smith\uff0chi @John", spaced),
+      "<at user_id=\"ou_long\">John Smith</at>\uff0chi <at user_id=\"ou_short\">John</at>",
+    );
+    assert.equal(
+      applyFeishuPlainMentions("@JohnSmith", feishuMentionNameIndex([{ id: "ou_short", name: "John" }])),
+      "@JohnSmith",
     );
     assert.deepEqual(feishuPlainMentionNames("@\u718a\u5cf0 @\u6240\u6709\u4eba <at user_id=\"ou_1\">Ada</at>"), ["\u718a\u5cf0"]);
     const texts = [];
@@ -1588,6 +1603,31 @@ describe("FeishuChatEgress", () => {
       content: [{ role: "body", media_type: "text/plain", text: "@\u718a\u5cf0 \u7ee7\u7eed" }],
     });
     assert.equal(texts[0].text, "@\u718a\u5cf0 \u7ee7\u7eed");
+    const incomplete = [];
+    const partial = new FeishuChatEgress(
+      {
+        async sendText(input) {
+          incomplete.push(input);
+          return { message_id: "om_text" };
+        },
+        async sendMessage(input) {
+          incomplete.push(input);
+          return { message_id: "om_post" };
+        },
+        async listChatMembers() {
+          return {
+            complete: false,
+            items: [{ id: "ou_fe497f2d8fa7522ce42f78109618ecbc", name: "\u718a\u5cf0" }],
+          };
+        },
+      },
+      { installation_id: "feishu-1", chat_id: "oc_1" },
+    );
+    await partial.send({
+      installation_id: "feishu-1",
+      content: [{ role: "body", media_type: "text/plain", text: "@\u718a\u5cf0 \u7ee7\u7eed" }],
+    });
+    assert.equal(incomplete[0].text, "@\u718a\u5cf0 \u7ee7\u7eed");
   });
 
   it("rejects an attachment without bytes instead of sending text only", async () => {

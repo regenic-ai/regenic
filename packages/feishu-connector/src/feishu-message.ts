@@ -479,35 +479,59 @@ export function feishuOutgoingBody(text: string): FeishuOutgoingBody {
 
 const PLAIN_MENTION = /(^|[^\w@])@([^\s@<]+)/;
 const TRAILING_MENTION_PUNCT = /[，。,.!！?？:：;；、)）\]]+$/u;
+const MENTION_BOUNDARY = /[\s，。,.!！?？:：;；、)）\]]/u;
 
 /**
  * Turns a copied `@名字` into `<at>` when that name belongs to exactly one
- * chat member. `@所有人` / `@all` always becomes everyone. Unmatched text,
- * emails, and existing `<at>` tags stay as they are.
+ * chat member. The longest member name wins, so `@John Smith` does not mention
+ * a different person named John. Only `@所有人` and the Feishu placeholder
+ * `@_all` mention everyone. Unmatched text, emails, and existing `<at>` tags
+ * stay as they are.
  */
 export function applyFeishuPlainMentions(
   text: string,
   names: ReadonlyMap<string, string>,
 ): string {
-  return rewriteOutsideAtTags(text, (part) =>
-    part.replace(new RegExp(PLAIN_MENTION.source, "g"), (all, prefix: string, raw: string) => {
-      if (prefix === "." || prefix === "．" || prefix === "-" || prefix === "_") {
-        return all;
-      }
-      const token = raw.replace(TRAILING_MENTION_PUNCT, "");
-      const punct = raw.slice(token.length);
-      if (!token || token.includes(".") || token.includes("/") || token.includes(":")) {
-        return all;
-      }
-      const everyone = everyoneMentionId(token);
-      const userId = everyone ?? names.get(token);
-      if (!userId) {
-        return all;
-      }
-      const label = everyone ? everyoneMentionLabel(token) : token;
-      return `${prefix}<at user_id="${userId}">${label}</at>${punct}`;
-    }),
-  );
+  const ordered = [...names.keys()].filter((name) => name.length > 0)
+    .sort((left, right) => right.length - left.length);
+  return rewriteOutsideAtTags(text, (part) => replacePlainMentions(part, ordered, names));
+}
+
+function replacePlainMentions(
+  part: string,
+  ordered: readonly string[],
+  names: ReadonlyMap<string, string>,
+): string {
+  let out = "";
+  for (let index = 0; index < part.length; index += 1) {
+    if (part[index] !== "@") {
+      out += part[index];
+      continue;
+    }
+    const prefix = index === 0 ? "" : part[index - 1];
+    if (prefix && isMentionPrefixBlocked(prefix)) {
+      out += "@";
+      continue;
+    }
+    const rest = part.slice(index + 1);
+    const everyone = everyoneTokenLength(rest);
+    if (everyone) {
+      out += `<at user_id="all">所有人</at>`;
+      index += everyone;
+      continue;
+    }
+    const name = ordered.find((candidate) =>
+      rest.startsWith(candidate) && isMentionBoundary(rest[candidate.length]),
+    );
+    const userId = name ? names.get(name) : undefined;
+    if (!name || !userId) {
+      out += "@";
+      continue;
+    }
+    out += `<at user_id="${userId}">${name}</at>`;
+    index += name.length;
+  }
+  return out;
 }
 
 /** Names still written as `@名字`, excluding `@所有人` and text already inside `<at>`. */
@@ -580,23 +604,28 @@ function rewriteOutsideAtTags(
 }
 
 function everyoneMentionId(name: string): string | undefined {
-  const value = name.trim().toLowerCase();
-  if (
-    name === "所有人" ||
-    value === "all" ||
-    value === "@_all" ||
-    value === "_all" ||
-    value === "everyone"
-  ) {
+  if (name === "所有人" || name.toLowerCase() === "_all") {
     return "all";
   }
   return undefined;
 }
 
-function everyoneMentionLabel(name: string): string {
-  return name === "all" || name === "@_all" || name === "_all" || name.toLowerCase() === "everyone"
-    ? "所有人"
-    : name;
+function everyoneTokenLength(rest: string): number | undefined {
+  if (rest.startsWith("所有人") && isMentionBoundary(rest["所有人".length])) {
+    return "所有人".length;
+  }
+  if (rest.slice(0, 4).toLowerCase() === "_all" && isMentionBoundary(rest[4])) {
+    return 4;
+  }
+  return undefined;
+}
+
+function isMentionPrefixBlocked(prefix: string): boolean {
+  return prefix === "." || prefix === "．" || prefix === "-" || prefix === "_" || /[\w@]/.test(prefix);
+}
+
+function isMentionBoundary(char: string | undefined): boolean {
+  return char === undefined || MENTION_BOUNDARY.test(char);
 }
 
 /** Official text-message @ syntax, used when the client cannot send post. */

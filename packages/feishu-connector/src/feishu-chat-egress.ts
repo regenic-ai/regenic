@@ -120,8 +120,9 @@ export class FeishuChatEgress implements EgressAdapter {
       return applyFeishuPlainMentions(text, new Map());
     }
     try {
-      const members = await this.client.listChatMembers(this.options.chat_id);
-      return applyFeishuPlainMentions(text, feishuMentionNameIndex(members));
+      const listed = await this.client.listChatMembers(this.options.chat_id);
+      const names = listed.complete ? feishuMentionNameIndex(listed.items) : new Map();
+      return applyFeishuPlainMentions(text, names);
     } catch {
       return applyFeishuPlainMentions(text, new Map());
     }

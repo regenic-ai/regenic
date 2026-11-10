@@ -56,6 +56,12 @@ export interface FeishuChatMember {
   name: string;
 }
 
+export interface FeishuChatMemberList {
+  items: FeishuChatMember[];
+  /** False when later pages were not read. Those lists must not resolve `@名字`. */
+  complete: boolean;
+}
+
 export interface FeishuSendMessageInput {
   chat_id: string;
   msg_type: string;
@@ -128,7 +134,7 @@ export interface FeishuImClient {
     uuid?: string;
   }): Promise<{ message_id: string }>;
   sendMessage?(input: FeishuSendMessageInput): Promise<{ message_id: string }>;
-  listChatMembers?(chatId: string): Promise<FeishuChatMember[]>;
+  listChatMembers?(chatId: string): Promise<FeishuChatMemberList>;
   uploadImage?(input: FeishuUploadFile): Promise<{ image_key: string }>;
   uploadFile?(input: FeishuUploadFile): Promise<{ file_key: string }>;
   downloadResource?(input: FeishuDownloadResource): Promise<FeishuDownloadedFile>;
@@ -692,24 +698,24 @@ export class LarkCliClient implements FeishuImClient {
     return { message_id: messageId };
   }
 
-  async listChatMembers(chatId: string): Promise<FeishuChatMember[]> {
+  async listChatMembers(chatId: string): Promise<FeishuChatMemberList> {
     const id = chatId.trim();
     if (!id) {
-      return [];
+      return { items: [], complete: true };
     }
     const now = Date.now();
     const cached = chatMemberCache.get(id);
     if (cached && now - cached.at < CHAT_MEMBER_TTL_MS) {
-      return cached.members;
+      return cached.list;
     }
     const inflight = chatMemberInflight.get(id);
     if (inflight) {
       return inflight;
     }
     const job = this.fetchChatMembers(id)
-      .then((members) => {
-        chatMemberCache.set(id, { members, at: Date.now() });
-        return members;
+      .then((list) => {
+        chatMemberCache.set(id, { list, at: Date.now() });
+        return list;
       })
       .finally(() => {
         if (chatMemberInflight.get(id) === job) {
@@ -720,8 +726,8 @@ export class LarkCliClient implements FeishuImClient {
     return job;
   }
 
-  private async fetchChatMembers(chatId: string): Promise<FeishuChatMember[]> {
-    const members: FeishuChatMember[] = [];
+  private async fetchChatMembers(chatId: string): Promise<FeishuChatMemberList> {
+    const items: FeishuChatMember[] = [];
     let pageToken: string | undefined;
     for (let page = 0; page < 5; page += 1) {
       const payload = await this.request({
@@ -734,13 +740,16 @@ export class LarkCliClient implements FeishuImClient {
         },
       });
       const parsed = parseChatMembers(payload);
-      members.push(...parsed.items);
-      if (!parsed.has_more || !parsed.page_token) {
-        break;
+      items.push(...parsed.items);
+      if (!parsed.has_more) {
+        return { items, complete: true };
+      }
+      if (!parsed.page_token) {
+        return { items, complete: false };
       }
       pageToken = parsed.page_token;
     }
-    return members;
+    return { items, complete: false };
   }
 
   async uploadImage(input: FeishuUploadFile): Promise<{ image_key: string }> {
@@ -1437,8 +1446,8 @@ const CHAT_LIST_TTL_MS = 5 * 60_000;
 const RECENT_CHAT_LIST_TTL_MS = 2 * 60_000;
 const CHAT_MEMBER_TTL_MS = 2 * 60_000;
 const userNameCache = new Map<string, { name: string; at: number }>();
-const chatMemberCache = new Map<string, { members: FeishuChatMember[]; at: number }>();
-const chatMemberInflight = new Map<string, Promise<FeishuChatMember[]>>();
+const chatMemberCache = new Map<string, { list: FeishuChatMemberList; at: number }>();
+const chatMemberInflight = new Map<string, Promise<FeishuChatMemberList>>();
 const userNameInflight = new Map<string, Promise<Map<string, string>>>();
 const chatInfoCache = new Map<string, { chat: FeishuChat | null; at: number }>();
 const chatListCache = new Map<string, { at: number; chats: FeishuChat[] }>();
