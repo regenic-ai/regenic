@@ -12,7 +12,14 @@ import {
   type FeishuUploadFile,
   uploadFilename,
 } from "./feishu-cli-client";
-import { FEISHU_SOURCE } from "./feishu-message";
+import {
+  FEISHU_SOURCE,
+  applyFeishuPlainMentions,
+  feishuMentionNameIndex,
+  feishuMentionText,
+  feishuOutgoingBody,
+  feishuPlainMentionNames,
+} from "./feishu-message";
 
 const IMAGE_MEDIA = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
 
@@ -56,11 +63,20 @@ export class FeishuChatEgress implements EgressAdapter {
       : randomUUID();
     const channelMessageIds: string[] = [];
     if (parts.text) {
-      const message = await this.client.sendText({
-        chat_id: chatId,
-        text: parts.text,
-        uuid: messageUuid("text"),
-      });
+      const text = await this.textWithMentions(parts.text);
+      const body = feishuOutgoingBody(text);
+      const message = body.msg_type === "post" && this.client.sendMessage
+        ? await this.client.sendMessage({
+            chat_id: chatId,
+            msg_type: "post",
+            content: body.content,
+            uuid: messageUuid("text"),
+          })
+        : await this.client.sendText({
+            chat_id: chatId,
+            text: body.msg_type === "text" ? body.content.text : feishuMentionText(text),
+            uuid: messageUuid("text"),
+          });
       channelMessageIds.push(message.message_id);
     }
     for (const [index, image] of parts.images.entries()) {
@@ -92,6 +108,23 @@ export class FeishuChatEgress implements EgressAdapter {
       rpc_id: rpcId,
       channel_message_ids: channelMessageIds,
     };
+  }
+
+  /**
+   * `@名字` copied from a chat is not a Feishu mention until it maps to one
+   * member of this chat. Lookup failure leaves the text unchanged.
+   */
+  private async textWithMentions(text: string): Promise<string> {
+    const pending = feishuPlainMentionNames(text);
+    if (pending.length === 0 || typeof this.client.listChatMembers !== "function") {
+      return applyFeishuPlainMentions(text, new Map());
+    }
+    try {
+      const members = await this.client.listChatMembers(this.options.chat_id);
+      return applyFeishuPlainMentions(text, feishuMentionNameIndex(members));
+    } catch {
+      return applyFeishuPlainMentions(text, new Map());
+    }
   }
 }
 
