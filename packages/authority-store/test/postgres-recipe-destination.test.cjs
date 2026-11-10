@@ -20,6 +20,17 @@ const input = {
 it("includes Recipe persistence fields in schema, upsert bindings and read mappings (SQL contract only)", async () => {
   assert.equal(PG_SCHEMA_VERSION, 58);
   assert.match(PG_BASELINE_SQL, /write_back_thread_id TEXT/);
+  const baselineHideColumn = PG_BASELINE_SQL.match(
+    /CREATE TABLE recipes \([\s\S]*?\n\);/,
+  )?.[0].match(/hide_on_success\s+BOOLEAN\s+NOT NULL\s+DEFAULT\s+TRUE/i)?.[0];
+  const migrationHideColumn = PG_MIGRATIONS.find(({ version }) => version === 58)
+    .sql.match(/ADD COLUMN IF NOT EXISTS (hide_on_success\s+BOOLEAN\s+NOT NULL\s+DEFAULT\s+TRUE)/i)?.[1];
+  assert.ok(baselineHideColumn, "fresh baseline must define hide_on_success");
+  assert.equal(
+    baselineHideColumn.replace(/\s+/g, " ").toLowerCase(),
+    migrationHideColumn?.replace(/\s+/g, " ").toLowerCase(),
+    "fresh baseline and v58 migration must use the same hide_on_success definition",
+  );
   assert.match(PG_MIGRATIONS.find(({ version }) => version === 57).sql,
     /ADD COLUMN IF NOT EXISTS write_back_thread_id TEXT/);
   assert.match(PG_MIGRATIONS.find(({ version }) => version === 58).sql,

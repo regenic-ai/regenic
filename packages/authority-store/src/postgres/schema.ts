@@ -744,6 +744,7 @@ CREATE TABLE recipes (
   executor_config_json JSONB NOT NULL,
   can_write_back BOOLEAN NOT NULL DEFAULT FALSE,
   write_back_thread_id TEXT,
+  hide_on_success BOOLEAN NOT NULL DEFAULT TRUE,
   include_context BOOLEAN NOT NULL DEFAULT FALSE,
   enabled BOOLEAN NOT NULL DEFAULT TRUE,
   trigger_kind TEXT NOT NULL DEFAULT 'push',
