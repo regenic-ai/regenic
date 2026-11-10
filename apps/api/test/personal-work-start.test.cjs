@@ -132,6 +132,90 @@ describe("durable executor start", () => {
     assert.deepEqual(await f.ports.authority.getSearchAnswer(ORG, result.answer_id), saved);
   });
 
+  it("removes fresh answer preparation atomically when capacity is unavailable", async (t) => {
+    const f = await fixture(t);
+    const service = f.service();
+    service.channel = f.channel;
+    service.supervise = f.supervise();
+    service.dispatch = f.dispatch(service.supervise);
+    let prepared;
+    const create = f.ports.authority.createWorkItem.bind(f.ports.authority);
+    t.mock.method(f.ports.authority, "createWorkItem", async (input) => {
+      prepared = input;
+      return create(input);
+    });
+    t.mock.method(service.dispatch, "startItem", async () => undefined);
+    const answers = new PersonalSearchAnswerService(f.runtime, {
+      answerEvidence: async () => ({ query: "Question", refs: ["event-1"], evidence_text: "Evidence", executor_type: "session" }),
+    }, {}, service);
+    await assert.rejects(answers.start({}, "en"), (error) => error.code === "busy" && error.httpStatus === 429);
+    assert.equal(await f.ports.authority.getWorkItem(ORG, prepared.item.id), null);
+    assert.equal(await f.ports.authority.getSearchAnswer(ORG, prepared.search_answer.id), null);
+    assert.deepEqual(await f.ports.authority.listWorkRuns(ORG, prepared.item.id), []);
+    assert.deepEqual(await f.ports.authority.listWorkDeliveries(ORG), []);
+    assert.deepEqual(await f.ports.authority.getRecipe(ORG, prepared.recipe.id), prepared.recipe);
+    assert.equal(f.calls.spawn, 0);
+    assert.equal(f.calls.stdin, 0);
+  });
+
+  it("preserves a failed reserved answer and exposes its recovery ID", async (t) => {
+    const f = await fixture(t);
+    const service = f.service();
+    service.channel = f.channel;
+    service.supervise = f.supervise();
+    service.dispatch = f.dispatch(service.supervise);
+    f.hooks.spawn = async () => {
+      throw new PersonalConnectorError("no_sender", "No sender", 400);
+    };
+    const answers = new PersonalSearchAnswerService(f.runtime, {
+      answerEvidence: async () => ({ query: "Question", refs: ["event-1"], evidence_text: "Evidence", executor_type: "session" }),
+    }, {}, service);
+    let startError;
+    await assert.rejects(answers.start({}, "en"), (error) => {
+      startError = error;
+      return error.code === "executor_unavailable";
+    });
+    const answerId = startError.message.match(/retained for recovery as ([a-f0-9-]+)/)?.[1];
+    assert.ok(answerId, startError.message);
+    const record = await f.ports.authority.getSearchAnswer(ORG, answerId);
+    const item = await f.ports.authority.getWorkItem(ORG, record.work_item_id);
+    const run = await f.ports.authority.getWorkRun(ORG, item.current_run_id);
+    assert.equal(item.status, "failed");
+    assert.equal(run.status, "failed");
+    assert.equal(run.start_state, undefined);
+  });
+
+  it("aborts pre-reservation failure without deleting unrelated work or shared recipe", async (t) => {
+    const f = await fixture(t);
+    const service = f.service();
+    service.channel = f.channel;
+    service.supervise = f.supervise();
+    service.dispatch = f.dispatch(service.supervise);
+    const other = await service.prepareAuxiliaryExecution({
+      id: "another-prepared-item", purpose: "search-answer",
+      executor_type: "session", prompt: "Answer safely",
+    });
+    const error = new Error("Context composition failed");
+    let created;
+    let createdRecipe;
+    const create = f.ports.authority.createWorkItem.bind(f.ports.authority);
+    t.mock.method(f.ports.authority, "createWorkItem", async (input) => {
+      created = await create(input);
+      if (created.outcome === "applied") createdRecipe = created.recipe;
+      return created;
+    });
+    t.mock.method(service.dispatch, "startItem", async () => { throw error; });
+    const answers = new PersonalSearchAnswerService(f.runtime, {
+      answerEvidence: async () => ({ query: "Question", refs: ["event-1"], evidence_text: "Evidence", executor_type: "session" }),
+    }, {}, service);
+    await assert.rejects(answers.start({}, "en"), /Context composition failed/);
+    assert.equal(await f.ports.authority.getWorkItem(ORG, created.item.id), null);
+    assert.equal(await f.ports.authority.getSearchAnswer(ORG, created.search_answer.id), null);
+    assert.deepEqual(await f.ports.authority.getWorkItem(ORG, other.work_item.id), other.work_item);
+    assert.deepEqual(await f.ports.authority.getRecipe(ORG, other.recipe.id), createdRecipe);
+    assert.equal(f.calls.spawn, 0);
+  });
+
   it("rolls back answer, work and changed rule when answer metadata cannot be saved", async (t) => {
     const f = await preparedAuxiliary(t);
     const original = await f.ports.authority.getRecipe(ORG, f.prepared.recipe.id);

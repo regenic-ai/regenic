@@ -27,6 +27,9 @@ import {
   prepareWorkItemCreation,
   type WorkItemCreation,
   type WorkItemCreationResult,
+  prepareWorkItemCreationAbort,
+  type WorkItemCreationAbort,
+  type WorkItemCreationAbortResult,
   type WorkDismissal,
   type WorkDismissalResult,
   type WorkRunStartFailure,
@@ -282,6 +285,38 @@ export async function createWorkItem(db: PgSql, input: WorkItemCreation): Promis
     if (error instanceof WorkItemCreationConflict) return { outcome: "conflict", reason: error.reason };
     throw error;
   }
+}
+
+export async function abortWorkItemCreation(db: PgSql, input: WorkItemCreationAbort): Promise<WorkItemCreationAbortResult> {
+  return db.withTx(async (client) => {
+    const expected = input.expected_item;
+    const item = await db.queryOne<WorkItemRow>(
+      "SELECT * FROM work_items WHERE org_id = $1 AND id = $2 FOR UPDATE", [expected.org_id, expected.id], client,
+    );
+    const answer = await db.queryOne<SearchAnswerRow>(
+      "SELECT * FROM search_answers WHERE org_id = $1 AND work_item_id = $2 FOR UPDATE",
+      [expected.org_id, expected.id], client,
+    );
+    const run = await db.queryOne(
+      "SELECT id FROM work_runs WHERE org_id = $1 AND work_item_id = $2 LIMIT 1", [expected.org_id, expected.id], client,
+    );
+    const delivery = await db.queryOne(
+      "SELECT id FROM work_deliveries WHERE org_id = $1 AND work_item_id = $2 LIMIT 1",
+      [expected.org_id, expected.id], client,
+    );
+    const result = prepareWorkItemCreationAbort(input, {
+      item: item ? toWorkItem(item) : null, has_run: Boolean(run), has_delivery: Boolean(delivery),
+      search_answer: answer ? toSearchAnswer(answer) : null,
+    });
+    if (result.outcome !== "applied") return result;
+    if (result.search_answer) await db.execute("DELETE FROM search_answers WHERE org_id = $1 AND id = $2",
+      [expected.org_id, result.search_answer.id], client);
+    const deleted = await db.queryOne<WorkItemRow>(
+      "DELETE FROM work_items WHERE org_id = $1 AND id = $2 RETURNING *", [expected.org_id, expected.id], client,
+    );
+    if (!deleted) throw new Error("Aborted work item disappeared inside its transaction");
+    return { outcome: "applied", item: toWorkItem(deleted), ...(result.search_answer ? { search_answer: result.search_answer } : {}) };
+  });
 }
 
 export async function listWorkRuns(db: PgSql, orgId: string, workItemId?: string): Promise<WorkRun[]> {

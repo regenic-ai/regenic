@@ -159,6 +159,54 @@ function answerCreationInput(f) {
 
 for (const driver of drivers) {
   describe(`${driver.name} atomic work observation`, { skip: driver.skip }, () => {
+    it("atomically removes only a fresh unreserved item and its answer metadata", async (t) => {
+      const f = await fixture(t, driver);
+      const input = answerCreationInput(f);
+      const created = await f.store.createWorkItem(input);
+      assert.equal(created.outcome, "applied");
+      const result = await f.store.abortWorkItemCreation({
+        expected_item: created.item, expected_search_answer: created.search_answer,
+      });
+      assert.equal(result.outcome, "applied");
+      assert.deepEqual(result.item, created.item);
+      assert.deepEqual(result.search_answer, created.search_answer);
+      assert.equal(await f.store.getWorkItem(ORG, created.item.id), null);
+      assert.equal(await f.store.getSearchAnswer(ORG, created.search_answer.id), null);
+      assert.deepEqual(await f.store.getRecipe(ORG, created.recipe.id), created.recipe);
+      assert.deepEqual(await f.store.listWorkRuns(ORG, created.item.id), []);
+    });
+
+    it("refuses to remove an item after a run reservation", async (t) => {
+      const f = await fixture(t, driver);
+      const input = answerCreationInput(f);
+      const created = await f.store.createWorkItem(input);
+      assert.equal(created.outcome, "applied");
+      const run = {
+        ...f.run, id: "created-run", work_item_id: created.item.id, recipe_id: created.recipe.id,
+        status: "running", start_state: "pending", created_at: LATER, updated_at: LATER,
+      };
+      assert.equal(await f.store.claimWorkRunStart({ expected_item: created.item, run }), true);
+      const reserved = await f.store.getWorkItem(ORG, created.item.id);
+      assert.deepEqual(await f.store.abortWorkItemCreation({
+        expected_item: created.item, expected_search_answer: created.search_answer,
+      }), { outcome: "conflict", reason: "stale_work" });
+      assert.deepEqual(await f.store.getWorkItem(ORG, created.item.id), reserved);
+      assert.deepEqual(await f.store.getWorkRun(ORG, run.id), run);
+      assert.deepEqual(await f.store.getSearchAnswer(ORG, created.search_answer.id), created.search_answer);
+    });
+
+    it("preserves changed answer metadata when aborting a stale prepared snapshot", async (t) => {
+      const f = await fixture(t, driver);
+      const input = answerCreationInput(f);
+      const created = await f.store.createWorkItem(input);
+      const changed = await f.store.putSearchAnswer({ ...created.search_answer, query: "Edited question" });
+      assert.deepEqual(await f.store.abortWorkItemCreation({
+        expected_item: created.item, expected_search_answer: created.search_answer,
+      }), { outcome: "conflict", reason: "stale_search_answer" });
+      assert.deepEqual(await f.store.getWorkItem(ORG, created.item.id), created.item);
+      assert.deepEqual(await f.store.getSearchAnswer(ORG, created.search_answer.id), changed);
+    });
+
     it("creates answer metadata, work and recipe together and returns persisted snapshots", async (t) => {
       const f = await fixture(t, driver);
       const input = answerCreationInput(f);
@@ -1740,6 +1788,29 @@ for (const driver of drivers) {
 
 for (const driver of drivers.filter((d) => d.name.startsWith("sqlite"))) {
   describe(`${driver.name} observation rollback`, () => {
+    for (const table of ["search_answers", "work_items"]) {
+      it(`rolls back both preparation deletions when ${table} cleanup fails`, async (t) => {
+        const f = await fixture(t, driver);
+        const input = answerCreationInput(f);
+        const created = await f.store.createWorkItem(input);
+        assert.equal(created.outcome, "applied");
+        const db = new Database(f.path);
+        try {
+          db.exec(`CREATE TRIGGER reject_abort BEFORE DELETE ON ${table}
+            BEGIN SELECT RAISE(ABORT, 'abort rejected'); END`);
+          await assert.rejects(f.store.abortWorkItemCreation({
+            expected_item: created.item, expected_search_answer: created.search_answer,
+          }), /abort rejected/);
+          await f.reopen();
+          assert.deepEqual(await f.store.getWorkItem(ORG, created.item.id), created.item);
+          assert.deepEqual(await f.store.getSearchAnswer(ORG, created.search_answer.id), created.search_answer);
+          assert.deepEqual(await f.store.getRecipe(ORG, created.recipe.id), created.recipe);
+        } finally {
+          db.close();
+        }
+      });
+    }
+
     for (const table of ["recipes", "work_items", "search_answers"]) {
       for (const existing of [false, true]) {
         it(`rolls back answer preparation with ${existing ? "existing" : "new"} recipe on ${table} failure`, async (t) => {
@@ -2076,6 +2147,37 @@ it("fences shared answer identity across SQLite writers and rolls back losing pr
   assert.deepEqual(await second.getSearchAnswer(ORG, input.search_answer.id), winner.search_answer);
   assert.deepEqual(await second.getWorkItem(ORG, winner.item.id), winner.item);
   assert.deepEqual(await second.getRecipe(ORG, winner.recipe.id), winner.recipe);
+});
+
+it("fences preparation abort against run reservation across SQLite writers", async (t) => {
+  const driver = drivers.find((d) => d.name === "sqlite writer RPC");
+  const f = await fixture(t, driver);
+  const input = answerCreationInput(f);
+  const created = await f.store.createWorkItem(input);
+  assert.equal(created.outcome, "applied");
+  const second = await SqliteSplitAuthorityStore.open(f.path);
+  t.after(() => second.close());
+  const run = {
+    ...f.run, id: "reserved-or-aborted", work_item_id: created.item.id, recipe_id: created.recipe.id,
+    status: "running", start_state: "pending", created_at: LATER, updated_at: LATER,
+  };
+  const [aborted, claimed] = await Promise.all([
+    f.store.abortWorkItemCreation({ expected_item: created.item, expected_search_answer: created.search_answer }),
+    second.claimWorkRunStart({ expected_item: created.item, run }),
+  ]);
+  assert.equal(Number(aborted.outcome === "applied") + Number(claimed), 1);
+  if (claimed) {
+    const item = await second.getWorkItem(ORG, created.item.id);
+    assert.equal(item.status, "running");
+    assert.equal(item.current_run_id, run.id);
+    assert.equal(item.version, created.item.version + 1);
+    assert.deepEqual(await second.getWorkRun(ORG, run.id), run);
+    assert.deepEqual(await second.getSearchAnswer(ORG, created.search_answer.id), created.search_answer);
+  } else {
+    assert.equal(await second.getWorkItem(ORG, created.item.id), null);
+    assert.equal(await second.getWorkRun(ORG, run.id), null);
+    assert.equal(await second.getSearchAnswer(ORG, created.search_answer.id), null);
+  }
 });
 
 it("allows distinct work to share a concurrently created equivalent recipe across SQLite writers", async (t) => {

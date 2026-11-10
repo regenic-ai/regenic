@@ -109,7 +109,6 @@ export class PersonalSearchAnswerService {
     });
     const record = prepared.search_answer;
     if (!record) throw new Error("Prepared search answer metadata is missing");
-    const authority = this.runtime.requireHost().get("authority");
     let started;
     try {
       started = await this.work.startPreparedAuxiliaryExecution(
@@ -117,9 +116,16 @@ export class PersonalSearchAnswerService {
         evidence.evidence_text,
       );
     } catch (error) {
-      await authority.deleteSearchAnswer(record.org_id, record.id)
-        .catch(() => undefined);
-      throw searchAnswerStartError(error);
+      let cleanup;
+      try {
+        cleanup = await this.work.abortPreparedAuxiliaryExecution(prepared);
+      } catch (cleanupError) {
+        console.error("search answer preparation cleanup failed", {
+          answer_id: record.id, work_item_id: record.work_item_id,
+        }, cleanupError);
+        throw searchAnswerStartError(error, record.id);
+      }
+      throw searchAnswerStartError(error, cleanup.outcome === "conflict" ? record.id : undefined);
     }
     return view(record, started.run, started.work_item.status);
   }
@@ -152,7 +158,7 @@ export class PersonalSearchAnswerService {
   }
 }
 
-function searchAnswerStartError(error: unknown): PersonalContextError {
+function searchAnswerStartError(error: unknown, retainedAnswerId?: string): PersonalContextError {
   const status = error instanceof Error && "httpStatus" in error
     ? Number(error.httpStatus)
     : HttpStatus.BAD_GATEWAY;
@@ -167,7 +173,8 @@ function searchAnswerStartError(error: unknown): PersonalContextError {
         ? "executor_session_unavailable"
         : "executor_unavailable",
     Number.isInteger(status) ? status : HttpStatus.BAD_GATEWAY,
-    error instanceof Error ? error.message : "Executor failed to start",
+    `${error instanceof Error ? error.message : "Executor failed to start"}${retainedAnswerId
+      ? ` The durable answer is retained for recovery as ${retainedAnswerId}.` : ""}`,
   );
 }
 

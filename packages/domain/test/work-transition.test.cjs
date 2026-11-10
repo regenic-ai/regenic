@@ -4,6 +4,7 @@ const {
   assertWorkRunWrite, planWorkObservation, prepareWorkRunStartCheckpoint, canClaimWorkRunStartItem,
   prepareWorkRunStartFailure,
   prepareWorkItemCreation,
+  prepareWorkItemCreationAbort,
   prepareWorkDismissal, enqueueWriteBack, prepareWorkObservation,
 } = require("../dist");
 
@@ -118,6 +119,55 @@ describe("work item creation transitions", () => {
       item_exists: false, recipe: null, search_answer_exists: true,
     }), { outcome: "conflict", reason: "search_answer_exists" });
   });
+  describe("pre-reservation abort", () => {
+    function abortFacts() {
+      const input = answerCreation();
+      const created = prepareWorkItemCreation(input, { item_exists: false, recipe: null });
+      return {
+        input: { expected_item: created.item, expected_search_answer: created.search_answer },
+        facts: { item: created.item, has_run: false, has_delivery: false, search_answer: created.search_answer },
+      };
+    }
+    it("removes only a fresh work item and its matching answer snapshot", () => {
+      const { input, facts } = abortFacts();
+      const result = prepareWorkItemCreationAbort(input, facts);
+      assert.equal(result.outcome, "applied");
+      assert.deepEqual(result.item, facts.item);
+      assert.deepEqual(result.search_answer, facts.search_answer);
+      assert.deepEqual(prepareWorkItemCreationAbort(input, { ...facts, item: null }),
+        { outcome: "conflict", reason: "missing_work" });
+    });
+    for (const [name, facts] of [
+      ["missing work", { item: null, has_run: false, has_delivery: false }],
+      ["changed work", { item: { ...abortFacts().facts.item, version: 1 }, has_run: false, has_delivery: false }],
+      ["active run", { ...abortFacts().facts, has_run: true }],
+      ["historical run", { ...abortFacts().facts, has_run: true }],
+      ["delivery", { ...abortFacts().facts, has_delivery: true }],
+      ["missing answer", { ...abortFacts().facts, search_answer: null }],
+      ["changed answer", { ...abortFacts().facts, search_answer: { ...abortFacts().facts.search_answer, query: "Changed" } }],
+    ]) {
+      it(`refuses abort when ${name} is no longer the prepared state`, () => {
+        const { input } = abortFacts();
+        const result = prepareWorkItemCreationAbort(input, facts);
+        assert.equal(result.outcome, "conflict");
+        assert.notEqual(result.reason, undefined);
+      });
+    }
+    it("rejects foreign answer identity and does not mutate prepared state", () => {
+      const { input, facts } = abortFacts();
+      assert.throws(() => prepareWorkItemCreationAbort({
+        ...input, expected_search_answer: { ...input.expected_search_answer, org_id: "foreign" },
+      }, facts), /same work item/);
+      assert.equal(facts.item.status, "open");
+      assert.equal(facts.search_answer.outcome, undefined);
+    });
+    it("does not remove an unexpected answer when no answer snapshot was prepared", () => {
+      const { input, facts } = abortFacts();
+      assert.deepEqual(prepareWorkItemCreationAbort({ expected_item: input.expected_item }, facts), {
+        outcome: "conflict", reason: "stale_search_answer",
+      });
+    });
+  });
   for (const change of [
     { id: "" }, { org_id: "foreign" }, { work_item_id: "other-work" },
     { outcome: "timed_out" }, { query: "" }, { event_ids: [""] }, { event_ids: [1] },
@@ -130,6 +180,47 @@ describe("work item creation transitions", () => {
       }, { item_exists: false, recipe: null }), /fresh search answer/);
     });
   }
+  describe("pre-reservation abort", () => {
+    function abortFacts() {
+      const input = answerCreation();
+      const created = prepareWorkItemCreation(input, { item_exists: false, recipe: null });
+      return {
+        input: { expected_item: created.item, expected_search_answer: created.search_answer },
+        facts: { item: created.item, has_run: false, has_delivery: false, search_answer: created.search_answer },
+      };
+    }
+    it("accepts only the exact fresh preparation and returns detached snapshots", () => {
+      const { input, facts } = abortFacts();
+      const result = prepareWorkItemCreationAbort(input, facts);
+      assert.equal(result.outcome, "applied");
+      assert.deepEqual(result.item, facts.item);
+      assert.deepEqual(result.search_answer, facts.search_answer);
+      result.search_answer.event_ids.push("mutated");
+      assert.deepEqual(facts.search_answer.event_ids, ["event"]);
+      assert.deepEqual(prepareWorkItemCreationAbort(input, { ...facts, item: null }),
+        { outcome: "conflict", reason: "missing_work" });
+    });
+    for (const [reason, patch] of [
+      ["stale work", { item: { ...abortFacts().facts.item, version: 1 } }],
+      ["existing run", { has_run: true }],
+      ["existing delivery", { has_delivery: true }],
+      ["missing answer", { search_answer: null }],
+      ["changed answer", { search_answer: { ...abortFacts().facts.search_answer, event_ids: ["changed"] } }],
+    ]) {
+      it(`refuses abort with ${reason}`, () => {
+        const { input, facts } = abortFacts();
+        const result = prepareWorkItemCreationAbort(input, { ...facts, ...patch });
+        assert.equal(result.outcome, "conflict");
+        assert.notEqual(result.reason, undefined);
+      });
+    }
+    it("rejects foreign answer identity", () => {
+      const { input, facts } = abortFacts();
+      assert.throws(() => prepareWorkItemCreationAbort({
+        ...input, expected_search_answer: { ...input.expected_search_answer, org_id: "foreign" },
+      }, facts), /same work item/);
+    });
+  });
 });
 
 describe("work dismissal transitions", () => {

@@ -27,6 +27,9 @@ import {
   prepareWorkItemCreation,
   type WorkItemCreation,
   type WorkItemCreationResult,
+  prepareWorkItemCreationAbort,
+  type WorkItemCreationAbort,
+  type WorkItemCreationAbortResult,
   type WorkDismissal,
   type WorkDismissalResult,
   type WorkRunStartFailure,
@@ -204,6 +207,33 @@ export async function createWorkItem(db: Database.Database, input: WorkItemCreat
       outcome: "applied", item: toWorkItem(savedItem), recipe: toRecipe(savedRecipe),
       ...(savedAnswer ? { search_answer: toSearchAnswer(savedAnswer) } : {}),
     };
+  }).immediate();
+}
+
+export async function abortWorkItemCreation(db: Database.Database, input: WorkItemCreationAbort): Promise<WorkItemCreationAbortResult> {
+  return db.transaction((): WorkItemCreationAbortResult => {
+    const expected = input.expected_item;
+    const item = db.prepare("SELECT * FROM work_items WHERE org_id = ? AND id = ?").get(
+      expected.org_id, expected.id,
+    ) as WorkItemRow | undefined;
+    const answer = db.prepare("SELECT * FROM search_answers WHERE org_id = ? AND work_item_id = ?").get(
+      expected.org_id, expected.id,
+    ) as SearchAnswerRow | undefined;
+    const result = prepareWorkItemCreationAbort(input, {
+      item: item ? toWorkItem(item) : null,
+      has_run: Boolean(db.prepare("SELECT id FROM work_runs WHERE org_id = ? AND work_item_id = ? LIMIT 1")
+        .get(expected.org_id, expected.id)),
+      has_delivery: Boolean(db.prepare("SELECT id FROM work_deliveries WHERE org_id = ? AND work_item_id = ? LIMIT 1")
+        .get(expected.org_id, expected.id)),
+      search_answer: answer ? toSearchAnswer(answer) : null,
+    });
+    if (result.outcome !== "applied") return result;
+    if (result.search_answer) db.prepare("DELETE FROM search_answers WHERE org_id = ? AND id = ?")
+      .run(expected.org_id, result.search_answer.id);
+    const deleted = db.prepare("DELETE FROM work_items WHERE org_id = ? AND id = ? RETURNING *")
+      .get(expected.org_id, expected.id) as WorkItemRow | undefined;
+    if (!deleted) throw new Error("Aborted work item disappeared inside its transaction");
+    return { outcome: "applied", item: toWorkItem(deleted), ...(result.search_answer ? { search_answer: result.search_answer } : {}) };
   }).immediate();
 }
 

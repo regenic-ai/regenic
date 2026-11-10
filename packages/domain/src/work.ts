@@ -14,6 +14,7 @@ import type {
   WorkRunStartFailure, WorkRunStartFailureResult,
   WorkDismissal, WorkDismissalResult,
   WorkItemCreation, WorkItemCreationResult,
+  WorkItemCreationAbort, WorkItemCreationAbortResult,
 } from "./work-transition";
 
 export type { ResultEnvelope, WorkRun, WorkRunStatus };
@@ -260,6 +261,8 @@ export interface WorkStore {
   putWorkItem(item: WorkItem): Promise<WorkItem>;
   /** Create without overwriting existing work; compare-and-set its recipe in the same commit. */
   createWorkItem(input: WorkItemCreation): Promise<WorkItemCreationResult>;
+  /** Remove only a fresh, unreserved preparation and its optional answer metadata. */
+  abortWorkItemCreation(input: WorkItemCreationAbort): Promise<WorkItemCreationAbortResult>;
   listWorkRuns(orgId: string, workItemId?: string): Promise<WorkRun[]>;
   getWorkRun(orgId: string, id: string): Promise<WorkRun | null>;
   /** Resolves only current_run_id; NULL historical identity is never guessed from timestamps. */

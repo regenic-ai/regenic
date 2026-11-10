@@ -112,6 +112,49 @@ export interface WorkItemCreation {
   search_answer?: SearchAnswerRecord;
 }
 
+export interface WorkItemCreationAbort {
+  expected_item: WorkItem;
+  expected_search_answer?: SearchAnswerRecord;
+}
+
+export type WorkItemCreationAbortResult =
+  | { outcome: "applied"; item: WorkItem; search_answer?: SearchAnswerRecord }
+  | { outcome: "conflict"; reason: "missing_work" | "stale_work" | "has_run" | "has_delivery" | "missing_search_answer" | "stale_search_answer" };
+
+export function prepareWorkItemCreationAbort(input: WorkItemCreationAbort, facts: {
+  item: WorkItem | null;
+  has_run: boolean;
+  has_delivery: boolean;
+  search_answer?: SearchAnswerRecord | null;
+}): WorkItemCreationAbortResult {
+  const { item } = facts;
+  if (!item) return { outcome: "conflict", reason: "missing_work" };
+  if (!sameSnapshot(item, input.expected_item) || item.status !== "open"
+    || item.current_run_id !== undefined || (item.version ?? 0) !== 0) {
+    return { outcome: "conflict", reason: "stale_work" };
+  }
+  if (facts.has_run) return { outcome: "conflict", reason: "has_run" };
+  if (facts.has_delivery) return { outcome: "conflict", reason: "has_delivery" };
+  const expectedAnswer = input.expected_search_answer;
+  const searchAnswer = facts.search_answer;
+  if (expectedAnswer) {
+    if (expectedAnswer.org_id !== item.org_id || expectedAnswer.work_item_id !== item.id) {
+      throw new Error("Work creation abort answer must belong to the same work item");
+    }
+    if (!searchAnswer) return { outcome: "conflict", reason: "missing_search_answer" };
+    if (!sameJson(searchAnswer, expectedAnswer)) {
+      return { outcome: "conflict", reason: "stale_search_answer" };
+    }
+  } else if (searchAnswer) {
+    return { outcome: "conflict", reason: "stale_search_answer" };
+  }
+  return structuredClone({
+    outcome: "applied",
+    item,
+    ...(expectedAnswer && searchAnswer ? { search_answer: searchAnswer } : {}),
+  });
+}
+
 export type WorkItemCreationResult =
   | { outcome: "applied"; item: WorkItem; recipe: Recipe; search_answer?: SearchAnswerRecord }
   | { outcome: "conflict"; reason: "work_exists" | "stale_recipe" | "search_answer_exists" };

@@ -25,6 +25,9 @@ import {
   prepareWorkItemCreation,
   type WorkItemCreation,
   type WorkItemCreationResult,
+  prepareWorkItemCreationAbort,
+  type WorkItemCreationAbort,
+  type WorkItemCreationAbortResult,
   type WorkDismissal,
   type WorkDismissalResult,
   type WorkRunStartFailure,
@@ -136,6 +139,22 @@ export class MemoryWorkStore implements WorkStore, ExecutorStore {
     this.items.set(saved.item.id, saved.item);
     if (saved.search_answer) this.searchAnswers.set(saved.search_answer.id, saved.search_answer);
     return result;
+  }
+
+  async abortWorkItemCreation(input: WorkItemCreationAbort): Promise<WorkItemCreationAbortResult> {
+    const result = prepareWorkItemCreationAbort(input, {
+      item: this.items.get(input.expected_item.id) ?? null,
+      has_run: [...this.runs.values()].some((run) => run.org_id === input.expected_item.org_id
+        && run.work_item_id === input.expected_item.id),
+      has_delivery: [...this.deliveries.values()].some((delivery) => delivery.org_id === input.expected_item.org_id
+        && delivery.work_item_id === input.expected_item.id),
+      search_answer: [...this.searchAnswers.values()].find((answer) =>
+        answer.org_id === input.expected_item.org_id && answer.work_item_id === input.expected_item.id) ?? null,
+    });
+    if (result.outcome !== "applied") return result;
+    this.items.delete(result.item.id);
+    if (result.search_answer) this.searchAnswers.delete(result.search_answer.id);
+    return structuredClone(result);
   }
 
   async listWorkRuns(orgId: string, workItemId?: string): Promise<WorkRun[]> {

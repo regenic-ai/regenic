@@ -75,6 +75,8 @@ import type {
   WorkDismissalResult,
   WorkItemCreation,
   WorkItemCreationResult,
+  WorkItemCreationAbort,
+  WorkItemCreationAbortResult,
   WorkDeliveryCommand,
   WorkDeliveryCommandResult,
   CommitWorkObservation,
@@ -289,6 +291,7 @@ import {
   recordWorkRunStartFailure,
   dismissWorkItem,
   createWorkItem,
+  abortWorkItemCreation,
   transitionWorkDelivery,
   commitWorkObservation,
   deleteSearchAnswer,
@@ -1278,6 +1281,11 @@ export class SqliteAuthorityStore
   async createWorkItem(input: WorkItemCreation): Promise<WorkItemCreationResult> {
     this.assertWritable();
     return createWorkItem(this.database, input);
+  }
+
+  async abortWorkItemCreation(input: WorkItemCreationAbort): Promise<WorkItemCreationAbortResult> {
+    this.assertWritable();
+    return abortWorkItemCreation(this.database, input);
   }
 
   async commitWorkObservation(input: CommitWorkObservation): Promise<CommitWorkObservationResult> {

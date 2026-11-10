@@ -35,6 +35,7 @@ import {
   type PromptAnswer,
   type Recipe,
   type SearchAnswerRecord,
+  type WorkItemCreationAbortResult,
   type ThreadPrompt,
   type WorkItem,
   type WorkRun,
@@ -546,6 +547,15 @@ export class PersonalWorkService implements OnModuleDestroy {
       "execution_start_conflict", "Auxiliary execution changed after start. Refresh the execution.", 409,
     );
     return { work_item: item, run };
+  }
+
+  async abortPreparedAuxiliaryExecution(
+    prepared: PreparedAuxiliaryExecution,
+  ): Promise<WorkItemCreationAbortResult> {
+    return this.runtime.requireHost().get("authority").abortWorkItemCreation({
+      expected_item: prepared.work_item,
+      ...(prepared.search_answer ? { expected_search_answer: prepared.search_answer } : {}),
+    });
   }
 
   async startAuxiliaryExecution(
