@@ -136,6 +136,9 @@ export const dshTaskExecutor: TaskExecutor = {
           text: composeWorkspaceTaskEvidence({
             current_line: input.conversation?.current_line,
           }),
+          ...(input.conversation?.task?.write_back_thread_id
+            ? { write_back_thread_id: input.conversation.task.write_back_thread_id }
+            : {}),
         })
       : input.evidence_text;
     await ctx.writeStdin(

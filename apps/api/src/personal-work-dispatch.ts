@@ -21,6 +21,7 @@ import {
   recipeHasStartCapacity,
   recipeStartInflight,
   recipeWantsContext,
+  recipeWantsWriteBack,
   recipeTextMatches,
   isOccupiedRecipeSlot,
   isTaskInboxItem,
@@ -613,6 +614,9 @@ export class PersonalWorkDispatch {
       return undefined;
     }
     const runningItem: WorkItem = { ...item, status: "running", updated_at: now };
+    const writeBackThreadId = recipeWantsWriteBack(recipe)
+      ? recipe.write_back_thread_id?.trim() || item.thread_id
+      : undefined;
     let handle;
     try {
       handle = await executor.start(
@@ -627,6 +631,7 @@ export class PersonalWorkDispatch {
             thread_facet: item.thread_facet,
             source: item.thread_id.split(":")[0] ?? "",
             text: composed.inline_text,
+            ...(writeBackThreadId ? { write_back_thread_id: writeBackThreadId } : {}),
           }),
           conversation: includeContext
             ? {
@@ -638,6 +643,7 @@ export class PersonalWorkDispatch {
                 task: {
                   thread_id: item.thread_id,
                   ...(item.head_event_id ? { event_id: item.head_event_id } : {}),
+                  ...(writeBackThreadId ? { write_back_thread_id: writeBackThreadId } : {}),
                 },
                 ...(workspace && this.contextAccess
                   ? { access: this.contextAccess.accessFor(run.id, { agent_key: true }) }

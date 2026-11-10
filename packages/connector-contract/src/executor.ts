@@ -162,6 +162,8 @@ export interface WorkTaskRef {
   event_id?: string;
   title?: string;
   channel?: string;
+  /** Conversation this rule sends its result to, when it writes back. */
+  write_back_thread_id?: string;
 }
 
 /** HTTP MCP server config, as Cursor, Claude Code and DSH accept it. */
@@ -438,6 +440,7 @@ export function composeWorkspaceInstructionFiles(input: {
   const agents = [
     "This session handles one work item from a source chat.",
     "The user message is the task. Prior turns are established background.",
+    writeBackInstruction(input.task?.write_back_thread_id),
     !background
       ? ""
       : inline
@@ -459,6 +462,14 @@ export function composeWorkspaceInstructionFiles(input: {
   return files;
 }
 
+function writeBackInstruction(threadId: string | undefined): string {
+  const id = threadId?.trim();
+  if (!id) {
+    return "";
+  }
+  return `Write-back conversation thread_id: ${id}. When the task mentions the write-back conversation, use this id and do not substitute another.`;
+}
+
 function selfServeAgents(
   task: WorkTaskRef,
   selfServe: WorkSelfServe,
@@ -475,11 +486,13 @@ function selfServeAgents(
   ]
     .filter(Boolean)
     .join(", ");
+  const writeBack = writeBackInstruction(task.write_back_thread_id);
   const tool = (name: string) => `${WORK_CONTEXT_MCP_SERVER} ${name}`;
   return [
     "This session handles one work item from a source chat.",
     "The user message is the task. Only the current message is included; the rest of the chat is not.",
     `Source: ${where ? `${where} (${ids})` : ids}.`,
+    ...(writeBack ? [writeBack] : []),
     "",
     "## Before you act",
     "",
@@ -511,7 +524,8 @@ export async function stageConversationWorkspace(
     : undefined;
   const background = conversation.background?.trim();
   const history = conversation.history?.trim();
-  if (!selfServe && !background && !history) {
+  const writeBack = conversation.task?.write_back_thread_id?.trim();
+  if (!selfServe && !background && !history && !writeBack) {
     return undefined;
   }
   return ctx.writeWorkFiles(
@@ -562,6 +576,9 @@ export async function prepareLocalAgentStart(
         text: composeWorkspaceTaskEvidence({
           current_line: conversation?.current_line,
         }),
+        ...(conversation?.task?.write_back_thread_id
+          ? { write_back_thread_id: conversation.task.write_back_thread_id }
+          : {}),
       })
     : input.evidence_text;
   return {
@@ -583,6 +600,7 @@ export function formatWorkEvidence(input: {
   source: string;
   text?: string;
   extra?: Record<string, JsonValue>;
+  write_back_thread_id?: string;
 }): string {
   const lines = [
     `Work item ${input.thread_id}`,
@@ -590,6 +608,10 @@ export function formatWorkEvidence(input: {
   ];
   if (input.text?.trim()) {
     lines.push("", input.text.trim());
+  }
+  const writeBack = writeBackInstruction(input.write_back_thread_id);
+  if (writeBack) {
+    lines.push("", writeBack);
   }
   if (input.extra && Object.keys(input.extra).length > 0) {
     lines.push("", JSON.stringify(input.extra));

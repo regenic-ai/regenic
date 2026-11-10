@@ -8,6 +8,7 @@ const {
   composeWorkConversation,
   composeWorkspaceInstructionFiles,
   createSessionTaskExecutor,
+  formatWorkEvidence,
   formatWorkRunHistory,
   prepareLocalAgentStart,
 } = require("../dist");
@@ -151,6 +152,32 @@ describe("composeWorkspaceInstructionFiles", () => {
     })[WORK_AGENTS_FILENAME];
     assert.equal(agents.includes("Pass run_id"), false);
     assert.equal(agents.includes("history.md"), false);
+    assert.equal(agents.includes("Write-back conversation"), false);
+  });
+
+  it("names the rule write-back conversation for the model", () => {
+    const lookedUp = composeWorkspaceInstructionFiles({
+      task: { thread_id: "crm:order-1", write_back_thread_id: "feishu:results" },
+      self_serve: { run_id: "run-now" },
+    })[WORK_AGENTS_FILENAME];
+    assert.match(
+      lookedUp,
+      /Write-back conversation thread_id: feishu:results\. When the task mentions the write-back conversation, use this id and do not substitute another\./,
+    );
+    const pushed = composeWorkspaceInstructionFiles({
+      background: "A: hello",
+      task: { thread_id: "crm:order-1", write_back_thread_id: "  feishu:results  " },
+    })[WORK_AGENTS_FILENAME];
+    assert.match(pushed, /Write-back conversation thread_id: feishu:results\./);
+    const evidence = formatWorkEvidence({
+      thread_id: "crm:order-1",
+      record_class: "message",
+      thread_facet: "chat",
+      source: "crm",
+      text: "please handle",
+      write_back_thread_id: "feishu:results",
+    });
+    assert.match(evidence, /Write-back conversation thread_id: feishu:results\./);
   });
 });
 
