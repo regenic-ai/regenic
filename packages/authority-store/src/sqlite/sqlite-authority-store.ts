@@ -1032,6 +1032,9 @@ export class SqliteAuthorityStore
         .prepare(`DELETE FROM conversation_prefs WHERE org_id = ?`)
         .run(orgId);
       this.database
+        .prepare(`DELETE FROM conversation_lifecycle_events WHERE org_id = ?`)
+        .run(orgId);
+      this.database
         .prepare(
           `
             DELETE FROM ingest_quarantines

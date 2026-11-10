@@ -7,6 +7,7 @@ import type {
   ConversationPrefPatch,
 } from "@regenic/domain";
 import Database from "better-sqlite3";
+import { randomUUID } from "node:crypto";
 import {
   formatInboxDigest,
   normalizeHiddenReason,
@@ -16,6 +17,8 @@ import {
   normalizeInboxLimit,
   TASK_INBOX_REASON,
   WORK_OBSERVE_AGAIN_STATUSES,
+  conversationVisibilityCommand,
+  sameConversationVisibilityCommand,
 } from "@regenic/domain";
 import {
   EventRow,
@@ -320,6 +323,30 @@ export async function setConversationVisibility(
   input: import("@regenic/domain").ConversationVisibilityUpdate,
 ): Promise<import("@regenic/domain").ConversationVisibilityUpdateResult> {
   return db.transaction(() => {
+    const command = conversationVisibilityCommand(input);
+    if (input.command_id !== undefined) {
+      const existing = db.prepare(`SELECT thread_id, aggregate_type, event_type, payload_json
+        FROM conversation_lifecycle_events WHERE org_id = ? AND command_id = ?`)
+        .get(input.org_id, input.command_id) as
+        | { thread_id: string; aggregate_type: string; event_type: string; payload_json: string }
+        | undefined;
+      if (existing) {
+        const payload = JSON.parse(existing.payload_json) as {
+          command?: unknown;
+          result?: ConversationPref;
+        };
+        if (
+          existing.thread_id !== input.thread_id ||
+          existing.aggregate_type !== "conversation" ||
+          existing.event_type !== "visibility_intent_changed" ||
+          !sameConversationVisibilityCommand(payload.command, command) ||
+          !payload.result
+        ) {
+          return { outcome: "command_conflict" as const };
+        }
+        return { outcome: "replayed" as const, pref: payload.result };
+      }
+    }
     const current = db.prepare(`SELECT ${PREF_COLUMNS} FROM conversation_prefs
       WHERE org_id = ? AND thread_id = ?`).get(input.org_id, input.thread_id) as PrefRow | undefined;
     const currentVersion = current?.visibility_version ?? 0;
@@ -338,7 +365,35 @@ export async function setConversationVisibility(
     const visibilityVersion = currentVersion + 1;
     db.prepare(`UPDATE conversation_prefs SET visibility_version = ?
       WHERE org_id = ? AND thread_id = ?`).run(visibilityVersion, input.org_id, input.thread_id);
-    return { outcome: "applied" as const, pref: { ...pref, visibility_version: visibilityVersion } };
+    const result = { ...pref, visibility_version: visibilityVersion };
+    if (input.command_id !== undefined) {
+      db.prepare(`INSERT INTO conversation_lifecycle_events (
+        id, org_id, thread_id, aggregate_type, aggregate_id, aggregate_version,
+        event_type, command_id, dedupe_key, schema_version, payload_json, occurred_at, created_at
+      ) VALUES (?, ?, ?, 'conversation', ?, ?, 'visibility_intent_changed', ?, ?, 1, ?, ?, ?)`)
+        .run(
+          randomUUID(),
+          input.org_id,
+          input.thread_id,
+          input.thread_id,
+          visibilityVersion,
+          input.command_id,
+          JSON.stringify([
+            "conversation",
+            input.thread_id,
+            visibilityVersion,
+            "visibility_intent_changed",
+          ]),
+          JSON.stringify({
+            command,
+            previous_version: currentVersion,
+            result,
+          }),
+          input.issued_at ?? input.updated_at,
+          input.updated_at,
+        );
+    }
+    return { outcome: "applied" as const, pref: result };
   }).immediate();
 }
 

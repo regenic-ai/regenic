@@ -1,4 +1,4 @@
-export const PG_SCHEMA_VERSION = 61;
+export const PG_SCHEMA_VERSION = 62;
 
 /** Applied when an existing postgres authority DB is already at a prior baseline. */
 export const PG_MIGRATIONS = [
@@ -632,6 +632,43 @@ ALTER TABLE conversation_prefs ADD COLUMN visibility_version INTEGER NOT NULL DE
 ALTER TABLE work_items ADD COLUMN visibility_intent_version INTEGER NOT NULL DEFAULT 0 CHECK (visibility_intent_version >= 0);
 `,
   },
+  {
+    version: 62,
+    sql: `
+CREATE TABLE conversation_lifecycle_events (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  thread_id TEXT NOT NULL,
+  aggregate_type TEXT NOT NULL CHECK (
+    aggregate_type IN ('work_item', 'work_run', 'work_delivery', 'conversation', 'source_event')
+  ),
+  aggregate_id TEXT NOT NULL,
+  aggregate_version INTEGER NOT NULL CHECK (aggregate_version >= 0),
+  event_type TEXT NOT NULL CHECK (
+    event_type IN (
+      'work_item_transitioned', 'work_run_transitioned', 'work_acknowledged',
+      'delivery_created', 'delivery_claimed', 'delivery_transitioned',
+      'cancellation_requested', 'visibility_intent_changed', 'visibility_changed',
+      'current_work_changed'
+    )
+  ),
+  command_id TEXT,
+  dedupe_key TEXT NOT NULL,
+  schema_version INTEGER NOT NULL CHECK (schema_version >= 1),
+  payload_json JSONB NOT NULL,
+  occurred_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL,
+  UNIQUE (org_id, id),
+  UNIQUE (org_id, dedupe_key)
+);
+CREATE INDEX conversation_lifecycle_events_thread_idx
+  ON conversation_lifecycle_events (org_id, thread_id, created_at, id);
+CREATE INDEX conversation_lifecycle_events_aggregate_idx
+  ON conversation_lifecycle_events (org_id, aggregate_type, aggregate_id, aggregate_version);
+CREATE INDEX conversation_lifecycle_events_command_idx
+  ON conversation_lifecycle_events (org_id, command_id);
+`,
+  },
 ] as const;
 
 export const PG_BASELINE_SQL = `
@@ -782,6 +819,40 @@ CREATE INDEX conversation_prefs_org_idx
   ON conversation_prefs (org_id, pinned, updated_at);
 CREATE INDEX conversation_prefs_hidden_idx
   ON conversation_prefs (org_id, hidden);
+
+CREATE TABLE conversation_lifecycle_events (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  thread_id TEXT NOT NULL,
+  aggregate_type TEXT NOT NULL CHECK (
+    aggregate_type IN ('work_item', 'work_run', 'work_delivery', 'conversation', 'source_event')
+  ),
+  aggregate_id TEXT NOT NULL,
+  aggregate_version INTEGER NOT NULL CHECK (aggregate_version >= 0),
+  event_type TEXT NOT NULL CHECK (
+    event_type IN (
+      'work_item_transitioned', 'work_run_transitioned', 'work_acknowledged',
+      'delivery_created', 'delivery_claimed', 'delivery_transitioned',
+      'cancellation_requested', 'visibility_intent_changed', 'visibility_changed',
+      'current_work_changed'
+    )
+  ),
+  command_id TEXT,
+  dedupe_key TEXT NOT NULL,
+  schema_version INTEGER NOT NULL CHECK (schema_version >= 1),
+  payload_json JSONB NOT NULL,
+  occurred_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL,
+  UNIQUE (org_id, id),
+  UNIQUE (org_id, dedupe_key)
+);
+
+CREATE INDEX conversation_lifecycle_events_thread_idx
+  ON conversation_lifecycle_events (org_id, thread_id, created_at, id);
+CREATE INDEX conversation_lifecycle_events_aggregate_idx
+  ON conversation_lifecycle_events (org_id, aggregate_type, aggregate_id, aggregate_version);
+CREATE INDEX conversation_lifecycle_events_command_idx
+  ON conversation_lifecycle_events (org_id, command_id);
 
 CREATE TABLE recipes (
   id TEXT PRIMARY KEY,

@@ -259,14 +259,57 @@ export interface ConversationVisibilityUpdate {
   thread_id: string;
   hidden: boolean;
   expected_version: number;
+  command_id?: string;
+  issued_at?: string;
   updated_at: string;
   title?: string | null;
   pinned?: boolean;
 }
 
+export type ConversationVisibilityCommand = Pick<
+  ConversationVisibilityUpdate,
+  "thread_id" | "hidden" | "expected_version"
+> & {
+  issued_at?: string;
+  title?: string | null;
+  pinned?: boolean;
+};
+
+export function conversationVisibilityCommand(
+  input: ConversationVisibilityUpdate,
+): ConversationVisibilityCommand {
+  return {
+    thread_id: input.thread_id,
+    hidden: input.hidden,
+    expected_version: input.expected_version,
+    ...(input.issued_at !== undefined ? { issued_at: input.issued_at } : {}),
+    ...(input.title !== undefined ? { title: input.title } : {}),
+    ...(input.pinned !== undefined ? { pinned: input.pinned } : {}),
+  };
+}
+
+export function sameConversationVisibilityCommand(
+  saved: unknown,
+  command: ConversationVisibilityCommand,
+): boolean {
+  if (typeof saved !== "object" || saved === null) {
+    return false;
+  }
+  const value = saved as Record<string, unknown>;
+  const expected = command as Record<string, unknown>;
+  return ["thread_id", "hidden", "expected_version", "issued_at", "title", "pinned"]
+    .every((key) =>
+      value[key] === expected[key] &&
+      Object.prototype.hasOwnProperty.call(value, key) ===
+        Object.prototype.hasOwnProperty.call(expected, key)
+    );
+}
+
 export type ConversationVisibilityUpdateResult =
   | { outcome: "applied"; pref: ConversationPref }
-  | { outcome: "conflict"; current_version: number };
+  | { outcome: "replayed"; pref: ConversationPref }
+  | { outcome: "conflict"; current_version: number }
+  | { outcome: "command_conflict" };
 
 export interface ConversationPolicyFold {
   org_id: string;

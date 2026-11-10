@@ -503,6 +503,8 @@ export class PersonalController {
           pinned?: boolean;
           hidden?: boolean;
           expected_visibility_version?: unknown;
+          command_id?: unknown;
+          issued_at?: unknown;
         }
       | undefined,
   ) {

@@ -220,8 +220,45 @@ for (const driver of drivers) {
         pinned: true,
         updated_at: "2026-08-30T00:00:02.000Z",
       });
+
       assert.equal(patched.visibility_version, 1);
       assert.equal((await store.getConversationPref(orgId, threadId)).visibility_version, 1);
+    });
+
+    it("replays visibility commands from the original audit fact", async () => {
+      const { store, orgId } = await openBoundStore();
+      const command = {
+        org_id: orgId,
+        thread_id: "dsh:session-command-replay",
+        hidden: true,
+        expected_version: 0,
+        command_id: "visibility-command-1",
+        issued_at: "2026-08-30T00:00:00.000Z",
+        updated_at: "2026-08-30T00:00:00.000Z",
+      };
+      const applied = await store.setConversationVisibility(command);
+      assert.equal(applied.outcome, "applied");
+      await store.setConversationVisibility({
+        org_id: orgId,
+        thread_id: command.thread_id,
+        hidden: false,
+        expected_version: 1,
+        updated_at: "2026-08-30T00:00:01.000Z",
+      });
+
+      const replay = await store.setConversationVisibility(command);
+      assert.equal(replay.outcome, "replayed");
+      assert.equal(replay.pref.hidden, true);
+      assert.equal(replay.pref.visibility_version, 1);
+      assert.equal(
+        (await store.getConversationPref(orgId, command.thread_id)).hidden,
+        false,
+      );
+      const changed = await store.setConversationVisibility({
+        ...command,
+        hidden: false,
+      });
+      assert.deepEqual(changed, { outcome: "command_conflict" });
     });
 
     it("does not let a stale policy fold overwrite a newer manual visibility command", async () => {

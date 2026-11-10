@@ -325,7 +325,7 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
         body: JSON.stringify({ thread_id: "dsh:session-title", hidden: true }),
       });
       assert.equal(missingVisibilityVersion.status, 400);
-      const hidden = await fetch(`${origin}/v1/me/conversations/prefs`, {
+      const missingCommandId = await fetch(`${origin}/v1/me/conversations/prefs`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -334,20 +334,23 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
           expected_visibility_version: 0,
         }),
       });
+      assert.equal(missingCommandId.status, 400);
+      const visibilityCommand = {
+        thread_id: "dsh:session-title",
+        hidden: true,
+        expected_visibility_version: 0,
+        command_id: "visibility-hide-1",
+        issued_at: new Date().toISOString(),
+      };
+      const hidden = await fetch(`${origin}/v1/me/conversations/prefs`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(visibilityCommand),
+      });
       const hiddenBody = await hidden.json();
       assert.equal(hidden.status, 201);
       assert.equal(hiddenBody.hidden, true);
       assert.equal(hiddenBody.visibility_version, 1);
-      const staleVisibility = await fetch(`${origin}/v1/me/conversations/prefs`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          thread_id: "dsh:session-title",
-          hidden: false,
-          expected_visibility_version: 0,
-        }),
-      });
-      assert.equal(staleVisibility.status, 409);
       const shown = await fetch(`${origin}/v1/me/conversations/prefs`, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -355,10 +358,41 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
           thread_id: "dsh:session-title",
           hidden: false,
           expected_visibility_version: 1,
+          command_id: "visibility-show-1",
+          issued_at: new Date().toISOString(),
         }),
       });
       assert.equal(shown.status, 201);
       assert.equal((await shown.json()).visibility_version, 2);
+
+      const replayed = await fetch(`${origin}/v1/me/conversations/prefs`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(visibilityCommand),
+      });
+      assert.equal(replayed.status, 201);
+      const replayedBody = await replayed.json();
+      assert.equal(replayedBody.hidden, true);
+      assert.equal(replayedBody.visibility_version, 1);
+      const commandConflict = await fetch(`${origin}/v1/me/conversations/prefs`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ...visibilityCommand, hidden: false }),
+      });
+      assert.equal(commandConflict.status, 409);
+
+      const staleVisibility = await fetch(`${origin}/v1/me/conversations/prefs`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          thread_id: "dsh:session-title",
+          hidden: false,
+          expected_visibility_version: 0,
+          command_id: "visibility-stale-1",
+          issued_at: new Date().toISOString(),
+        }),
+      });
+      assert.equal(staleVisibility.status, 409);
 
       const after = await (await fetch(`${origin}/v1/me/engine?detail=0`)).json();
       assert.equal(after.inbox_count, before.inbox_count);

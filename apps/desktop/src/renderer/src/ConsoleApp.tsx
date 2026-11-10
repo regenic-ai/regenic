@@ -78,6 +78,7 @@ import {
   type InboxListFact,
   type InboxListSnapshot,
 } from "./inbox-list-store.ts";
+
 import {
   decideInboxSync,
   headsPageCacheEntry,
@@ -118,6 +119,13 @@ import type {
   PersonalEngineView,
   RecipeSeed,
 } from "./types";
+
+function newVisibilityCommandId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `visibility-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
 
 const POLL_MS = 2000;
 const IDLE_POLL_MS = 8000;
@@ -1445,6 +1453,12 @@ export function ConsoleApp() {
     thread: InboxThread,
     patch: { title?: string | null; pinned?: boolean; hidden?: boolean },
   ) => {
+    const visibilityCommand = patch.hidden === undefined
+      ? {}
+      : {
+          command_id: newVisibilityCommandId(),
+          issued_at: new Date().toISOString(),
+        };
     const write = async () => {
       const currentItem = listStoreRef.current.items.find(
         (item) => item.thread_id === thread.id,
@@ -1471,6 +1485,7 @@ export function ConsoleApp() {
           ...(patch.hidden !== undefined
             ? { expected_visibility_version: base.visibility_version ?? 0 }
             : {}),
+          ...visibilityCommand,
         });
         if (
           isActivePrefWrite(

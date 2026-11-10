@@ -994,6 +994,11 @@ export class PostgresAuthorityStore
         client,
       );
       await this.execute(
+        `DELETE FROM conversation_lifecycle_events WHERE org_id = $1`,
+        [orgId],
+        client,
+      );
+      await this.execute(
         `
           DELETE FROM ingest_quarantines
           WHERE attempt_id IN (

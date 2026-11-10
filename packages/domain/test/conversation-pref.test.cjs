@@ -52,6 +52,7 @@ describe("conversation prefs", () => {
       expected_version: 0,
       updated_at: "2026-08-22T00:00:00.000Z",
     });
+
     assert.equal(first.outcome, "applied");
     assert.equal(first.pref.visibility_version, 1);
     assert.equal(first.pref.hidden, true);
@@ -87,6 +88,43 @@ describe("conversation prefs", () => {
     assert.equal(shown.pref.hidden, false);
     assert.equal(shown.pref.title, "Release");
     assert.equal(shown.pref.pinned, true);
+  });
+
+  it("replays a visibility command by command id and rejects changed parameters", async () => {
+    const store = new MemoryAuthorityStore();
+    const command = {
+      org_id: "local-owner",
+      thread_id: "dsh:session-command",
+      hidden: true,
+      expected_version: 0,
+      command_id: "visibility-command-1",
+      issued_at: "2026-08-22T00:00:00.000Z",
+      updated_at: "2026-08-22T00:00:00.000Z",
+    };
+    const applied = await store.setConversationVisibility(command);
+    assert.equal(applied.outcome, "applied");
+    const later = await store.setConversationVisibility({
+      org_id: "local-owner",
+      thread_id: "dsh:session-command",
+      hidden: false,
+      expected_version: 1,
+      updated_at: "2026-08-22T00:00:01.000Z",
+    });
+    assert.equal(later.outcome, "applied");
+
+    const replay = await store.setConversationVisibility(command);
+    assert.equal(replay.outcome, "replayed");
+    assert.equal(replay.pref.hidden, true);
+    assert.equal(replay.pref.visibility_version, 1);
+    assert.equal(
+      (await store.getConversationPref("local-owner", "dsh:session-command")).hidden,
+      false,
+    );
+    const changed = await store.setConversationVisibility({
+      ...command,
+      hidden: false,
+    });
+    assert.deepEqual(changed, { outcome: "command_conflict" });
   });
 
   it("applies policy folding only against the visibility version it observed", async () => {

@@ -34,7 +34,9 @@ import { type WorkStore } from "./work";
 import {
   AuthorityConflictError,
   collectAvailableBlobs,
+  conversationVisibilityCommand,
   putUniqueBlobs,
+  sameConversationVisibilityCommand,
 } from "./ingestion";
 import {
   eventThreadId,
@@ -118,6 +120,10 @@ export class MemoryAuthorityStore
   private readonly blobs = new Map<string, BlobRecord>();
   private readonly dispositions = new Map<string, ArrangementDecision>();
   private readonly prefs = new Map<string, ConversationPref>();
+  private readonly visibilityCommands = new Map<
+    string,
+    { command: string; pref: ConversationPref }
+  >();
 
   protected override conversationVisibilityVersion(orgId: string, threadId: string): number {
     return this.prefs.get(prefKey(orgId, threadId))?.visibility_version ?? 0;
@@ -426,6 +432,21 @@ export class MemoryAuthorityStore
     input: ConversationVisibilityUpdate,
   ): Promise<ConversationVisibilityUpdateResult> {
     const key = prefKey(input.org_id, input.thread_id);
+    const command = JSON.stringify(conversationVisibilityCommand(input));
+    const commandKey = input.command_id === undefined
+      ? undefined
+      : `${input.org_id}\0${input.command_id}`;
+    if (commandKey !== undefined) {
+      const previous = this.visibilityCommands.get(commandKey);
+      if (previous) {
+        return sameConversationVisibilityCommand(
+          JSON.parse(previous.command),
+          conversationVisibilityCommand(input),
+        )
+          ? { outcome: "replayed", pref: { ...previous.pref } }
+          : { outcome: "command_conflict" };
+      }
+    }
     const current = this.prefs.get(key);
     const currentVersion = current?.visibility_version ?? 0;
     if (currentVersion !== input.expected_version) {
@@ -445,6 +466,9 @@ export class MemoryAuthorityStore
       updated_at: input.updated_at,
     };
     this.prefs.set(key, next);
+    if (commandKey !== undefined) {
+      this.visibilityCommands.set(commandKey, { command, pref: { ...next } });
+    }
     return { outcome: "applied", pref: { ...next } };
   }
 
@@ -506,6 +530,11 @@ export class MemoryAuthorityStore
     for (const [key, pref] of [...this.prefs]) {
       if (pref.org_id === orgId) {
         this.prefs.delete(key);
+      }
+    }
+    for (const key of this.visibilityCommands.keys()) {
+      if (key.startsWith(`${orgId}\0`)) {
+        this.visibilityCommands.delete(key);
       }
     }
     this.dropOperationalWork(orgId);

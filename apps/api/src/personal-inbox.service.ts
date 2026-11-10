@@ -173,6 +173,8 @@ export interface ConversationPrefInput {
   pinned?: boolean;
   hidden?: boolean;
   expected_visibility_version?: unknown;
+  command_id?: unknown;
+  issued_at?: unknown;
 }
 
 export interface ConversationAttentionInput {
@@ -1602,11 +1604,30 @@ export class PersonalInboxService {
           400,
         );
       }
+      const commandId = input.command_id;
+      if (
+        typeof commandId !== "string" ||
+        commandId.trim().length < 1 ||
+        commandId !== commandId.trim() ||
+        commandId.length > 128 ||
+        typeof input.issued_at !== "string" ||
+        !Number.isFinite(Date.parse(input.issued_at)) ||
+        Date.parse(input.issued_at) < Date.now() - 90 * 24 * 60 * 60 * 1000 ||
+        Date.parse(input.issued_at) > Date.now() + 5 * 60 * 1000
+      ) {
+        throw new PersonalConnectorError(
+          "invalid_command",
+          "A valid command_id and issued_at are required. Refresh the conversation and try again.",
+          400,
+        );
+      }
       const result = await host.get("authority").setConversationVisibility({
         org_id: this.runtime.orgId(),
         thread_id: threadId,
         hidden: input.hidden,
         expected_version: expectedVersion,
+        command_id: commandId,
+        issued_at: input.issued_at,
         title: input.title !== undefined ? normalizeTitle(input.title) : undefined,
         pinned: input.pinned,
         updated_at: updatedAt,
@@ -1615,6 +1636,13 @@ export class PersonalInboxService {
         throw new PersonalConnectorError(
           "visibility_conflict",
           "Conversation visibility changed since it was displayed. Refresh before changing it.",
+          409,
+        );
+      }
+      if (result.outcome === "command_conflict") {
+        throw new PersonalConnectorError(
+          "command_conflict",
+          "This command_id was already used for a different conversation change.",
           409,
         );
       }

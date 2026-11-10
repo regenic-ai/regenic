@@ -9,6 +9,7 @@ import type {
 import type {
   PoolClient,
 } from "pg";
+import { randomUUID } from "node:crypto";
 import {
   formatInboxDigest,
   normalizeHiddenReason,
@@ -18,6 +19,8 @@ import {
   normalizeInboxLimit,
   TASK_INBOX_REASON,
   WORK_OBSERVE_AGAIN_STATUSES,
+  conversationVisibilityCommand,
+  sameConversationVisibilityCommand,
 } from "@regenic/domain";
 import {
   EventRow,
@@ -326,7 +329,41 @@ export async function setConversationVisibility(
   input: import("@regenic/domain").ConversationVisibilityUpdate,
 ): Promise<import("@regenic/domain").ConversationVisibilityUpdateResult> {
   return db.withTx(async (client) => {
+    if (input.command_id !== undefined) {
+      await db.queryOne(
+        "SELECT pg_advisory_xact_lock(hashtextextended(jsonb_build_array($1, 'lifecycle-command', $2)::text, 0))",
+        [input.org_id, input.command_id],
+        client,
+      );
+    }
     await lockConversationPref(db, client, input.org_id, input.thread_id);
+    const command = conversationVisibilityCommand(input);
+    if (input.command_id !== undefined) {
+      const existing = await db.queryOne<{
+        thread_id: string;
+        aggregate_type: string;
+        event_type: string;
+        payload_json: unknown;
+      }>(`SELECT thread_id, aggregate_type, event_type, payload_json
+        FROM conversation_lifecycle_events WHERE org_id = $1 AND command_id = $2`,
+      [input.org_id, input.command_id], client);
+      if (existing) {
+        const payload = asJson<{
+          command?: unknown;
+          result?: ConversationPref;
+        }>(existing.payload_json);
+        if (
+          existing.thread_id !== input.thread_id ||
+          existing.aggregate_type !== "conversation" ||
+          existing.event_type !== "visibility_intent_changed" ||
+          !sameConversationVisibilityCommand(payload.command, command) ||
+          !payload.result
+        ) {
+          return { outcome: "command_conflict" };
+        }
+        return { outcome: "replayed", pref: payload.result };
+      }
+    }
     const current = await db.queryOne<PrefRow>(`SELECT ${PREF_COLUMNS} FROM conversation_prefs
       WHERE org_id = $1 AND thread_id = $2 FOR UPDATE`, [input.org_id, input.thread_id], client);
     const currentVersion = current?.visibility_version ?? 0;
@@ -345,7 +382,35 @@ export async function setConversationVisibility(
     const visibilityVersion = currentVersion + 1;
     await db.execute(`UPDATE conversation_prefs SET visibility_version = $1
       WHERE org_id = $2 AND thread_id = $3`, [visibilityVersion, input.org_id, input.thread_id], client);
-    return { outcome: "applied", pref: { ...pref, visibility_version: visibilityVersion } };
+    const result = { ...pref, visibility_version: visibilityVersion };
+    if (input.command_id !== undefined) {
+      await db.execute(`INSERT INTO conversation_lifecycle_events (
+        id, org_id, thread_id, aggregate_type, aggregate_id, aggregate_version,
+        event_type, command_id, dedupe_key, schema_version, payload_json, occurred_at, created_at
+      ) VALUES ($1, $2, $3, 'conversation', $4, $5, 'visibility_intent_changed', $6, $7, 1, $8, $9, $10)`,
+      [
+        randomUUID(),
+        input.org_id,
+        input.thread_id,
+        input.thread_id,
+        visibilityVersion,
+        input.command_id,
+        JSON.stringify([
+          "conversation",
+          input.thread_id,
+          visibilityVersion,
+          "visibility_intent_changed",
+        ]),
+        jsonb({
+          command,
+          previous_version: currentVersion,
+          result,
+        }),
+        input.issued_at ?? input.updated_at,
+        input.updated_at,
+      ], client);
+    }
+    return { outcome: "applied", pref: result };
   });
 }
 
