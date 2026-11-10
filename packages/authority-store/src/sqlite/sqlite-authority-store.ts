@@ -139,6 +139,7 @@ import {
   MIGRATIONS,
   OUTBOUND_REJECTION_MIGRATION_SQL,
   RECIPE_CLOCK_COLUMN_SQL,
+  RECIPE_DESTINATION_COLUMN_SQL,
 } from "./migrations";
 import {
   append,
@@ -1686,6 +1687,8 @@ export class SqliteAuthorityStore
         }
         if (migration.version === 54) {
           this.applyRecipeClockColumns();
+        } else if (migration.version === 57) {
+          this.applyRecipeDestinationColumn();
         } else {
           this.database.exec(migration.sql);
         }
@@ -1777,6 +1780,7 @@ export class SqliteAuthorityStore
       this.database.exec(OUTBOUND_REJECTION_MIGRATION_SQL);
       this.database.exec(CUSTOMER_SERVICE_TASKS_SQL);
       this.applyRecipeClockColumns();
+      this.applyRecipeDestinationColumn();
       this.database.exec(`
         CREATE TABLE IF NOT EXISTS search_answers (
           id TEXT PRIMARY KEY,
@@ -1820,6 +1824,12 @@ export class SqliteAuthorityStore
       if (!this.columnExists("recipes", column)) {
         this.database.exec(sql);
       }
+    }
+  }
+
+  private applyRecipeDestinationColumn(): void {
+    if (!this.columnExists("recipes", "write_back_thread_id")) {
+      this.database.exec(RECIPE_DESTINATION_COLUMN_SQL);
     }
   }
 
