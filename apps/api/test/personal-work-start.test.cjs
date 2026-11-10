@@ -778,7 +778,8 @@ describe("durable executor start", () => {
       return dismiss(input);
     });
     const run = (await f.ports.authority.listWorkRuns(ORG, f.item.id))[0];
-    await assert.rejects(f.service().dismissWorkItem(f.item.id), code("work_dismissal_conflict"));
+    const expectedVersion = (await f.ports.authority.getWorkItem(ORG, f.item.id)).version;
+    await assert.rejects(f.service().dismissWorkItem(f.item.id, expectedVersion), code("work_dismissal_conflict"));
     assert.deepEqual(await f.ports.authority.getWorkItem(ORG, f.item.id), changed);
     assert.deepEqual(await f.ports.authority.getWorkRun(ORG, run.id), run);
     assert.equal(cancelCalls, 0);
@@ -799,7 +800,8 @@ describe("durable executor start", () => {
     });
     const service = f.service();
     service.channel = f.channel;
-    const result = await service.dismissWorkItem(f.item.id);
+    const expectedVersion = (await f.ports.authority.getWorkItem(ORG, f.item.id)).version;
+    const result = await service.dismissWorkItem(f.item.id, expectedVersion);
     assert.equal(cancelledId, run.id);
     assert.equal(result.work_item.status, "skipped");
     assert.deepEqual(result.run, run);
@@ -822,7 +824,8 @@ describe("durable executor start", () => {
       org_id: ORG, delivery_id: delivery.id, kind: "claim", owner: "sender", now: new Date().toISOString(),
     });
     const fold = t.mock.method(f.ports.authority, "putConversationPref");
-    const result = await f.service().dismissWorkItem(f.item.id);
+    const expectedVersion = (await f.ports.authority.getWorkItem(ORG, f.item.id)).version;
+    const result = await f.service().dismissWorkItem(f.item.id, expectedVersion);
     assert.equal(result.work_item.status, "skipped");
     const stopped = await f.ports.authority.getWorkDelivery(ORG, delivery.id);
     assert.equal(stopped.status, "write_back");
@@ -845,7 +848,8 @@ describe("durable executor start", () => {
     });
     const service = f.service();
     service.channel = f.channel;
-    const result = await service.dismissWorkItem(f.item.id);
+    const expectedVersion = (await f.ports.authority.getWorkItem(ORG, f.item.id)).version;
+    const result = await service.dismissWorkItem(f.item.id, expectedVersion);
     assert.equal(result.work_item.status, "skipped");
     assert.equal(result.run.status, "running");
     assert.equal(result.run.start_state, "pending");
@@ -1592,7 +1596,7 @@ describe("durable executor start", () => {
     assert.equal((await service.inboxFaces([item.thread_id])).has(item.thread_id), false);
     assert.equal((await service.boundPromptThreads()).has(item.thread_id), false);
     await assert.rejects(service.runWorkItem(item.id), code("not_found"));
-    await assert.rejects(service.dismissWorkItem(item.id), code("not_found"));
+    await assert.rejects(service.dismissWorkItem(item.id, 0), code("not_found"));
   });
 
   it("expires abandoned search answers without a client GET", async (t) => {
@@ -1671,7 +1675,8 @@ describe("durable executor start", () => {
     };
     const starting = f.dispatch().startItem(f.item, f.recipe, "evidence");
     await spawning;
-    await f.service().dismissWorkItem(f.item.id);
+    const expectedVersion = (await f.ports.authority.getWorkItem(ORG, f.item.id)).version;
+    await f.service().dismissWorkItem(f.item.id, expectedVersion);
     release();
     await starting;
     assert.equal(f.calls.stdin, 0);

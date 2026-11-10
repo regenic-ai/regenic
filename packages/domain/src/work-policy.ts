@@ -320,6 +320,7 @@ export function workFaceOf(
   return {
     id: item.id,
     status: item.status,
+    version: item.version ?? 0,
     recipe_id: item.recipe_id,
     executor_type: run?.executor_type ?? recipe?.executor_type,
     ...(run?.start_state ? { start_state: run.start_state } : {}),

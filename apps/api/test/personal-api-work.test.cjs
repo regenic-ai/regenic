@@ -107,26 +107,43 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
     const { app, origin } = await startPersonalApi(database, blobRoot);
     try {
       const workId = "work-dismiss-1";
+      const inboxBeforeDismiss = await (await fetch(`${origin}/v1/me/inbox`)).json();
+      const threadBeforeDismiss = inboxBeforeDismiss.find((item) => item.thread_id === "feishu:oc_dismiss");
+      assert.equal(typeof threadBeforeDismiss.work.version, "number");
+      const expectedVersion = threadBeforeDismiss.work.version;
       const dismissed = await fetch(`${origin}/v1/me/work-items/${workId}/dismiss`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: "{}",
+        body: JSON.stringify({ expected_version: expectedVersion }),
       });
       assert.ok(dismissed.ok, `dismiss ${dismissed.status}`);
       const body = await dismissed.json();
       assert.equal(body.work_item.status, "skipped");
       assert.equal(body.work_item.id, workId);
+      assert.equal(body.work_item.version, expectedVersion + 1);
       assert.equal(body.run.status, "running");
       assert.notEqual(body.run.status, "failed");
       const aliased = await (
         await fetch(`${origin}/v1/me/work-items/${workId}/complete`, {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: "{}",
+          body: JSON.stringify({ expected_version: body.work_item.version }),
         })
       ).json();
       assert.equal(aliased.work_item.status, "skipped");
       assert.equal(aliased.run.status, "running");
+      const staleDismiss = await fetch(`${origin}/v1/me/work-items/${workId}/dismiss`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ expected_version: expectedVersion }),
+      });
+      assert.equal(staleDismiss.status, 409);
+      const missingVersion = await fetch(`${origin}/v1/me/work-items/${workId}/dismiss`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      });
+      assert.equal(missingVersion.status, 400);
       const inbox = await (await fetch(`${origin}/v1/me/inbox`)).json();
       const texts = inbox
         .filter((item) => item.thread_id === "feishu:oc_dismiss")
@@ -339,7 +356,7 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
       assert.equal(missingComplete.status, 404);
       const missingDismiss = await fetch(
         `${origin}/v1/me/work-items/work-missing/dismiss`,
-        { method: "POST" },
+        { method: "POST", headers: { "content-type": "application/json" }, body: "{}" },
       );
       assert.equal(missingDismiss.status, 404);
       const created = await (

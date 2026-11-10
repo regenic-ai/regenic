@@ -1191,7 +1191,7 @@ export class PersonalWorkService implements OnModuleDestroy {
     };
   }
 
-  async dismissWorkItem(id: string): Promise<WorkRunView> {
+  async dismissWorkItem(id: string, expectedVersion: unknown): Promise<WorkRunView> {
     const host = this.runtime.requireHost();
     const orgId = this.runtime.orgId();
     const item = await host.get("authority").getWorkItem(orgId, id);
@@ -1200,6 +1200,12 @@ export class PersonalWorkService implements OnModuleDestroy {
     }
     if (isSystemRecipeId(item.recipe_id)) {
       throw new PersonalConnectorError("not_found", "Work item not found", 404);
+    }
+    if (typeof expectedVersion !== "number" || !Number.isSafeInteger(expectedVersion) || expectedVersion < 0) {
+      throw new PersonalConnectorError("invalid_work_version", "A valid work version is required. Refresh the work item.", 400);
+    }
+    if ((item.version ?? 0) !== expectedVersion) {
+      throw new PersonalConnectorError("work_dismissal_conflict", "Work item changed since it was displayed. Refresh before dismissing.", 409);
     }
     const now = new Date().toISOString();
     const dismissed = await host.get("authority").dismissWorkItem({ expected_item: item, now });
@@ -1236,8 +1242,8 @@ export class PersonalWorkService implements OnModuleDestroy {
   }
 
   /** @deprecated Human dismiss. Does not fake an executor exit or write back. */
-  async completeWorkItem(id: string): Promise<WorkRunView> {
-    return this.dismissWorkItem(id);
+  async completeWorkItem(id: string, expectedVersion: unknown): Promise<WorkRunView> {
+    return this.dismissWorkItem(id, expectedVersion);
   }
 }
 

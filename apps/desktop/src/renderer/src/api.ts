@@ -1495,11 +1495,11 @@ export async function fetchWorkRunReads(runId: string): Promise<AgentContextRead
   return ((await response.json()) as { reads?: AgentContextRead[] }).reads ?? [];
 }
 
-export async function dismissWorkItem(id: string): Promise<void> {
+export async function dismissWorkItem(id: string, expectedVersion: number): Promise<void> {
   const response = await fetch(`${origin()}/v1/me/work-items/${id}/dismiss`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: "{}",
+    body: JSON.stringify({ expected_version: expectedVersion }),
   });
   if (!response.ok) {
     const body = (await response.json()) as { error?: { message?: string } };

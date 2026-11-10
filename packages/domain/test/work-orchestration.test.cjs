@@ -770,6 +770,7 @@ describe("work face", () => {
     };
     const item = { id: "w1", status: "waiting_human" };
     assert.equal(workFaceOf(item, undefined, run).start_state, "uncertain");
+    assert.equal(workFaceOf(item).version, 0);
     assert.equal(workFaceOf({ ...item, status: "skipped" }, undefined,
       cancelWorkRun(run, "2026-08-24T00:01:00.000Z")).start_state, undefined);
   });

@@ -130,7 +130,7 @@ for (const managed of [true, false]) {
           f.auxiliary();
           await f.work.cancelAuxiliaryExecution("work");
         } else {
-          await f.work.dismissWorkItem("work");
+          await f.work.dismissWorkItem("work", 0);
         }
         assert.equal(f.run.status, "running");
         assert.deepEqual(f.calls, [
@@ -150,7 +150,7 @@ for (const operation of ["dismiss", "auxiliary"]) {
       f.auxiliary();
       await f.work.cancelAuxiliaryExecution("work");
     } else {
-      await f.work.dismissWorkItem("work");
+      await f.work.dismissWorkItem("work", 0);
     }
     assert.equal(f.run.status, "running");
     assert.equal(f.calls.includes("cancel:owned-agent-run"), true);

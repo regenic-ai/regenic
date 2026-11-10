@@ -213,6 +213,7 @@ export interface WorkDeliveryFace {
 export interface WorkFace {
   id: string;
   status: WorkItemStatus;
+  version: number;
   start_state?: WorkRun["start_state"];
   recipe_id?: string;
   executor_type?: string;

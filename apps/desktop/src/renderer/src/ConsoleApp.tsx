@@ -1591,7 +1591,7 @@ export function ConsoleApp() {
         return;
       }
       try {
-        await dismissWorkItem(thread.work.id);
+        await dismissWorkItem(thread.work.id, thread.work.version);
         await refresh();
         setError(null);
       } catch (caught) {

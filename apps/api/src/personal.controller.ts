@@ -613,13 +613,13 @@ export class PersonalController {
   }
 
   @Post("work-items/:id/dismiss")
-  dismissWorkItem(@Param("id") id: string) {
-    return this.guard(() => this.work.dismissWorkItem(id));
+  dismissWorkItem(@Param("id") id: string, @Body() body: { expected_version?: unknown } | undefined) {
+    return this.guard(() => this.work.dismissWorkItem(id, body?.expected_version));
   }
 
   @Post("work-items/:id/complete")
-  completeWorkItem(@Param("id") id: string) {
-    return this.guard(() => this.work.dismissWorkItem(id));
+  completeWorkItem(@Param("id") id: string, @Body() body: { expected_version?: unknown } | undefined) {
+    return this.guard(() => this.work.dismissWorkItem(id, body?.expected_version));
   }
 
   @Get("prefs")
