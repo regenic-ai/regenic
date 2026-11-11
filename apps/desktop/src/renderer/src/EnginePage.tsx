@@ -465,11 +465,11 @@ export function EnginePage({
                 await retryConnectorQuarantines(id);
               })
             }
-            onToggle={(installation) =>
+            onEnable={(installation) =>
               void runAction(installation.id, async () => {
                 await setConnectorStatus(
                   installation.id,
-                  installation.status === "disabled" ? "enabled" : "disabled",
+                  "enabled",
                 );
               })
             }

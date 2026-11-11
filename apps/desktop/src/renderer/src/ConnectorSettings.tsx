@@ -50,7 +50,7 @@ export function ConnectorKind({
   onInstall,
   onSync,
   onRetryQuarantines,
-  onToggle,
+  onEnable,
   onUpdate,
   onRefresh,
   onUninstall,
@@ -69,7 +69,7 @@ export function ConnectorKind({
   onInstall: (config: ConnectorFormValues) => void;
   onSync: (id: string, mode: SyncRunMode) => void;
   onRetryQuarantines: (id: string) => void;
-  onToggle: (installation: EngineInstallationView) => void;
+  onEnable: (installation: EngineInstallationView) => void;
   onUpdate: (
     installation: EngineInstallationView,
     config: ConnectorFormValues,
@@ -168,7 +168,7 @@ export function ConnectorKind({
           }
           onSync={(mode) => onSync(installation.id, mode)}
           onRetryQuarantines={() => onRetryQuarantines(installation.id)}
-          onToggle={() => onToggle(installation)}
+          onEnable={() => onEnable(installation)}
           onSave={(config) => {
             void onUpdate(installation, config).then((saved) => {
               if (saved) {
@@ -668,7 +668,7 @@ function ConnectorRow({
   onEdit,
   onSync,
   onRetryQuarantines,
-  onToggle,
+  onEnable,
   onSave,
   onUninstall,
   onPairingCode,
@@ -683,7 +683,7 @@ function ConnectorRow({
   onEdit: () => void;
   onSync: (mode: SyncRunMode) => void;
   onRetryQuarantines: () => void;
-  onToggle: () => void;
+  onEnable: () => void;
   onSave: (config: ConnectorFormValues) => void;
   onUninstall: () => void;
   onPairingCode?: (id: string, code: string) => void;
@@ -764,11 +764,11 @@ function ConnectorRow({
               {t("sync.retryQuarantine")}
             </button>
           ) : null}
-          <button type="button" className="ghost" disabled={busy} onClick={onToggle}>
-            {installation.status === "disabled"
-              ? t("connector.enable")
-              : t("connector.disable")}
-          </button>
+          {installation.status === "disabled" ? (
+            <button type="button" className="ghost" disabled={busy} onClick={onEnable}>
+              {t("connector.enable")}
+            </button>
+          ) : null}
           {kind.fields.length > 0 ? (
             <button type="button" className="ghost" disabled={busy} onClick={onEdit}>
               {t("connector.editSync")}
