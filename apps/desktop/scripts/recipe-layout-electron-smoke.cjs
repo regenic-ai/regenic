@@ -434,7 +434,13 @@ async function rendererSmoke() {
       await window.webContents.executeJavaScript(
         'document.querySelector(\'button[aria-label="Send result to"]\').click()',
       );
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      for (let attempt = 0; ; attempt++) {
+        if (await window.webContents.executeJavaScript(
+          'document.querySelector(\'[role="listbox"]\')?.getAttribute("aria-busy") === "false"',
+        )) break;
+        assert.ok(attempt < 50, "Destination discovery did not settle");
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
       const options = await window.webContents.executeJavaScript(
         '[...document.querySelectorAll(\'[role="option"]\')].map(item => item.textContent.trim())',
       );
@@ -488,7 +494,23 @@ async function rendererSmoke() {
     ), /Writable result chat.*unavailable/);
     assert.equal(await window.webContents.executeJavaScript(
       'document.querySelector(\'button[aria-label="Send result to"]\').disabled',
-    ), true, "No unavailable target may be a new option");
+    ), false, "An empty local list must still allow discovering other sendable targets");
+    await window.webContents.executeJavaScript(
+      'document.querySelector(\'button[aria-label="Send result to"]\').click()',
+    );
+    for (let attempt = 0; ; attempt++) {
+      if (await window.webContents.executeJavaScript(
+        'document.querySelector(\'[role="listbox"]\')?.getAttribute("aria-busy") === "false"',
+      )) break;
+      assert.ok(attempt < 50, "Empty destination discovery did not settle");
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    assert.equal(await window.webContents.executeJavaScript(
+      'document.querySelectorAll(\'[role="option"]\').length',
+    ), 0, "No unavailable target may be a new option");
+    await window.webContents.executeJavaScript(
+      'document.querySelector(".menu-select-search").dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }))',
+    );
     assert.match(await window.webContents.executeJavaScript(
       'document.querySelector(".recipe-form").textContent',
     ), /No available conversations/);
@@ -612,6 +634,131 @@ async function rendererSmoke() {
     }
     console.log("Dynamic original destination ignores body filters; save and trial remain distinct");
     console.log("Destination intent, candidates, empty/legacy states, save/edit and send-trial smoke passed");
+    const waitFor = async (expression, message) => {
+      for (let attempt = 0; ; attempt++) {
+        if (await window.webContents.executeJavaScript(expression)) return;
+        assert.ok(attempt < 100, message);
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+    };
+    await window.webContents.executeJavaScript(`(() => {
+      window.__inboxRequests = [];
+      window.__inboxMode = "normal";
+      window.__inboxHandler = async (params, signal) => {
+        const mode = window.__inboxMode;
+        window.__inboxRequests.push({ list: params.get("list"), before: params.get("before"), signal });
+        if (mode === "error") throw new Error("Discovery unavailable");
+        if (mode === "slow" && params.get("list") !== "hidden" && !params.get("before")) {
+          await new Promise(resolve => { window.__releaseSlow = resolve; });
+        }
+        const head = (id, title, canSend) => ({
+          thread_id: "smoke:" + id, title, can_send: canSend,
+          body_text: "unrelated-body-needle",
+          event: { id, source: "smoke", external_id: id + ":message",
+            occurred_at: "2026-01-01T00:00:00Z", ingested_at: "2026-01-01T00:00:00Z" }
+        });
+        if (params.get("list") === "hidden") return {
+          live: [head("hidden", "Hidden searchable chat", false), head("unknown", "Unknown send capability")],
+          pinned: [], has_older: false, next_before: null
+        };
+        if (params.get("before")) return {
+          live: [head("older-id", mode === "slow" ? "Stale response" : "Older searchable chat", true)],
+          pinned: [], has_older: false, next_before: null
+        };
+        return {
+          live: [head("recent", "Recent searchable chat", true)],
+          pinned: [head("pinned", "Pinned searchable chat", true)],
+          active_work: [head("working", "Working searchable chat", false)],
+          has_older: true, next_before: { before: "2025-01-01", before_id: "older-cursor" }
+        };
+      };
+      window.__resetFixture();
+    })()`);
+    await waitFor('Boolean(document.querySelector(\'button[aria-label="Chat"]\'))', "Empty inbox must retain a searchable trigger picker");
+    const openChat = () => window.webContents.executeJavaScript(
+      'document.querySelector(\'button[aria-label="Chat"]\').click()',
+    );
+    const searchChat = async (value) => {
+      await window.webContents.executeJavaScript(`(() => {
+        const input = document.querySelector(".menu-select-search");
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(input, ${JSON.stringify(value)});
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      })()`);
+    };
+    const optionLabels = () => window.webContents.executeJavaScript(
+      '[...document.querySelectorAll(\'[role="option"]\')].map(item => item.textContent.trim())',
+    );
+    const closeChat = () => window.webContents.executeJavaScript(
+      'document.querySelector(".menu-select-search").dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }))',
+    );
+    await openChat();
+    await waitFor('document.querySelector(\'[role="listbox"]\')?.getAttribute("aria-busy") === "true"', "Discovery needs a loading state");
+    await waitFor('(window.__inboxRequests.length === 3) && document.querySelector(\'[role="listbox"]\')?.getAttribute("aria-busy") === "false"', "Must fetch shown, hidden and older pages");
+    assert.ok((await optionLabels()).includes("Older searchable chat"));
+    assert.ok((await optionLabels()).includes("Hidden searchable chat"));
+    await searchChat("older");
+    await searchChat("HIDDEN");
+    await waitFor('document.querySelectorAll(\'[role="option"]\').length === 1', "Debounced query must settle");
+    assert.deepEqual(await optionLabels(), ["Hidden searchable chat"], "Latest query wins");
+    assert.equal(await window.webContents.executeJavaScript('window.__inboxRequests.length'), 3, "Typing must not repeat full-list requests");
+    await searchChat("  SMOKE:OLDER-ID ");
+    await waitFor('document.querySelector(\'[role="option"]\')?.textContent.trim() === "Older searchable chat"', "Search must match canonical conversation IDs");
+    await window.webContents.executeJavaScript('document.querySelector(\'[role="option"]\').click()');
+    assert.match(await window.webContents.executeJavaScript(
+      'document.querySelector(\'button[aria-label="Chat"]\').textContent',
+    ), /Older searchable chat/);
+    await openChat();
+    await waitFor('document.querySelector(\'[role="listbox"]\')?.getAttribute("aria-busy") === "false"', "Reopened discovery must settle");
+    await searchChat("unrelated-body-needle");
+    await waitFor('document.querySelector(".menu-select-pop")?.textContent.includes("No matching conversations.")', "No match needs an empty state, not message-body results");
+    assert.deepEqual(await optionLabels(), []);
+    await closeChat();
+    assert.match(await window.webContents.executeJavaScript(
+      'document.querySelector(\'button[aria-label="Chat"]\').textContent',
+    ), /Older searchable chat/, "Search must not clear the selected value");
+    await clickText("Send back");
+    await window.webContents.executeJavaScript('document.querySelector(\'button[aria-label="Send result to"]\').click()');
+    await waitFor('document.querySelector(\'[role="listbox"]\')?.getAttribute("aria-busy") === "false"', "Destination discovery must settle");
+    assert.ok((await optionLabels()).includes("Older searchable chat"));
+    assert.ok(!(await optionLabels()).some(label => /Hidden searchable|Unknown send|Working searchable/.test(label)), "Discovery must not grant send permission");
+    await closeChat();
+    await window.webContents.executeJavaScript('window.__inboxMode = "error"');
+    await openChat();
+    await waitFor('Boolean(document.querySelector(".menu-select-pop [role=alert]"))', "Request errors must be visible");
+    assert.deepEqual(await optionLabels(), [], "Failed discovery must not masquerade as stale success");
+    await window.webContents.executeJavaScript(`(() => {
+      window.__inboxMode = "normal";
+      [...document.querySelectorAll(".menu-select-pop button")].find(button => button.textContent.trim() === "Retry").click();
+    })()`);
+    await waitFor('document.querySelector(\'[role="listbox"]\')?.getAttribute("aria-busy") === "false" && !document.querySelector(".menu-select-pop [role=alert]")', "Retry must recover");
+    await closeChat();
+    await window.webContents.executeJavaScript('window.__inboxMode = "slow"');
+    await openChat();
+    await waitFor('Boolean(window.__releaseSlow)', "Slow request must start");
+    await closeChat();
+    assert.equal(await window.webContents.executeJavaScript(
+      'window.__inboxRequests[window.__inboxRequests.length - 1].signal.aborted',
+    ), true, "Closing must abort in-flight discovery");
+    await window.webContents.executeJavaScript('window.__inboxMode = "normal"');
+    await openChat();
+    await waitFor('document.querySelector(\'[role="listbox"]\')?.getAttribute("aria-busy") === "false"', "Newer request must settle independently");
+    await window.webContents.executeJavaScript('window.__releaseSlow()');
+    await new Promise(resolve => setTimeout(resolve, 100));
+    assert.ok(!(await optionLabels()).includes("Stale response"), "Late aborted result must not replace newer options");
+    await closeChat();
+    await window.webContents.executeJavaScript(`(() => {
+      window.__inboxHandler = undefined;
+      window.__resetFixture({ thread_id: "", title: "" });
+    })()`);
+    await waitFor('Boolean(document.querySelector(\'button[aria-label="Chat"]\'))', "No loaded or selected conversation must still expose the picker");
+    assert.equal(await window.webContents.executeJavaScript(
+      'document.querySelector(\'button[aria-label="Chat"]\').disabled',
+    ), false);
+    await openChat();
+    await waitFor('Boolean(document.querySelector(".menu-select-search"))', "Small or empty lists must remain searchable");
+    await waitFor('document.querySelector(".menu-select-pop")?.textContent.includes("No matching conversations.")', "A truly empty list needs an empty state");
+    await closeChat();
+    console.log("All-conversation title/ID search, pagination, hidden chats, permissions, debounce, retry and cancellation smoke passed");
   } finally {
     window.destroy();
     app.quit();
@@ -644,6 +791,14 @@ async function launchSmoke() {
     };
     window.fetch = async (input, init) => {
       const path = new URL(String(input), location.href).pathname;
+      if (path === "/v1/me/inbox") {
+        if (window.__inboxHandler) {
+          return new Response(JSON.stringify(await window.__inboxHandler(
+            new URL(String(input), location.href).searchParams, init?.signal,
+          )));
+        }
+        return new Response(JSON.stringify({ pinned: [], live: [], active_work: [], has_older: false, next_before: null }));
+      }
       if (path === "/v1/me/recipes/smoke-rule/try" && init?.method === "POST") {
         window.__lastTry = JSON.parse(init.body);
         window.__tryCalls = (window.__tryCalls ?? 0) + 1;
@@ -661,16 +816,21 @@ async function launchSmoke() {
       return new Response(JSON.stringify(fixtures[path]), { headers: { "content-type": "application/json" } });
     };
     function Fixture() {
+      const [version, setVersion] = React.useState(0);
+      const [fixtureSeed, setFixtureSeed] = React.useState(seed);
       const [conversations, setConversations] = React.useState([{
         id: "smoke:room", label: "Filter smoke chat", source: "smoke", can_send: true,
         record_class: "utterance", thread_facet: "chat", body_text: "approve release"
       }]);
       window.__setConversations = setConversations;
+      window.__resetFixture = (nextSeed = seed) => {
+        setConversations([]); setFixtureSeed(nextSeed); setVersion(value => value + 1);
+      };
       return (
       <div className="shell">
         <header className="titlebar">Recipe layout smoke</header>
         <nav className="rail" />
-        <div className="workspace"><RecipesPage sources={[{ id: "smoke", label: "Smoke channel" }]} conversations={conversations} seed={seed} /></div>
+        <div className="workspace"><RecipesPage key={version} sources={[{ id: "smoke", label: "Smoke channel" }]} conversations={conversations} seed={fixtureSeed} /></div>
       </div>
       );
     }
