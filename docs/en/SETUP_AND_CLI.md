@@ -10,7 +10,7 @@ Run commands from the repository root. This guide covers connector setup, local 
 
 ### Requirements
 
-- Node.js 20+
+- Node.js 22.14+ (22.x) or 24+ with Node-API 10+
 - [pnpm](https://pnpm.io)
 
 Feishu and DSH each need their own tool installed first. See [Add Feishu or DSH](#add-feishu-or-dsh).

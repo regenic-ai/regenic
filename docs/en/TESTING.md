@@ -1,6 +1,6 @@
 # Automated testing
 
-The repository keeps Node's built-in `node:test` runner. The supported local/CI test runtime is Node 22.12+ (22.x) or Node 24+; the desktop tests use Node's type stripping and the Electron smoke also requires the built desktop and API. Install the pinned workspace dependencies first:
+The repository keeps Node's built-in `node:test` runner. The supported local/CI test runtime is Node 22.14+ (22.x) or Node 24+, with Node-API 10 or newer. The `better-sqlite3` 13 prebuild requires Node-API 10; Node 22.12 exposes version 9 and can crash when opening a database. Testing lanes reject incompatible runtimes before loading the native addon. The desktop tests use Node's type stripping and the Electron smoke also requires the built desktop and API. Install the pinned workspace dependencies first:
 
 ```sh
 pnpm install --frozen-lockfile
@@ -9,7 +9,7 @@ pnpm test:ci
 
 `test:ci` is the pull-request gate: package-boundary checks, workspace build and typecheck, the existing package test suites, and a production-only packed SDK consumer check. The API keeps its existing serial `personal-api*.test.cjs` group and runs the remaining test files separately. The build, typecheck, test and boundary failures block the job. Dependency inventory and audit findings are emitted as sanitized evidence under ignored `coverage/test-evidence/`; known dependency advisories are reported, not silently waived or used as a pre-existing, permanently-red gate. Audit transport/schema failures still fail reporting.
 
-The workflow runs stable `Core / Node 22.12.0` and `Core / Node 24.12.0` checks and a `Desktop / <OS>` check on Linux and macOS. Nightly runs the same full PR regressions, ten deterministic host lifecycle repetitions, and external connector source compatibility. Manual workflow dispatch adds the SDK candidate matrix and packed consumer verification. A published GitHub release runs the packed core consumer lane against the released source SHA. All jobs use read-only repository permissions and upload short-lived JSON evidence containing source SHAs, lock/tarball SHA-512 hashes, package versions, and sanitized lane results.
+The workflow runs stable `Core / Node 22.14.0` and `Core / Node 24.12.0` checks and a `Desktop / <OS>` check on Linux and macOS. Nightly runs the same full PR regressions, ten deterministic host lifecycle repetitions, and external connector source compatibility. Manual workflow dispatch adds the SDK candidate matrix and packed consumer verification. A published GitHub release runs the packed core consumer lane against the released source SHA. All jobs use read-only repository permissions and upload short-lived JSON evidence containing source SHAs, lock/tarball SHA-512 hashes, package versions, and sanitized lane results.
 
 Useful focused commands:
 

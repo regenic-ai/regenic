@@ -6,7 +6,7 @@
     "neverBuiltDependencies": ["better-sqlite3"]
   },
   "engines": {
-    "node": ">=20"
+    "node": "^22.14.0 || >=24.0.0"
   },
   "scripts": {
     "build": "pnpm -r --filter=!@regenic/desktop run build",

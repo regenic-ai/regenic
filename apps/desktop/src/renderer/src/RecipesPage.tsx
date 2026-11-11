@@ -1,12 +1,14 @@
 import {
   deleteRecipe,
   fetchExecutors,
+  fetchInboxHeads,
   fetchRecipes,
   saveRecipe,
   tryRecipe,
 } from "./api";
 import { useLocale } from "./LocaleContext";
 import { MenuSelect } from "./MenuSelect";
+import { loadRecipeConversations } from "./recipe-conversations";
 import {
   MatchPreview,
   MoreOptions,
@@ -76,11 +78,11 @@ import type {
   RecipeSourceOption,
   RecipeView,
 } from "./types";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 export function RecipesPage({
   sources,
-  conversations = [],
+  conversations: initialConversations = [],
   seed,
   onSeedConsumed,
   onBound,
@@ -96,6 +98,16 @@ export function RecipesPage({
   onOpenThread?: (threadId: string) => void;
 }) {
   const { t, locale } = useLocale();
+  const [discoveredConversations, setDiscoveredConversations] = useState<RecipeConversationOption[]>([]);
+  const conversations = useMemo(() => {
+    const byId = new Map(initialConversations.map((item) => [item.id, item]));
+    for (const item of discoveredConversations) byId.set(item.id, item);
+    return [...byId.values()];
+  }, [initialConversations, discoveredConversations]);
+  const loadConversations = useCallback(async (signal: AbortSignal) => {
+    const next = await loadRecipeConversations(fetchInboxHeads, signal);
+    if (!signal.aborted) setDiscoveredConversations(next);
+  }, [locale]);
   const formRef = useRef<HTMLElement>(null);
   const [recipes, setRecipes] = useState<RecipeView[]>([]);
   const [executors, setExecutors] = useState<ExecutorCatalogEntry[]>([]);
@@ -221,10 +233,10 @@ export function RecipesPage({
         match: draftMatch(draft),
         draftId: draft.id,
         triggerKind: draft.trigger_kind,
-        conversations,
+        conversations: initialConversations,
         recipes,
       }),
-    [conversations, draft, recipes],
+    [initialConversations, draft, recipes],
   );
   const priorityGroup = useMemo(() => {
     const match = draftMatch(draft);
@@ -249,8 +261,8 @@ export function RecipesPage({
     if (bound) {
       return [{ id: bound, label: draft.thread_title || bound }];
     }
-    return matchingConversations(match, conversations, draft.trigger_kind) ?? [];
-  }, [draft, conversations]);
+    return matchingConversations(match, initialConversations, draft.trigger_kind) ?? [];
+  }, [draft, initialConversations]);
   const tryThreadId = tryChoices.some((item) => item.id === trySample)
     ? trySample
     : (tryChoices[0]?.id ?? null);
@@ -835,37 +847,28 @@ export function RecipesPage({
 
                 {draft.scope === "thread" || draft.trigger_kind === "pull" ? (
                   <RecipeRow label={t("recipes.conversation")}>
-                    {conversationOptions.length === 0 && !draft.thread_id ? (
-                      <div className="recipe-gate">
-                        <p className="field-empty">{t("recipes.noConversation")}</p>
-                        <p className="recipe-hint">{t("recipes.noConversationHint")}</p>
-                        {onBound ? (
-                          <button type="button" className="ghost" onClick={onBound}>
-                            {t("recipes.goInbox")}
-                          </button>
-                        ) : null}
-                      </div>
-                    ) : (
-                      <MenuSelect
-                        value={draft.thread_id}
-                        placeholder={t("recipes.chooseConversation")}
-                        searchable={conversationOptions.length > 6}
-                        options={conversationOptions}
-                        onChange={(thread_id) => {
-                          const picked = conversationOptions.find(
-                            (item) => item.id === thread_id,
-                          );
-                          setDraft((current) =>
-                            withSuggestedName({
-                              ...current,
-                              thread_id,
-                              thread_title: picked?.label ?? thread_id,
-                              source: picked?.source ?? current.source,
-                            }),
-                          );
-                        }}
-                      />
-                    )}
+                    <MenuSelect
+                      value={draft.thread_id}
+                      valueLabel={draft.thread_title || draft.thread_id || undefined}
+                      placeholder={t("recipes.chooseConversation")}
+                      ariaLabel={t("recipes.conversation")}
+                      searchable
+                      onLoad={loadConversations}
+                      options={conversationOptions}
+                      onChange={(thread_id) => {
+                        const picked = conversationOptions.find(
+                          (item) => item.id === thread_id,
+                        );
+                        setDraft((current) =>
+                          withSuggestedName({
+                            ...current,
+                            thread_id,
+                            thread_title: picked?.label ?? thread_id,
+                            source: picked?.source ?? current.source,
+                          }),
+                        );
+                      }}
+                    />
                   </RecipeRow>
                 ) : null}
 
@@ -1026,6 +1029,7 @@ export function RecipesPage({
                         : t("recipes.writeBackNoTargets")}
                       placeholder={t("recipes.searchConversation")}
                       searchable
+                      onLoad={loadConversations}
                       ariaLabel={t("recipes.writeBackTo")}
                       onChange={(write_back_thread_id) =>
                         setDraft((current) => ({ ...current, write_back_thread_id }))

@@ -1,6 +1,6 @@
 # 自动化测试
 
-仓库继续使用 Node 内置的 `node:test`，不整体替换为 Jest/Vitest。支持的本地和 CI 测试运行时为 Node 22.12+（22.x）或 Node 24+；桌面测试依赖 Node 类型剥离，Electron 冒烟测试还需要先构建桌面端和 API。先安装锁定的工作区依赖：
+仓库继续使用 Node 内置的 `node:test`，不整体替换为 Jest/Vitest。支持的本地和 CI 测试运行时为 Node 22.14+（22.x）或 Node 24+，且 Node-API 至少为 10。`better-sqlite3` 13 的预编译插件要求 Node-API 10；Node 22.12 只提供版本 9，打开数据库可能崩溃。测试 lane 会在加载原生插件前拒绝不兼容运行时。桌面测试依赖 Node 类型剥离，Electron 冒烟测试还需要先构建桌面端和 API。先安装锁定的工作区依赖：
 
 ```sh
 pnpm install --frozen-lockfile
@@ -9,7 +9,7 @@ pnpm test:ci
 
 `test:ci` 是 Pull Request 门禁：依赖边界检查、工作区 build/typecheck、现有包测试，以及生产依赖模式下的打包 SDK 消费者检查。API 原有 `personal-api*.test.cjs` 测试仍单独串行，其余测试按既有命令执行。构建、类型检查、测试和依赖边界失败都会阻断任务。依赖清单及审计发现以脱敏证据形式输出到已忽略的 `coverage/test-evidence/`；已存在的依赖公告只报告，不静默豁免，也不作为已知长期失败的门禁。审计传输或结果结构错误仍会失败。
 
-工作流提供稳定的 `Core / Node 22.12.0`、`Core / Node 24.12.0` 检查，并在 Linux 和 macOS 运行 `Desktop / <OS>`。Nightly 执行完整 PR 回归、十轮确定性的宿主生命周期重复测试，以及外置连接器源码兼容性测试。手动 workflow dispatch 另外运行候选 SDK 矩阵和打包消费者验证；GitHub Release 发布后会针对该发布源码 SHA 运行打包消费者测试。所有任务仅有只读仓库权限，并上传短期 JSON 证据，包含源码 SHA、锁文件/打包文件 SHA-512、包版本和脱敏结果。
+工作流提供稳定的 `Core / Node 22.14.0`、`Core / Node 24.12.0` 检查，并在 Linux 和 macOS 运行 `Desktop / <OS>`。Nightly 执行完整 PR 回归、十轮确定性的宿主生命周期重复测试，以及外置连接器源码兼容性测试。手动 workflow dispatch 另外运行候选 SDK 矩阵和打包消费者验证；GitHub Release 发布后会针对该发布源码 SHA 运行打包消费者测试。所有任务仅有只读仓库权限，并上传短期 JSON 证据，包含源码 SHA、锁文件/打包文件 SHA-512、包版本和脱敏结果。
 
 常用聚焦命令：
 

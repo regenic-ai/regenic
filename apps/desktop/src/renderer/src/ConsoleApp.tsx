@@ -70,6 +70,7 @@ import {
   type ThreadOverlays,
 } from "./reply-proposals";
 import { threadTitle } from "./message-view";
+import { recipeConversationOptions } from "./recipe-conversations";
 import { RecipesPage } from "./RecipesPage";
 import { SettingsPage } from "./SettingsPage";
 import {
@@ -1789,17 +1790,7 @@ export function ConsoleApp() {
         {nav === "recipes" ? (
           <RecipesPage
             sources={recipeSources}
-            conversations={listThreads.map((thread) => ({
-              id: thread.id,
-              label: threadTitle(thread),
-              source: thread.source || thread.channel,
-              can_send: thread.can_send,
-              record_class: thread.record_class,
-              thread_facet: thread.thread_facet,
-              unit_kind: thread.unit_kind ?? undefined,
-              has_work: Boolean(thread.work),
-              body_text: thread.messages[thread.messages.length - 1]?.body_text,
-            }))}
+            conversations={recipeConversationOptions(listThreads)}
             seed={recipeSeed}
             onSeedConsumed={consumeRecipeSeed}
             onBound={() => setNav("inbox")}
