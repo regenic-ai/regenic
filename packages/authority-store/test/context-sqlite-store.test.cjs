@@ -1250,6 +1250,7 @@ describe("SQLite context artifact store", () => {
     legacy.exec(MIGRATIONS.find((migration) => migration.version === 23).sql);
     legacy.exec("ALTER TABLE work_runs DROP COLUMN start_state");
     legacy.exec("ALTER TABLE recipes DROP COLUMN write_back_thread_id");
+    legacy.exec("ALTER TABLE recipes DROP COLUMN hide_on_success");
     legacy.pragma("user_version = 45");
     legacy.close();
 
@@ -1301,6 +1302,7 @@ describe("SQLite context artifact store", () => {
       ALTER TABLE recipes DROP COLUMN trigger_at_minute;
       ALTER TABLE recipes DROP COLUMN trigger_weekdays;
       ALTER TABLE recipes DROP COLUMN trigger_timezone;
+      ALTER TABLE recipes DROP COLUMN hide_on_success;
       ALTER TABLE search_answers DROP COLUMN scope_json;
     `);
     // Last migration before preview_json (46) and the preview rebuild (47).

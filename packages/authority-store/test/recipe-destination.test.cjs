@@ -25,6 +25,7 @@ function recipe() {
     match: { thread_id: "test:source" }, trigger: { kind: "manual" },
     executor_type: "test", executor_config: { prompt: "Summarize updates." },
     can_write_back: true, write_back_thread_id: "test:results",
+    hide_on_success: false,
     include_context: false, enabled: true,
     created_at: "2026-09-01T00:00:00.000Z", updated_at: "2026-09-01T00:00:00.000Z",
   };
@@ -52,6 +53,7 @@ describe("recipe send-back destination", () => {
       try {
         assert.equal((await store.putRecipe(input)).write_back_thread_id, "test:results");
         assert.equal((await store.getRecipe(input.org_id, input.id)).write_back_thread_id, "test:results");
+        assert.equal((await store.getRecipe(input.org_id, input.id)).hide_on_success, false);
         assert.equal(rawDestination(path), "test:results");
       } finally {
         await store.close();
@@ -67,6 +69,7 @@ describe("recipe send-back destination", () => {
           const current = await store.getRecipe(input.org_id, input.id);
           await store.putRecipe({ ...current, ...patch });
           assert.equal((await store.getRecipe(input.org_id, input.id)).write_back_thread_id, expected);
+          assert.equal((await store.getRecipe(input.org_id, input.id)).hide_on_success, false);
           assert.equal((await store.listRecipes(input.org_id))[0].write_back_thread_id, expected);
           assert.equal(rawDestination(path), expected ?? null);
           assert.deepEqual(await store.listRecipes("another-org"), []);
@@ -114,6 +117,7 @@ describe("recipe send-back destination", () => {
           assert.equal(store.schemaVersion, LATEST_SCHEMA_VERSION);
           const saved = await store.getRecipe("local-owner", "destination-rule");
           assert.equal(saved.write_back_thread_id, existingColumn ? "test:preserved" : undefined);
+          assert.equal(saved.hide_on_success, true);
           assert.equal(saved.name, recipe().name);
           assert.deepEqual(saved.match, recipe().match);
           assert.equal(rawDestination(path), existingColumn ? "test:preserved" : null);
