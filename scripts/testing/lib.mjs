@@ -78,9 +78,9 @@ export function evidence(name, value) {
   writeFileSync(join(directory, `${name}.json`), `${JSON.stringify(value, null, 2)}\n`);
 }
 
-export function requireRuntime() {
-  const [major, minor] = process.versions.node.split(".").map(Number);
-  if (!((major === 22 && minor >= 12) || major >= 24)) {
-    throw new Error("Testing lanes require Node 22.12+ (22.x) or Node 24+. Node >=20 alone does not support desktop strip-types.");
+export function requireRuntime(versions = process.versions) {
+  const [major, minor] = versions.node.split(".").map(Number);
+  if (!((major === 22 && minor >= 14) || major >= 24) || !(Number(versions.napi) >= 10)) {
+    throw new Error("Testing lanes require Node 22.14+ (22.x) or Node 24+ with Node-API 10+. better-sqlite3 13 requires Node-API 10; older runtimes can crash when opening a database.");
   }
 }

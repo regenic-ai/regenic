@@ -10,7 +10,7 @@
 
 ### 环境要求
 
-- Node.js 20+
+- Node.js 22.14+（22.x）或 24+，且 Node-API 至少为 10
 - [pnpm](https://pnpm.io)
 
 飞书、DSH 各自还要先装好自己的工具，见[加上飞书或 DSH](#加上飞书或-dsh)。
