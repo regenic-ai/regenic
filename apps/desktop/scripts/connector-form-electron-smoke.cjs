@@ -28,6 +28,22 @@ async function rendererSmoke() {
   const more = () => evaluate(`document.querySelector(".check-options > button").click()`);
   try {
     await window.loadURL(process.env.REGENIC_SMOKE_URL);
+    await waitFor('Boolean(document.querySelector("#connector-installation-enabled"))');
+    assert.equal(await evaluate(`Array.from(document.querySelectorAll(".connector-kind button"))
+      .some(button => button.textContent.trim() === "Disable")`), false,
+    "Connector rows must not expose a disable action");
+    for (const status of ["enabled", "disabled", "needs_attention"]) {
+      assert.equal(await evaluate(`Array.from(document.querySelectorAll("#connector-installation-${status} button"))
+        .some(button => button.textContent.trim() === "Uninstall")`), true,
+      "Every installation must keep its uninstall action");
+    }
+    await evaluate(`Array.from(document.querySelectorAll("#connector-installation-disabled button"))
+      .find(button => button.textContent.trim() === "Enable").click()`);
+    assert.equal(await evaluate('window.__enabledInstallation'), "disabled",
+      "Previously disabled installations must remain recoverable");
+    await evaluate(`Array.from(document.querySelectorAll("#connector-installation-enabled button"))
+      .find(button => button.textContent.trim() === "Uninstall").click()`);
+    assert.equal(await evaluate('window.__uninstalledInstallation'), "enabled");
     await waitFor('document.querySelector(".check-list")?.textContent.includes("a-first")');
     await more();
     await waitFor('document.querySelector(".check-list").textContent.includes("a-second")');
@@ -142,6 +158,7 @@ async function launchSmoke() {
     import React, { useCallback, useState } from "react";
     import { createRoot } from "react-dom/client";
     import { ConnectorFormFields } from "/src/ConnectorFormFields";
+    import { ConnectorKind } from "/src/ConnectorSettings";
     window.__requests = [];
     window.__optionUpdates = [];
     window.__formSubmits = 0;
@@ -193,7 +210,24 @@ async function launchSmoke() {
           onOptions={remember} />
       </form>;
     }
-    createRoot(document.getElementById("root")).render(<React.StrictMode><Fixture /></React.StrictMode>);
+    const kind = {
+      connector_type: "actions-fixture", title: "Fixture", description: "", credential_hint: "",
+      installed: true, instance_count: 3, setup_ready: true, singleton: true,
+      fields: [], prerequisites: [], setup_steps: [], docs: []
+    };
+    const installations = ["enabled", "disabled", "needs_attention"].map(status => ({
+      id: status, connector_type: kind.connector_type, status, label: status, detail: null,
+      syncable: false, can_reply: false, can_create: false, last_attempt: null
+    }));
+    createRoot(document.getElementById("root")).render(<React.StrictMode>
+      <Fixture />
+      <ConnectorKind kind={kind} installations={installations} busyId={null} syncingAll={false}
+        installing={false} pendingUninstall={false} onOpenInstall={() => {}} onCloseInstall={() => {}}
+        onInstall={() => {}} onSync={() => {}} onRetryQuarantines={() => {}}
+        onEnable={installation => { window.__enabledInstallation = installation.id; }}
+        onUpdate={async () => true}
+        onUninstall={installation => { window.__uninstalledInstallation = installation.id; }} />
+    </React.StrictMode>);
   `;
   const server = await createServer({
     configFile: false,
