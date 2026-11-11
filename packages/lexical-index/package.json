@@ -18,7 +18,7 @@
   "dependencies": {
     "@regenic/domain": "workspace:*",
     "@regenic/plugin-host": "workspace:*",
-    "better-sqlite3": "11.10.0"
+    "better-sqlite3": "13.0.3"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",

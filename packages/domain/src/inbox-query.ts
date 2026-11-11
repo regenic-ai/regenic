@@ -11,6 +11,11 @@ import { conversationId } from "./message-contract";
 /** Arrangement reason that marks a task row. Connectors do not interpret it. */
 export const TASK_INBOX_REASON = "task";
 
+export function isPushInboxDecision(decision: InboxItem["decision"]): boolean {
+  return decision.disposition === "current_work" ||
+    (decision.disposition === "pending" && !decision.reason_codes.includes("human_triage"));
+}
+
 export function isTaskInboxItem(item: {
   decision: { reason_codes: readonly string[] };
 }): boolean {
@@ -439,8 +444,8 @@ export function selectInboxItems(
       );
     }
   }
-  if (query?.tasks) {
-    selected = selected.filter((item) => isTaskInboxItem(item));
+  if (query?.tasks !== undefined) {
+    selected = selected.filter((item) => isTaskInboxItem(item) === query.tasks);
   }
   return takeRecentInboxItems(selected, query);
 }

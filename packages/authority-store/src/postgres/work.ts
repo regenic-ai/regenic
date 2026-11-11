@@ -54,14 +54,16 @@ export async function putRecipe(db: PgSql, recipe: Recipe): Promise<Recipe> {
           id, org_id, name, match_json, executor_type, executor_config_json,
           can_write_back, include_context, enabled, trigger_kind,
           trigger_interval_ms, trigger_at_minute, trigger_weekdays, trigger_timezone,
-          trigger_coalesce, max_concurrent, next_run_at, created_at, updated_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+          trigger_coalesce, max_concurrent, next_run_at, created_at, updated_at,
+          write_back_thread_id, hide_on_success
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
         ON CONFLICT (id) DO UPDATE SET
           name = EXCLUDED.name,
           match_json = EXCLUDED.match_json,
           executor_type = EXCLUDED.executor_type,
           executor_config_json = EXCLUDED.executor_config_json,
           can_write_back = EXCLUDED.can_write_back,
+          write_back_thread_id = EXCLUDED.write_back_thread_id,
           include_context = EXCLUDED.include_context,
           enabled = EXCLUDED.enabled,
           trigger_kind = EXCLUDED.trigger_kind,
@@ -72,6 +74,7 @@ export async function putRecipe(db: PgSql, recipe: Recipe): Promise<Recipe> {
           trigger_coalesce = EXCLUDED.trigger_coalesce,
           max_concurrent = EXCLUDED.max_concurrent,
           next_run_at = EXCLUDED.next_run_at,
+          hide_on_success = EXCLUDED.hide_on_success,
           updated_at = EXCLUDED.updated_at
       `,
       [
@@ -94,6 +97,8 @@ export async function putRecipe(db: PgSql, recipe: Recipe): Promise<Recipe> {
         recipe.next_run_at ?? null,
         recipe.created_at,
         recipe.updated_at,
+        recipe.write_back_thread_id ?? null,
+        recipe.hide_on_success !== false,
       ],
     );
     return recipe;
@@ -328,12 +333,13 @@ export async function putSearchAnswer(
   await db.execute(
     `
       INSERT INTO search_answers (
-        id, org_id, work_item_id, query, event_ids_json, outcome, created_at, updated_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        id, org_id, work_item_id, query, event_ids_json, scope_json, outcome, created_at, updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
       ON CONFLICT (id) DO UPDATE SET
         work_item_id = EXCLUDED.work_item_id,
         query = EXCLUDED.query,
         event_ids_json = EXCLUDED.event_ids_json,
+        scope_json = EXCLUDED.scope_json,
         outcome = EXCLUDED.outcome,
         updated_at = EXCLUDED.updated_at
     `,
@@ -343,6 +349,7 @@ export async function putSearchAnswer(
       record.work_item_id,
       record.query,
       jsonb(record.event_ids),
+      record.scope ? jsonb(record.scope) : null,
       record.outcome ?? null,
       record.created_at,
       record.updated_at,
@@ -546,7 +553,9 @@ interface RecipeRow {
   executor_type: string;
   executor_config_json: unknown;
   can_write_back: unknown;
+  write_back_thread_id: string | null;
   include_context: unknown;
+  hide_on_success: unknown;
   enabled: unknown;
   trigger_kind: string | null;
   trigger_interval_ms: number | null;
@@ -616,6 +625,7 @@ interface SearchAnswerRow {
   work_item_id: string;
   query: string;
   event_ids_json: unknown;
+  scope_json: unknown;
   outcome: SearchAnswerRecord["outcome"] | null;
   created_at: unknown;
   updated_at: unknown;
@@ -657,7 +667,9 @@ function toRecipe(row: RecipeRow): Recipe {
     executor_type: row.executor_type,
     executor_config: asJson<Recipe["executor_config"]>(row.executor_config_json),
     can_write_back: asBool(row.can_write_back),
+    ...(row.write_back_thread_id ? { write_back_thread_id: row.write_back_thread_id } : {}),
     include_context: asBool(row.include_context),
+    hide_on_success: asBool(row.hide_on_success),
     enabled: asBool(row.enabled),
     ...(row.max_concurrent && row.max_concurrent > 0
       ? { max_concurrent: row.max_concurrent }
@@ -710,6 +722,9 @@ function toSearchAnswer(row: SearchAnswerRow): SearchAnswerRecord {
     work_item_id: row.work_item_id,
     query: row.query,
     event_ids: asJson<string[]>(row.event_ids_json),
+    ...(row.scope_json
+      ? { scope: asJson<NonNullable<SearchAnswerRecord["scope"]>>(row.scope_json) }
+      : {}),
     ...(row.outcome ? { outcome: row.outcome } : {}),
     created_at: toIso(row.created_at),
     updated_at: toIso(row.updated_at),

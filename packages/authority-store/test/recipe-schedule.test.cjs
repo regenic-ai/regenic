@@ -34,8 +34,8 @@ function recipe(trigger) {
 
 describe("recipe pull schedule", () => {
   it("appends the PostgreSQL schedule migration after main's existing migrations", () => {
-    assert.equal(PG_SCHEMA_VERSION, 55);
-    assert.deepEqual(PG_MIGRATIONS.filter(({ version }) => version > 54), [
+    assert.ok(PG_SCHEMA_VERSION >= 56);
+    assert.deepEqual(PG_MIGRATIONS.filter(({ version }) => version > 54 && version <= 56), [
       {
         version: 55,
         sql: `
@@ -43,6 +43,10 @@ ALTER TABLE recipes ADD COLUMN trigger_at_minute INTEGER;
 ALTER TABLE recipes ADD COLUMN trigger_weekdays TEXT;
 ALTER TABLE recipes ADD COLUMN trigger_timezone TEXT;
 `,
+      },
+      {
+        version: 56,
+        sql: "ALTER TABLE search_answers ADD COLUMN scope_json JSONB;",
       },
     ]);
   });

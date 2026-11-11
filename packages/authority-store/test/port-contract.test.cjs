@@ -188,6 +188,60 @@ for (const driver of drivers) {
       assert.equal(inbox[0].event.org_id, orgId);
     });
 
+    it("pages push candidates by event identity, including auto pending but not human exclusions", async () => {
+      const { store, orgId } = await openBoundStore();
+      const at = "2026-08-30T00:00:00.000Z";
+      const variants = [
+        ["current_work", [], "room"],
+        ["pending", ["needs_review"], "room"],
+        ["pending", ["policy_default_personal_attention"], "folded"],
+        ["pending", ["needs_review", "human_triage"], "room"],
+        ["outside_current_work", [], "room"],
+        ["current_work", [TASK_INBOX_REASON], "room"],
+        ["current_work", [], "hidden"],
+      ];
+      for (const [i, [disposition, reason_codes, target]] of variants.entries()) {
+        const event = await store.append({
+          id: `candidate-${i}`, org_id: orgId, source: "synthetic",
+          external_id: `${target}:${i}`, thread_id: `synthetic:${target}`,
+          actor_id: "person", required_scope_ids: [], content_hash: HASH_A,
+          content_media_type: "text/plain", content_byte_size: 1,
+          occurred_at: at, expected_head_id: null,
+        });
+        await store.putDisposition({
+          event_id: event.id, org_id: orgId, disposition, reason_codes,
+          layer: "L1_event", score: 1, decided_at: at,
+        });
+      }
+      await store.putConversationPref({
+        org_id: orgId, thread_id: "synthetic:hidden", hidden: true, updated_at: at,
+      });
+      await store.putConversationPref({
+        org_id: orgId, thread_id: "synthetic:folded", hidden: true,
+        hidden_reason: "policy", updated_at: at,
+      });
+      const query = { tasks: false, needs_work: true, push_candidates: true, limit: 2 };
+      const recent = await store.listInbox(orgId, query);
+      assert.deepEqual(recent.map((row) => row.event.id), ["candidate-1", "candidate-2"]);
+      const older = await store.listInbox(orgId, {
+        ...query, before: at, before_id: recent[0].event.id,
+      });
+      assert.deepEqual(older.map((row) => row.event.id), ["candidate-0"]);
+      assert.deepEqual((await store.listInbox(orgId, { tasks: false })).map((row) => row.event.id),
+        ["candidate-0"]);
+      assert.deepEqual(await store.listInbox(orgId, {
+        ...query, thread_ids: ["synthetic:hidden"],
+      }), []);
+      await store.putWorkItem({
+        id: "handled", org_id: orgId, thread_id: "synthetic:room",
+        unit_key: "candidate-1", head_event_id: "candidate-1",
+        record_class: "utterance", thread_facet: "chat", status: "done",
+        created_at: at, updated_at: at,
+      });
+      assert.deepEqual((await store.listInbox(orgId, query)).map((row) => row.event.id),
+        ["candidate-0", "candidate-2"]);
+    });
+
     it("restores shared-body artifacts through lifecycle transitions and preview reads", async () => {
       const { store, orgId } = await openBoundStore();
       const reference = {
@@ -470,6 +524,15 @@ for (const driver of drivers) {
         work_item_id: itemId,
         query: "Who was selected?",
         event_ids: ["event-1", "event-2"],
+        scope: {
+          intent: "aggregate",
+          complete: true,
+          total_count: 2,
+          included_count: 2,
+          omitted_count: 0,
+          occurred_after: "2026-08-01T00:00:00.000Z",
+          occurred_before: "2026-08-24T00:00:00.000Z",
+        },
         created_at: now,
         updated_at: now,
       };

@@ -82,6 +82,25 @@ async function fixture(t, options = {}) {
 }
 
 describe("recipe text filters", () => {
+  it("defaults new rules to visible results and keeps the legacy default when editing", () => {
+    const created = normalizeRecipe({
+      name: "Keep visible", executor_type: "test",
+      match: { thread_id: "test-chat:room" },
+    }, ORG, "now");
+    assert.equal(created.hide_on_success, false);
+    assert.equal(normalizeRecipe({ name: "Renamed" }, ORG, "later", created).hide_on_success, false);
+    assert.equal(normalizeRecipe({ hide_on_success: true }, ORG, "later", created).hide_on_success, true);
+
+    const legacy = { ...created };
+    delete legacy.hide_on_success;
+    assert.equal(normalizeRecipe({ name: "Legacy edit" }, ORG, "later", legacy).hide_on_success, true);
+    assert.throws(() => normalizeRecipe({
+      name: "Invalid", executor_type: "test",
+      match: { thread_id: "test-chat:room" },
+      hide_on_success: "yes",
+    }, ORG, "now"), (error) => error.code === "invalid_config");
+  });
+
   it("validates filters, preserves exact strings and allows clearing them", () => {
     const input = {
       name: "Filter", executor_type: "test",

@@ -1,4 +1,7 @@
-export const LATEST_SCHEMA_VERSION = 55;
+export const LATEST_SCHEMA_VERSION = 58;
+
+export const RECIPE_DESTINATION_COLUMN_SQL =
+  "ALTER TABLE recipes ADD COLUMN write_back_thread_id TEXT";
 
 export const CUSTOMER_SERVICE_TASKS_SQL = `
   CREATE TABLE IF NOT EXISTS customer_service_tasks (
@@ -1110,5 +1113,19 @@ export const MIGRATIONS = [
     // Those same databases skipped this table, because version 48 was taken.
     version: 55,
     sql: CUSTOMER_SERVICE_TASKS_SQL,
+  },
+  {
+    version: 56,
+    sql: `ALTER TABLE search_answers ADD COLUMN scope_json TEXT
+      CHECK (scope_json IS NULL OR json_valid(scope_json));`,
+  },
+  {
+    version: 57,
+    sql: RECIPE_DESTINATION_COLUMN_SQL,
+  },
+  {
+    version: 58,
+    sql: `ALTER TABLE recipes ADD COLUMN hide_on_success INTEGER NOT NULL DEFAULT 1
+      CHECK (hide_on_success IN (0, 1));`,
   },
 ] as const;

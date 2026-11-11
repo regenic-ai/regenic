@@ -1,20 +1,109 @@
 export const SEARCH_CONTEXT = { before: 2, after: 2, reply_depth: 8, max_messages: 40 } as const;
 
+export interface SearchTimeRange {
+  occurred_after: string;
+  occurred_before: string;
+}
+
+export interface SearchAnswerFilters extends SearchTimeRange {
+  sources?: string[];
+  thread_ids?: string[];
+}
+
+export interface SearchQueryPlan {
+  query: string;
+  intent: "lookup" | "aggregate" | "list";
+  time_range?: SearchTimeRange;
+}
+
+const CHINESE_RELATIVE_PERIOD =
+  /(?:最近|近|过去)\s*(\d{1,3}|一|两)\s*(天|周|个?月)(?:内|以来)?(?:的)?/u;
+const ENGLISH_RELATIVE_PERIOD =
+  /\b(?:last|past)\s+(\d{1,3}|one|two)\s+(day|week|month)s?\b/i;
+const BROAD_COVERAGE_INTENT =
+  /所有人|全员|统计|汇总|多少(?:条|个|人)|\b(?:all|total|count|summary)\b/i;
+const LIST_COVERAGE_INTENT =
+  /哪些|列出|清单|分别|逐个|\b(?:which|list)\b/i;
+
+/** Turns an explicit rolling-period phrase into an authorized search filter, not embedding noise. */
+export function planContextSearchQuery(query: string, now = new Date()): SearchQueryPlan {
+  const trimmed = query.trim();
+  const intent = BROAD_COVERAGE_INTENT.test(trimmed)
+    ? "aggregate"
+    : LIST_COVERAGE_INTENT.test(trimmed)
+      ? "list"
+      : "lookup";
+  const chinese = CHINESE_RELATIVE_PERIOD.exec(trimmed);
+  const english = ENGLISH_RELATIVE_PERIOD.exec(trimmed);
+  const match = chinese ?? english;
+  if (!match || !Number.isFinite(now.getTime())) return { query: trimmed, intent };
+  const amount = relativeAmount(match[1]);
+  const unit = match[2].toLowerCase();
+  const maximum = unit === "天" || unit === "day"
+    ? 366
+    : unit === "周" || unit === "week"
+      ? 104
+      : 120;
+  if (amount < 1 || amount > maximum) return { query: trimmed, intent };
+  const after = unit === "天" || unit === "day"
+    ? new Date(now.getTime() - amount * 24 * 60 * 60 * 1000)
+    : unit === "周" || unit === "week"
+      ? new Date(now.getTime() - amount * 7 * 24 * 60 * 60 * 1000)
+      : subtractUtcMonths(now, amount);
+  const semanticQuery = `${trimmed.slice(0, match.index)} ${trimmed.slice(match.index + match[0].length)}`
+    .replace(/\s+/g, " ").trim();
+  return {
+    query: semanticQuery || trimmed,
+    intent,
+    time_range: {
+      occurred_after: after.toISOString(),
+      occurred_before: now.toISOString(),
+    },
+  };
+}
+
 export function contextSearchInput(
   query: string, source: string, thread: string, limit: number,
   kind: "all" | "messages" | "files" = "all",
+  now = new Date(),
 ) {
   if (!query.trim() || query.length > 8000 || !Number.isInteger(limit) || limit < 1 || limit > 20) {
     throw new Error("search.invalid");
   }
+  const plan = planContextSearchQuery(query, now);
+  const effectiveLimit = plan.time_range && plan.intent !== "lookup"
+    ? Math.max(limit, 20)
+    : limit;
+  const filters = {
+    ...(source.trim() ? { sources: [source.trim()] } : {}),
+    ...(thread.trim() ? { thread_ids: [thread.trim()] } : {}),
+    ...(plan.time_range ?? {}),
+  };
   return {
-    query: query.trim(), limit, kind,
-    ...((source.trim() || thread.trim()) ? { filters: {
-      ...(source.trim() ? { sources: [source.trim()] } : {}),
-      ...(thread.trim() ? { thread_ids: [thread.trim()] } : {}),
-    } } : {}),
+    query: plan.query, limit: effectiveLimit, kind,
+    ...(Object.keys(filters).length ? { filters } : {}),
     context: SEARCH_CONTEXT,
   };
+}
+
+function relativeAmount(value: string | undefined): number {
+  if (value === undefined || value.toLowerCase() === "one" || value === "一") return 1;
+  if (value.toLowerCase() === "two" || value === "两") return 2;
+  return Number(value);
+}
+
+function subtractUtcMonths(value: Date, amount: number): Date {
+  const monthIndex = value.getUTCFullYear() * 12 + value.getUTCMonth() - amount;
+  const year = Math.floor(monthIndex / 12);
+  const month = ((monthIndex % 12) + 12) % 12;
+  const day = Math.min(
+    value.getUTCDate(),
+    new Date(Date.UTC(year, month + 1, 0)).getUTCDate(),
+  );
+  return new Date(Date.UTC(
+    year, month, day,
+    value.getUTCHours(), value.getUTCMinutes(), value.getUTCSeconds(), value.getUTCMilliseconds(),
+  ));
 }
 
 export interface SearchAttachment {
@@ -114,15 +203,25 @@ export function applySearchWindow<T extends { occurred_at: string; event_id: str
 
 /** The cards the user is looking at, in result order, within the server's message cap. */
 export function searchAnswerConversations(
-  conversations: ReadonlyArray<{ thread_id: string; messages: ReadonlyArray<{ event_id: string }> }>,
+  conversations: ReadonlyArray<{
+    thread_id: string;
+    messages: ReadonlyArray<{ event_id: string; occurred_at: string }>;
+  }>,
+  timeRange?: SearchTimeRange,
 ): Array<{ thread_id: string; event_ids: string[] }> {
   let remaining = SEARCH_ANSWER_MESSAGES_MAX;
   const selected = [];
   for (const conversation of conversations.slice(0, 20)) {
-    const eventIds = conversation.messages.slice(0, remaining).map((message) => message.event_id);
-    if (!eventIds.length) break;
+    const eventIds = conversation.messages
+      .filter((message) => !timeRange ||
+        (Date.parse(message.occurred_at) >= Date.parse(timeRange.occurred_after) &&
+          Date.parse(message.occurred_at) <= Date.parse(timeRange.occurred_before)))
+      .slice(0, remaining)
+      .map((message) => message.event_id);
+    if (!eventIds.length) continue;
     remaining -= eventIds.length;
     selected.push({ thread_id: conversation.thread_id, event_ids: eventIds });
+    if (!remaining) break;
   }
   return selected;
 }

@@ -19,6 +19,7 @@ import {
   applySearchWindow,
   contextSearchInput,
   mergeSearchMessages,
+  planContextSearchQuery,
   searchAnswerConversations,
   searchAnswerSegments,
   searchElapsedSeconds,
@@ -115,6 +116,53 @@ test("semantic actions and search input are bounded and literal", () => {
   assert.ok(contextSearchInput("x", "", "", 20).limit <= SEARCH_CONTEXT.max_messages);
 });
 
+test("search turns explicit rolling periods into filters and removes them from semantic inference", () => {
+  const now = new Date("2026-11-08T03:04:05.000Z");
+  assert.deepEqual(
+    contextSearchInput("hollyland 最近一个月主要是谁在对接我们", "", "", 10, "all", now),
+    {
+      query: "hollyland 主要是谁在对接我们",
+      limit: 10,
+      kind: "all",
+      filters: {
+        occurred_after: "2026-10-08T03:04:05.000Z",
+        occurred_before: "2026-11-08T03:04:05.000Z",
+      },
+      context: SEARCH_CONTEXT,
+    },
+  );
+  assert.deepEqual(
+    planContextSearchQuery("统计下所有人近30天的研发任务完成情况", now),
+    {
+      query: "统计下所有人 研发任务完成情况",
+      intent: "aggregate",
+      time_range: {
+        occurred_after: "2026-10-09T03:04:05.000Z",
+        occurred_before: "2026-11-08T03:04:05.000Z",
+      },
+    },
+  );
+  assert.equal(
+    contextSearchInput("统计下所有人近30天的研发任务完成情况", "", "", 10, "all", now).limit,
+    20,
+  );
+  assert.equal(
+    contextSearchInput("hollyland 最近一个月发布了多少条视频", "", "", 10, "all", now).limit,
+    20,
+  );
+  assert.equal(
+    planContextSearchQuery("past two weeks release count", now).time_range?.occurred_after,
+    "2026-10-25T03:04:05.000Z",
+  );
+  assert.equal(planContextSearchQuery("列出近一个月发布的视频", now).intent, "list");
+  assert.equal(planContextSearchQuery("hollyland 最近在跟谁对接", now).intent, "lookup");
+  assert.equal(
+    planContextSearchQuery("最近一个月", new Date("2026-03-31T12:00:00.000Z"))
+      .time_range?.occurred_after,
+    "2026-02-28T12:00:00.000Z",
+  );
+});
+
 test("search highlighting finds Chinese runs without whitespace and Latin terms case-insensitively", () => {
   const query = "上次选中的 2 位都还没回复吗？";
   assert.deepEqual(searchHighlightRanges("上次选中的 2 位都还没回复吗？", query), [[0, 5], [8, 15]]);
@@ -190,13 +238,26 @@ test("search cards load windows from their boundaries and close them when exhaus
 });
 
 test("search answers send visible cards and turn resolved [n] markers into citations", () => {
-  const many = Array.from({ length: 150 }, (_, index) => ({ event_id: `e${index}` }));
+  const many = Array.from({ length: 150 }, (_, index) => ({
+    event_id: `e${index}`,
+    occurred_at: "2026-11-01T00:00:00.000Z",
+  }));
   const selected = searchAnswerConversations([
     { thread_id: "a", messages: many },
     { thread_id: "b", messages: many },
     { thread_id: "c", messages: many },
   ]);
   assert.deepEqual(selected.map((entry) => [entry.thread_id, entry.event_ids.length]), [["a", 150], ["b", 50]]);
+  assert.deepEqual(searchAnswerConversations([
+    { thread_id: "old", messages: [{ event_id: "old", occurred_at: "2026-09-01T00:00:00.000Z" }] },
+    { thread_id: "mixed", messages: [
+      { event_id: "before", occurred_at: "2026-10-07T23:59:59.000Z" },
+      { event_id: "inside", occurred_at: "2026-10-08T00:00:00.000Z" },
+    ] },
+  ], {
+    occurred_after: "2026-10-08T00:00:00.000Z",
+    occurred_before: "2026-11-08T00:00:00.000Z",
+  }), [{ thread_id: "mixed", event_ids: ["inside"] }]);
 
   assert.deepEqual(searchAnswerSegments("Alice [1], Bob [3]. [9] [x]", [
     { ref: 1, event_id: "e1" },

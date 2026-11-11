@@ -892,6 +892,10 @@ query 直接 `429`。query 与 document 各自按 FIFO 调度；有 document 等
 可以在同一请求的两段之间运行。query 批次不拆分，响应中的 counts/vectors 顺序与输入一致；
 任何一段失败都会使整个请求失败，不返回部分结果。
 
+索引积压时，worker 对每个 generation 按“三个最新任务、一个最旧任务”的节奏认领：近期消息不会一直排在
+整库回填之后，最旧积压也保留固定 25% 的处理机会，不会因持续采集而饥饿。Job Store
+默认仍保持 oldest-first；只有 worker 显式请求 newest-first 时才反向认领。
+
 同机固定 BF16、14 threads、每段约 129 tokens 的 batch 1/2/4/8 对比中，原 batch-8
 吞吐为 0.965 chunks/s，query 最大等待 8.62 秒；可让步后吞吐为 0.910 chunks/s
 （下降约 5.7%），query 最大等待为 1.49 秒（约 5.8 倍改善）。提交版 batch-8 持续负载

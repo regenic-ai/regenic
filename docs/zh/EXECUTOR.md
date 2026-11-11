@@ -235,6 +235,12 @@ token 是前置条件，不是表单字段。
 `can_write_back` 为真。内核把结果第一行与活的待办选项做精确匹配。
 别名来自 `ChannelDriver.writeBackLabels`，不写在宿主名单里。
 
+规则可用 `write_back_thread_id` 指定其他会话；未设置时，发回触发任务的
+WorkItem 所属会话。更新规则时省略该字段会保留目标，传 `null` 则切回原会话。
+SQLite 与 PostgreSQL 将其持久化为可空列（schema version 57），API 重启后
+仍会保留。升级保留已有目标值；旧版本从未写入存储的选择无法恢复，需要重新选择
+并保存。执行时读取已保存规则，不使用编辑器中未保存的选择。
+
 人不想跟的 Job 走 `POST /v1/me/work-items/:id/dismiss`。Dismiss 不是
 `exited`，也不写回。被拿掉的 Inferior 记 `cancelled`。之后的 status
 tick 不得把这次 run 救活。

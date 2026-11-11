@@ -23,6 +23,8 @@ export const en = {
   "search.answer.by": "Answered by {executor} from the conversations below",
   "search.answer.again": "Answer again",
   "search.answer.cite": "Show message {ref}",
+  "search.answer.scopeComplete": "Complete scope: examined {included} / {total} authorized messages.",
+  "search.answer.scopePartial": "Partial scope: examined {included} / {total}; totals and “all” claims are not complete.",
   "search.answer.failed": "The executor could not answer.",
   "search.answer.timedOut": "The executor took too long and was stopped.",
   "search.answer.cancelled": "Stopped.",
@@ -80,6 +82,7 @@ export const en = {
   "search.lexicalHint": "Matches words and characters in file names and content.",
   "search.count": "{count} conversations · {hits} matching messages",
   "search.coverage": "Semantic index covers {covered} / {authorized}",
+  "search.timeRange": "Time range {from}–{to}",
   "search.filters": "Filters",
   "search.filtersActive": "Filters ({count})",
   "search.clearFilters": "Clear filters",
@@ -784,7 +787,10 @@ export const en = {
   "recipes.writeBackHintPull":
     "The result goes back to this chat. It will not start this rule again.",
   "recipes.writeBackUnavailable":
-    "This chat cannot receive replies yet. The result will stay here.",
+    "This destination is unavailable. Choose a sendable conversation or Keep here.",
+  "recipes.writeBackTargetUnavailable": "{name} (unavailable)",
+  "recipes.writeBackNoTargets": "No available conversations",
+  "recipes.writeBackPreserved": "Send back remains selected; delivery may fail until the destination is available.",
   "recipes.writeBackMatchHint":
     "If the chat is waiting for a choice, put that on the first line. Reasons go below.",
   "recipes.lastRunFailed": "Last run failed",
@@ -802,6 +808,9 @@ export const en = {
   "recipes.maxConcurrentUnlimited": "No limit",
   "recipes.maxConcurrentHint":
     "How many can run at the same time. Leave empty for no limit.",
+  "recipes.hideOnSuccess": "Hide conversations after success",
+  "recipes.hideOnSuccessHint":
+    "When enabled, hide the source and assistant conversations only after a successful run. Failures stay visible.",
   "recipes.enabledCheck": "On",
   "recipes.advanced": "More",
   "recipes.cancel": "Cancel",
@@ -1385,6 +1394,8 @@ export const zh: Record<MessageKey, string> = {
   "search.answer.by": "由 {executor} 根据下方会话回答",
   "search.answer.again": "重新回答",
   "search.answer.cite": "查看第 {ref} 条消息",
+  "search.answer.scopeComplete": "完整范围：已检查 {included} / {total} 条授权消息。",
+  "search.answer.scopePartial": "范围不完整：已检查 {included} / {total}；总数和“全部”结论不可视为完整。",
   "search.answer.failed": "执行器未能给出回答。",
   "search.answer.timedOut": "执行器超时，已停止。",
   "search.answer.cancelled": "已停止。",
@@ -1442,6 +1453,7 @@ export const zh: Record<MessageKey, string> = {
   "search.lexicalHint": "按文件名和内容中的词语、字符匹配。",
   "search.count": "{count} 个会话 · {hits} 条命中",
   "search.coverage": "语义索引覆盖 {covered} / {authorized}",
+  "search.timeRange": "时间范围 {from}–{to}",
   "search.filters": "筛选",
   "search.filtersActive": "筛选（{count}）",
   "search.clearFilters": "清除筛选",
@@ -2130,7 +2142,10 @@ export const zh: Record<MessageKey, string> = {
   "recipes.writeBackCheck": "处理完后发回原会话",
   "recipes.writeBackHint": "助手做完后，把结果发回原会话。",
   "recipes.writeBackHintPull": "结果会发回这条会话，不会再触发本规则。",
-  "recipes.writeBackUnavailable": "这条会话现在发不回去，结果会留在这里。",
+  "recipes.writeBackUnavailable": "此目标不可用，请选择可发送的会话，或留在本地。",
+  "recipes.writeBackTargetUnavailable": "{name}（不可用）",
+  "recipes.writeBackNoTargets": "暂无可用的会话",
+  "recipes.writeBackPreserved": "已保留发回配置；目标恢复可用前，发送可能失败。",
   "recipes.writeBackMatchHint":
     "原会话在等一个选项时，把选项写在第一行，原因写在后面。",
   "recipes.lastRunFailed": "上次失败",
@@ -2147,6 +2162,9 @@ export const zh: Record<MessageKey, string> = {
   "recipes.maxConcurrent": "同时处理",
   "recipes.maxConcurrentUnlimited": "不限制",
   "recipes.maxConcurrentHint": "最多同时处理几条。留空不限制。",
+  "recipes.hideOnSuccess": "成功后隐藏处理会话",
+  "recipes.hideOnSuccessHint":
+    "打开后，仅在规则成功完成时隐藏来源会话和助手会话；失败时仍会显示。",
   "recipes.enabledCheck": "启用",
   "recipes.advanced": "更多",
   "recipes.cancel": "取消",

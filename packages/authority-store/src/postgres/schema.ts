@@ -1,4 +1,4 @@
-export const PG_SCHEMA_VERSION = 55;
+export const PG_SCHEMA_VERSION = 58;
 
 /** Applied when an existing postgres authority DB is already at a prior baseline. */
 export const PG_MIGRATIONS = [
@@ -573,6 +573,18 @@ ALTER TABLE recipes ADD COLUMN trigger_weekdays TEXT;
 ALTER TABLE recipes ADD COLUMN trigger_timezone TEXT;
 `,
   },
+  {
+    version: 56,
+    sql: `ALTER TABLE search_answers ADD COLUMN scope_json JSONB;`,
+  },
+  {
+    version: 57,
+    sql: `ALTER TABLE recipes ADD COLUMN IF NOT EXISTS write_back_thread_id TEXT;`,
+  },
+  {
+    version: 58,
+    sql: `ALTER TABLE recipes ADD COLUMN IF NOT EXISTS hide_on_success BOOLEAN NOT NULL DEFAULT TRUE;`,
+  },
 ] as const;
 
 export const PG_BASELINE_SQL = `
@@ -731,6 +743,8 @@ CREATE TABLE recipes (
   executor_type TEXT NOT NULL,
   executor_config_json JSONB NOT NULL,
   can_write_back BOOLEAN NOT NULL DEFAULT FALSE,
+  write_back_thread_id TEXT,
+  hide_on_success BOOLEAN NOT NULL DEFAULT TRUE,
   include_context BOOLEAN NOT NULL DEFAULT FALSE,
   enabled BOOLEAN NOT NULL DEFAULT TRUE,
   trigger_kind TEXT NOT NULL DEFAULT 'push',
@@ -788,6 +802,7 @@ CREATE TABLE search_answers (
   work_item_id TEXT NOT NULL REFERENCES work_items(id),
   query TEXT NOT NULL,
   event_ids_json JSONB NOT NULL,
+  scope_json JSONB,
   outcome TEXT CHECK (outcome IN ('timed_out')),
   created_at TIMESTAMPTZ NOT NULL,
   updated_at TIMESTAMPTZ NOT NULL

@@ -413,6 +413,8 @@ export interface RecipeView {
   executor_config: Record<string, string>;
   can_write_back: boolean;
   write_back_thread_id?: string;
+  /** Optional for compatibility with older API responses. */
+  hide_on_success?: boolean;
   include_context: boolean;
   max_concurrent?: number;
   enabled: boolean;
@@ -633,6 +635,14 @@ export interface PersonalSearchAnswer {
   agent_thread_id?: string;
   answer?: string;
   citations?: Array<{ ref: number; event_id: string }>;
+  scope?: {
+    intent: "lookup" | "aggregate" | "list";
+    complete: boolean;
+    total_count: number | null;
+    included_count: number;
+    omitted_count: number | null;
+    incomplete_reason?: string;
+  };
 }
 
 export interface PersonalExpandedSearchResult extends PersonalContextSearchResult {

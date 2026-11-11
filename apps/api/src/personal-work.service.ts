@@ -497,6 +497,7 @@ export class PersonalWorkService implements OnModuleDestroy {
       executor_type: executorType,
       executor_config: { prompt: input.prompt },
       can_write_back: false,
+      hide_on_success: false,
       include_context: false,
       ...(input.max_concurrent === undefined
         ? {}
@@ -678,7 +679,7 @@ export class PersonalWorkService implements OnModuleDestroy {
     if (id && !existing) {
       throw new PersonalConnectorError("not_found", "Recipe not found", 404);
     }
-    let recipe = normalizeRecipe(input, orgId, now, existing ?? undefined);
+    const recipe = normalizeRecipe(input, orgId, now, existing ?? undefined);
     const executor = host.get("executors").get(recipe.executor_type);
     if (!executor) {
       throw new PersonalConnectorError(
@@ -719,10 +720,17 @@ export class PersonalWorkService implements OnModuleDestroy {
         throw new PersonalConnectorError("invalid_config", "Invalid write-back chat id", 400);
       }
     }
-    if (recipe.can_write_back && threadId) {
-      const canReply = await this.channel.canReplyThread(threadId);
-      if (canReply === false) {
-        recipe = { ...recipe, can_write_back: false };
+    const sameDestination = existing &&
+      existing.write_back_thread_id === recipe.write_back_thread_id &&
+      (existing.write_back_thread_id || existing.match.thread_id) === threadId;
+    // Capability loss must not rewrite a saved delivery preference on unrelated edits.
+    if (recipe.can_write_back && threadId && !(existing?.can_write_back && sameDestination)) {
+      if (await this.channel.canReplyThread(threadId) !== true) {
+        throw new PersonalConnectorError(
+          "invalid_config",
+          "Write-back destination is unavailable. Choose a sendable conversation or keep results here.",
+          400,
+        );
       }
     }
     const saved = await host.get("authority").putRecipe(recipe);
@@ -774,6 +782,14 @@ export class PersonalWorkService implements OnModuleDestroy {
       parseConversationThread(threadId);
     } catch {
       throw new PersonalConnectorError("invalid_config", "Invalid chat id", 400);
+    }
+    if (input?.write_back === true) {
+      if (!recipe.can_write_back) {
+        throw new PersonalConnectorError("invalid_config", "Send back is not enabled for this rule", 400);
+      }
+      if (await this.channel.canReplyThread(recipe.write_back_thread_id ?? threadId) !== true) {
+        throw new PersonalConnectorError("invalid_config", "Write-back destination is unavailable", 400);
+      }
     }
     const authority = host.get("authority");
     const existing = await authority.getWorkItemByThread(orgId, threadId);
