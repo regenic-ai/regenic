@@ -5,7 +5,28 @@ export type SearchAnswerIncompleteReason =
   | "range_too_wide"
   | "scope_limit"
   | "unreadable_evidence"
-  | "transcript_limit";
+  | "transcript_limit"
+  | "map_failed"
+  | "fact_conflict";
+
+export interface SearchAnswerFact {
+  dedupe_key: string;
+  group: string;
+  metric: string;
+  value: number | string;
+  event_ids: string[];
+}
+
+export interface SearchAnswerMapReduce {
+  strategy: "map_reduce";
+  phase: "mapping" | "reducing";
+  snapshot_id: string;
+  executor_type?: string;
+  batch_size: number;
+  total_batches: number;
+  completed_batches: number;
+  facts: SearchAnswerFact[];
+}
 
 export interface SearchAnswerScope {
   intent: SearchAnswerIntent;
@@ -16,6 +37,7 @@ export interface SearchAnswerScope {
   occurred_after?: string;
   occurred_before?: string;
   incomplete_reason?: SearchAnswerIncompleteReason;
+  map_reduce?: SearchAnswerMapReduce;
 }
 
 /**

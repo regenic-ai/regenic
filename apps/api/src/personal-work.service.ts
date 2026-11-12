@@ -369,8 +369,7 @@ export class PersonalWorkService implements OnModuleDestroy {
       if (
         !answerId ||
         !isSearchAnswerRecipeId(item.recipe_id) ||
-        !isActiveWorkStatus(item.status) ||
-        now - Date.parse(item.created_at) <= SEARCH_ANSWER_TIMEOUT_MS
+        !isActiveWorkStatus(item.status)
       ) {
         continue;
       }
@@ -385,6 +384,7 @@ export class PersonalWorkService implements OnModuleDestroy {
           !active ||
           !record ||
           record.outcome ||
+          now - Date.parse(record.created_at) <= SEARCH_ANSWER_TIMEOUT_MS ||
           !isActiveWorkStatus(latest.status)
         ) {
           continue;

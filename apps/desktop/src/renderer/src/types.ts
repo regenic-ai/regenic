@@ -643,6 +643,10 @@ export interface PersonalSearchAnswer {
     omitted_count: number | null;
     incomplete_reason?: string;
   };
+  progress?: {
+    completed_batches: number;
+    total_batches: number;
+  };
 }
 
 export interface PersonalExpandedSearchResult extends PersonalContextSearchResult {

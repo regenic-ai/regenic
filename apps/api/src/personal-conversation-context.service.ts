@@ -7,6 +7,7 @@ import {
   type ContextAuthorityRead,
   type ContextSelectionReason,
   type SearchAnswerIntent,
+  type SearchAnswerMapReduce,
   type SearchAnswerScope,
 } from "@regenic/domain";
 import { PersonalContextError } from "./personal-context-error";
@@ -18,11 +19,14 @@ const ANSWER_CONVERSATIONS_MAX = 20;
 const ANSWER_MESSAGES_MAX = 200;
 const ANSWER_MESSAGE_CHARS = 2_000;
 const ANSWER_TRANSCRIPT_CHARS = 24_000;
-const COMPLETE_SCOPE_DAYS_MAX = 90;
 const COMPLETE_SCOPE_ITEMS_MAX = 10_000;
 const COMPLETE_ANSWER_MESSAGES_MAX = 1_000;
 const COMPLETE_ANSWER_MESSAGE_CHARS = 1_000;
 const COMPLETE_ANSWER_TRANSCRIPT_CHARS = 160_000;
+const MAP_REDUCE_THRESHOLD = 1_000;
+const MAP_REDUCE_BATCH_SIZE = 100;
+const MAP_REDUCE_MESSAGE_CHARS = 4_000;
+const COMPLETE_SCOPE_DAYS_MAX = 365;
 
 export interface ConversationMessage {
   event_id: string;
@@ -52,6 +56,7 @@ export interface ConversationAnswerEvidence {
   evidence_text: string;
   refs: string[];
   scope?: SearchAnswerScope;
+  map_reduce?: SearchAnswerMapReduce;
 }
 
 /**
@@ -234,6 +239,8 @@ export class PersonalConversationContextService {
     if (intent !== "lookup" && completeRange?.allowed) {
       const complete = await this.completeAnswerConversations(filters!);
       conversations = complete.conversations;
+      const allRefs = conversations.flatMap((conversation) =>
+        conversation.messages.map((message) => message.event_id));
       scope = {
         intent,
         complete: complete.truncated === 0 && complete.unreadable === 0,
@@ -248,6 +255,43 @@ export class PersonalConversationContextService {
             ? { incomplete_reason: "unreadable_evidence" as const }
             : {}),
       };
+      if (
+        complete.truncated === 0
+        && complete.unreadable === 0
+        && allRefs.length > MAP_REDUCE_THRESHOLD
+      ) {
+        const clipped = conversations.some((conversation) =>
+          conversation.messages.some((message) =>
+            message.text.replace(/\s+/g, " ").length > MAP_REDUCE_MESSAGE_CHARS));
+        if (clipped) {
+          scope.complete = false;
+          scope.incomplete_reason = "transcript_limit";
+        }
+        const mapReduce: SearchAnswerMapReduce = {
+          strategy: "map_reduce",
+          phase: "mapping",
+          snapshot_id: complete.snapshot_id,
+          ...(executorType ? { executor_type: executorType } : {}),
+          batch_size: MAP_REDUCE_BATCH_SIZE,
+          total_batches: Math.ceil(allRefs.length / MAP_REDUCE_BATCH_SIZE),
+          completed_batches: 0,
+          facts: [],
+        };
+        scope.included_count = allRefs.length;
+        scope.omitted_count = 0;
+        return {
+          query,
+          ...(executorType ? { executor_type: executorType } : {}),
+          evidence_text: await this.mapBatchEvidence(
+            complete.snapshot_id,
+            allRefs.slice(0, MAP_REDUCE_BATCH_SIZE),
+            query,
+          ),
+          refs: allRefs,
+          scope: { ...scope, map_reduce: mapReduce },
+          map_reduce: mapReduce,
+        };
+      }
     } else {
       conversations = await this.selectedAnswerConversations(requested, filters);
       if (intent !== "lookup") {
@@ -331,6 +375,76 @@ export class PersonalConversationContextService {
       refs: transcript.refs,
       ...(scope ? { scope } : {}),
     };
+  }
+
+  async mapBatchEvidence(
+    snapshotId: string,
+    eventIds: readonly string[],
+    query: string,
+  ): Promise<string> {
+    const bundle = await this.runtime.requireHost().get("context").replay({
+      org_id: this.runtime.orgId(),
+      snapshot_id: snapshotId,
+      principal: { actor_type: "human", actor_id: this.runtime.orgId() },
+      consumer_id: "personal-search-answer-complete",
+      purpose: "answer an exhaustive time-bounded search question",
+      allowed_uses: ["reason"],
+    });
+    const wanted = new Set(eventIds);
+    const byId = new Map(bundle.sections.flatMap((section) => section.items)
+      .filter((item) => item.kind === "event" && wanted.has(item.resource_id))
+      .map((item) => [item.resource_id, item]));
+    if (byId.size !== wanted.size) {
+      throw new PersonalContextError(
+        "context_changed",
+        HttpStatus.CONFLICT,
+        "Aggregate context snapshot is incomplete",
+      );
+    }
+    const authority = this.runtime.requireHost().get("authority");
+    const events = await Promise.all(eventIds.map((eventId) =>
+      authority.getEvent(this.runtime.orgId(), eventId)));
+    const hashes = events.flatMap((event) =>
+      event?.content_hash ? [event.content_hash] : []);
+    const [bodies, metadata] = await Promise.all([
+      this.runtime.requireHost().get("blobs").getMany(hashes),
+      authority.findBlobs(hashes),
+    ]);
+    return [
+      "QUESTION",
+      query,
+      "",
+      "BATCH MESSAGES",
+      ...eventIds.map((eventId, index) => {
+        const item = byId.get(eventId)!;
+        const evidence = item.evidence.find((entry) => entry.event_id === eventId);
+        const event = events[index];
+        const bytes = event?.content_hash ? bodies.get(event.content_hash) : undefined;
+        const blob = event?.content_hash ? metadata.get(event.content_hash) : undefined;
+        const content = event?.content_hash && blob && bytes
+          && createHash("sha256").update(bytes).digest("hex") === event.content_hash
+          ? storedMessageContent(bytes, blob.media_type)
+          : undefined;
+        if (!content || evidence?.content_hash !== event?.content_hash) {
+          throw new PersonalContextError(
+            "context_changed",
+            HttpStatus.CONFLICT,
+            "Aggregate evidence changed; search again",
+          );
+        }
+        const sentAt = evidence?.occurred_at.slice(0, 16).replace("T", " ")
+          ?? "unknown time";
+        const attachments = content.attachments.map((attachment) =>
+          `[attachment: ${attachment.filename || attachment.media_type}]`);
+        const body = [
+          content.text.replace(/\s+/g, " ").slice(0, MAP_REDUCE_MESSAGE_CHARS),
+          ...attachments,
+        ].filter(Boolean).join(" ");
+        return `[${index + 1}] ${sentAt} UTC · ${evidence?.source ?? "unknown"}: ${
+          body
+        }`;
+      }),
+    ].join("\n");
   }
 
   private async selectedAnswerConversations(
@@ -475,6 +589,7 @@ export class PersonalConversationContextService {
     });
     return {
       conversations,
+      snapshot_id: result.snapshot.id,
       total: items.length + truncated,
       truncated,
       unreadable,
