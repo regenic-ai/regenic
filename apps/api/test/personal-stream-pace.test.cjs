@@ -18,9 +18,10 @@ const {
   dueWorkBatchTimeoutMs,
   dueWorkClaimLimitFor,
   dueWorkClaimLeaseMs,
+  dueWorkConcurrency,
   observeDueWorkPressure,
 } = require("../dist/personal-connector-rhythm");
-const { DueWorkClaimLimiter } = require("@regenic/domain");
+const { DueWorkClaimLimiter, connectorPollTimeoutMs, connectorSyncTimeoutMs } = require("@regenic/domain");
 
 function planned(key, catchingUp, threadId) {
   return { key, catchingUp, threadId, item: key };
@@ -53,6 +54,41 @@ describe("user sync budgets", () => {
       dueWorkBatchTimeoutMs([...work, { lane: "media" }], settings) >
         dueWorkBatchTimeoutMs(work, settings),
     );
+  });
+
+  it("covers the actual serial history waves when pressure reduces configured concurrency", () => {
+    const settings = { ...defaultSyncSettings(), live_concurrency: 64, history_concurrency: 64, media_concurrency: 64 };
+    const work = Array.from({ length: 16 }, () => ({ lane: "history" }));
+    const concurrency = dueWorkConcurrency(settings, "elevated");
+    assert.equal(concurrency.history, 1);
+    const deadline = dueWorkBatchTimeoutMs(work, settings, concurrency);
+    assert.ok(deadline >= 16 * connectorPollTimeoutMs());
+    assert.ok(deadline > dueWorkBatchTimeoutMs(work, settings));
+    const critical = dueWorkConcurrency(settings, "critical");
+    assert.equal(critical.media, 0);
+    assert.equal(
+      dueWorkBatchTimeoutMs([...work, { lane: "media" }], settings, critical),
+      dueWorkBatchTimeoutMs(work, settings, critical),
+      "deferred media must not count as a polling wave",
+    );
+  });
+
+  it("keeps queued installation and catalog claims leased through their worst-case execution", () => {
+    const settings = {
+      ...defaultSyncSettings(), installation_concurrency: 1,
+      live_concurrency: 64, history_concurrency: 64, media_concurrency: 64,
+    };
+    const limit = 8;
+    const lease = dueWorkClaimLeaseMs(limit, settings);
+    assert.ok(lease > limit * connectorPollTimeoutMs(), "all installations may poll serially");
+    assert.ok(lease > limit * connectorSyncTimeoutMs(), "catalog work can take longer than a stream poll");
+    const concurrency = dueWorkConcurrency(settings, "critical");
+    const mixed = [
+      ...Array.from({ length: 4 }, () => ({ lane: "live" })),
+      ...Array.from({ length: 4 }, () => ({ lane: "history" })),
+    ];
+    assert.ok(lease > dueWorkBatchTimeoutMs(mixed, settings, concurrency));
+    assert.equal(dueWorkClaimLeaseMs(limit), Math.max(60000, connectorSyncTimeoutMs() * 2));
   });
 
   it("keeps adaptive pressure reduction below user-configured batch caps", () => {

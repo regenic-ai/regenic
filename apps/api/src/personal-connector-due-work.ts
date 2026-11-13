@@ -5,7 +5,6 @@ import {
   driverPolls,
   runInSyncLane,
   SyncEngine,
-  applyKernelPressureToSyncBudget,
   buildSyncProgressSnapshot,
   streamIdleTiersFromEnv,
   syncOutcomeForPoll,
@@ -35,6 +34,7 @@ import {
   type SyncLane,
   type SyncPhase,
   type SyncWorkRecord,
+  type KernelPressureView,
 } from "@regenic/domain";
 import {
   applyPullOutcome,
@@ -47,7 +47,6 @@ import {
 } from "./personal-human-pace";
 import {
   catalogRefreshPages,
-  syncExecutionBudget,
 } from "./personal-stream-pace";
 
 import { loadEligibleInstallationThreads } from "./personal-eligible-threads";
@@ -55,6 +54,7 @@ import { loadEligibleInstallationThreads } from "./personal-eligible-threads";
 import { catalogMembersFromStreams } from "./connector-sync-members";
 
 import type { ConnectorDueWorkState as ConnectorState } from "./personal-connector-state";
+import type { PersonalSyncSettings } from "./personal-sync-settings";
 import {
   pollStream,
   mapLimit,
@@ -65,6 +65,7 @@ import {
 import {
   dueWorkBatchTimeoutMs,
   dueWorkClaimLeaseMs,
+  dueWorkConcurrency,
   recordClaimedWorkLag,
   deferWrongPlaneDueAt,
   nextDueAfterFailure,
@@ -87,13 +88,15 @@ export async function runDueWorkPlane(
     installationId?: string;
   },
 ): Promise<boolean> {
+  await state.refreshSyncSettings();
+  const settings = state.syncSettings;
   const now = new Date().toISOString();
-  const limit = dueWorkClaimLimitFor(state.dueWorkLimiters, input.plane, state.syncSettings);
+  const limit = dueWorkClaimLimitFor(state.dueWorkLimiters, input.plane, settings);
   const claim = (at: string) =>
     store.claimSyncWork({
       owner: state.dueWorkOwner,
       now: at,
-      lease_ms: dueWorkClaimLeaseMs(limit, state.syncSettings),
+      lease_ms: dueWorkClaimLeaseMs(limit, settings),
       limit,
       lanes: input.lanes,
       unassigned: true,
@@ -117,14 +120,14 @@ export async function runDueWorkPlane(
     }
   }
   recordClaimedWorkLag(claimed);
-  let pressure = (await executeClaimedDueWork(state, store, claimed, input))
+  let pressure = (await executeClaimedDueWork(state, store, claimed, { ...input, execution: { settings } }))
     .pressure;
   if (claimed.some((item) => item.lane === "catalog")) {
     const followUp = await claim(new Date().toISOString());
     if (followUp.length > 0) {
       recordClaimedWorkLag(followUp);
       pressure =
-        (await executeClaimedDueWork(state, store, followUp, input)).pressure ||
+        (await executeClaimedDueWork(state, store, followUp, { ...input, execution: { settings } })).pressure ||
         pressure;
     }
   }
@@ -256,8 +259,10 @@ export async function executeClaimedDueWork(
     plane: "steady" | "bootstrap";
     allowHistory: boolean;
     syncRunId?: string;
+    execution?: { settings: PersonalSyncSettings | undefined };
   },
 ): Promise<{ pressure: boolean; accepted_count: number }> {
+  const { settings } = input.execution ?? { settings: state.syncSettings };
   const groups = new Map<string, SyncWorkRecord[]>();
   for (const work of claimed) {
     const group = groups.get(work.installation_id) ?? [];
@@ -267,7 +272,7 @@ export async function executeClaimedDueWork(
   const errors: unknown[] = [];
   let pressure = false;
   let acceptedCount = 0;
-  await mapLimit([...groups.entries()], state.syncSettings?.installation_concurrency ?? installationConcurrency(), async ([installationId, work]) => {
+  await mapLimit([...groups.entries()], settings?.installation_concurrency ?? installationConcurrency(), async ([installationId, work]) => {
     const now = new Date().toISOString();
     const catalogWork = work.filter((item) => item.lane === "catalog");
     const streamWork = work.filter((item) => item.lane !== "catalog");
@@ -293,14 +298,18 @@ export async function executeClaimedDueWork(
       if (streamWork.length === 0) {
         return;
       }
+      const kernelPressure = state.kernelRuntime.pressureView();
+      const humanIdle = isHumanIdle();
+      const concurrency = dueWorkConcurrency(settings, kernelPressure.level, humanIdle);
       const polled = await withDeadline(
         pollClaimedDueWorkStreams(state, 
           store,
           installationId,
           streamWork,
           input,
+          { kernelPressure, humanIdle, concurrency },
         ),
-        dueWorkBatchTimeoutMs(streamWork, state.syncSettings),
+        dueWorkBatchTimeoutMs(streamWork, settings, concurrency),
         `due-work ${input.plane} ${installationId}`,
       );
       if (polled.pressure) {
@@ -348,6 +357,11 @@ async function pollClaimedDueWorkStreams(
     allowHistory: boolean;
     syncRunId?: string;
   },
+  budget: {
+    kernelPressure: KernelPressureView;
+    humanIdle: boolean;
+    concurrency: ReturnType<typeof dueWorkConcurrency>;
+  },
 ): Promise<{ pressure: boolean; accepted: number }> {
   const host = state.runtime.requireHost();
   const installation = await state.requireInstallation(store, installationId);
@@ -364,51 +378,9 @@ async function pollClaimedDueWorkStreams(
     return { pressure: false, accepted: 0 };
   }
   const engine = new SyncEngine(store);
-  const humanIdle = isHumanIdle();
-  const kernelPressure = state.kernelRuntime.pressureView();
+  const { humanIdle, kernelPressure, concurrency } = budget;
   const catalogSize = await catalogSizeFor(state, store, installation.id);
-  const liveConcurrency = applyKernelPressureToSyncBudget(
-    {
-      pages: DEFAULT_MAX_PAGES,
-      concurrency: syncExecutionBudget({
-        settings: state.syncSettings,
-        humanIdle,
-        capCatchUp: true,
-        lane: "live",
-        pages: DEFAULT_MAX_PAGES,
-      }).concurrency,
-      lane: "live",
-    },
-    kernelPressure.level,
-  ).concurrency;
-  const historyConcurrency = applyKernelPressureToSyncBudget(
-    {
-      pages: DEFAULT_MAX_PAGES,
-      concurrency: syncExecutionBudget({
-        settings: state.syncSettings,
-        humanIdle,
-        capCatchUp: true,
-        lane: "history",
-        pages: DEFAULT_MAX_PAGES,
-      }).concurrency,
-      lane: "history",
-    },
-    kernelPressure.level,
-  ).concurrency;
-  const mediaConcurrency = applyKernelPressureToSyncBudget(
-    {
-      pages: DEFAULT_MAX_PAGES,
-      concurrency: syncExecutionBudget({
-        settings: state.syncSettings,
-        humanIdle,
-        capCatchUp: true,
-        lane: "media",
-        pages: DEFAULT_MAX_PAGES,
-      }).concurrency,
-      lane: "media",
-    },
-    kernelPressure.level,
-  ).concurrency;
+  const { live: liveConcurrency, history: historyConcurrency, media: mediaConcurrency } = concurrency;
   const liveItems = streamWork.filter(
     (item) => item.lane === "interactive" || item.lane === "live",
   );
@@ -892,6 +864,7 @@ export async function catchUp(state: ConnectorState, installationId: string): Pr
 }
 
 async function catchUpDueWork(state: ConnectorState, installationId: string): Promise<void> {
+  await state.refreshSyncSettings();
   const store = state.runtime.requireHost().get("authority");
   await discoverCatalogDueWork(state, store, installationId, "bootstrap");
   await runDueWorkPlane(state, store, {
@@ -992,6 +965,7 @@ async function rememberEngineResult(
 }
 
 export async function runCatalogTick(state: ConnectorState): Promise<void> {
+  await state.refreshSyncSettings();
   const host = state.runtime.requireHost();
   const store = host.get("authority");
   const installations = await store.listInstallations(state.runtime.orgId());

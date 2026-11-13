@@ -17,16 +17,15 @@ import {
   type DueWorkHeat,
   type SyncLane,
   type SyncWorkRecord,
+  applyKernelPressureToSyncBudget,
+  type KernelPressureLevel,
 } from "@regenic/domain";
 
 import {
   preferredThreadId,
 } from "./personal-pull-status";
 
-import {
-  IDLE_HISTORY_STREAM_CONCURRENCY,
-  LIVE_STREAM_CONCURRENCY,
-} from "./personal-stream-pace";
+import { syncExecutionBudget } from "./personal-stream-pace";
 import type { PersonalSyncSettings } from "./personal-sync-settings";
 import { LEASE_MS } from "./personal-connector-poll";
 
@@ -60,6 +59,7 @@ export function catalogPullIntervalMs(): number {
 export function dueWorkBatchTimeoutMs(
   work: readonly { lane: string }[],
   settings?: PersonalSyncSettings,
+  concurrency = dueWorkConcurrency(settings),
 ): number {
   const pollMs = connectorPollTimeoutMs();
   const live = work.filter(
@@ -68,25 +68,39 @@ export function dueWorkBatchTimeoutMs(
   const history = work.filter((item) => item.lane === "history").length;
   const media = work.filter((item) => item.lane === "media").length;
   const liveHistoryWaves = Math.max(
-    Math.ceil(live / Math.max(1, settings?.live_concurrency ?? LIVE_STREAM_CONCURRENCY)),
-    Math.ceil(history / Math.max(1, settings?.history_concurrency ?? IDLE_HISTORY_STREAM_CONCURRENCY)),
+    Math.ceil(live / Math.max(1, concurrency.live)),
+    Math.ceil(history / Math.max(1, concurrency.history)),
   );
-  const mediaWaves = Math.ceil(media / Math.max(1, settings?.media_concurrency ?? 1));
+  const mediaWaves = concurrency.media > 0 ? Math.ceil(media / concurrency.media) : 0;
   const waves = Math.max(1, liveHistoryWaves + mediaWaves);
   // Each list already stops at the poll timeout. The batch clock has to
   // cover every wave of this claim; a flat 30s cuts the later waves.
   return Math.max(connectorSyncTimeoutMs(), waves * pollMs + 5_000);
 }
 
+export function dueWorkConcurrency(
+  settings?: PersonalSyncSettings,
+  pressure: KernelPressureLevel = "ok",
+  humanIdle = true,
+): { live: number; history: number; media: number } {
+  const concurrency = (lane: SyncLane) => applyKernelPressureToSyncBudget({
+    ...syncExecutionBudget({ settings, humanIdle, lane, pages: 1 }),
+    lane,
+  }, pressure).concurrency;
+  return {
+    live: concurrency("live"),
+    history: concurrency("history"),
+    media: concurrency("media"),
+  };
+}
+
 export function dueWorkClaimLeaseMs(limit: number, settings?: PersonalSyncSettings): number {
   const fallback = Math.max(LEASE_MS, connectorSyncTimeoutMs() * 2);
   if (!settings) return fallback;
-  const width = Math.min(
-    settings.live_concurrency, settings.history_concurrency, settings.media_concurrency,
-  );
-  // Media runs after live/history. Keep claims leased through both phases.
-  const waves = Math.ceil(limit / width) + 1;
-  return Math.max(fallback, waves * connectorPollTimeoutMs() + 10_000);
+  // Claimed rows can queue behind other installations, and pressure can reduce
+  // any stream lane to one worker. Bound the whole claim as serial work.
+  const itemMs = Math.max(connectorPollTimeoutMs(), connectorSyncTimeoutMs()) + 5_000;
+  return Math.max(fallback, (limit + 1) * itemMs + 10_000);
 }
 
 export function dueWorkClaimLimit(plane: "steady" | "bootstrap"): number {

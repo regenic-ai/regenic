@@ -39,6 +39,7 @@ export interface ConnectorState {
     "clearInstallationSnapshots" | "pressureView" | "publishInstallAttempt" | "publishSyncSnapshot" | "shouldDeferHistorySync">;
   readonly quota: InstallationQuotaBook;
   syncSettings?: PersonalSyncSettings;
+  refreshSyncSettings(): Promise<void>;
   readonly streamCatchingUp: Set<string>;
   readonly streamMeta: Map<
     string,
@@ -83,7 +84,8 @@ export interface ConnectorState {
 
 type ConnectorDependencies = Pick<ConnectorState,
   "runtime" | "inbox" | "drivers" | "kernelRuntime" | "exclusiveStream" |
-  "publishStreams" | "rememberStreamMeta" | "rememberStreamPace" | "requireInstallation" | "installSecrets" | "catchUp"
+  "publishStreams" | "rememberStreamMeta" | "rememberStreamPace" | "requireInstallation" | "installSecrets" | "catchUp" |
+  "refreshSyncSettings"
 > & { maintenanceHeld(): boolean };
 
 export function createConnectorState(input: ConnectorDependencies): ConnectorState {
@@ -125,7 +127,7 @@ export type ConnectorEgressState = Pick<ConnectorState,
 export type ConnectorWebhookState = Pick<ConnectorState,
   "runtime" | "drivers" | "inbox" | "maintenanceHold" | "quota" | "requireInstallation">;
 export type ConnectorDueWorkState = Pick<ConnectorState,
-  "runtime" | "drivers" | "inbox" | "kernelRuntime" | "quota" | "syncSettings" | "maintenanceHold" |
+  "runtime" | "drivers" | "inbox" | "kernelRuntime" | "quota" | "syncSettings" | "refreshSyncSettings" | "maintenanceHold" |
   "catalogSizeByInstall" | "dueWorkLimiters" | "dueWorkOwner" | "exclusiveStream" |
   "publishStreams" | "rememberStreamMeta" | "rememberStreamPace" | "requireInstallation" |
   "streamCatchingUp" | "streamPulling" | "streamPullingHistory">;

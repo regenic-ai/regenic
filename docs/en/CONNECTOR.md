@@ -131,6 +131,11 @@ Each connector must:
   4 history, 1 media, batch caps 32/16, and 16 new conversations per tick).
   An explicit user quota overrides connector hints, not source-side rate limits.
   Adaptive claim reduction and kernel-pressure protection remain enabled.
+  Background, catalog and manual workers reload the shared preference at work
+  boundaries, so a save on a non-leader API replica also reaches the timer leader.
+  A claim keeps its chosen concurrency settings; each installation's deadline uses
+  the same pressure-adjusted concurrency as its execution. Customized leases cover
+  worst-case serial queueing across installations and lanes, including catalog work.
   The desktop shows two choices before any numeric controls: Everyday sync
   retains the existing defaults; Catch up faster doubles the request allowance,
   live concurrency, first-seed limit and steady batch cap within the allowed ranges.

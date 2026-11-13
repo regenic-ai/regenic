@@ -20,6 +20,7 @@ import {
 
 import type { ConnectorDueWorkState as ConnectorState } from "./personal-connector-state";
 import type { StartSyncRunInput } from "./personal-connector-types";
+import type { PersonalSyncSettings } from "./personal-sync-settings";
 import {
   safeErrorCode,
   DEFAULT_MAX_PAGES,
@@ -210,18 +211,25 @@ export async function retryQuarantines(
 }
 
 async function executeDurableSyncRun(state: ConnectorState, runId: string): Promise<void> {
+  await state.refreshSyncSettings();
+  const settings = state.syncSettings;
   const store = state.runtime.requireHost().get("authority");
   const run = await store.getSyncRun(runId, state.runtime.orgId());
   if (!run || (run.status !== "queued" && run.status !== "running")) {
     return;
   }
   const owner = `personal-sync-worker:${randomUUID()}`;
+  const plane = syncRunWorkPlane(run.mode);
+  const claimCap = settings
+    ? settings[plane === "steady" ? "steady_claim_limit" : "bootstrap_claim_limit"]
+    : dueWorkClaimLimitFor(state.dueWorkLimiters, plane);
   const [work] = await store.claimSyncWork({
     owner,
     now: new Date().toISOString(),
     lease_ms: dueWorkClaimLeaseMs(
-      dueWorkClaimLimitFor(state.dueWorkLimiters, syncRunWorkPlane(run.mode), state.syncSettings),
-      state.syncSettings,
+      // The durable run covers catalog discovery and up to two stream claims.
+      2 * claimCap + 1,
+      settings,
     ),
     limit: 1,
     work_id: syncRunWorkId(run.id),
@@ -230,7 +238,7 @@ async function executeDurableSyncRun(state: ConnectorState, runId: string): Prom
     return;
   }
   try {
-    const result = await executeSyncRunDueWork(state, store, run);
+    const result = await executeSyncRunDueWork(state, store, run, settings);
     const latest = await store.getSyncRun(run.id, run.org_id);
     if (latest?.status === "paused") {
       await store.settleSyncWork({
@@ -289,6 +297,7 @@ async function executeSyncRunDueWork(
   state: ConnectorState,
   store: ConnectorRuntimeStore,
   run: SyncRun,
+  settings: PersonalSyncSettings | undefined,
 ): Promise<{ accepted_count: number }> {
   const plane = syncRunWorkPlane(run.mode);
   const lanes = syncRunWorkLanes(run.mode);
@@ -317,7 +326,7 @@ async function executeSyncRunDueWork(
     members: catalog.members,
     preferredThreadId: preferredThreadId(),
     streamKeys: run.options.stream_keys,
-    limit: state.syncSettings?.first_seed_limit ?? firstSeedHeadFromEnv(),
+    limit: settings?.first_seed_limit ?? firstSeedHeadFromEnv(),
   });
   if (wakeKeys.length > 0) {
     await store.wakeUnassignedSyncWork({
@@ -330,8 +339,8 @@ async function executeSyncRunDueWork(
   if (!latest || (latest.status !== "queued" && latest.status !== "running")) {
     return { accepted_count: 0 };
   }
-  const limit = state.syncSettings
-    ? dueWorkClaimLimitFor(state.dueWorkLimiters, plane, state.syncSettings)
+  const limit = settings
+    ? dueWorkClaimLimitFor(state.dueWorkLimiters, plane, settings)
     : Math.min(
         MAX_DUE_WORK_CLAIM_LIMIT,
         Math.max(
@@ -340,7 +349,7 @@ async function executeSyncRunDueWork(
           firstSeedHeadFromEnv() + 2,
         ),
       );
-  const leaseMs = dueWorkClaimLeaseMs(limit, state.syncSettings);
+  const leaseMs = dueWorkClaimLeaseMs(limit, settings);
   const claim = async (): Promise<SyncWorkRecord[]> =>
     store.claimSyncWork({
       owner: state.dueWorkOwner,
@@ -359,6 +368,7 @@ async function executeSyncRunDueWork(
       plane,
       allowHistory,
       syncRunId: run.id,
+      execution: { settings },
     });
     accepted += executed.accepted_count;
     if (claimed.some((item) => item.lane === "catalog")) {
@@ -370,6 +380,7 @@ async function executeSyncRunDueWork(
             plane,
             allowHistory,
             syncRunId: run.id,
+            execution: { settings },
           })
         ).accepted_count;
       }

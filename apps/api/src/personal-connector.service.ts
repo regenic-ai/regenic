@@ -105,6 +105,7 @@ export class PersonalConnectorService implements OnModuleDestroy, OnApplicationB
   private catalogTicking = false;
   private backgroundStarted = false;
   private maintenanceHold = false;
+  private syncSettingsAccess: Promise<void> = Promise.resolve();
 
   constructor(
     @Inject(PersonalRuntimeService)
@@ -129,6 +130,7 @@ export class PersonalConnectorService implements OnModuleDestroy, OnApplicationB
       requireInstallation: (store, installationId) => this.requireInstallation(store, installationId),
       installSecrets: () => this.installSecrets(),
       catchUp: (installationId) => catchUp(this.state, installationId),
+      refreshSyncSettings: async () => { await this.getSyncSettings(); },
     });
     drivers.installationLifecycle.setHost(() => asConnectorHost(runtime.requireHost()));
     runtime.beforeDispose(async () => {
@@ -158,7 +160,11 @@ export class PersonalConnectorService implements OnModuleDestroy, OnApplicationB
     }
   }
 
-  async getSyncSettings() {
+  getSyncSettings() {
+    return this.accessSyncSettings(() => this.readSyncSettings());
+  }
+
+  private async readSyncSettings() {
     const value = await this.runtime.requireHost().get("authority").getUiPref(
       this.runtime.orgId(), SYNC_SETTINGS_PREF_KEY,
     );
@@ -179,7 +185,11 @@ export class PersonalConnectorService implements OnModuleDestroy, OnApplicationB
     };
   }
 
-  async putSyncSettings(input: unknown) {
+  putSyncSettings(input: unknown) {
+    return this.accessSyncSettings(() => this.writeSyncSettings(input));
+  }
+
+  private async writeSyncSettings(input: unknown) {
     const settings = input === null ? undefined : validateSyncSettings(input);
     await this.runtime.requireHost().get("authority").putUiPref(
       this.runtime.orgId(), SYNC_SETTINGS_PREF_KEY,
@@ -192,6 +202,12 @@ export class PersonalConnectorService implements OnModuleDestroy, OnApplicationB
       ranges: SYNC_SETTINGS_RANGES,
       customized: settings !== undefined,
     };
+  }
+
+  private accessSyncSettings<T>(work: () => Promise<T>): Promise<T> {
+    const operation = this.syncSettingsAccess.then(work);
+    this.syncSettingsAccess = operation.then(() => undefined, () => undefined);
+    return operation;
   }
 
   private applySyncSettings(settings: PersonalSyncSettings | undefined): void {
