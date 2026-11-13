@@ -54,18 +54,28 @@ interface Bucket {
  */
 export class InstallationQuotaBook {
   private readonly buckets = new Map<string, Bucket>();
+  private override: ConnectorQuota | undefined;
 
   constructor(
     private readonly fallback: ConnectorQuota = connectorQuotaFromEnv(),
     private readonly now: () => number = () => Date.now(),
   ) {}
 
+  configure(quota?: ConnectorQuota): void {
+    if (this.override?.tokens === quota?.tokens &&
+        this.override?.window_ms === quota?.window_ms) {
+      return;
+    }
+    this.override = quota ? { ...quota } : undefined;
+    this.buckets.clear();
+  }
+
   tryConsume(
     installationId: string,
     quota?: Partial<ConnectorQuota> | null,
     lane: SyncLane = currentSyncLane(),
   ): boolean {
-    const resolved = normalizeConnectorQuota(quota, this.fallback);
+    const resolved = this.override ?? normalizeConnectorQuota(quota, this.fallback);
     if (resolved.tokens <= 0) {
       return true;
     }
