@@ -11,6 +11,7 @@ import {
   Menu,
   nativeImage,
   Notification,
+  safeStorage,
   session,
   shell,
   Tray,
@@ -51,7 +52,7 @@ import { editContextRoles } from "./edit-menu";
 import { collectHostStats, resetHostStatCache } from "./host-stats";
 import { formatBytes, portFromHttpOrigin } from "../shared/host-watch";
 import { waitForPersonalKernel } from "../shared/kernel-ready";
-import { probeKernelDatabase, probeKernelMode } from "./kernel-probe";
+import { probeKernelAuthority, probeKernelDatabase, probeKernelMode } from "./kernel-probe";
 import { isMessageKey, translate } from "../shared/messages.ts";
 import { parseLocale } from "../shared/locale.ts";
 import {
@@ -68,6 +69,14 @@ import {
   type KernelPreference,
 } from "./kernel-settings";
 import { connectCustomKernel } from "./kernel-connect";
+import {
+  databaseEnvironment,
+  postgresConnection,
+  switchDatabase,
+  testPostgresConnection,
+  type DatabasePreference,
+} from "./database-settings";
+import type { DatabaseSettingsInput, DatabaseSettingsResult } from "../shared/database-settings";
 import { personalApiRequestHeaders } from "./personal-api-key";
 import {
   attachConsolePresenceWindow,
@@ -118,8 +127,14 @@ function managedSemantic(): SemanticRuntime {
 function semanticView() {
   const preference = loadDesktopPreference(settingsFile());
   const hardware = currentEmbeddingHardware();
+  const sqlite = preference.database?.driver !== "postgres";
   return {
-    ...managedSemantic().view(preference.semanticEnabled === true, !kernelMutation && preference.mode === "local" && (sidecar !== null || Boolean(semanticActionError))),
+    ...managedSemantic().view(
+      preference.semanticEnabled === true && sqlite,
+      !kernelMutation && preference.mode === "local" && sqlite &&
+        (sidecar !== null || Boolean(semanticActionError)),
+    ),
+    ...(!sqlite && preference.mode === "local" ? { managementHint: "sqlite_only" as const } : {}),
     visualEnabled: preference.semanticVisualEnabled === true,
     launchSettings: preference.semanticLaunchSettings,
     maxThreads: Math.max(1, Math.floor(hardware.cpus)),
@@ -325,11 +340,99 @@ function sidecarEnv(
     if (endpoint) env.REGENIC_EMBEDDING_BASE_URL = endpoint;
     else delete env.REGENIC_EMBEDDING_BASE_URL;
   }
-  return env;
+  const preference = loadDesktopPreference(settingsFile());
+  return databaseEnvironment(
+    env, database, blobRoot, currentDataPaths().dataRoot,
+    preference.database,
+    preference.database?.driver === "postgres" ? savedDatabaseConnection() : undefined,
+  );
 }
 
 function settingsFile(): string {
   return join(app.getPath("userData"), "desktop-settings.json");
+}
+
+function savedDatabaseConnection(): string {
+  const encrypted = loadDesktopPreference(settingsFile()).database?.encryptedConnection;
+  if (!encrypted) throw new Error("database.connectionRequired");
+  if (!safeStorage.isEncryptionAvailable() ||
+    (process.platform === "linux" && safeStorage.getSelectedStorageBackend() === "basic_text")) {
+    throw new Error("database.secureStorageUnavailable");
+  }
+  try {
+    return safeStorage.decryptString(Buffer.from(encrypted, "base64"));
+  } catch {
+    throw new Error("database.secureStorageUnavailable");
+  }
+}
+
+function databaseView() {
+  const preference = loadDesktopPreference(settingsFile());
+  return {
+    driver: preference.database?.driver ?? "sqlite",
+    canChange: preference.mode === "local",
+    hasSavedConnection: Boolean(preference.database?.encryptedConnection),
+    connectionLabel: preference.database?.connectionLabel,
+  };
+}
+
+async function databaseResult<T>(run: () => Promise<T>): Promise<DatabaseSettingsResult<T>> {
+  try {
+    return { ok: true, value: await run() };
+  } catch (error) {
+    const code = error instanceof Error && isMessageKey(error.message)
+      ? error.message : "database.operationFailed";
+    console.error("[database]", code);
+    return { ok: false, error: code };
+  }
+}
+
+async function applyDatabaseSettings(input: DatabaseSettingsInput): Promise<void> {
+  const previous = loadDesktopPreference(settingsFile());
+  if (previous.mode !== "local") throw new Error("database.localOnly");
+  if (!input || !["sqlite", "postgres"].includes(input.driver)) {
+    throw new Error("database.invalidDriver");
+  }
+  if (input.confirmed !== true) throw new Error("database.confirmRequired");
+  if (input.connectionString !== undefined && typeof input.connectionString !== "string") {
+    throw new Error("database.invalidConnection");
+  }
+  let database: DatabasePreference = previous.database
+    ? { ...previous.database, driver: input.driver }
+    : { driver: input.driver };
+  if (input.driver === "postgres") {
+    const connection = postgresConnection(input.connectionString?.trim() || savedDatabaseConnection());
+    await testPostgresConnection(connection.connectionString);
+    if (!safeStorage.isEncryptionAvailable() ||
+      (process.platform === "linux" && safeStorage.getSelectedStorageBackend() === "basic_text")) {
+      throw new Error("database.secureStorageUnavailable");
+    }
+    database = {
+      driver: "postgres",
+      encryptedConnection: safeStorage.encryptString(connection.connectionString).toString("base64"),
+      connectionLabel: connection.label,
+      blobKey: connection.blobKey,
+    };
+  }
+  await switchDatabase<DatabasePreference | undefined>(previous.database, database, {
+    stop: async () => {
+      await stopOwnedSidecarAndWait();
+      releaseOwnedStoreLock();
+      await managedSemantic().stop();
+    },
+    save: (database) => saveDesktopPreference(settingsFile(), {
+      ...loadDesktopPreference(settingsFile()), database,
+    }),
+    start: async () => {
+      const preference = loadDesktopPreference(settingsFile());
+      if (preference.database?.driver !== "postgres" && preference.semanticEnabled) {
+        await managedSemantic().start();
+      }
+      await startLocalKernel({ forceSpawn: true });
+      broadcastOrigin();
+    },
+  });
+  resetHostStatCache();
 }
 
 function isUsingCustomKernel(): boolean {
@@ -355,6 +458,7 @@ function kernelView() {
         loadSavedPersonalApiKey(settingsFile(), customOrigin),
     ),
     locale: preference.locale,
+    databaseDriver: preference.database?.driver ?? "sqlite",
     dataDirectory: {
       path: paths.dataRoot,
       database: paths.database,
@@ -364,8 +468,8 @@ function kernelView() {
       productRoot: paths.productRoot,
       checkoutRoot: paths.checkoutRoot,
       relocatedFrom: paths.relocatedFrom,
-      splitLayout: storeLayoutSplit(paths),
-      canChange: preference.mode === "local" && !paths.envOverride,
+      splitLayout: preference.database?.driver !== "postgres" && storeLayoutSplit(paths),
+      canChange: preference.mode === "local" && preference.database?.driver !== "postgres" && !paths.envOverride,
       remoteWarning: isRemoteOrRemovablePath(paths.dataRoot),
     },
     ...(sourceRetention ? { sourceRetention } : {}),
@@ -576,7 +680,8 @@ async function storeHeldByLocalKernel(database: string): Promise<boolean> {
 
 async function startLocalKernel(options?: { forceSpawn?: boolean }): Promise<void> {
   const paths = currentDataPaths();
-  if (!options?.forceSpawn) {
+  const postgres = loadDesktopPreference(settingsFile()).database?.driver === "postgres";
+  if (!options?.forceSpawn && !postgres) {
     const reusable = await findReusableLocalKernel(paths.database);
     if (reusable) {
       if (sidecar && personalApiKey) {
@@ -601,12 +706,17 @@ async function startLocalKernel(options?: { forceSpawn?: boolean }): Promise<voi
     spawnSidecar(picked.port);
     await waitForPersonalKernel({
       origin: apiOrigin,
-      probe: probeKernelMode,
+      probe: postgres
+        ? (origin) => probeKernelAuthority(origin, "postgres")
+        : probeKernelMode,
       isAlive: () => sidecar != null && sidecar.exitCode == null,
     });
   } catch (error) {
-    stopOwnedSidecar();
-    releaseOwnedStoreLock();
+    try {
+      await stopOwnedSidecarAndWait();
+    } finally {
+      releaseOwnedStoreLock();
+    }
     throw error;
   }
 }
@@ -651,7 +761,8 @@ async function applyKernelPreference(
     return;
   }
   saveKernelPreference(settingsFile(), { mode: "local" });
-  if (loadDesktopPreference(settingsFile()).semanticEnabled) await managedSemantic().start();
+  const localPreference = loadDesktopPreference(settingsFile());
+  if (localPreference.semanticEnabled && localPreference.database?.driver !== "postgres") await managedSemantic().start();
   await startLocalKernel();
   broadcastOrigin();
 }
@@ -672,12 +783,12 @@ function inspectCurrentDataDirectory(dest: string) {
   const preference = loadDesktopPreference(settingsFile());
   const plan = inspectDataDirectory(dest, currentDataPaths());
   const relocatedTo = readStoreRelocation(plan.path)?.to;
-  if (preference.mode === "custom") {
+  if (preference.mode === "custom" || preference.database?.driver === "postgres") {
     return {
       ...plan,
       ...(relocatedTo ? { relocatedTo } : {}),
       canChange: false,
-      reason: "settings.dataDirCustom",
+      reason: preference.mode === "custom" ? "settings.dataDirCustom" : "database.directoryUnavailable",
     };
   }
   return {
@@ -1117,6 +1228,24 @@ app.whenReady().then(async () => {
   });
   ipcMain.handle("regenic:get-api-origin", async () => apiOrigin);
   ipcMain.handle("regenic:get-kernel-settings", async () => kernelView());
+  ipcMain.handle("regenic:get-database-settings", async () => databaseResult(async () => databaseView()));
+  ipcMain.handle("regenic:test-database-settings", async (event, connectionString: unknown) => databaseResult(async () => {
+    if (event.sender !== mainWindow?.webContents) throw new Error("database.localOnly");
+    if (!databaseView().canChange) throw new Error("database.localOnly");
+    if (connectionString !== undefined && typeof connectionString !== "string") {
+      throw new Error("database.invalidConnection");
+    }
+    const connection = postgresConnection(
+      typeof connectionString === "string" && connectionString.trim()
+        ? connectionString : savedDatabaseConnection(),
+    );
+    await testPostgresConnection(connection.connectionString);
+  }));
+  ipcMain.handle("regenic:set-database-settings", async (event, input: DatabaseSettingsInput) => databaseResult(async () => {
+    if (event.sender !== mainWindow?.webContents) throw new Error("database.localOnly");
+    await mutateKernel(() => applyDatabaseSettings(input));
+    return databaseView();
+  }));
   ipcMain.handle("regenic:get-semantic-runtime", async (event) => {
     if (event.sender !== mainWindow?.webContents) throw new Error("semantic.localOnly");
     await managedSemantic().refreshHealth();
@@ -1240,7 +1369,7 @@ app.whenReady().then(async () => {
 
   try {
     const preference = loadDesktopPreference(settingsFile());
-    if (preference.mode === "local" && preference.semanticEnabled) {
+    if (preference.mode === "local" && preference.semanticEnabled && preference.database?.driver !== "postgres") {
       try { await managedSemantic().start(); } catch (error) {
         console.error("[semantic] startup failed", error instanceof Error ? error.message : "semantic.startFailed");
       }

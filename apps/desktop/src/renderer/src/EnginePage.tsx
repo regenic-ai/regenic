@@ -22,6 +22,7 @@ import {
 } from "./api";
 import { CatalogDocs, uniqueCatalogDocs } from "./CatalogDocs";
 import { ConnectorKind } from "./ConnectorSettings";
+import { InfoTip } from "./InfoTip";
 import { ExecutorKind } from "./ExecutorSettings";
 import {
   connectorActionError,
@@ -362,7 +363,9 @@ export function EnginePage({
       <section className="card engine-connectors" id="engine-connector-config">
         <div className="card-head">
           <div className="card-title">
-            <h2>{t("engine.connectors")}</h2>
+            <h2 className="settings-heading">{t("engine.connectors")}
+              <InfoTip label={t("engine.connectors")}>{t("engine.connectorsLead")}</InfoTip>
+            </h2>
             <CatalogDocs docs={uniqueCatalogDocs(engine.catalog ?? [])} />
           </div>
           {syncable.length > 1 ? (
@@ -397,9 +400,6 @@ export function EnginePage({
             </button>
           ) : null}
         </div>
-        <p className="muted">
-          {t("engine.connectorsLead")}
-        </p>
         {unsignedPlugins > 0 ? (
           <p className="action-hint">
             {t("engine.unsignedPlugins", { count: unsignedPlugins })}
@@ -533,11 +533,12 @@ export function EnginePage({
       <section className="card engine-connectors">
         <div className="card-head">
           <div className="card-title">
-            <h2>{t("engine.executors")}</h2>
+            <h2 className="settings-heading">{t("engine.executors")}
+              <InfoTip label={t("engine.executors")}>{t("engine.executorsLead")}</InfoTip>
+            </h2>
             <CatalogDocs docs={uniqueCatalogDocs(engine.executor_catalog ?? [])} />
           </div>
         </div>
-        <p className="muted">{t("engine.executorsLead")}</p>
         {(engine.executor_catalog ?? []).map((kind) => (
           <ExecutorKind
             key={kind.kind}

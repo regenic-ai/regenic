@@ -22,6 +22,7 @@ async function rendererSmoke() {
   });
   try {
     await window.loadURL(process.env.REGENIC_SMOKE_URL);
+    window.webContents.focus();
     for (let attempt = 0; ; attempt++) {
       if (await window.webContents.executeJavaScript(
         'Boolean(document.querySelector(".recipe-form-foot"))',
@@ -29,6 +30,24 @@ async function rendererSmoke() {
       assert.ok(attempt < 100, "Real recipe editor did not render");
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
+    await window.webContents.executeJavaScript(
+      'document.querySelector("button[aria-describedby=recipe-instruction-hint]").focus()',
+    );
+    for (let attempt = 0; ; attempt++) {
+      if (await window.webContents.executeJavaScript('Boolean(document.querySelector("[role=tooltip]"))')) break;
+      assert.ok(attempt < 50, "Playbook help did not open on keyboard focus");
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert.equal(await window.webContents.executeJavaScript(`(() => {
+      const input = document.querySelector('textarea[aria-describedby="recipe-instruction-hint"]');
+      return Boolean(document.getElementById(input.getAttribute("aria-describedby")).textContent.trim()) &&
+        !input.value;
+    })()`), true, "Compact playbook fields must retain accessible help without changing the draft");
+    window.webContents.sendInputEvent({ type: "keyDown", keyCode: "Escape" });
+    window.webContents.sendInputEvent({ type: "keyUp", keyCode: "Escape" });
+    await new Promise((resolve) => setTimeout(resolve, 75));
+    assert.equal(await window.webContents.executeJavaScript('Boolean(document.querySelector("[role=tooltip]"))'), false,
+      "Escape must dismiss recipe field help");
     assert.equal(await window.webContents.executeJavaScript(`(() => {
       const row = [...document.querySelectorAll(".recipe-row")]
         .find(item => item.querySelector(".recipe-row-label")?.textContent.trim() === "Playbook");
@@ -51,6 +70,10 @@ async function rendererSmoke() {
     assert.equal(await window.webContents.executeJavaScript(
       'document.querySelector(\'.recipe-form button[type="submit"]\').disabled',
     ), false, "A non-empty shared task instruction must unblock saving");
+    await window.webContents.executeJavaScript('document.querySelector(".page").scrollTop = 0');
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    writeFileSync(join(process.env.REGENIC_SMOKE_OUTPUT, "editor-overview.png"),
+      (await window.webContents.capturePage()).toPNG());
     await window.webContents.executeJavaScript(`(() => {
       const buttons = [...document.querySelectorAll(".seg button")];
       const keepHere = buttons.find(button => button.textContent.trim() === "Keep here");
@@ -356,8 +379,15 @@ async function rendererSmoke() {
         await assertInactive();
         if (kind === "pull") {
           assert.match(await window.webContents.executeJavaScript(
-            'document.querySelector(".recipe-form").textContent',
+            `(() => {
+              const button = document.querySelector("button[aria-label='About How often']");
+              return document.getElementById(button.getAttribute("aria-describedby")).textContent;
+            })()`,
           ), /what to read.*what to select.*nothing matches.*available tools/s);
+          assert.doesNotMatch(await window.webContents.executeJavaScript(
+            'document.querySelector(".recipe-form").textContent',
+          ), /what to read.*what to select.*nothing matches.*available tools/s,
+          "Schedule instructions should be available as help, not permanent copy");
         }
       }
       const count = await window.webContents.executeJavaScript('window.__saveCount');

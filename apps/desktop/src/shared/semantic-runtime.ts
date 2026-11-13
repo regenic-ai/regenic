@@ -26,6 +26,7 @@ export interface SemanticRuntimeView {
   healthy: boolean;
   busy: boolean;
   canManage: boolean;
+  managementHint?: "sqlite_only";
   error?: string;
   execution?: SemanticExecution;
   visualEnabled?: boolean;

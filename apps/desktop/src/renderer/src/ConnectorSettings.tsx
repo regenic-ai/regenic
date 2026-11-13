@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchConnectorPairingCode, fetchCatalogFieldOptions, fetchConnectorCredentials, importConnectorFile } from "./api";
 import { ConnectorFormFields } from "./ConnectorFormFields";
+import { InfoTip } from "./InfoTip";
 import {
   importConnectorFiles,
   connectorImportSummary,
@@ -87,26 +88,26 @@ export function ConnectorKind({
     >
       <div className="install">
         <div>
-          <strong>{kind.title}</strong>
-          <div className="muted">{kind.description}</div>
+          <span className="settings-label">
+            <strong>{kind.title}</strong>
+            {kind.description || kind.credential_hint || kind.import_files ? (
+              <InfoTip label={kind.title}>
+                {kind.description ? <p>{kind.description}</p> : null}
+                {kind.credential_hint ? <p>{t("connector.credentials", { hint: kind.credential_hint })}</p> : null}
+                {kind.import_files ? <p>{kind.import_files.description ?? kind.import_files.title}</p> : null}
+              </InfoTip>
+            ) : null}
+          </span>
           <div className="install-meta">
             <span className={`chip ${kind.installed ? "running" : ""}`.trim()}>
               {kind.installed
                 ? t("connector.installed", { count: kind.instance_count })
                 : t("connector.notInstalled")}
             </span>
-            <span className="muted">
-              {t("connector.credentials", { hint: kind.credential_hint })}
-            </span>
           </div>
           <PrerequisiteList
             items={visiblePrerequisites(kind, defaultFieldValues(kind))}
           />
-          {kind.import_files ? (
-            <p className="muted">
-              {kind.import_files.description ?? kind.import_files.title}
-            </p>
-          ) : null}
         </div>
         <div className="install-actions">
           {!kind.singleton || !kind.installed ? (

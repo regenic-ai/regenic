@@ -282,18 +282,18 @@ process.on("SIGTERM",() => server.close(() => process.exit(0)));
       await waitFor(() => evaluate('Array.from(document.querySelectorAll(".semantic-settings button")).some(button => button.textContent === "Save settings and start")'), "combined permission startup");
       await evaluate(`(() => {
         const choose = (labelText, value) => {
-          const label = Array.from(document.querySelectorAll("label.field")).find(item => item.textContent.includes(labelText));
-          const select = label?.querySelector("select");
-          if (!select || !Array.from(select.options).some(option => option.value === value && !option.disabled)) {
+          const label = Array.from(document.querySelectorAll("label")).find(item => item.textContent.includes(labelText));
+          const select = label?.control;
+          if (!select || select.tagName !== "SELECT" || !Array.from(select.options).some(option => option.value === value && !option.disabled)) {
             throw new Error("Missing model parameter option: " + labelText + "=" + value);
           }
           Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value").set.call(select, value);
           select.dispatchEvent(new Event("change", { bubbles: true }));
         };
         const setRange = (labelText, value) => {
-          const label = Array.from(document.querySelectorAll("label.field")).find(item => item.textContent.includes(labelText));
-          const input = label?.querySelector('input[type="range"]');
-          if (!input || Number(value) < Number(input.min) || Number(value) > Number(input.max)) {
+          const label = Array.from(document.querySelectorAll("label")).find(item => item.textContent.includes(labelText));
+          const input = label?.control;
+          if (!input || input.type !== "range" || Number(value) < Number(input.min) || Number(value) > Number(input.max)) {
             throw new Error("Missing model parameter range: " + labelText + "=" + value);
           }
           Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(input, value);
