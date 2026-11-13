@@ -2,6 +2,7 @@ const assert = require("node:assert/strict");
 const { join } = require("node:path");
 const { describe, it } = require("node:test");
 const { createHttpApp } = require("../dist/http-app");
+const { PersonalConnectorService } = require("../dist/personal-connector.service");
 const { SqliteAuthorityStore } = require("@regenic/authority-store/sqlite");
 const { FsBlobStore } = require("@regenic/blob-store");
 const { INGEST_SCHEMA_VERSION, IngestionService, channelRecord } = require("@regenic/domain");
@@ -13,6 +14,75 @@ const {
 } = require("./personal-api-harness.cjs");
 
 describe("personal /v1/me", { concurrency: 1 }, () => {
+  it("persists sync settings, applies them without a restart, and restores environment defaults", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    const started = await startPersonalApi(database, blobRoot, {
+      REGENIC_CONNECTOR_QUOTA_TOKENS: "2",
+      REGENIC_INSTALLATION_SYNC_CONCURRENCY: "3",
+    });
+    let app = started.app;
+    let origin = started.origin;
+    const update = (settings) => fetch(`${origin}/v1/me/sync-settings`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ settings }),
+    });
+    try {
+      const defaults = await (await fetch(`${origin}/v1/me/sync-settings`)).json();
+      assert.equal(defaults.customized, false);
+      assert.equal(defaults.settings.quota_tokens, 2);
+      assert.equal(defaults.settings.installation_concurrency, 3);
+      const settings = {
+        ...defaults.settings,
+        quota_tokens: 3,
+        live_concurrency: 16,
+        history_concurrency: 8,
+        steady_claim_limit: 64,
+        first_seed_limit: 32,
+      };
+      const response = await update(settings);
+      assert.equal(response.status, 201);
+      assert.deepEqual((await response.json()).settings, settings);
+      const state = app.get(PersonalConnectorService).connectorState();
+      assert.deepEqual(state.syncSettings, settings);
+      assert.equal(state.dueWorkLimiters.steady.limit(128), 64);
+      for (let count = 0; count < 3; count++) assert.equal(state.quota.tryConsume("a"), true);
+      assert.equal(state.quota.tryConsume("a"), false);
+      await fetch(`${origin}/v1/me/sync-settings`);
+      assert.equal(state.quota.tryConsume("a"), false, "reading settings must not refill quota");
+
+      for (const invalid of [
+        { ...settings, live_concurrency: 0 },
+        { ...settings, history_concurrency: 65 },
+        { ...settings, steady_claim_limit: 1.5 },
+        { ...settings, quota_tokens: "3" },
+        { ...settings, quota_window_ms: 0 },
+        { ...settings, first_seed_limit: 65 },
+        {},
+      ]) {
+        assert.equal((await update(invalid)).status, 400);
+        assert.deepEqual(state.syncSettings, settings);
+      }
+      await app.close();
+      app = await createHttpApp({ logger: false });
+      await app.listen(0, "127.0.0.1");
+      origin = await app.getUrl();
+      const restored = app.get(PersonalConnectorService).connectorState();
+      assert.deepEqual(restored.syncSettings, settings, "load saved settings before serving pulls");
+      const reset = await (await update(null)).json();
+      assert.equal(reset.customized, false);
+      assert.deepEqual(reset.settings, defaults.settings);
+      assert.equal(restored.syncSettings, undefined);
+      assert.equal(restored.quota.tryConsume("a"), true);
+      assert.equal(restored.quota.tryConsume("a"), true);
+      assert.equal(restored.quota.tryConsume("a"), false);
+    } finally {
+      await app.close();
+    }
+  });
+
   it("lists current-work inbox items with Blob body text", async () => {
     const root = await createRoot();
     const database = join(root, "authority.db");

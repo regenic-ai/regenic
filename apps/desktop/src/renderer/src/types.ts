@@ -2,6 +2,25 @@ import type { DriverCatalogField, DriverCatalogFieldWhen, ConnectorCatalogFieldO
 
 export type NavId = "inbox" | "search" | "follow-ups" | "recipes" | "engine" | "settings";
 
+export interface PersonalSyncSettings {
+  quota_tokens: number;
+  quota_window_ms: number;
+  installation_concurrency: number;
+  live_concurrency: number;
+  history_concurrency: number;
+  media_concurrency: number;
+  steady_claim_limit: number;
+  bootstrap_claim_limit: number;
+  first_seed_limit: number;
+}
+
+export interface PersonalSyncSettingsView {
+  settings: PersonalSyncSettings;
+  defaults: PersonalSyncSettings;
+  ranges: Record<keyof PersonalSyncSettings, [number, number]>;
+  customized: boolean;
+}
+
 export interface CustomerServiceTaskView {
   id: string;
   status: string;

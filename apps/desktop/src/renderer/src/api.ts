@@ -17,6 +17,8 @@ import type {
   MessageDisposition,
   MessageReceipt,
   PersonalDispatchPolicy,
+  PersonalSyncSettings,
+  PersonalSyncSettingsView,
   PersonalEngineView,
   PersonalFollowUpPolicy,
   PersonalFollowUpView,
@@ -1904,6 +1906,24 @@ export async function fetchDispatchPolicy(): Promise<PersonalDispatchPolicy> {
     throw new Error(`dispatch policy ${response.status}`);
   }
   return response.json() as Promise<PersonalDispatchPolicy>;
+}
+
+export async function fetchSyncSettings(): Promise<PersonalSyncSettingsView> {
+  const response = await fetch(`${origin()}/v1/me/sync-settings`);
+  if (!response.ok) throw new Error(`sync settings ${response.status}`);
+  return response.json() as Promise<PersonalSyncSettingsView>;
+}
+
+export async function saveSyncSettings(
+  settings: PersonalSyncSettings | null,
+): Promise<PersonalSyncSettingsView> {
+  const response = await fetch(`${origin()}/v1/me/sync-settings`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ settings }),
+  });
+  if (!response.ok) throw new Error(`sync settings ${response.status}`);
+  return response.json() as Promise<PersonalSyncSettingsView>;
 }
 
 export async function saveDispatchPolicy(

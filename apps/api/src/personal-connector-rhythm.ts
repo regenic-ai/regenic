@@ -27,6 +27,8 @@ import {
   IDLE_HISTORY_STREAM_CONCURRENCY,
   LIVE_STREAM_CONCURRENCY,
 } from "./personal-stream-pace";
+import type { PersonalSyncSettings } from "./personal-sync-settings";
+import { LEASE_MS } from "./personal-connector-poll";
 
 const DEFAULT_PULL_MS = 2_000;
 const DEFAULT_CATALOG_PULL_MS = 45_000;
@@ -57,23 +59,37 @@ export function catalogPullIntervalMs(): number {
 
 export function dueWorkBatchTimeoutMs(
   work: readonly { lane: string }[],
+  settings?: PersonalSyncSettings,
 ): number {
   const pollMs = connectorPollTimeoutMs();
   const live = work.filter(
     (item) => item.lane === "live" || item.lane === "interactive",
   ).length;
   const history = work.filter((item) => item.lane === "history").length;
-  const waves = Math.max(
-    Math.ceil(live / Math.max(1, LIVE_STREAM_CONCURRENCY)),
-    Math.ceil(history / Math.max(1, IDLE_HISTORY_STREAM_CONCURRENCY)),
-    1,
+  const media = work.filter((item) => item.lane === "media").length;
+  const liveHistoryWaves = Math.max(
+    Math.ceil(live / Math.max(1, settings?.live_concurrency ?? LIVE_STREAM_CONCURRENCY)),
+    Math.ceil(history / Math.max(1, settings?.history_concurrency ?? IDLE_HISTORY_STREAM_CONCURRENCY)),
   );
+  const mediaWaves = Math.ceil(media / Math.max(1, settings?.media_concurrency ?? 1));
+  const waves = Math.max(1, liveHistoryWaves + mediaWaves);
   // Each list already stops at the poll timeout. The batch clock has to
   // cover every wave of this claim; a flat 30s cuts the later waves.
   return Math.max(connectorSyncTimeoutMs(), waves * pollMs + 5_000);
 }
 
-function dueWorkClaimLimit(plane: "steady" | "bootstrap"): number {
+export function dueWorkClaimLeaseMs(limit: number, settings?: PersonalSyncSettings): number {
+  const fallback = Math.max(LEASE_MS, connectorSyncTimeoutMs() * 2);
+  if (!settings) return fallback;
+  const width = Math.min(
+    settings.live_concurrency, settings.history_concurrency, settings.media_concurrency,
+  );
+  // Media runs after live/history. Keep claims leased through both phases.
+  const waves = Math.ceil(limit / width) + 1;
+  return Math.max(fallback, waves * connectorPollTimeoutMs() + 10_000);
+}
+
+export function dueWorkClaimLimit(plane: "steady" | "bootstrap"): number {
   const fallback = plane === "bootstrap" ? 16 : 32;
   const raw = Number(
     process.env.REGENIC_SYNC_DUE_WORK_LIMIT ?? fallback,
@@ -212,8 +228,12 @@ export function dueWorkClaimLimitFor(
     bootstrap: DueWorkClaimLimiter;
   },
   plane: "steady" | "bootstrap",
+  settings?: PersonalSyncSettings,
 ): number {
-  return limiters[plane].limit(dueWorkClaimLimit(plane));
+  return limiters[plane].limit(
+    settings?.[plane === "steady" ? "steady_claim_limit" : "bootstrap_claim_limit"] ??
+      dueWorkClaimLimit(plane),
+  );
 }
 
 export function observeDueWorkPressure(
@@ -223,9 +243,11 @@ export function observeDueWorkPressure(
   },
   plane: "steady" | "bootstrap",
   pressure: boolean,
+  settings?: PersonalSyncSettings,
 ): void {
   limiters[plane].observe(
     pressure || dueWorkHasWritePressure(processSyncMetrics.snapshot()),
-    dueWorkClaimLimit(plane),
+    settings?.[plane === "steady" ? "steady_claim_limit" : "bootstrap_claim_limit"] ??
+      dueWorkClaimLimit(plane),
   );
 }

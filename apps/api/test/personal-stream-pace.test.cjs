@@ -13,10 +13,60 @@ const {
   shouldKeepCatchingUp,
   syncExecutionBudget,
 } = require("../dist/personal-stream-pace");
+const { defaultSyncSettings } = require("../dist/personal-sync-settings");
+const {
+  dueWorkBatchTimeoutMs,
+  dueWorkClaimLimitFor,
+  dueWorkClaimLeaseMs,
+  observeDueWorkPressure,
+} = require("../dist/personal-connector-rhythm");
+const { DueWorkClaimLimiter } = require("@regenic/domain");
 
 function planned(key, catchingUp, threadId) {
   return { key, catchingUp, threadId, item: key };
 }
+
+describe("user sync budgets", () => {
+  it("uses configured concurrency in each pulling lane while preserving one-page history and media", () => {
+    const settings = {
+      ...defaultSyncSettings(),
+      live_concurrency: 17,
+      history_concurrency: 7,
+      media_concurrency: 3,
+    };
+    for (const humanIdle of [true, false]) {
+      for (const lane of ["interactive", "live", "history", "media"]) {
+        assert.deepEqual(syncExecutionBudget({ humanIdle, lane, pages: 5, settings }), {
+          pages: lane === "history" || lane === "media" ? 1 : 5,
+          concurrency: lane === "history" ? 7 : lane === "media" ? 3 : 17,
+        });
+      }
+    }
+  });
+
+  it("extends batch deadlines for the configured number of waves", () => {
+    const settings = { ...defaultSyncSettings(), live_concurrency: 1 };
+    const work = Array.from({ length: 8 }, () => ({ lane: "live" }));
+    assert.ok(dueWorkBatchTimeoutMs(work, settings) > dueWorkBatchTimeoutMs(work));
+    assert.ok(dueWorkClaimLeaseMs(work.length, settings) > dueWorkBatchTimeoutMs(work, settings));
+    assert.ok(
+      dueWorkBatchTimeoutMs([...work, { lane: "media" }], settings) >
+        dueWorkBatchTimeoutMs(work, settings),
+    );
+  });
+
+  it("keeps adaptive pressure reduction below user-configured batch caps", () => {
+    const settings = { ...defaultSyncSettings(), steady_claim_limit: 64, bootstrap_claim_limit: 8 };
+    const limiters = {
+      steady: new DueWorkClaimLimiter(1, 128, 64),
+      bootstrap: new DueWorkClaimLimiter(1, 128, 16),
+    };
+    assert.equal(dueWorkClaimLimitFor(limiters, "steady", settings), 64);
+    assert.equal(dueWorkClaimLimitFor(limiters, "bootstrap", settings), 8);
+    observeDueWorkPressure(limiters, "steady", true, settings);
+    assert.equal(dueWorkClaimLimitFor(limiters, "steady", settings), 32);
+  });
+});
 
 describe("selectStreamsForTick", () => {
   it("keeps the open conversation first and rotates the rest", () => {

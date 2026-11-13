@@ -4,6 +4,8 @@ const { setImmediate } = require("node:timers/promises");
 const { ChannelDriverRegistry } = require("@regenic/domain");
 const { PersonalConnectorService } = require("../dist/personal-connector.service");
 const { pullStatus, resetPullStatus } = require("../dist/personal-pull-status");
+const { defaultSyncSettings } = require("../dist/personal-sync-settings");
+const { executeClaimedDueWork, enqueueDueWorkFromCatalog } = require("../dist/personal-connector-due-work");
 
 function createService() {
   return new PersonalConnectorService(
@@ -17,6 +19,68 @@ function createService() {
 afterEach(() => resetPullStatus());
 
 describe("owned connector coordination state", () => {
+  it("uses saved installation and live concurrency when dispatching claimed conversations", async () => {
+    for (const [installations, streams] of [[1, 2], [2, 3]]) {
+      const state = createService().connectorState();
+      state.syncSettings = {
+        ...defaultSyncSettings(),
+        installation_concurrency: installations,
+        live_concurrency: streams,
+      };
+      const settled = [];
+      const store = {
+        async settleSyncWork(input) { settled.push(input); },
+        async getSyncCatalog() { return { members: [], catalog: null }; },
+        async listSyncPhaseHeads() { return []; },
+        async latestAttempt() { return null; },
+        async listHiddenExecutorThreadIds() { return []; },
+      };
+      state.runtime.requireHost = () => ({ get: () => store });
+      state.kernelRuntime.pressureView = () => ({ level: "ok" });
+      state.requireInstallation = async (_store, id) => ({
+        id, org_id: "org-one", connector_type: "test", status: "enabled", config: {},
+      });
+      let active = 0;
+      let peak = 0;
+      state.drivers.get = () => ({
+        source: "test",
+        async resolveThreadStream() {
+          active++;
+          peak = Math.max(peak, active);
+          await setImmediate();
+          active--;
+          throw new Error("Source temporarily unavailable");
+        },
+      });
+      const work = [];
+      for (let installation = 0; installation < 3; installation++) {
+        const id = `install-${installation}`;
+        state.catalogSizeByInstall.set(id, 5);
+        for (let stream = 0; stream < 5; stream++) {
+          work.push({
+            id: `${id}-${stream}`, installation_id: id,
+            stream_key: `test:stream-${stream}`, lane: "live", attempts: 1,
+          });
+        }
+      }
+      await executeClaimedDueWork(state, store, work, { plane: "steady", allowHistory: false });
+      assert.equal(peak, installations * streams);
+      assert.equal(settled.length, work.length);
+    }
+  });
+
+  it("passes the user's new-conversation seed limit to the indexed gap planner", async () => {
+    const state = createService().connectorState();
+    state.syncSettings = { ...defaultSyncSettings(), first_seed_limit: 37 };
+    let options;
+    await enqueueDueWorkFromCatalog(state, {
+      async getSyncCatalogHead() { return { member_count: 5000 }; },
+      async listSyncWorkGaps(_id, input) { options = input; return []; },
+      async findInstallation() { return { config: {} }; },
+    }, "installation", "steady");
+    assert.equal(options.unseeded_limit, 37);
+  });
+
   it("owns a stable context rather than exposing the service instance", () => {
     const service = createService();
     const state = service.connectorState();

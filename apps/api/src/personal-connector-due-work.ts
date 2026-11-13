@@ -60,11 +60,11 @@ import {
   mapLimit,
   safeErrorCode,
   summarizeRuns,
-  LEASE_MS,
   DEFAULT_MAX_PAGES,
 } from "./personal-connector-poll";
 import {
   dueWorkBatchTimeoutMs,
+  dueWorkClaimLeaseMs,
   recordClaimedWorkLag,
   deferWrongPlaneDueAt,
   nextDueAfterFailure,
@@ -88,12 +88,12 @@ export async function runDueWorkPlane(
   },
 ): Promise<boolean> {
   const now = new Date().toISOString();
-  const limit = dueWorkClaimLimitFor(state.dueWorkLimiters, input.plane);
+  const limit = dueWorkClaimLimitFor(state.dueWorkLimiters, input.plane, state.syncSettings);
   const claim = (at: string) =>
     store.claimSyncWork({
       owner: state.dueWorkOwner,
       now: at,
-      lease_ms: Math.max(LEASE_MS, connectorSyncTimeoutMs() * 2),
+      lease_ms: dueWorkClaimLeaseMs(limit, state.syncSettings),
       limit,
       lanes: input.lanes,
       unassigned: true,
@@ -128,7 +128,7 @@ export async function runDueWorkPlane(
         pressure;
     }
   }
-  observeDueWorkPressure(state.dueWorkLimiters, input.plane, pressure);
+  observeDueWorkPressure(state.dueWorkLimiters, input.plane, pressure, state.syncSettings);
   return true;
 }
 
@@ -205,7 +205,9 @@ export async function enqueueDueWorkFromCatalog(
   }
   return enqueueSyncWorkGaps(state, store, installationId, {
     lanes: plane === "steady" ? ["live", "media"] : ["history"],
-    unseededLimit: plane === "steady" ? firstSeedHeadFromEnv() : 0,
+    unseededLimit: plane === "steady"
+      ? state.syncSettings?.first_seed_limit ?? firstSeedHeadFromEnv()
+      : 0,
   });
 }
 
@@ -265,7 +267,7 @@ export async function executeClaimedDueWork(
   const errors: unknown[] = [];
   let pressure = false;
   let acceptedCount = 0;
-  await mapLimit([...groups.entries()], installationConcurrency(), async ([installationId, work]) => {
+  await mapLimit([...groups.entries()], state.syncSettings?.installation_concurrency ?? installationConcurrency(), async ([installationId, work]) => {
     const now = new Date().toISOString();
     const catalogWork = work.filter((item) => item.lane === "catalog");
     const streamWork = work.filter((item) => item.lane !== "catalog");
@@ -298,7 +300,7 @@ export async function executeClaimedDueWork(
           streamWork,
           input,
         ),
-        dueWorkBatchTimeoutMs(streamWork),
+        dueWorkBatchTimeoutMs(streamWork, state.syncSettings),
         `due-work ${input.plane} ${installationId}`,
       );
       if (polled.pressure) {
@@ -369,6 +371,7 @@ async function pollClaimedDueWorkStreams(
     {
       pages: DEFAULT_MAX_PAGES,
       concurrency: syncExecutionBudget({
+        settings: state.syncSettings,
         humanIdle,
         capCatchUp: true,
         lane: "live",
@@ -382,6 +385,7 @@ async function pollClaimedDueWorkStreams(
     {
       pages: DEFAULT_MAX_PAGES,
       concurrency: syncExecutionBudget({
+        settings: state.syncSettings,
         humanIdle,
         capCatchUp: true,
         lane: "history",
@@ -395,6 +399,7 @@ async function pollClaimedDueWorkStreams(
     {
       pages: DEFAULT_MAX_PAGES,
       concurrency: syncExecutionBudget({
+        settings: state.syncSettings,
         humanIdle,
         capCatchUp: true,
         lane: "media",
@@ -991,7 +996,7 @@ export async function runCatalogTick(state: ConnectorState): Promise<void> {
   const store = host.get("authority");
   const installations = await store.listInstallations(state.runtime.orgId());
   const errors: unknown[] = [];
-  await mapLimit(installations, installationConcurrency(), async (installation) => {
+  await mapLimit(installations, state.syncSettings?.installation_concurrency ?? installationConcurrency(), async (installation) => {
     if (state.kernelRuntime.shouldDeferHistorySync()) {
       return;
     }

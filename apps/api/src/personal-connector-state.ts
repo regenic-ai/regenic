@@ -19,6 +19,7 @@ import type { KernelRuntimeService } from "./kernel-runtime.service";
 import type { PersonalInboxService } from "./personal-inbox.service";
 import type { PersonalRuntimeService } from "./personal-runtime.service";
 import type { CreatedConversationView } from "./personal-connector-types";
+import type { PersonalSyncSettings } from "./personal-sync-settings";
 
 export interface ConnectorFocusSlot {
   threadId: string;
@@ -37,6 +38,7 @@ export interface ConnectorState {
   readonly kernelRuntime: Pick<KernelRuntimeService,
     "clearInstallationSnapshots" | "pressureView" | "publishInstallAttempt" | "publishSyncSnapshot" | "shouldDeferHistorySync">;
   readonly quota: InstallationQuotaBook;
+  syncSettings?: PersonalSyncSettings;
   readonly streamCatchingUp: Set<string>;
   readonly streamMeta: Map<
     string,
@@ -123,7 +125,7 @@ export type ConnectorEgressState = Pick<ConnectorState,
 export type ConnectorWebhookState = Pick<ConnectorState,
   "runtime" | "drivers" | "inbox" | "maintenanceHold" | "quota" | "requireInstallation">;
 export type ConnectorDueWorkState = Pick<ConnectorState,
-  "runtime" | "drivers" | "inbox" | "kernelRuntime" | "quota" | "maintenanceHold" |
+  "runtime" | "drivers" | "inbox" | "kernelRuntime" | "quota" | "syncSettings" | "maintenanceHold" |
   "catalogSizeByInstall" | "dueWorkLimiters" | "dueWorkOwner" | "exclusiveStream" |
   "publishStreams" | "rememberStreamMeta" | "rememberStreamPace" | "requireInstallation" |
   "streamCatchingUp" | "streamPulling" | "streamPullingHistory">;

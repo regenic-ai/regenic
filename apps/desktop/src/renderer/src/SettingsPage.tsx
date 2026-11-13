@@ -15,6 +15,7 @@ import { isMessageKey, type MessageKey } from "../../shared/messages.ts";
 import { ContextRecordsDialog } from "./ContextRecordsDialog";
 import { FollowUpPolicySettings } from "./FollowUpPolicySettings";
 import { SemanticSettings } from "./SemanticSettings";
+import { SyncSettings } from "./SyncSettings";
 import { useLocale } from "./LocaleContext";
 import type {
   DataDirectoryAction,
@@ -400,6 +401,7 @@ export function SettingsPage({
     ["settings-general", t("settings.language")],
     ["settings-dispatch", t("settings.dispatch")],
     ["settings-follow-up", t("followUps.policy")],
+    ["settings-sync", t("syncSettings.title")],
     ["settings-semantic", t("semantic.title")],
     ["settings-kernel", t("settings.kernel")],
     ["settings-data", t("settings.store")],
@@ -490,6 +492,8 @@ export function SettingsPage({
           </section>
 
           <FollowUpPolicySettings />
+
+          <SyncSettings key={activeOrigin} />
 
           <div id="settings-semantic">
             <SemanticSettings />

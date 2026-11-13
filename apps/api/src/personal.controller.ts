@@ -632,6 +632,16 @@ export class PersonalController {
     return this.guard(() => this.work.getPersonalDispatchPolicy());
   }
 
+  @Get("sync-settings")
+  getSyncSettings() {
+    return this.guard(() => this.connectors.getSyncSettings());
+  }
+
+  @Post("sync-settings")
+  putSyncSettings(@Body() body: { settings?: unknown } | undefined) {
+    return this.guard(() => this.connectors.putSyncSettings(body?.settings));
+  }
+
   @Post("dispatch-policy")
   putPersonalDispatchPolicy(@Body() body: { policy?: unknown } | undefined) {
     return this.guard(() => this.work.putPersonalDispatchPolicy(body?.policy));

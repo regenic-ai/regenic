@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import {
-  connectorSyncTimeoutMs,
   type ConnectorRuntimeStore,
   type IngestQuarantine,
   firstSeedHeadFromEnv,
@@ -23,12 +22,12 @@ import type { ConnectorDueWorkState as ConnectorState } from "./personal-connect
 import type { StartSyncRunInput } from "./personal-connector-types";
 import {
   safeErrorCode,
-  LEASE_MS,
   DEFAULT_MAX_PAGES,
 } from "./personal-connector-poll";
 import {
   recordClaimedWorkLag,
   dueWorkClaimLimitFor,
+  dueWorkClaimLeaseMs,
 } from "./personal-connector-rhythm";
 import {
   discoverCatalogDueWork,
@@ -220,7 +219,10 @@ async function executeDurableSyncRun(state: ConnectorState, runId: string): Prom
   const [work] = await store.claimSyncWork({
     owner,
     now: new Date().toISOString(),
-    lease_ms: Math.max(LEASE_MS, connectorSyncTimeoutMs() * 2),
+    lease_ms: dueWorkClaimLeaseMs(
+      dueWorkClaimLimitFor(state.dueWorkLimiters, syncRunWorkPlane(run.mode), state.syncSettings),
+      state.syncSettings,
+    ),
     limit: 1,
     work_id: syncRunWorkId(run.id),
   });
@@ -315,7 +317,7 @@ async function executeSyncRunDueWork(
     members: catalog.members,
     preferredThreadId: preferredThreadId(),
     streamKeys: run.options.stream_keys,
-    limit: firstSeedHeadFromEnv(),
+    limit: state.syncSettings?.first_seed_limit ?? firstSeedHeadFromEnv(),
   });
   if (wakeKeys.length > 0) {
     await store.wakeUnassignedSyncWork({
@@ -328,15 +330,17 @@ async function executeSyncRunDueWork(
   if (!latest || (latest.status !== "queued" && latest.status !== "running")) {
     return { accepted_count: 0 };
   }
-  const leaseMs = Math.max(LEASE_MS, connectorSyncTimeoutMs() * 2);
-  const limit = Math.min(
-    MAX_DUE_WORK_CLAIM_LIMIT,
-    Math.max(
-      dueWorkClaimLimitFor(state.dueWorkLimiters, plane),
-      wakeKeys.length + 1,
-      firstSeedHeadFromEnv() + 2,
-    ),
-  );
+  const limit = state.syncSettings
+    ? dueWorkClaimLimitFor(state.dueWorkLimiters, plane, state.syncSettings)
+    : Math.min(
+        MAX_DUE_WORK_CLAIM_LIMIT,
+        Math.max(
+          dueWorkClaimLimitFor(state.dueWorkLimiters, plane),
+          wakeKeys.length + 1,
+          firstSeedHeadFromEnv() + 2,
+        ),
+      );
+  const leaseMs = dueWorkClaimLeaseMs(limit, state.syncSettings);
   const claim = async (): Promise<SyncWorkRecord[]> =>
     store.claimSyncWork({
       owner: state.dueWorkOwner,
