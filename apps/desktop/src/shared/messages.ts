@@ -1325,7 +1325,8 @@ export const en = {
     "New information from the connected service syncs to your inbox automatically—no manual sync needed.",
   "connector.push.receivingWhen": "Receiving updates · {when}",
   "connector.push.failedWhen": "Could not receive updates{code} · {when}",
-  "connector.push.receivedWhen": "Updates received · {count} items · {when}",
+  "connector.push.receivedOneWhen": "1 update received · {when}",
+  "connector.push.receivedWhen": "{count} updates received · {when}",
   "connector.hybrid.waiting": "Waiting for the first update",
   "connector.hybrid.waitingHint":
     "New updates arrive automatically. You can also sync manually.",
@@ -2733,6 +2734,7 @@ export const zh: Record<MessageKey, string> = {
   "connector.push.waitingHint": "连接的服务有新内容时，会自动同步到收件箱，无需手动同步。",
   "connector.push.receivingWhen": "正在接收更新 · {when}",
   "connector.push.failedWhen": "接收更新失败{code} · {when}",
+  "connector.push.receivedOneWhen": "已接收更新 · 1 条 · {when}",
   "connector.push.receivedWhen": "已接收更新 · {count} 条 · {when}",
   "connector.hybrid.waiting": "等待首次更新",
   "connector.hybrid.waitingHint": "新更新会自动接收；也可以手动同步。",

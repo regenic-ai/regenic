@@ -183,7 +183,11 @@ export function attemptSummary(
     });
   }
   if (sourceMode === "webhook") {
-    return t("connector.push.receivedWhen", {
+    const summaryKey =
+      attempt.accepted_count === 1
+        ? "connector.push.receivedOneWhen"
+        : "connector.push.receivedWhen";
+    return t(summaryKey, {
       count: attempt.accepted_count,
       when,
     });

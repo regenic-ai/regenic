@@ -316,11 +316,26 @@ describe("connector attempt summaries", () => {
       started_at: "2026-09-02T12:00:00.000Z",
     };
     setActiveLocale("en");
-    assert.match(attemptSummary(attempt, "webhook"), /^Updates received · 3 items · /);
+    assert.match(attemptSummary(attempt, "webhook"), /^3 updates received · /);
 
     setActiveLocale("zh");
     assert.match(attemptSummary(attempt, "webhook"), /^已接收更新 · 3 条 · /);
     setActiveLocale("en");
+  });
+
+  it("uses singular English copy for one received update", () => {
+    setActiveLocale("en");
+    assert.match(
+      attemptSummary(
+        {
+          status: "succeeded",
+          accepted_count: 1,
+          started_at: "2026-09-02T12:00:00.000Z",
+        },
+        "webhook",
+      ),
+      /^1 update received · /,
+    );
   });
 });
 
