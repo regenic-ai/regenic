@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { Socket } from "node:net";
 import { join } from "node:path";
 import { Client } from "pg";
 import type { DatabaseDriver } from "../shared/database-settings.ts";
@@ -105,13 +106,23 @@ export function databaseEnvironment(
 }
 
 export async function testPostgresConnection(connectionString: string): Promise<void> {
+  const socket = new Socket();
   const client = new Client({
     connectionString,
+    stream: () => socket,
     connectionTimeoutMillis: 10_000,
     query_timeout: 10_000,
     statement_timeout: 10_000,
     application_name: "regenic-desktop-connection-test",
   });
+  let failed = false;
+  const fail = () => {
+    failed = true;
+    socket.destroy();
+  };
+  client.on("error", fail);
+  // Own the socket so URL parameters cannot extend the deadline, including cleanup.
+  const timeout = setTimeout(fail, 10_000);
   try {
     try {
       await client.connect();
@@ -119,10 +130,31 @@ export async function testPostgresConnection(connectionString: string): Promise<
     } finally {
       await client.end();
     }
+    if (failed) throw new Error("database.connectionFailed");
   } catch {
     // Do not expose credentials or server-supplied details through IPC.
     throw new Error("database.connectionFailed");
+  } finally {
+    clearTimeout(timeout);
+    socket.destroy();
   }
+}
+
+export async function startDatabaseRuntime(options: {
+  database?: DatabasePreference;
+  semanticEnabled?: boolean;
+  startSemantic: () => Promise<void>;
+  startKernel: () => Promise<void>;
+  onSemanticError: (error: unknown) => void;
+}): Promise<void> {
+  if (options.database?.driver !== "postgres" && options.semanticEnabled) {
+    try {
+      await options.startSemantic();
+    } catch (error) {
+      options.onSemanticError(error);
+    }
+  }
+  await options.startKernel();
 }
 
 export async function switchDatabase<T>(

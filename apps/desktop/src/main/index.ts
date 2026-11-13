@@ -72,6 +72,7 @@ import { connectCustomKernel } from "./kernel-connect";
 import {
   databaseEnvironment,
   postgresConnection,
+  startDatabaseRuntime,
   switchDatabase,
   testPostgresConnection,
   type DatabasePreference,
@@ -122,6 +123,10 @@ function managedSemantic(): SemanticRuntime {
     visualEnabled: () => loadDesktopPreference(settingsFile()).semanticVisualEnabled === true,
     launchSettings: () => loadDesktopPreference(settingsFile()).semanticLaunchSettings!,
   });
+}
+
+function reportSemanticStartupError(error: unknown): void {
+  console.error("[semantic] startup failed", error instanceof Error ? error.message : "semantic.startFailed");
 }
 
 function semanticView() {
@@ -425,10 +430,13 @@ async function applyDatabaseSettings(input: DatabaseSettingsInput): Promise<void
     }),
     start: async () => {
       const preference = loadDesktopPreference(settingsFile());
-      if (preference.database?.driver !== "postgres" && preference.semanticEnabled) {
-        await managedSemantic().start();
-      }
-      await startLocalKernel({ forceSpawn: true });
+      await startDatabaseRuntime({
+        database: preference.database,
+        semanticEnabled: preference.semanticEnabled,
+        startSemantic: () => managedSemantic().start(),
+        startKernel: () => startLocalKernel({ forceSpawn: true }),
+        onSemanticError: reportSemanticStartupError,
+      });
       broadcastOrigin();
     },
   });
@@ -1369,12 +1377,13 @@ app.whenReady().then(async () => {
 
   try {
     const preference = loadDesktopPreference(settingsFile());
-    if (preference.mode === "local" && preference.semanticEnabled && preference.database?.driver !== "postgres") {
-      try { await managedSemantic().start(); } catch (error) {
-        console.error("[semantic] startup failed", error instanceof Error ? error.message : "semantic.startFailed");
-      }
-    }
-    await connectSavedKernel();
+    await startDatabaseRuntime({
+      database: preference.database,
+      semanticEnabled: preference.mode === "local" && preference.semanticEnabled,
+      startSemantic: () => managedSemantic().start(),
+      startKernel: () => connectSavedKernel(),
+      onSemanticError: reportSemanticStartupError,
+    });
   } catch (error) {
     process.stderr.write(`[kernel] ${error instanceof Error ? error.message : error}\n`);
   }
