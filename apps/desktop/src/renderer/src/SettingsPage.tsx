@@ -16,6 +16,8 @@ import { ContextRecordsDialog } from "./ContextRecordsDialog";
 import { FollowUpPolicySettings } from "./FollowUpPolicySettings";
 import { SemanticSettings } from "./SemanticSettings";
 import { SyncSettings } from "./SyncSettings";
+import { DatabaseSettings } from "./DatabaseSettings";
+import { InfoTip } from "./InfoTip";
 import { useLocale } from "./LocaleContext";
 import type {
   DataDirectoryAction,
@@ -110,6 +112,8 @@ export function SettingsPage({
   });
   const [activeSection, setActiveSection] = useState("settings-general");
   const [pathCopied, setPathCopied] = useState(false);
+  const [databaseRevision, setDatabaseRevision] = useState(0);
+  const [databaseDriver, setDatabaseDriver] = useState<"sqlite" | "postgres">("sqlite");
   const pageRef = useRef<HTMLDivElement | null>(null);
 
   const dispatchDirty = Boolean(dispatchPolicy && savedDispatch &&
@@ -182,6 +186,7 @@ export function SettingsPage({
         setHasSavedPersonalApiKey(settings.hasSavedPersonalApiKey === true);
         setActiveOrigin(settings.activeOrigin);
         setDataDir(settings.dataDirectory);
+        setDatabaseDriver(settings.databaseDriver ?? "sqlite");
         setSourceRetention(settings.sourceRetention ?? null);
       })
       .catch(() => {
@@ -239,6 +244,7 @@ export function SettingsPage({
       setCustomApiKey("");
       setActiveOrigin(settings.activeOrigin);
       setDataDir(settings.dataDirectory);
+      setDatabaseDriver(settings.databaseDriver ?? "sqlite");
       setSourceRetention(settings.sourceRetention ?? null);
       await onChanged();
     } catch (caught) {
@@ -404,6 +410,7 @@ export function SettingsPage({
     ["settings-sync", t("syncSettings.title")],
     ["settings-semantic", t("semantic.title")],
     ["settings-kernel", t("settings.kernel")],
+    ["settings-database", t("database.title")],
     ["settings-data", t("settings.store")],
     ["settings-danger", t("settings.danger")],
   ] as const;
@@ -427,8 +434,9 @@ export function SettingsPage({
           <section className="card" id="settings-general">
             <div className="settings-row">
               <div>
-                <h2>{t("settings.language")}</h2>
-                <p className="muted">{t("settings.languageLead")}</p>
+                <h2 className="settings-heading">{t("settings.language")}
+                  <InfoTip label={t("settings.language")}>{t("settings.languageLead")}</InfoTip>
+                </h2>
               </div>
               <div className="segmented" role="radiogroup" aria-label={t("settings.language")}>
                 {(["zh", "en"] as const).map((value) => (
@@ -443,10 +451,11 @@ export function SettingsPage({
 
           <section className="card" id="settings-dispatch">
             <div className="card-head">
-              <h2>{t("settings.dispatch")}</h2>
+              <h2 className="settings-heading">{t("settings.dispatch")}
+                <InfoTip label={t("settings.dispatch")}>{t("settings.dispatchLead")}</InfoTip>
+              </h2>
               {dispatchDirty ? <span className="chip syncing">{t("settings.unsaved")}</span> : null}
             </div>
-            <p className="muted">{t("settings.dispatchLead")}</p>
             {dispatchPolicy ? (
               <div className="dispatch-rules">
                 {([
@@ -457,8 +466,10 @@ export function SettingsPage({
                 ] as const).map(([field, label, hint]) => (
                   <div className="dispatch-rule" key={field}>
                     <div className="dispatch-rule-text">
-                      <strong>{t(label)}</strong>
-                      <span className="muted">{t(hint)}</span>
+                      <span className="settings-label">
+                        <strong>{t(label)}</strong>
+                        <InfoTip label={t(label)}>{t(hint)}</InfoTip>
+                      </span>
                     </div>
                     <div className="segmented" role="radiogroup" aria-label={t(label)}>
                       {([
@@ -491,9 +502,9 @@ export function SettingsPage({
             </div>
           </section>
 
-          <FollowUpPolicySettings />
+          <FollowUpPolicySettings key={`${activeOrigin}:${databaseRevision}`} />
 
-          <SyncSettings key={activeOrigin} />
+          <SyncSettings key={`${activeOrigin}:${databaseRevision}`} />
 
           <div id="settings-semantic">
             <SemanticSettings />
@@ -501,7 +512,9 @@ export function SettingsPage({
 
           <section className="card" id="settings-kernel">
             <div className="card-head">
-              <h2>{t("settings.kernel")}</h2>
+              <h2 className="settings-heading">{t("settings.kernel")}
+                <InfoTip label={t("settings.kernel")}>{t("settings.kernelApplyHint")}</InfoTip>
+              </h2>
               {kernelDirty ? <span className="chip syncing">{t("settings.unsaved")}</span> : null}
             </div>
             <div className="settings-current">
@@ -509,28 +522,30 @@ export function SettingsPage({
               <code>{activeOrigin}</code>
             </div>
             <div className="choice-list">
-              <button
-                type="button"
-                className={`choice${mode === "local" ? " active" : ""}`}
-                onClick={() => setMode("local")}
-              >
-                <span className="choice-mark" />
-                <span>
-                  <strong>{t("settings.local")}</strong>
-                  <span className="muted">{t("settings.localHint")}</span>
-                </span>
-              </button>
-              <button
-                type="button"
-                className={`choice${mode === "custom" ? " active" : ""}`}
-                onClick={() => setMode("custom")}
-              >
-                <span className="choice-mark" />
-                <span>
-                  <strong>{t("settings.custom")}</strong>
-                  <span className="muted">{t("settings.customHint")}</span>
-                </span>
-              </button>
+              <div className="choice-with-info">
+                <button
+                  type="button"
+                  className={`choice${mode === "local" ? " active" : ""}`}
+                  aria-describedby="settings-local-hint"
+                  onClick={() => setMode("local")}
+                >
+                  <span className="choice-mark" />
+                  <span><strong>{t("settings.local")}</strong></span>
+                </button>
+                <InfoTip label={t("settings.local")} id="settings-local-hint">{t("settings.localHint")}</InfoTip>
+              </div>
+              <div className="choice-with-info">
+                <button
+                  type="button"
+                  className={`choice${mode === "custom" ? " active" : ""}`}
+                  aria-describedby="settings-custom-hint"
+                  onClick={() => setMode("custom")}
+                >
+                  <span className="choice-mark" />
+                  <span><strong>{t("settings.custom")}</strong></span>
+                </button>
+                <InfoTip label={t("settings.custom")} id="settings-custom-hint">{t("settings.customHint")}</InfoTip>
+              </div>
             </div>
             {mode === "custom" ? (
               <div className="settings-fields">
@@ -564,7 +579,7 @@ export function SettingsPage({
               </p>
             ) : null}
             <div className="settings-footer">
-              {error ? <span className="action-error">{error}</span> : <span className="muted">{t("settings.kernelApplyHint")}</span>}
+              {error ? <span className="action-error">{error}</span> : <span />}
               <span className="install-actions">
                 <button type="button" className="ghost" disabled={!kernelDirty || busy} onClick={() => {
                   setMode(savedKernel.mode); setCustomOrigin(savedKernel.customOrigin); setCustomApiKey("");
@@ -576,9 +591,26 @@ export function SettingsPage({
             </div>
           </section>
 
+          <DatabaseSettings engineMode={savedKernel.mode} onChanged={async () => {
+            const settings = await fetchKernelSettings();
+            setActiveOrigin(settings.activeOrigin);
+            setDataDir(settings.dataDirectory);
+            setDatabaseDriver(settings.databaseDriver ?? "sqlite");
+            setDatabaseRevision((revision) => revision + 1);
+            setStore(null);
+            await onStoreCleared();
+            setStore(await fetchStore());
+            const policy = await fetchDispatchPolicy();
+            setDispatchPolicy(policy);
+            setSavedDispatch(policy);
+            setDispatchMessage(null);
+            setConfirming(false);
+          }} />
+
           <section className="card" id="settings-data">
-            <h2>{t("settings.store")}</h2>
-            <p className="muted">{t("settings.storeLead")}</p>
+            <h2 className="settings-heading">{t("settings.store")}
+              <InfoTip label={t("settings.store")}>{t("settings.storeLead")}</InfoTip>
+            </h2>
             <div className="store-footprint">
               <StoreStat
                 label={t("settings.storeConversations")}
@@ -600,7 +632,11 @@ export function SettingsPage({
 
             <div className="settings-path">
               <div className="settings-path-text">
-                <span className="muted">{t("settings.dataDir")}</span>
+                <span className="settings-label muted">{t("settings.dataDir")}
+                  <InfoTip label={t("settings.dataDir")}>
+                    {t(databaseDriver === "postgres" ? "database.dataDirLead" : "settings.dataDirLead")}
+                  </InfoTip>
+                </span>
                 <code title={dataDir?.path}>{dataDir?.path || "—"}</code>
               </div>
               {dataPlan ? null : (
@@ -621,7 +657,6 @@ export function SettingsPage({
                 </span>
               )}
             </div>
-            <p className="muted settings-note">{t("settings.dataDirLead")}</p>
             {dataDir?.splitLayout ? (
               <details className="settings-details">
                 <summary>{t("settings.dataDirSplitTitle")}</summary>

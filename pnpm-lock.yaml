@@ -89,7 +89,13 @@ importers:
       '@regenic/connector-contract':
         specifier: workspace:*
         version: link:../../packages/connector-contract
+      pg:
+        specifier: ^8.13.1
+        version: 8.22.0
     devDependencies:
+      '@types/pg':
+        specifier: ^8.11.10
+        version: 8.20.4
       '@types/react':
         specifier: ^19.1.8
         version: 19.2.18

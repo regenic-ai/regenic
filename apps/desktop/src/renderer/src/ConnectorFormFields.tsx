@@ -3,6 +3,7 @@ import { pickDirectory } from "./api";
 import { splitValues } from "./connector-config";
 import { connectorFieldInvalid, type ConnectorFormValues } from "./connector-form";
 import { useLocale } from "./LocaleContext";
+import { InfoTip } from "./InfoTip";
 import type { ConnectorField, ConnectorFieldOption } from "./types";
 import { useConnectorFieldOptions } from "./useConnectorFieldOptions";
 
@@ -65,15 +66,17 @@ function ConnectorFormField({
   const options = field.options ?? [];
   const change = (value: unknown) => onChange(field.key, value);
   const invalid = connectorFieldInvalid(field, value);
-  const helpId = `${id}-help`;
+  const helpId = field.description ? `${id}-help` : undefined;
   let body;
   if (multiple || field.dynamic_options) {
     body = <ConnectorOptionsField
       connectorType={connectorType} field={field} values={values} multiple={Boolean(multiple)}
+      descriptionId={helpId}
       loading={loading} enabled={enabled} onChange={change} onOptions={onOptions}
     />;
   } else if (field.type === "boolean" || field.widget === "switch") {
-    body = <input id={id} type="checkbox" checked={value === true} onChange={(event) => change(event.target.checked)} />;
+    body = <input id={id} type="checkbox" aria-describedby={helpId}
+      checked={value === true} onChange={(event) => change(event.target.checked)} />;
   } else if (field.type === "number" || field.widget === "number") {
     body = <input id={id} type="number" step="any" min={field.min} max={field.max} required={field.required}
       aria-describedby={helpId} aria-invalid={invalid} value={typeof value === "number" ? value : ""}
@@ -81,7 +84,8 @@ function ConnectorFormField({
   } else if (!secret && !field.allow_custom && (field.widget === "select" || (!field.widget && options.length))) {
     const choices = text && !options.some((item) => item.value === text)
       ? [{ value: text, label: text }, ...options] : options;
-    body = <select id={id} value={text} required={field.required} onChange={(event) => change(event.target.value)}>
+    body = <select id={id} value={text} required={field.required} aria-describedby={helpId}
+      onChange={(event) => change(event.target.value)}>
       {!text ? <option value="">{field.placeholder ?? t("connector.chooseOption")}</option> : null}
       {choices.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
     </select>;
@@ -104,9 +108,11 @@ function ConnectorFormField({
     </>;
   }
   return <div className="field">
-    {multiple || field.dynamic_options ? <span>{field.label}{field.required ? " *" : ""}</span>
-      : <label htmlFor={id}>{field.label}{field.required ? " *" : ""}</label>}
-    <span id={helpId} className="muted">{field.description}</span>
+    <span className="settings-label">
+      {multiple || field.dynamic_options ? <span>{field.label}{field.required ? " *" : ""}</span>
+        : <label htmlFor={id}>{field.label}{field.required ? " *" : ""}</label>}
+      {field.description ? <InfoTip label={field.label} id={helpId}>{field.description}</InfoTip> : null}
+    </span>
     {body}
     {secret ? <div className="credential-actions">
       <span className="muted">{t(value === null ? "connector.credentialClearing"
@@ -121,11 +127,12 @@ function ConnectorFormField({
 }
 
 function ConnectorOptionsField({
-  connectorType, field, values, multiple, loading, enabled, onChange, onOptions,
+  connectorType, field, values, multiple, loading, enabled, descriptionId, onChange, onOptions,
 }: {
   connectorType: string; field: ConnectorField; values: ConnectorFormValues;
   multiple: boolean; loading: boolean; onChange: (value: unknown) => void;
   enabled: boolean;
+  descriptionId?: string;
   onOptions: (key: string, options: ConnectorFieldOption[]) => void;
 }) {
   const { t } = useLocale();
@@ -153,7 +160,7 @@ function ConnectorOptionsField({
     onChange(multiple ? field.type === "string_array" ? next : next.join(",") : custom);
     setCustomValue("");
   };
-  return <div className="check-options">
+  return <div className="check-options" role="group" aria-label={field.label} aria-describedby={descriptionId}>
     {field.allow_custom ? <div className="connector-custom-value">
       <input type="text" value={customValue} disabled={customDisabled}
         aria-label={t("connector.customValue", { label: field.label })}

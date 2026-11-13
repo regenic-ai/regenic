@@ -1,6 +1,7 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { tryParseDataRoot } from "./data-directory.ts";
+import { storedDatabasePreference, type DatabasePreference } from "./database-settings.ts";
 import {
   DEFAULT_LOCALE,
   parseLocale,
@@ -29,6 +30,7 @@ export interface DesktopPreference extends KernelPreference {
   dataRoot?: string;
   previousDataRoot?: string;
   personalApiKeys?: Record<string, string>;
+  database?: DatabasePreference;
 }
 
 export function parseKernelOrigin(raw: string): string {
@@ -60,11 +62,13 @@ export function loadDesktopPreference(file: string): DesktopPreference {
       semanticEnabled?: unknown;
       semanticVisualEnabled?: unknown;
       semanticLaunchSettings?: unknown;
+      database?: unknown;
     };
     const locale = parseLocale(raw.locale ?? DEFAULT_LOCALE);
     const dataRoot = tryParseDataRoot(raw.dataRoot);
     const previousDataRoot = tryParseDataRoot(raw.previousDataRoot);
     const personalApiKeys = parsePersonalApiKeys(raw.personalApiKeys);
+    const database = storedDatabasePreference(raw.database);
     if (raw.mode === "custom" && typeof raw.origin === "string") {
       return {
         mode: "custom",
@@ -76,6 +80,7 @@ export function loadDesktopPreference(file: string): DesktopPreference {
         ...(dataRoot ? { dataRoot } : {}),
         ...(previousDataRoot ? { previousDataRoot } : {}),
         ...(personalApiKeys ? { personalApiKeys } : {}),
+        ...(database ? { database } : {}),
       };
     }
     return {
@@ -87,8 +92,10 @@ export function loadDesktopPreference(file: string): DesktopPreference {
       ...(dataRoot ? { dataRoot } : {}),
       ...(previousDataRoot ? { previousDataRoot } : {}),
       ...(personalApiKeys ? { personalApiKeys } : {}),
+      ...(database ? { database } : {}),
     };
-  } catch {
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("database.")) throw error;
     return {
       mode: "local", locale: DEFAULT_LOCALE,
       semanticLaunchSettings: DEFAULT_SEMANTIC_LAUNCH_SETTINGS,
@@ -120,6 +127,7 @@ export function saveDesktopPreference(
     locale: preference.locale,
   };
   if (preference.semanticEnabled !== undefined) body.semanticEnabled = preference.semanticEnabled;
+  if (preference.database) body.database = preference.database;
   if (preference.semanticVisualEnabled !== undefined) body.semanticVisualEnabled = preference.semanticVisualEnabled;
   if (preference.semanticLaunchSettings !== undefined) body.semanticLaunchSettings = preference.semanticLaunchSettings;
   if (preference.mode === "custom" && preference.origin) {

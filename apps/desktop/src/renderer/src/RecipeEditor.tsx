@@ -1,5 +1,6 @@
 import { MenuSelect } from "./MenuSelect";
 import { RecipeRow } from "./RecipeRow";
+import { InfoTip } from "./InfoTip";
 import {
   unitKindsForSource,
   draftMatch,
@@ -55,7 +56,8 @@ export function TextFilterConditions({
     return null;
   }
   return (
-    <RecipeRow label={t("recipes.filterConditions")}>
+    <RecipeRow label={t("recipes.filterConditions")} descriptionId={`${id}-hint`}
+      hint={<><p>{t("recipes.filterEmpty")}</p><p>{t("recipes.filterShortHint")}</p><p>{t("recipes.filterHint")}</p></>}>
       <div className={`recipe-conditions${shown.length ? " has-conditions" : ""}`}>
         {shown.length > 0 ? (
           <>
@@ -131,17 +133,8 @@ export function TextFilterConditions({
               aria-controls={`${id}-test`} onClick={() => setTestOpen((current) => !current)}>
               {t("recipes.filterTest")}
             </button>
-          ) : <span className="recipe-hint">{t("recipes.filterEmpty")}</span>}
+          ) : null}
         </div>
-        {shown.length ? (
-          <div className="recipe-conditions-help" id={`${id}-hint`}>
-            <span>{t("recipes.filterShortHint")}</span>
-            <details>
-              <summary>{t("recipes.filterDetails")}</summary>
-              <p>{t("recipes.filterHint")}</p>
-            </details>
-          </div>
-        ) : null}
         {testOpen && shown.length ? (
           <div className="recipe-condition-test" id={`${id}-test`}>
             <label htmlFor={`${id}-sample`}>{t("recipes.filterTestLabel")}</label>
@@ -174,11 +167,15 @@ export function SwitchRow({
   onChange,
   children,
   disabled = false,
+  label,
+  descriptionId,
 }: {
   checked: boolean;
   onChange: (next: boolean) => void;
   children: string;
   disabled?: boolean;
+  label?: string;
+  descriptionId?: string;
 }) {
   return (
     <div className={`switch-row${disabled ? " is-disabled" : ""}`}>
@@ -186,6 +183,8 @@ export function SwitchRow({
       <button
         type="button"
         role="switch"
+        aria-label={label ?? children}
+        aria-describedby={descriptionId}
         aria-checked={checked}
         disabled={disabled}
         className={`switch${checked ? " is-on" : ""}`}
@@ -226,14 +225,13 @@ export function MatchPreview({
       : null;
   return (
     <div className="recipe-preview">
-      <p className="recipe-preview-body">{body}</p>
-      {samples ? <p className="recipe-preview-samples">{samples}</p> : null}
-      {preview.ready ? (
-        <p className="recipe-hint">
+      <p className="recipe-preview-body">{body}
+        {preview.ready ? <>{" "}<InfoTip label={t("recipes.previewTitle")}>
           {t(draft.trigger_kind === "push" && (draft.text_contains.trim() || draft.text_excludes.trim())
             ? "recipes.filterPreviewHint" : "recipes.previewPartial")}
-        </p>
-      ) : null}
+        </InfoTip></> : null}
+      </p>
+      {samples ? <p className="recipe-preview-samples">{samples}</p> : null}
       {preview.preempted_by ? (
         <p className="recipe-preview-conflict">
           {t("recipes.previewConflict", { name: preview.preempted_by })}
@@ -252,8 +250,9 @@ export function PriorityPanel({
 }) {
   return (
     <div className="recipe-priority">
-      <p className="recipe-preview-title">{t("recipes.priorityTitle")}</p>
-      <p className="muted recipe-preview-note">{t("recipes.priorityLead")}</p>
+      <p className="recipe-preview-title settings-label">{t("recipes.priorityTitle")}
+        <InfoTip label={t("recipes.priorityTitle")}>{t("recipes.priorityLead")}</InfoTip>
+      </p>
       <ol className="recipe-priority-list">
         {rows.map((row) => (
           <li
@@ -320,7 +319,7 @@ export function unitKindField(
     options.unshift({ value: draft.unit_kind, label: draft.unit_kind });
   }
   return (
-    <RecipeRow label={t("recipes.unitKind")}>
+    <RecipeRow label={t("recipes.unitKind")} hint={t("recipes.unitKindHint")}>
       <MenuSelect
         value={draft.unit_kind}
         placeholder={t("recipes.unitKindAny")}
@@ -329,7 +328,6 @@ export function unitKindField(
           setDraft((current) => withSuggestedName({ ...current, unit_kind }))
         }
       />
-      <p className="recipe-hint">{t("recipes.unitKindHint")}</p>
     </RecipeRow>
   );
 }
@@ -343,6 +341,7 @@ export function MoreOptions({
   setDraft: Dispatch<SetStateAction<RecipeDraft>>;
   t: Translate;
 }) {
+  const id = useId();
   const advancedDirty =
     (draft.trigger_kind === "push" && !draft.coalesce) ||
     (draft.trigger_kind !== "pull" && Boolean(draft.max_concurrent.trim())) ||
@@ -370,8 +369,10 @@ export function MoreOptions({
       </button>
       {open ? (
       <div className="recipe-more-body">
-        <RecipeRow label={t("recipes.hideOnSuccess")}>
+        <RecipeRow label={t("recipes.hideOnSuccess")} hint={t("recipes.hideOnSuccessHint")}
+          descriptionId={`${id}-hide-hint`}>
           <SwitchRow
+            label={t("recipes.hideOnSuccess")} descriptionId={`${id}-hide-hint`}
             checked={draft.hide_on_success}
             onChange={(hide_on_success) =>
               setDraft((current) => ({ ...current, hide_on_success }))
@@ -379,11 +380,12 @@ export function MoreOptions({
           >
             {""}
           </SwitchRow>
-          <p className="recipe-hint">{t("recipes.hideOnSuccessHint")}</p>
         </RecipeRow>
         {draft.trigger_kind === "push" ? (
-          <RecipeRow label={t("recipes.coalesceCheck")}>
+          <RecipeRow label={t("recipes.coalesceCheck")} hint={t("recipes.coalesceHint")}
+            descriptionId={`${id}-coalesce-hint`}>
             <SwitchRow
+              label={t("recipes.coalesceCheck")} descriptionId={`${id}-coalesce-hint`}
               checked={draft.coalesce}
               onChange={(coalesce) =>
                 setDraft((current) => ({ ...current, coalesce }))
@@ -391,12 +393,13 @@ export function MoreOptions({
             >
               {""}
             </SwitchRow>
-            <p className="recipe-hint">{t("recipes.coalesceHint")}</p>
           </RecipeRow>
         ) : null}
         {draft.trigger_kind !== "pull" ? (
-          <RecipeRow label={t("recipes.maxConcurrent")}>
+          <RecipeRow label={t("recipes.maxConcurrent")} hint={t("recipes.maxConcurrentHint")}
+            descriptionId={`${id}-concurrency-hint`}>
             <input
+              aria-label={t("recipes.maxConcurrent")} aria-describedby={`${id}-concurrency-hint`}
               type="number"
               min={1}
               inputMode="numeric"
@@ -409,7 +412,6 @@ export function MoreOptions({
                 }))
               }
             />
-            <p className="recipe-hint">{t("recipes.maxConcurrentHint")}</p>
           </RecipeRow>
         ) : null}
         {draft.can_write_back ? (

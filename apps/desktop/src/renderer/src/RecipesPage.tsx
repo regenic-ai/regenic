@@ -765,7 +765,7 @@ export function RecipesPage({
                   <h3>{t("recipes.triggerLegend")}</h3>
                 </header>
                 <div className="recipe-rows">
-                <RecipeRow label={t("recipes.triggerRow")}>
+                <RecipeRow label={t("recipes.triggerRow")} hint={triggerHint(draft.trigger_kind, t)}>
                   <div className="seg">
                     {triggerChoices(t).map((choice) => (
                       <button
@@ -782,7 +782,6 @@ export function RecipesPage({
                       </button>
                     ))}
                   </div>
-                  <p className="recipe-hint">{triggerHint(draft.trigger_kind, t)}</p>
                 </RecipeRow>
                 {draft.trigger_kind !== "pull" ? (
                 <RecipeRow label={t("recipes.watchLegend")}>
@@ -873,7 +872,7 @@ export function RecipesPage({
                 ) : null}
 
                 {draft.trigger_kind === "pull" ? (
-                  <RecipeRow label={t("recipes.interval")}>
+                  <RecipeRow label={t("recipes.interval")} hint={t("recipes.scheduleInstructionsHint")}>
                     <ScheduleField
                       draft={draft}
                       t={t}
@@ -881,7 +880,6 @@ export function RecipesPage({
                         setDraft((current) => ({ ...current, ...patch }))
                       }
                     />
-                    <p className="recipe-hint">{t("recipes.scheduleInstructionsHint")}</p>
                   </RecipeRow>
                 ) : null}
 
@@ -904,7 +902,7 @@ export function RecipesPage({
                   <h3>{t("recipes.then")}</h3>
                 </header>
                 <div className="recipe-rows">
-                <RecipeRow label={t("recipes.runWith")}>
+                <RecipeRow label={t("recipes.runWith")} hint={catalog?.description}>
                   {executors.length === 1 ? (
                     <p className="recipe-chip">{executors[0].label}</p>
                   ) : (
@@ -928,12 +926,11 @@ export function RecipesPage({
                       }
                     />
                   )}
-                  {catalog?.description ? (
-                    <p className="recipe-hint">{catalog.description}</p>
-                  ) : null}
                 </RecipeRow>
-                <RecipeRow label={t("recipes.instruction")}>
+                <RecipeRow label={t("recipes.instruction")} hint={t("recipes.instructionHint")}
+                  descriptionId="recipe-instruction-hint">
                   <textarea
+                    aria-label={t("recipes.instruction")} aria-describedby="recipe-instruction-hint"
                     value={taskInstruction}
                     placeholder={t("recipes.instructionPlaceholder")}
                     required={taskInstructionRequired}
@@ -949,7 +946,6 @@ export function RecipesPage({
                       })
                     }
                   />
-                  <p className="recipe-hint">{t("recipes.instructionHint")}</p>
                 </RecipeRow>
                 {catalog?.fields.length ? (
                   <RecipeParams
@@ -964,12 +960,14 @@ export function RecipesPage({
                     }
                   />
                 ) : null}
-                <RecipeRow label={t("recipes.includeContextCheck")}>
+                <RecipeRow label={t("recipes.includeContextCheck")} descriptionId="recipe-context-hint"
+                  hint={t(draft.trigger_kind === "pull" ? "recipes.includeContextHintPull" : "recipes.includeContextHint")}>
                   {draft.trigger_kind === "pull" ? (
-                    <p className="recipe-hint">{t("recipes.includeContextHintPull")}</p>
+                    <p className="recipe-chip">{t("recipes.contextIncluded")}</p>
                   ) : (
                     <>
                       <SwitchRow
+                        label={t("recipes.includeContextCheck")} descriptionId="recipe-context-hint"
                         checked={draft.include_context}
                         onChange={(include_context) =>
                           setDraft((current) => ({ ...current, include_context }))
@@ -977,7 +975,6 @@ export function RecipesPage({
                       >
                         {""}
                       </SwitchRow>
-                      <p className="recipe-hint">{t("recipes.includeContextHint")}</p>
                     </>
                   )}
                 </RecipeRow>
@@ -1055,6 +1052,7 @@ export function RecipesPage({
                 ) : null}
                 <RecipeRow label={t("recipes.enabledCheck")}>
                   <SwitchRow
+                    label={t("recipes.enabledCheck")}
                     checked={draft.enabled}
                     onChange={(enabled) => setDraft((current) => ({ ...current, enabled }))}
                   >

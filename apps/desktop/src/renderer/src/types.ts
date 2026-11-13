@@ -141,6 +141,7 @@ export interface KernelSettingsView {
   activeOrigin: string;
   hasSavedPersonalApiKey?: boolean;
   locale: Locale;
+  databaseDriver?: "sqlite" | "postgres";
   dataDirectory: DataDirectoryView;
   sourceRetention?: SourceRetentionView;
 }

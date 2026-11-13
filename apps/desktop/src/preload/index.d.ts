@@ -1,4 +1,5 @@
 import type { SemanticAction, SemanticLaunchSettings, SemanticRuntimeView } from "../shared/semantic-runtime";
+import type { DatabaseSettingsInput, DatabaseSettingsView } from "../shared/database-settings";
 
 export type KernelMode = "local" | "custom";
 export type Locale = "en" | "zh";
@@ -46,6 +47,7 @@ export interface KernelSettingsView {
   activeOrigin: string;
   hasSavedPersonalApiKey?: boolean;
   locale: Locale;
+  databaseDriver?: "sqlite" | "postgres";
   dataDirectory: DataDirectoryView;
   sourceRetention?: SourceRetentionView;
 }
@@ -80,6 +82,9 @@ export interface RegenicDesktop {
   apiOrigin: string;
   getApiOrigin: () => Promise<string>;
   getKernelSettings: () => Promise<KernelSettingsView>;
+  getDatabaseSettings: () => Promise<DatabaseSettingsView>;
+  testDatabaseSettings: (connectionString?: string) => Promise<void>;
+  setDatabaseSettings: (input: DatabaseSettingsInput) => Promise<DatabaseSettingsView>;
   getSemanticRuntime: () => Promise<SemanticRuntimeView>;
   setSemanticVisual: (enabled: boolean) => Promise<SemanticRuntimeView>;
   semanticAction: (action: SemanticAction, visualEnabled?: boolean, launchSettings?: SemanticLaunchSettings) => Promise<SemanticRuntimeView>;
