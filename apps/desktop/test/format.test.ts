@@ -6,7 +6,7 @@ import {
   networkWatchHint,
 } from "../src/renderer/src/connector-errors.ts";
 import { KernelRequestError } from "../src/renderer/src/kernel-request.ts";
-import { formatChatTime } from "../src/renderer/src/format.ts";
+import { attemptSummary, formatChatTime } from "../src/renderer/src/format.ts";
 import {
   engineChip,
   namedPullProgress,
@@ -298,6 +298,29 @@ describe("connector action errors", () => {
       connectorActionError(new KernelRequestError("feishu-chat is already installed", "already_installed")),
       "This connector is already installed",
     );
+  });
+});
+
+describe("connector attempt summaries", () => {
+  it("keeps polling connectors' empty state and explains push connectors", () => {
+    setActiveLocale("en");
+    assert.equal(attemptSummary(null), "Not synced yet");
+    assert.equal(attemptSummary(null, "webhook"), "Waiting for the first update");
+    assert.equal(attemptSummary(null, "hybrid"), "Waiting for the first update");
+  });
+
+  it("describes webhook activity as received updates in both locales", () => {
+    const attempt = {
+      status: "succeeded",
+      accepted_count: 3,
+      started_at: "2026-09-02T12:00:00.000Z",
+    };
+    setActiveLocale("en");
+    assert.match(attemptSummary(attempt, "webhook"), /^Updates received · 3 items · /);
+
+    setActiveLocale("zh");
+    assert.match(attemptSummary(attempt, "webhook"), /^已接收更新 · 3 条 · /);
+    setActiveLocale("en");
   });
 });
 

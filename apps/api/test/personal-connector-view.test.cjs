@@ -237,8 +237,30 @@ describe("connector catalog hints", () => {
     assert.equal(view.label, "All conversations");
     assert.equal(view.channel, "feishu");
     assert.equal(view.channel_label, "Feishu");
+    assert.equal(view.source_mode, "poll");
     assert.deepEqual(view.settings.kinds, ["group", "p2p"]);
     assert.equal(view.sync, undefined);
+  });
+
+  it("exposes the driver's push source mode", () => {
+    const view = toInstallationView(
+      {
+        id: "feishu-1",
+        org_id: "local-owner",
+        connector_type: "feishu-chat",
+        status: "enabled",
+        config: { selection: "all", kinds: ["group", "p2p"] },
+        created_at: "2026-08-22T00:00:00.000Z",
+        updated_at: "2026-08-22T00:00:00.000Z",
+      },
+      null,
+      {
+        get() {
+          return { ...feishuChatDriver, source_mode: "webhook" };
+        },
+      },
+    );
+    assert.equal(view.source_mode, "webhook");
   });
 
   it("attaches sync coverage when the store has started a catalog", () => {

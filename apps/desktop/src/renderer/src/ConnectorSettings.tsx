@@ -699,6 +699,11 @@ function ConnectorRow({
   const syncUnavailableHint = installation.status === "enabled" && !installation.syncable
     ? kind.sync_unavailable_hint
     : undefined;
+  const activeSourceMode =
+    installation.status === "enabled" ? installation.source_mode : "poll";
+  const attemptSourceMode = installation.last_attempt
+    ? installation.source_mode
+    : activeSourceMode;
   return (
     <div id={id} className="install-block">
       <div className="install install-instance">
@@ -710,11 +715,28 @@ function ConnectorRow({
             <span className={`chip ${statusChip}`.trim()}>
               {installationStatusLabel(installation.status)}
             </span>
+            {activeSourceMode === "webhook" || activeSourceMode === "hybrid" ? (
+              <span className="connector-mode-chip">
+                {t(
+                  activeSourceMode === "webhook"
+                    ? "connector.mode.push"
+                    : "connector.mode.hybrid",
+                )}
+              </span>
+            ) : null}
             {installation.detail ? (
               <span className="muted">{installation.detail}</span>
             ) : null}
           </div>
-          <div className="muted">{attemptSummary(installation.last_attempt)}</div>
+          <div className={activeSourceMode === "webhook" ? "connector-activity" : "muted"}>
+            {attemptSummary(installation.last_attempt, attemptSourceMode)}
+          </div>
+          {!installation.last_attempt && activeSourceMode === "webhook" ? (
+            <p className="muted connector-next">{t("connector.push.waitingHint")}</p>
+          ) : null}
+          {!installation.last_attempt && activeSourceMode === "hybrid" ? (
+            <p className="muted connector-next">{t("connector.hybrid.waitingHint")}</p>
+          ) : null}
           {syncUnavailableHint ? (
             <p className="muted connector-next">{syncUnavailableHint}</p>
           ) : null}
