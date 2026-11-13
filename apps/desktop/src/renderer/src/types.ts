@@ -808,6 +808,7 @@ export interface EngineInstallationView {
   can_pair?: boolean;
   channel?: string;
   channel_label?: string;
+  source_mode?: "poll" | "webhook" | "hybrid";
   last_attempt: IngestAttempt | null;
   pairing_code?: string;
   sync?: SyncProgressView;
