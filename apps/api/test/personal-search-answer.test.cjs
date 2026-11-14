@@ -10,6 +10,7 @@ const {
   reduceFactsWithDiagnostics,
   searchAnswerCitations,
   searchAnswerMapBatchRefs,
+  searchAnswerProgress,
 } = require("../dist/personal-search-answer.service");
 const {
   searchAnswerIdFromWorkItem,
@@ -180,6 +181,81 @@ describe("adaptive aggregate map batches", () => {
       eventIds.slice(37, 91),
     );
   });
+
+  it("serializes adaptive progress without private map state", async () => {
+    const eventIds = Array.from({ length: 10 }, (_, index) => `event-${index}`);
+    const harness = retryHarness(runWithStatus("running"), {
+      eventIds,
+      batchOffsets: [0, 3, 8, 10],
+      completedBatches: 1,
+      attempt: 1,
+    });
+
+    const result = await harness.service().get("answer-1");
+
+    assert.deepEqual(result.progress, {
+      phase: "mapping",
+      completed_batches: 1,
+      total_batches: 3,
+      processed_messages: 3,
+      total_messages: 10,
+      current_attempt: 2,
+      max_attempts: 2,
+    });
+    const serialized = JSON.stringify(result);
+    for (const privateField of [
+      "map_reduce",
+      "batch_offsets",
+      "snapshot_id",
+      "facts",
+      "dedupe_key",
+    ]) {
+      assert.doesNotMatch(serialized, new RegExp(privateField));
+    }
+    assert.equal(result.work_item_id, mapWorkItemId("answer-1", 1, 1));
+  });
+
+  it("reports all authorized messages during reduction and bounds conflicts", () => {
+    const eventIds = Array.from({ length: 10 }, (_, index) => `event-${index}`);
+    const progress = searchAnswerProgress({
+      id: "answer-1",
+      org_id: "org-1",
+      work_item_id: "search-answer:answer-1",
+      query: "How many?",
+      event_ids: eventIds,
+      scope: {
+        intent: "aggregate",
+        complete: false,
+        total_count: 10,
+        included_count: 10,
+        omitted_count: 0,
+        conflict_count: 50_000,
+        map_reduce: {
+          strategy: "map_reduce",
+          phase: "reducing",
+          snapshot_id: "private",
+          batch_offsets: [0, 3, 8, 10],
+          total_batches: 3,
+          completed_batches: 3,
+          batch_attempt: 0,
+          facts: [],
+        },
+      },
+      created_at: "2026-01-01T00:00:00.000Z",
+      updated_at: "2026-01-01T00:00:00.000Z",
+    });
+
+    assert.deepEqual(progress, {
+      phase: "reducing",
+      completed_batches: 3,
+      total_batches: 3,
+      processed_messages: 10,
+      total_messages: 10,
+      current_attempt: 1,
+      max_attempts: 1,
+      conflict_count: 2_000,
+    });
+  });
 });
 
 describe("aggregate map retry", () => {
@@ -334,13 +410,20 @@ function retryHarness(initialRun, options = {}) {
   const prepared = [];
   const started = [];
   const initialAttempt = options.attempt ?? 0;
+  const completedBatches = options.completedBatches ?? 0;
+  const eventIds = options.eventIds ?? ["event-1"];
+  const batchOffsets = options.batchOffsets ?? [0, eventIds.length];
   const harness = {
     record: {
       id: "answer-1",
       org_id: "org-1",
-      work_item_id: mapWorkItemId("answer-1", 0, initialAttempt),
+      work_item_id: mapWorkItemId(
+        "answer-1",
+        completedBatches,
+        initialAttempt,
+      ),
       query: "How many tickets?",
-      event_ids: ["event-1"],
+      event_ids: eventIds,
       scope: {
         intent: "aggregate",
         complete: true,
@@ -351,9 +434,9 @@ function retryHarness(initialRun, options = {}) {
           strategy: "map_reduce",
           phase: "mapping",
           snapshot_id: "snapshot-1",
-          batch_offsets: [0, 1],
-          total_batches: 1,
-          completed_batches: 0,
+          batch_offsets: batchOffsets,
+          total_batches: batchOffsets.length - 1,
+          completed_batches: completedBatches,
           batch_attempt: initialAttempt,
           facts: [],
         },

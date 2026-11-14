@@ -46,6 +46,18 @@ export interface SearchAnswerScope {
   map_reduce?: SearchAnswerMapReduce;
 }
 
+export interface SearchAnswerProgress {
+  phase: "mapping" | "reducing";
+  completed_batches: number;
+  total_batches: number;
+  processed_messages: number;
+  total_messages: number;
+  current_attempt: number;
+  max_attempts: number;
+  /** Number of conflicting canonical fact identities, capped by the reducer. */
+  conflict_count?: number;
+}
+
 /**
  * Search-specific metadata that points at a normal persistent WorkItem/WorkRun.
  * Message bodies stay in the blob store; this record only keeps stable locators.
