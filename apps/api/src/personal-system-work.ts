@@ -26,7 +26,7 @@ export function searchAnswerIdFromWorkItem(id: string): string | undefined {
   }
   if (id.startsWith(SEARCH_ANSWER_MAP_WORK_ITEM_PREFIX)) {
     const value = id.slice(SEARCH_ANSWER_MAP_WORK_ITEM_PREFIX.length);
-    const separator = value.lastIndexOf(":");
+    const separator = value.indexOf(":");
     return separator > 0 ? value.slice(0, separator) : undefined;
   }
   return undefined;

@@ -279,6 +279,7 @@ export class PersonalConversationContextService {
           batch_offsets: batchOffsets,
           total_batches: batchOffsets.length - 1,
           completed_batches: 0,
+          batch_attempt: 0,
           facts: [],
         };
         scope.included_count = allRefs.length;
