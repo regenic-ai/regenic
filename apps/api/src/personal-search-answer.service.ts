@@ -197,10 +197,7 @@ export class PersonalSearchAnswerService {
       const batchIndex = map.completed_batches;
       const evidenceText = await this.context.mapBatchEvidence(
         map.snapshot_id,
-        record.event_ids.slice(
-          batchIndex * map.batch_size,
-          (batchIndex + 1) * map.batch_size,
-        ),
+        searchAnswerMapBatchRefs(record.event_ids, map, batchIndex),
         record.query,
       );
       const prepared = await this.work.prepareAuxiliaryExecution({
@@ -226,10 +223,7 @@ export class PersonalSearchAnswerService {
       return this.failMap(record, run);
     }
     const batchIndex = map.completed_batches;
-    const batchRefs = record.event_ids.slice(
-      batchIndex * map.batch_size,
-      (batchIndex + 1) * map.batch_size,
-    );
+    const batchRefs = searchAnswerMapBatchRefs(record.event_ids, map, batchIndex);
     let facts: SearchAnswerFact[];
     try {
       facts = parseMapFacts(run.result.summary, batchRefs);
@@ -244,9 +238,10 @@ export class PersonalSearchAnswerService {
     if (nextMap.completed_batches < nextMap.total_batches) {
       const evidenceText = await this.context.mapBatchEvidence(
         nextMap.snapshot_id,
-        record.event_ids.slice(
-          nextMap.completed_batches * nextMap.batch_size,
-          (nextMap.completed_batches + 1) * nextMap.batch_size,
+        searchAnswerMapBatchRefs(
+          record.event_ids,
+          nextMap,
+          nextMap.completed_batches,
         ),
         record.query,
       );
@@ -359,6 +354,18 @@ export class PersonalSearchAnswerService {
 
 function mapWorkItemId(answerId: string, batchIndex: number) {
   return `${SEARCH_ANSWER_MAP_PURPOSE}:${answerId}:${batchIndex}`;
+}
+
+export function searchAnswerMapBatchRefs(
+  eventIds: readonly string[],
+  map: SearchAnswerMapReduce,
+  batchIndex: number,
+): string[] {
+  const start = map.batch_offsets?.[batchIndex]
+    ?? batchIndex * (map.batch_size ?? 100);
+  const end = map.batch_offsets?.[batchIndex + 1]
+    ?? Math.min(eventIds.length, (batchIndex + 1) * (map.batch_size ?? 100));
+  return eventIds.slice(start, end);
 }
 
 export function parseMapFacts(
