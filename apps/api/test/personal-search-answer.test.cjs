@@ -137,7 +137,7 @@ describe("aggregate fact reduction", () => {
       reduced,
       new RegExp(`\\[${SEARCH_ANSWER_REDUCED_CITATION_MAX + 1}\\]`),
     );
-    assert.match(reduced, /additional_evidence=3$/);
+    assert.match(reduced, /\+3 additional evidence$/);
   });
 });
 
