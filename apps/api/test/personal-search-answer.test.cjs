@@ -2,8 +2,12 @@ const assert = require("node:assert/strict");
 const { describe, it } = require("node:test");
 const {
   PersonalSearchAnswerService,
+  SEARCH_ANSWER_REDUCED_CITATION_MAX,
   SEARCH_ANSWER_MAP_RETRY_PROMPT,
   mapWorkItemId,
+  parseMapFacts,
+  reduceFacts,
+  reduceFactsWithDiagnostics,
   searchAnswerCitations,
   searchAnswerMapBatchRefs,
 } = require("../dist/personal-search-answer.service");
@@ -29,6 +33,110 @@ describe("search answer citations", () => {
         { ref: 2, event_id: "event-2" },
       ],
     );
+  });
+});
+
+describe("aggregate fact reduction", () => {
+  it("canonicalizes superficial dedupe key variants", () => {
+    const facts = parseMapFacts(
+      JSON.stringify([
+        {
+          dedupe_key: "  ＴＩＣＫＥＴ　 42  ",
+          group: "support",
+          metric: "ticket",
+          value: 1,
+          evidence_refs: [1],
+        },
+      ]),
+      ["event-1"],
+    );
+
+    assert.equal(facts[0].dedupe_key, "ticket 42");
+  });
+
+  it("merges identical duplicates and unions their citations", () => {
+    const facts = [
+      fact(" Ticket  42 ", "support", "ticket", 1, ["event-2"]),
+      fact("ＴＩＣＫＥＴ 42", "support", "ticket", 1, ["event-1", "event-2"]),
+    ];
+
+    assert.equal(
+      reduceFacts(facts, ["event-1", "event-2"]),
+      '- group="support" metric="ticket" total=1 [1] [2]',
+    );
+  });
+
+  it("excludes conflicting identities from totals and reports conflicts", () => {
+    const reduced = reduceFactsWithDiagnostics([
+      fact("ticket-1", "support", "ticket", 1, ["event-1"]),
+      fact("TICKET-1", "support", "ticket", 2, ["event-2"]),
+      fact("ticket-2", "support", "ticket", 1, ["event-3"]),
+    ], ["event-1", "event-2", "event-3"]);
+
+    assert.equal(reduced.conflict_count, 1);
+    assert.equal(
+      reduced.text,
+      '- group="support" metric="ticket" total=1 [3]',
+    );
+  });
+
+  it("is invariant to map batch and fact order", () => {
+    const facts = [
+      fact("b", "support", "status", "open", ["event-3"]),
+      fact("a", "support", "ticket", 1, ["event-2"]),
+      fact(" A ", "support", "ticket", 1, ["event-1"]),
+      fact("c", "accounts", "ticket", 2, ["event-4"]),
+    ];
+    const refs = ["event-1", "event-2", "event-3", "event-4"];
+
+    assert.equal(
+      reduceFacts(facts, refs),
+      reduceFacts(facts.toReversed(), refs),
+    );
+  });
+
+  it("rejects non-finite, unsafe, and blank map values", () => {
+    const entry = (value) => JSON.stringify([{
+      dedupe_key: "ticket-1",
+      group: "support",
+      metric: "ticket",
+      value,
+      evidence_refs: [1],
+    }]);
+
+    assert.throws(
+      () => parseMapFacts(entry(Number.MAX_SAFE_INTEGER + 1), ["event-1"]),
+      /Invalid fact/,
+    );
+    assert.throws(
+      () => parseMapFacts(entry(" \t "), ["event-1"]),
+      /Invalid fact/,
+    );
+    assert.throws(
+      () => parseMapFacts(entry(1).replace('"value":1', '"value":1e309'), ["event-1"]),
+      /Invalid fact/,
+    );
+    assert.equal(parseMapFacts(entry(1.5), ["event-1"])[0].value, 1.5);
+  });
+
+  it("bounds citations and reports omitted evidence accurately", () => {
+    const eventIds = Array.from(
+      { length: SEARCH_ANSWER_REDUCED_CITATION_MAX + 3 },
+      (_, index) => `event-${index + 1}`,
+    );
+    const reduced = reduceFacts([
+      fact("ticket-1", "support", "ticket", 1, eventIds),
+    ], eventIds);
+
+    assert.match(
+      reduced,
+      new RegExp(`\\[${SEARCH_ANSWER_REDUCED_CITATION_MAX}\\]`),
+    );
+    assert.doesNotMatch(
+      reduced,
+      new RegExp(`\\[${SEARCH_ANSWER_REDUCED_CITATION_MAX + 1}\\]`),
+    );
+    assert.match(reduced, /additional_evidence=3$/);
   });
 });
 
@@ -75,6 +183,33 @@ describe("adaptive aggregate map batches", () => {
 });
 
 describe("aggregate map retry", () => {
+  it("persists and exposes conflict diagnostics before reducing", async () => {
+    const harness = retryHarness(completedRun(JSON.stringify([
+      {
+        dedupe_key: "ticket-1",
+        group: "support",
+        metric: "ticket",
+        value: 1,
+        evidence_refs: [1],
+      },
+      {
+        dedupe_key: " TICKET-1 ",
+        group: "support",
+        metric: "ticket",
+        value: 2,
+        evidence_refs: [1],
+      },
+    ])));
+
+    const result = await harness.service().get("answer-1");
+
+    assert.equal(harness.record.scope.complete, false);
+    assert.equal(harness.record.scope.incomplete_reason, "fact_conflict");
+    assert.equal(harness.record.scope.conflict_count, 1);
+    assert.equal(result.scope.conflict_count, 1);
+    assert.equal(result.progress.conflict_count, 1);
+  });
+
   it("retries invalid output once and then reduces successful facts", async () => {
     const harness = retryHarness(completedRun("not json"));
 
@@ -183,6 +318,16 @@ describe("aggregate map retry", () => {
     );
   });
 });
+
+function fact(dedupeKey, group, metric, value, eventIds) {
+  return {
+    dedupe_key: dedupeKey,
+    group,
+    metric,
+    value,
+    event_ids: eventIds,
+  };
+}
 
 function retryHarness(initialRun, options = {}) {
   const states = new Map();
