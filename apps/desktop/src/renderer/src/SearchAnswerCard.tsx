@@ -9,6 +9,10 @@ import { KernelRequestError } from "./kernel-request";
 import { useLocale } from "./LocaleContext";
 import type { ExecutorCatalogEntry, PersonalSearchAnswer, PersonalSearchConversation } from "./types";
 import { subscribeWorkUpdates } from "./personal-events";
+import {
+  searchAnswerConflictCopy,
+  searchAnswerProgressCopy,
+} from "./search-answer-progress";
 
 /** Reconnect/lost-event fallback; normal updates arrive over the shared SSE connection. */
 const POLL_FALLBACK_MS = 15_000;
@@ -138,18 +142,30 @@ export function SearchAnswerCard({ query, conversations, intent, filters, onCite
       </div>
     );
   } else if (isActive(answer)) {
+    const progressCopy = answer.progress
+      ? searchAnswerProgressCopy(answer.progress)
+      : null;
+    const conflictCopy = answer.progress
+      ? searchAnswerConflictCopy(answer.progress)
+      : null;
     body = (
-      <div className="search-answer-row">
-        <p className="muted" role="status">
-          {t(answer.status === "waiting_human" ? "search.answer.waiting" : "search.answer.running",
-            { executor: label(answer.executor_type) })}
-          {answer.progress
-            ? ` ${answer.progress.completed_batches}/${answer.progress.total_batches}`
-            : ""}
-        </p>
-        <button type="button" className="link muted-link" disabled={stopping}
-          onClick={() => void stop()}>{t("search.answer.cancel")}</button>
-      </div>
+      <>
+        <div className="search-answer-row">
+          <p className="muted" role="status">
+            {progressCopy
+              ? t(progressCopy.key, progressCopy.vars)
+              : t(answer.status === "waiting_human" ? "search.answer.waiting" : "search.answer.running",
+                { executor: label(answer.executor_type) })}
+          </p>
+          <button type="button" className="link muted-link" disabled={stopping}
+            onClick={() => void stop()}>{t("search.answer.cancel")}</button>
+        </div>
+        {conflictCopy ? (
+          <p className="search-warning" role="status">
+            {t(conflictCopy.key, conflictCopy.vars)}
+          </p>
+        ) : null}
+      </>
     );
   } else if (answer.status === "completed" && answer.answer) {
     body = (
