@@ -173,6 +173,33 @@ async function ingestLongConversation(database, blobRoot) {
   authority.close();
 }
 
+async function ingestLargeAggregateConversation(database, blobRoot) {
+  const authority = new SqliteAuthorityStore(database);
+  const service = new IngestionService(new FsBlobStore(blobRoot), authority);
+  await service.ingest({
+    schema_version: INGEST_SCHEMA_VERSION,
+    connector_id: "synthetic-chat",
+    org_id: "local-owner",
+    delivery_id: "delivery-large-aggregate",
+    received_at: "2026-08-31T00:00:00.000Z",
+    records: Array.from({ length: 1_001 }, (_, index) => ({
+      operation: "create",
+      source: "synthetic-chat",
+      external_id: `bulk:${index}`,
+      occurred_at: new Date(Date.parse("2026-08-30T00:00:00.000Z") + index * 1_000).toISOString(),
+      actor: { id: `owner-${index % 5}` },
+      scope: { id: "bulk" },
+      type: "message",
+      content: [{
+        role: "body",
+        media_type: "text/plain",
+        text: `bulk-task-${index} completed`,
+      }],
+    })),
+  });
+  authority.close();
+}
+
 async function ingestConversationMetadataOnly(database, blobRoot) {
   const ids = await ingestConversationEvidence(database, blobRoot);
   const authority = new SqliteAuthorityStore(database);
@@ -209,9 +236,12 @@ async function startExecutorStub(summary) {
     const text = Buffer.concat(chunks).toString("utf8");
     requests.push({ method: request.method, url: request.url, body: text ? JSON.parse(text) : undefined });
     const done = request.method === "GET" && summary !== undefined;
+    const resolvedSummary = typeof summary === "function"
+      ? summary(requests)
+      : summary;
     response.setHeader("content-type", "application/json");
     response.end(JSON.stringify(done
-      ? { status: "completed", external_run_id: "run-1", agent_thread_id: "dsh:answer-1", result: { summary } }
+      ? { status: "completed", external_run_id: "run-1", agent_thread_id: "dsh:answer-1", result: { summary: resolvedSummary } }
       : { status: "running", external_run_id: "run-1", agent_thread_id: "dsh:answer-1" }));
   });
   await listenServer(server);
@@ -1226,6 +1256,79 @@ describe("personal context API", () => {
       occurred_before: "2026-08-30T00:02:00.000Z",
       incomplete_reason: "transcript_limit",
     });
+  });
+  it("maps large authorized scopes in resumable batches before reducing", async () => {
+    const root = await createRoot();
+    const executor = await startExecutorStub((requests) => {
+      const starts = requests.filter((request) =>
+        request.method === "POST" && request.url === "/v1/runs");
+      const latest = starts.at(-1);
+      return latest?.body?.executor_config?.prompt?.includes("Extract atomic facts")
+        ? JSON.stringify([{
+            dedupe_key: `batch-${starts.length}`,
+            group: "all owners",
+            metric: "completed tasks",
+            value: 1,
+            evidence_refs: [1],
+          }])
+        : "There were 11 extracted task groups [1].";
+    });
+    const { origin } = await startApi(
+      root,
+      { driver: "none" },
+      undefined,
+      ingestLargeAggregateConversation,
+    );
+    const executorType = await installHttpExecutor(origin, executor.baseUrl);
+    const conversation = JSON.parse((await postJson(
+      `${origin}/v1/me/context/search/expand`,
+      {
+        query: "bulk-task-0",
+        limit: 1,
+        context: { before: 0, after: 0, reply_depth: 0, max_messages: 1 },
+      },
+    )).text).conversations[0];
+    const started = await postJson(
+      `${origin}/v1/me/context/search/answers`,
+      {
+        query: "Count all completed tasks.",
+        conversations: [{
+          thread_id: conversation.thread_id,
+          event_ids: [conversation.messages[0].event_id],
+        }],
+        intent: "aggregate",
+        executor_type: executorType,
+        filters: {
+          occurred_after: "2026-08-30T00:00:00.000Z",
+          occurred_before: "2026-08-30T00:20:00.000Z",
+        },
+      },
+    );
+    assert.equal(started.response.status, 202, started.text);
+    let answer = JSON.parse(started.text);
+    assert.deepEqual(answer.progress, { completed_batches: 0, total_batches: 11 });
+    for (let index = 0; index < 12; index += 1) {
+      answer = await fetch(
+        `${origin}/v1/me/context/search/answers/${answer.answer_id}`,
+      ).then((response) => response.json());
+    }
+    assert.equal(answer.status, "completed");
+    assert.equal(answer.answer, "There were 11 extracted task groups [1].");
+    assert.deepEqual(answer.progress, { completed_batches: 11, total_batches: 11 });
+    const starts = executor.requests.filter((request) =>
+      request.method === "POST" && request.url === "/v1/runs");
+    assert.equal(starts.length, 12);
+    assert.match(starts.at(-1).body.evidence_text, /DETERMINISTIC REDUCED FACTS/);
+    assert.match(starts.at(-1).body.evidence_text, /total=11/);
+    const ledger = new SqliteAuthorityStore(join(root, "authority.db"));
+    try {
+      const record = await ledger.getSearchAnswer("local-owner", answer.answer_id);
+      assert.equal(record.scope.map_reduce.phase, "reducing");
+      assert.equal(record.scope.map_reduce.completed_batches, 11);
+      assert.equal(record.scope.map_reduce.facts.length, 11);
+    } finally {
+      ledger.close();
+    }
   });
   it("marks aggregate answers without a bounded range as partial", async () => {
     const root = await createRoot();

@@ -143,6 +143,9 @@ export function SearchAnswerCard({ query, conversations, intent, filters, onCite
         <p className="muted" role="status">
           {t(answer.status === "waiting_human" ? "search.answer.waiting" : "search.answer.running",
             { executor: label(answer.executor_type) })}
+          {answer.progress
+            ? ` ${answer.progress.completed_batches}/${answer.progress.total_batches}`
+            : ""}
         </p>
         <button type="button" className="link muted-link" disabled={stopping}
           onClick={() => void stop()}>{t("search.answer.cancel")}</button>
