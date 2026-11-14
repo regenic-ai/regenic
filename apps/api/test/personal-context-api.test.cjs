@@ -1338,8 +1338,13 @@ describe("personal context API", () => {
     }
     assert.equal(answer.status, "completed");
     assert.deepEqual(answer.progress, {
+      phase: "reducing",
       completed_batches: persistedOffsets.length - 1,
       total_batches: persistedOffsets.length - 1,
+      processed_messages: 1_001,
+      total_messages: 1_001,
+      current_attempt: 1,
+      max_attempts: 1,
     });
     const starts = executor.requests.filter((request) =>
       request.method === "POST" && request.url === "/v1/runs");
