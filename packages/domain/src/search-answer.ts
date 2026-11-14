@@ -22,7 +22,9 @@ export interface SearchAnswerMapReduce {
   phase: "mapping" | "reducing";
   snapshot_id: string;
   executor_type?: string;
-  batch_size: number;
+  batch_offsets: number[];
+  /** Retained for resumability of records created before adaptive batches. */
+  batch_size?: number;
   total_batches: number;
   completed_batches: number;
   facts: SearchAnswerFact[];

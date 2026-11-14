@@ -24,7 +24,8 @@ const COMPLETE_ANSWER_MESSAGES_MAX = 1_000;
 const COMPLETE_ANSWER_MESSAGE_CHARS = 1_000;
 const COMPLETE_ANSWER_TRANSCRIPT_CHARS = 160_000;
 const MAP_REDUCE_THRESHOLD = 1_000;
-const MAP_REDUCE_BATCH_SIZE = 100;
+const MAP_REDUCE_BATCH_EVENTS = 100;
+const MAP_REDUCE_BATCH_EVIDENCE_CHARS = 120_000;
 const MAP_REDUCE_MESSAGE_CHARS = 4_000;
 const COMPLETE_SCOPE_DAYS_MAX = 365;
 
@@ -260,6 +261,9 @@ export class PersonalConversationContextService {
         && complete.unreadable === 0
         && allRefs.length > MAP_REDUCE_THRESHOLD
       ) {
+        const batchOffsets = adaptiveMapBatchOffsets(
+          conversations.flatMap((conversation) => conversation.messages),
+        );
         const clipped = conversations.some((conversation) =>
           conversation.messages.some((message) =>
             message.text.replace(/\s+/g, " ").length > MAP_REDUCE_MESSAGE_CHARS));
@@ -272,8 +276,8 @@ export class PersonalConversationContextService {
           phase: "mapping",
           snapshot_id: complete.snapshot_id,
           ...(executorType ? { executor_type: executorType } : {}),
-          batch_size: MAP_REDUCE_BATCH_SIZE,
-          total_batches: Math.ceil(allRefs.length / MAP_REDUCE_BATCH_SIZE),
+          batch_offsets: batchOffsets,
+          total_batches: batchOffsets.length - 1,
           completed_batches: 0,
           facts: [],
         };
@@ -284,7 +288,7 @@ export class PersonalConversationContextService {
           ...(executorType ? { executor_type: executorType } : {}),
           evidence_text: await this.mapBatchEvidence(
             complete.snapshot_id,
-            allRefs.slice(0, MAP_REDUCE_BATCH_SIZE),
+            allRefs.slice(batchOffsets[0], batchOffsets[1]),
             query,
           ),
           refs: allRefs,
@@ -432,17 +436,12 @@ export class PersonalConversationContextService {
             "Aggregate evidence changed; search again",
           );
         }
-        const sentAt = evidence?.occurred_at.slice(0, 16).replace("T", " ")
-          ?? "unknown time";
-        const attachments = content.attachments.map((attachment) =>
-          `[attachment: ${attachment.filename || attachment.media_type}]`);
-        const body = [
-          content.text.replace(/\s+/g, " ").slice(0, MAP_REDUCE_MESSAGE_CHARS),
-          ...attachments,
-        ].filter(Boolean).join(" ");
-        return `[${index + 1}] ${sentAt} UTC · ${evidence?.source ?? "unknown"}: ${
-          body
-        }`;
+        return mapBatchMessageLine({
+          occurred_at: evidence?.occurred_at,
+          source: evidence?.source,
+          text: content.text,
+          attachments: content.attachments,
+        }, index);
       }),
     ].join("\n");
   }
@@ -595,6 +594,60 @@ export class PersonalConversationContextService {
       unreadable,
     };
   }
+}
+
+interface MapBatchMessage {
+  occurred_at?: string;
+  source?: string;
+  text: string;
+  attachments?: Array<{ media_type: string; filename?: string }>;
+}
+
+export function mapBatchMessageLine(
+  message: MapBatchMessage,
+  batchIndex: number,
+): string {
+  const sentAt = message.occurred_at?.slice(0, 16).replace("T", " ")
+    ?? "unknown time";
+  const attachments = (message.attachments ?? []).map((attachment) =>
+    `[attachment: ${attachment.filename || attachment.media_type}]`);
+  const body = [
+    message.text.replace(/\s+/g, " ").slice(0, MAP_REDUCE_MESSAGE_CHARS),
+    ...attachments,
+  ].filter(Boolean).join(" ");
+  return `[${batchIndex + 1}] ${sentAt} UTC · ${message.source ?? "unknown"}: ${body}`;
+}
+
+export function adaptiveMapBatchOffsets(
+  messages: readonly MapBatchMessage[],
+): number[] {
+  const offsets = [0];
+  let batchEvents = 0;
+  let batchCharacters = 0;
+  for (let index = 0; index < messages.length; index += 1) {
+    let line = mapBatchMessageLine(messages[index], batchEvents);
+    let additionalCharacters = (batchEvents > 0 ? 1 : 0) + line.length;
+    if (
+      batchEvents > 0
+      && (
+        batchEvents >= MAP_REDUCE_BATCH_EVENTS
+        || batchCharacters + additionalCharacters > MAP_REDUCE_BATCH_EVIDENCE_CHARS
+      )
+    ) {
+      offsets.push(index);
+      batchEvents = 0;
+      batchCharacters = 0;
+      line = mapBatchMessageLine(messages[index], batchEvents);
+      additionalCharacters = line.length;
+    }
+    if (additionalCharacters > MAP_REDUCE_BATCH_EVIDENCE_CHARS) {
+      throw new Error("A single aggregate evidence message exceeds the batch character budget");
+    }
+    batchCharacters += additionalCharacters;
+    batchEvents += 1;
+  }
+  if (messages.length > 0) offsets.push(messages.length);
+  return offsets;
 }
 
 function answerIntent(value: unknown): SearchAnswerIntent {

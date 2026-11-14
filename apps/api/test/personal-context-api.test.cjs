@@ -193,7 +193,7 @@ async function ingestLargeAggregateConversation(database, blobRoot) {
       content: [{
         role: "body",
         media_type: "text/plain",
-        text: `bulk-task-${index} completed`,
+        text: `bulk-task-${index} completed ${"x".repeat(3_900)}`,
       }],
     })),
   });
@@ -1306,28 +1306,57 @@ describe("personal context API", () => {
     );
     assert.equal(started.response.status, 202, started.text);
     let answer = JSON.parse(started.text);
-    assert.deepEqual(answer.progress, { completed_batches: 0, total_batches: 11 });
-    for (let index = 0; index < 12; index += 1) {
+    assert.equal(answer.progress.completed_batches, 0);
+    assert.ok(answer.progress.total_batches > 11);
+    const ledger = new SqliteAuthorityStore(join(root, "authority.db"));
+    let persistedOffsets;
+    try {
+      const record = await ledger.getSearchAnswer("local-owner", answer.answer_id);
+      persistedOffsets = record.scope.map_reduce.batch_offsets;
+      assert.equal(record.scope.map_reduce.total_batches, persistedOffsets.length - 1);
+      assert.ok(persistedOffsets[1] < 100);
+    } finally {
+      ledger.close();
+    }
+    answer = await fetch(
+      `${origin}/v1/me/context/search/answers/${answer.answer_id}`,
+    ).then((response) => response.json());
+    const startsAfterResume = executor.requests.filter((request) =>
+      request.method === "POST" && request.url === "/v1/runs");
+    assert.match(
+      startsAfterResume[1].body.evidence_text,
+      new RegExp(`bulk-task-${persistedOffsets[1]} completed`),
+    );
+    assert.doesNotMatch(
+      startsAfterResume[1].body.evidence_text,
+      new RegExp(`bulk-task-${persistedOffsets[1] - 1} completed`),
+    );
+    for (let index = 1; index < answer.progress.total_batches + 1; index += 1) {
       answer = await fetch(
         `${origin}/v1/me/context/search/answers/${answer.answer_id}`,
       ).then((response) => response.json());
     }
     assert.equal(answer.status, "completed");
-    assert.equal(answer.answer, "There were 11 extracted task groups [1].");
-    assert.deepEqual(answer.progress, { completed_batches: 11, total_batches: 11 });
+    assert.deepEqual(answer.progress, {
+      completed_batches: persistedOffsets.length - 1,
+      total_batches: persistedOffsets.length - 1,
+    });
     const starts = executor.requests.filter((request) =>
       request.method === "POST" && request.url === "/v1/runs");
-    assert.equal(starts.length, 12);
+    assert.equal(starts.length, persistedOffsets.length);
     assert.match(starts.at(-1).body.evidence_text, /DETERMINISTIC REDUCED FACTS/);
-    assert.match(starts.at(-1).body.evidence_text, /total=11/);
-    const ledger = new SqliteAuthorityStore(join(root, "authority.db"));
+    assert.match(
+      starts.at(-1).body.evidence_text,
+      new RegExp(`total=${persistedOffsets.length - 1}`),
+    );
+    const finalLedger = new SqliteAuthorityStore(join(root, "authority.db"));
     try {
-      const record = await ledger.getSearchAnswer("local-owner", answer.answer_id);
+      const record = await finalLedger.getSearchAnswer("local-owner", answer.answer_id);
       assert.equal(record.scope.map_reduce.phase, "reducing");
-      assert.equal(record.scope.map_reduce.completed_batches, 11);
-      assert.equal(record.scope.map_reduce.facts.length, 11);
+      assert.equal(record.scope.map_reduce.completed_batches, persistedOffsets.length - 1);
+      assert.equal(record.scope.map_reduce.facts.length, persistedOffsets.length - 1);
     } finally {
-      ledger.close();
+      finalLedger.close();
     }
   });
   it("marks aggregate answers without a bounded range as partial", async () => {
