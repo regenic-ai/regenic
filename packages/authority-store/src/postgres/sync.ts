@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type {
   ConnectorInstallation,
   SyncPhase,
@@ -10,6 +11,7 @@ import type {
   SetConnectorInstallationConfig,
   ConnectorLease,
   ReleaseConnectorLease,
+  RenewConnectorLease,
   ResetConnectorCursor,
   ConnectorStreamCursor,
   NewIngestAttempt,
@@ -48,6 +50,8 @@ import {
   releaseHistoryPhase,
   syncWorkEnsurePlan,
   dueSyncWorkId,
+  assertAttemptSettlementBinding,
+  assertAttemptInstallationBinding,
 } from "@regenic/domain";
 import {
   PgSql,
@@ -86,6 +90,7 @@ interface CursorRow {
   cursor_value: string | null;
   cursor_version: number;
   lease_owner: string | null;
+  lease_claim_token: string | null;
   lease_expires_at: unknown;
   updated_at: unknown;
 }
@@ -186,7 +191,7 @@ interface QuarantineRow {
 
 const CURSOR_COLUMNS = `
   installation_id, stream_key, cursor_value, cursor_version,
-  lease_owner, lease_expires_at, updated_at
+  lease_owner, lease_claim_token, lease_expires_at, updated_at
 `;
 
 export async function createInstallation(db: PgSql, input: NewConnectorInstallation): Promise<ConnectorInstallation> {
@@ -265,7 +270,7 @@ export async function updateInstallationConfig(db: PgSql, input: SetConnectorIns
 export async function deleteInstallation(db: PgSql, id: string, orgId: string): Promise<boolean> {
     return db.withTx(async (client) => {
       const row = await db.queryOne<{ id: string }>(
-        `SELECT id FROM connector_installations WHERE id = $1 AND org_id = $2`,
+        `SELECT id FROM connector_installations WHERE id = $1 AND org_id = $2 FOR UPDATE`,
         [id, orgId],
         client,
       );
@@ -345,26 +350,27 @@ export async function acquireLease(db: PgSql, input: {
       if (!installation || installation.status !== "enabled") {
         return null;
       }
-      const leaseExpiresAt = new Date(
-        new Date(input.now).getTime() + input.lease_duration_ms,
-      ).toISOString();
+      const claimToken = randomUUID();
       const updated = await db.queryOne<CursorRow>(
         `
           UPDATE connector_cursors
-          SET lease_owner = $1, lease_expires_at = $2, updated_at = $3
-          WHERE installation_id = $4 AND stream_key = $5
+          SET lease_owner = $1, lease_claim_token = $2,
+              lease_expires_at = clock_timestamp() + ($3 * interval '1 millisecond'),
+              updated_at = $4
+          WHERE installation_id = $5 AND stream_key = $6
             AND (
-              $6::boolean
+              $7::boolean
               OR lease_owner IS NULL
               OR lease_owner = $1
               OR lease_expires_at IS NULL
-              OR lease_expires_at <= $3::timestamptz
+              OR lease_expires_at <= clock_timestamp()
             )
           RETURNING ${CURSOR_COLUMNS}
         `,
         [
           input.lease_owner,
-          leaseExpiresAt,
+          claimToken,
+          input.lease_duration_ms,
           input.now,
           input.installation_id,
           input.stream_key,
@@ -379,23 +385,28 @@ export async function acquireLease(db: PgSql, input: {
         `
           INSERT INTO connector_cursors (
             installation_id, stream_key, cursor_value, cursor_version,
-            lease_owner, lease_expires_at, updated_at
-          ) VALUES ($1, $2, NULL, 1, $3, $4, $5)
+            lease_owner, lease_claim_token, lease_expires_at, updated_at
+          ) VALUES (
+            $1, $2, NULL, 1, $3, $4,
+            clock_timestamp() + ($5 * interval '1 millisecond'), $6
+          )
           ON CONFLICT (installation_id, stream_key) DO UPDATE SET
             lease_owner = EXCLUDED.lease_owner,
+            lease_claim_token = EXCLUDED.lease_claim_token,
             lease_expires_at = EXCLUDED.lease_expires_at,
             updated_at = EXCLUDED.updated_at
           WHERE connector_cursors.lease_owner IS NULL
              OR connector_cursors.lease_owner = EXCLUDED.lease_owner
              OR connector_cursors.lease_expires_at IS NULL
-             OR connector_cursors.lease_expires_at <= $5::timestamptz
+             OR connector_cursors.lease_expires_at <= clock_timestamp()
           RETURNING ${CURSOR_COLUMNS}
         `,
         [
           input.installation_id,
           input.stream_key,
           input.lease_owner,
-          leaseExpiresAt,
+          claimToken,
+          input.lease_duration_ms,
           input.now,
         ],
         client,
@@ -408,18 +419,45 @@ export async function releaseLease(db: PgSql, input: ReleaseConnectorLease): Pro
     const rowCount = await db.execute(
       `
         UPDATE connector_cursors
-        SET lease_owner = NULL, lease_expires_at = NULL, updated_at = $1
+        SET lease_owner = NULL, lease_claim_token = NULL, lease_expires_at = NULL, updated_at = $1
         WHERE installation_id = $2 AND stream_key = $3 AND lease_owner = $4
+          AND lease_claim_token = $5
       `,
       [
         input.now,
         input.installation_id,
         input.stream_key,
         input.lease_owner,
+        input.claim_token,
       ],
     );
     return rowCount === 1;
   }
+
+export async function renewLease(
+  db: PgSql,
+  input: RenewConnectorLease,
+): Promise<ConnectorLease | null> {
+  const row = await db.queryOne<CursorRow>(
+    `
+      UPDATE connector_cursors
+      SET lease_expires_at = clock_timestamp() + ($1 * interval '1 millisecond'),
+          updated_at = $2
+      WHERE installation_id = $3 AND stream_key = $4 AND lease_owner = $5
+        AND lease_claim_token = $6 AND lease_expires_at > clock_timestamp()
+      RETURNING ${CURSOR_COLUMNS}
+    `,
+    [
+      input.lease_duration_ms,
+      input.now,
+      input.installation_id,
+      input.stream_key,
+      input.lease_owner,
+      input.claim_token,
+    ],
+  );
+  return row ? toLease(db, row) : null;
+}
 
 export async function resetCursor(db: PgSql, input: ResetConnectorCursor): Promise<ConnectorStreamCursor | null> {
     return db.withTx(async (client) => {
@@ -427,19 +465,25 @@ export async function resetCursor(db: PgSql, input: ResetConnectorCursor): Promi
         input.installation_id,
         input.stream_key,
         client,
+        true,
       );
       if (!cursor) {
         return null;
       }
-      const leaseExpiresAt = toIsoOrNull(cursor.lease_expires_at);
-      if (leaseExpiresAt && leaseExpiresAt > input.now) {
+      const activeLease = await db.queryOne<{ active: boolean }>(
+        `SELECT lease_expires_at > clock_timestamp() AS active
+         FROM connector_cursors WHERE installation_id = $1 AND stream_key = $2`,
+        [input.installation_id, input.stream_key],
+        client,
+      );
+      if (activeLease?.active) {
         throw new Error("Connector cursor is leased and cannot be reset");
       }
       await db.execute(
         `
           UPDATE connector_cursors
           SET cursor_value = NULL, cursor_version = $1, lease_owner = NULL,
-              lease_expires_at = NULL, updated_at = $2
+              lease_claim_token = NULL, lease_expires_at = NULL, updated_at = $2
           WHERE installation_id = $3 AND stream_key = $4
         `,
         [
@@ -460,15 +504,19 @@ export async function resetCursor(db: PgSql, input: ResetConnectorCursor): Promi
   }
 
 export async function beginAttempt(db: PgSql, input: NewIngestAttempt): Promise<IngestAttempt> {
-    await beginAttemptOn(db, undefined, input);
-    return (await findAttempt(db, input.id))!;
+    return db.withTx(async (client) => {
+      await beginAttemptOn(db, client, input);
+      return (await findAttempt(db, input.id, client))!;
+    });
   }
 
 export async function settleAttempt(db: PgSql, input: SettleIngestAttempt): Promise<IngestAttempt> {
     return db.withTx((client) => settleAttemptOn(db, client, input));
   }
 
-export async function beginAttemptOn(db: PgSql, client: PoolClient | undefined, input: NewIngestAttempt): Promise<void> {
+export async function beginAttemptOn(db: PgSql, client: PoolClient, input: NewIngestAttempt): Promise<void> {
+    const installation = await lockAttemptInstallation(db, client, input.connector_installation_id);
+    assertAttemptInstallationBinding(input, installation);
     await db.execute(
       `
         INSERT INTO ingest_attempts (
@@ -489,12 +537,18 @@ export async function beginAttemptOn(db: PgSql, client: PoolClient | undefined, 
   }
 
 export async function settleAttemptOn(db: PgSql, client: PoolClient, input: SettleIngestAttempt): Promise<IngestAttempt> {
+    const installation = await lockAttemptInstallation(db, client, input.installation_id);
+    const attempt = await findAttempt(db, input.attempt_id, client, true);
+    assertAttemptSettlementBinding(attempt, input);
+    assertAttemptInstallationBinding(attempt, installation);
     const cursor = await findCursorRow(db, 
       input.installation_id,
       input.stream_key,
       client,
+      true,
     );
-    if (!cursor || cursor.lease_owner !== input.lease_owner) {
+    if (!cursor || cursor.lease_owner !== input.lease_owner ||
+      cursor.lease_claim_token !== input.claim_token) {
       throw new Error("Connector lease is not held by the attempt owner");
     }
     const status =
@@ -543,8 +597,9 @@ export async function settleAttemptOn(db: PgSql, client: PoolClient, input: Sett
       `
         UPDATE connector_cursors
         SET cursor_value = $1, cursor_version = $2, lease_owner = NULL,
-            lease_expires_at = NULL, updated_at = $3
+            lease_claim_token = NULL, lease_expires_at = NULL, updated_at = $3
         WHERE installation_id = $4 AND stream_key = $5 AND lease_owner = $6
+          AND lease_claim_token = $7 AND lease_expires_at > clock_timestamp()
       `,
       [
         advancesCursor ? input.next_cursor : cursor.cursor_value,
@@ -555,6 +610,7 @@ export async function settleAttemptOn(db: PgSql, client: PoolClient, input: Sett
         input.installation_id,
         input.stream_key,
         input.lease_owner,
+        input.claim_token,
       ],
       client,
     );
@@ -562,6 +618,14 @@ export async function settleAttemptOn(db: PgSql, client: PoolClient, input: Sett
       throw new Error("Connector lease is not held by the attempt owner");
     }
     return (await findAttempt(db, input.attempt_id, client))!;
+  }
+
+async function lockAttemptInstallation(db: PgSql, client: PoolClient, id: string): Promise<{ id: string; org_id: string } | null> {
+    return db.queryOne<{ id: string; org_id: string }>(
+      "SELECT id, org_id FROM connector_installations WHERE id = $1 FOR SHARE",
+      [id],
+      client,
+    );
   }
 
 export async function listAttempts(db: PgSql, installationId: string, limit?: number): Promise<IngestAttempt[]> {
@@ -1742,25 +1806,25 @@ function toSyncWork(db: PgSql, row: SyncWorkRow): SyncWorkRecord {
     };
   }
 
-async function findCursorRow(db: PgSql, installationId: string, streamKey: string, client?: PoolClient): Promise<CursorRow | null> {
+async function findCursorRow(db: PgSql, installationId: string, streamKey: string, client?: PoolClient, forUpdate = false): Promise<CursorRow | null> {
     return db.queryOne<CursorRow>(
       `
         SELECT ${CURSOR_COLUMNS}
         FROM connector_cursors
-        WHERE installation_id = $1 AND stream_key = $2
+        WHERE installation_id = $1 AND stream_key = $2 ${forUpdate ? "FOR UPDATE" : ""}
       `,
       [installationId, streamKey],
       client,
     );
   }
 
-async function findAttempt(db: PgSql, id: string, client?: PoolClient): Promise<IngestAttempt | null> {
+async function findAttempt(db: PgSql, id: string, client?: PoolClient, forUpdate = false): Promise<IngestAttempt | null> {
     const row = await db.queryOne<AttemptRow>(
       `
         SELECT id, org_id, connector_installation_id, stream_key, delivery_id,
                started_at, finished_at, status, accepted_count, duplicate_count,
                quarantined_count, retryable_failure_count, error_code
-        FROM ingest_attempts WHERE id = $1
+        FROM ingest_attempts WHERE id = $1 ${forUpdate ? "FOR UPDATE" : ""}
       `,
       [id],
       client,
@@ -1795,6 +1859,7 @@ function toLease(db: PgSql, row: CursorRow): ConnectorLease {
     return {
       ...toCursor(db, row),
       lease_owner: row.lease_owner!,
+      claim_token: row.lease_claim_token!,
       lease_expires_at: toIso(row.lease_expires_at),
     };
   }

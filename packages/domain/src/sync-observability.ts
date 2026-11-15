@@ -14,6 +14,7 @@ export type SyncMetricName =
   | "quarantined_records"
   | "retryable_failures"
   | "lease_conflicts"
+  | "lease_renewal_errors"
   | "throttled"
   | "source_429";
 

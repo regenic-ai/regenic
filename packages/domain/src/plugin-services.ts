@@ -2,7 +2,7 @@ import type { IngestBatchProcessor } from "./connector-runner";
 import type { ConnectorRegistry } from "./connector-registry";
 import type { EgressRegistry } from "./egress";
 import type { ExecutorRegistry } from "./executor";
-import type { AuthorityStore, BlobStore, ConnectorRuntimeStore } from "./ingestion";
+import type { AuthorityStore, FencedBlobStore, ConnectorRuntimeStore } from "./ingestion";
 import type { WorkStore } from "./work";
 import type { ExecutorStore } from "./executor-installation";
 import type {
@@ -35,7 +35,7 @@ import type { CustomerServiceTaskStore } from "./customer-service-task";
 declare module "@regenic/plugin-host" {
   interface Services {
     authority: AuthorityStore & ConnectorRuntimeStore & WorkStore & ExecutorStore;
-    blobs: BlobStore;
+    blobs: FencedBlobStore;
     ingest: IngestBatchProcessor;
     connectors: ConnectorRegistry;
     egress: EgressRegistry;

@@ -85,7 +85,9 @@ export function InboxWorkspace({
   otherThreads = [],
   onNeedSearchCatalog,
   onRunWork,
+  onReconcileDelivery,
   onDismissWork,
+  onAcknowledgeWork,
   onBindRecipe,
   onForwardCreated,
   onOverlaysChanged,
@@ -128,7 +130,9 @@ export function InboxWorkspace({
   otherThreads?: InboxThread[];
   onNeedSearchCatalog?: () => void;
   onRunWork: (thread: InboxThread) => Promise<void>;
+  onReconcileDelivery: (thread: InboxThread, resolution: "sent" | "not_sent") => Promise<void>;
   onDismissWork: (thread: InboxThread) => Promise<void>;
+  onAcknowledgeWork: (thread: InboxThread) => Promise<void>;
   onBindRecipe: (thread: InboxThread) => void;
   onForwardCreated: (result: ForwardView) => Promise<void>;
   onOverlaysChanged?: () => Promise<void>;
@@ -491,7 +495,9 @@ export function InboxWorkspace({
             onSelectNext={() => selectAdjacent(1)}
             paneRef={paneRef}
             onRunWork={() => onRunWork(selected)}
+            onReconcileDelivery={(resolution) => onReconcileDelivery(selected, resolution)}
             onDismissWork={() => onDismissWork(selected)}
+            onAcknowledgeWork={() => onAcknowledgeWork(selected)}
             onBindRecipe={() => onBindRecipe(selected)}
             forwardTargets={threads}
             createTargets={createTargets}

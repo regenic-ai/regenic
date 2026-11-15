@@ -14,9 +14,12 @@ import {
   fetchUiPrefs,
   focusConversation,
   dismissWorkItem,
+  acknowledgeWorkResult,
   isInboxAbortError,
   isKernelTimeoutError,
   runWorkItem,
+  retryWorkDelivery,
+  reconcileWorkDelivery,
   saveUiPrefs,
   updateConversationPrefs,
   fetchCustomerServiceTasks,
@@ -1597,7 +1600,11 @@ export function ConsoleApp() {
         return;
       }
       try {
-        await runWorkItem(thread.work.id, thread.work.version);
+        if (thread.work.status === "done" && thread.work.delivery) {
+          await retryWorkDelivery(thread.work.id, thread.work.version, thread.work.delivery);
+        } else {
+          await runWorkItem(thread.work.id, thread.work.version);
+        }
         await refresh();
         setError(null);
       } catch (caught) {
@@ -1622,6 +1629,44 @@ export function ConsoleApp() {
         setError(null);
       } catch (caught) {
         setError(caught instanceof Error ? caught.message : translate("error.cannotDismissWork"));
+      }
+    },
+    [refresh],
+  );
+  const acknowledgeSelectedWork = useCallback(
+    async (thread: InboxThread) => {
+      if (!thread.work?.id || !thread.work.run_id) return;
+      try {
+        await acknowledgeWorkResult(
+          thread.work.id,
+          thread.work.run_id,
+          thread.work.version,
+          thread.work.run_version ?? 0,
+          newClientCommandId(),
+          new Date().toISOString(),
+        );
+        await refresh();
+        setError(null);
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : translate("error.cannotAcknowledgeWork"));
+      }
+    },
+    [refresh],
+  );
+  const reconcileSelectedDelivery = useCallback(
+    async (thread: InboxThread, resolution: "sent" | "not_sent") => {
+      if (!thread.work?.id || !thread.work.delivery) return;
+      try {
+        await reconcileWorkDelivery(
+          thread.work.id,
+          resolution,
+          thread.work.version,
+          thread.work.delivery,
+        );
+        await refresh();
+        setError(null);
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : translate("error.cannotStartWork"));
       }
     },
     [refresh],
@@ -1806,7 +1851,9 @@ export function ConsoleApp() {
               void ensureOtherListHeads();
             }}
             onRunWork={runSelectedWork}
+            onReconcileDelivery={reconcileSelectedDelivery}
             onDismissWork={dismissSelectedWork}
+            onAcknowledgeWork={acknowledgeSelectedWork}
             onBindRecipe={bindSelectedRecipe}
             onForwardCreated={openForwardedConversation}
             onOverlaysChanged={reloadOverlays}

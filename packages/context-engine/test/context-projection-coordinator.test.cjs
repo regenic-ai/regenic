@@ -39,6 +39,12 @@ function authority(overrides = {}) {
   };
 }
 
+function artifactsWithExistingEventBlob() {
+  const artifacts = new MemoryContextArtifactStore();
+  artifacts.seedProtectedBlob(HASH);
+  return artifacts;
+}
+
 function projector(transform = (artifact) => artifact) {
   return {
     id: "test-projector",
@@ -58,7 +64,7 @@ function projector(transform = (artifact) => artifact) {
 
 describe("ContextProjectionCoordinator", () => {
   it("recovers a committed shared manifest after checkpoint failure without rewriting its original read time", async () => {
-    const artifacts = new MemoryContextArtifactStore();
+    const artifacts = artifactsWithExistingEventBlob();
     const registry = new MemoryContextProjectorRegistry();
     registry.register(new DeterministicThreadSummaryProjector());
     const read = {
@@ -92,7 +98,7 @@ describe("ContextProjectionCoordinator", () => {
   });
 
   it("writes shared-body manifests without duplicating the full transcript into Blob storage", async () => {
-    const artifacts = new MemoryContextArtifactStore();
+    const artifacts = artifactsWithExistingEventBlob();
     const registry = new MemoryContextProjectorRegistry();
     registry.register(new DeterministicThreadSummaryProjector());
     const coordinator = new ContextProjectionCoordinator(authority({
@@ -109,7 +115,7 @@ describe("ContextProjectionCoordinator", () => {
   });
 
   it("requires a new generation when the projector algorithm changes", async () => {
-    const artifacts = new MemoryContextArtifactStore();
+    const artifacts = artifactsWithExistingEventBlob();
     await artifacts.putCheckpoint({
       org_id: "example-org", projector_id: "test-projector", algorithm_version: "old-rules",
       generation: "generation-1", sequence: 1, watermark: "authority:1",
@@ -123,7 +129,7 @@ describe("ContextProjectionCoordinator", () => {
   });
 
   it("stores bounded proposals once and advances an append-only checkpoint", async () => {
-    const artifacts = new MemoryContextArtifactStore();
+    const artifacts = artifactsWithExistingEventBlob();
     const registry = new MemoryContextProjectorRegistry();
     registry.register(projector());
     const coordinator = new ContextProjectionCoordinator(authority(), artifacts, registry);
@@ -170,7 +176,7 @@ describe("ContextProjectionCoordinator", () => {
     };
     const coordinator = new ContextProjectionCoordinator(
       indexedAuthority,
-      new MemoryContextArtifactStore(),
+      artifactsWithExistingEventBlob(),
       registry,
       blobs,
       index,
@@ -208,7 +214,7 @@ describe("ContextProjectionCoordinator", () => {
       authority({
         events: [{ ...event, content_media_type: "text/plain" }],
       }),
-      new MemoryContextArtifactStore(),
+      artifactsWithExistingEventBlob(),
       new MemoryContextProjectorRegistry(),
       { async getMany() { return new Map(); } },
       index,
@@ -221,7 +227,7 @@ describe("ContextProjectionCoordinator", () => {
   });
 
   it("rejects proposals that do not preserve authority evidence scopes", async () => {
-    const artifacts = new MemoryContextArtifactStore();
+    const artifacts = artifactsWithExistingEventBlob();
     const registry = new MemoryContextProjectorRegistry();
     registry.register(projector((artifact) => ({ ...artifact, required_scope_ids: [] })));
     await assert.rejects(
@@ -232,7 +238,7 @@ describe("ContextProjectionCoordinator", () => {
   });
 
   it("rejects an artifact kind outside the projector's declared capabilities", async () => {
-    const artifacts = new MemoryContextArtifactStore();
+    const artifacts = artifactsWithExistingEventBlob();
     const registry = new MemoryContextProjectorRegistry();
     registry.register(projector((artifact) => ({ ...artifact, kind: "daily_digest" })));
     await assert.rejects(
@@ -243,7 +249,7 @@ describe("ContextProjectionCoordinator", () => {
   });
 
   it("rejects an artifact proposal without authority evidence", async () => {
-    const artifacts = new MemoryContextArtifactStore();
+    const artifacts = artifactsWithExistingEventBlob();
     const registry = new MemoryContextProjectorRegistry();
     registry.register(projector((artifact) => ({
       ...artifact,
@@ -259,7 +265,7 @@ describe("ContextProjectionCoordinator", () => {
   });
 
   it("rejects a cross-organization Event before calling a projector", async () => {
-    const artifacts = new MemoryContextArtifactStore();
+    const artifacts = artifactsWithExistingEventBlob();
     const registry = new MemoryContextProjectorRegistry();
     let called = false;
     registry.register({
@@ -285,7 +291,7 @@ describe("ContextProjectionCoordinator", () => {
   });
 
   it("rejects an invalid authority read boundary before calling a projector", async () => {
-    const artifacts = new MemoryContextArtifactStore();
+    const artifacts = artifactsWithExistingEventBlob();
     const registry = new MemoryContextProjectorRegistry();
     let called = false;
     registry.register({
@@ -311,7 +317,7 @@ describe("ContextProjectionCoordinator", () => {
   });
 
   it("rejects blank projection namespaces before reading authority", async () => {
-    const artifacts = new MemoryContextArtifactStore();
+    const artifacts = artifactsWithExistingEventBlob();
     const registry = new MemoryContextProjectorRegistry();
     let readCalls = 0;
     const coordinator = new ContextProjectionCoordinator({
@@ -331,7 +337,7 @@ describe("ContextProjectionCoordinator", () => {
   });
 
   it("projects one thread through a scoped authority read", async () => {
-    const artifacts = new MemoryContextArtifactStore();
+    const artifacts = artifactsWithExistingEventBlob();
     const registry = new MemoryContextProjectorRegistry();
     registry.register(projector());
     let scopedThread = null;

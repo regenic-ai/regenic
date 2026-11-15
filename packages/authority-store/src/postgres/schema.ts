@@ -1,4 +1,4 @@
-export const PG_SCHEMA_VERSION = 63;
+export const PG_SCHEMA_VERSION = 74;
 
 /** Applied when an existing postgres authority DB is already at a prior baseline. */
 export const PG_MIGRATIONS = [
@@ -579,9 +579,9 @@ ALTER TABLE recipes ADD COLUMN trigger_timezone TEXT;
   },
   {
     version: 57,
-    sql: `
-ALTER TABLE work_items ADD COLUMN current_run_id TEXT REFERENCES work_runs(id) DEFERRABLE INITIALLY DEFERRED;
-ALTER TABLE work_items ADD COLUMN version INTEGER NOT NULL DEFAULT 0 CHECK (version >= 0);
+        sql: `
+    ALTER TABLE work_items ADD COLUMN current_run_id TEXT REFERENCES work_runs(id) DEFERRABLE INITIALLY DEFERRED;
+    ALTER TABLE work_items ADD COLUMN version INTEGER NOT NULL DEFAULT 0 CHECK (version >= 0);
 ALTER TABLE work_runs ADD COLUMN version INTEGER NOT NULL DEFAULT 0 CHECK (version >= 0);
 UPDATE work_items SET current_run_id = (
   SELECT r.id FROM work_runs r
@@ -677,6 +677,230 @@ CREATE UNIQUE INDEX conversation_lifecycle_events_command_unique_idx
   WHERE command_id IS NOT NULL;
 `,
   },
+  {
+    version: 64,
+    sql: `ALTER TABLE work_items ADD COLUMN acknowledged_run_id TEXT REFERENCES work_runs(id) DEFERRABLE INITIALLY DEFERRED;`,
+  },
+  {
+    version: 65,
+    sql: `
+CREATE TABLE conversation_lifecycle_jobs (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  event_id TEXT NOT NULL,
+  job_type TEXT NOT NULL CHECK (job_type = 'cancel_execution'),
+  run_id TEXT NOT NULL,
+  schema_version INTEGER NOT NULL CHECK (schema_version >= 1),
+  status TEXT NOT NULL CHECK (status IN ('pending', 'running', 'succeeded', 'failed', 'dead')),
+  attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+  lease_owner TEXT,
+  claim_token TEXT,
+  lease_expires_at TIMESTAMPTZ,
+  next_retry_at TIMESTAMPTZ,
+  last_error_code TEXT,
+  last_error TEXT,
+  outcome_code TEXT,
+  created_at TIMESTAMPTZ NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL,
+  completed_at TIMESTAMPTZ,
+  FOREIGN KEY (org_id, event_id) REFERENCES conversation_lifecycle_events(org_id, id),
+  FOREIGN KEY (org_id, run_id) REFERENCES work_runs(org_id, id),
+  UNIQUE (org_id, job_type, run_id)
+);
+CREATE INDEX conversation_lifecycle_jobs_pending_idx
+  ON conversation_lifecycle_jobs (created_at, id) WHERE status = 'pending';
+CREATE INDEX conversation_lifecycle_jobs_failed_due_idx
+  ON conversation_lifecycle_jobs (next_retry_at, created_at, id) WHERE status = 'failed';
+CREATE INDEX conversation_lifecycle_jobs_running_expired_idx
+  ON conversation_lifecycle_jobs (lease_expires_at, created_at, id) WHERE status = 'running';
+CREATE INDEX conversation_lifecycle_jobs_org_idx
+  ON conversation_lifecycle_jobs (org_id, status, updated_at, id);
+`,
+  },
+  {
+    version: 66,
+    sql: `
+      ALTER TABLE work_runs ADD COLUMN executor_config_json JSONB;
+      ALTER TABLE work_runs ADD COLUMN include_context BOOLEAN;
+    `,
+  },
+  {
+    version: 67,
+    sql: `
+ALTER TABLE work_deliveries ADD COLUMN version INTEGER NOT NULL DEFAULT 0 CHECK (version >= 0);
+ALTER TABLE message_dispositions ADD COLUMN version INTEGER NOT NULL DEFAULT 0 CHECK (version >= 0);
+`,
+  },
+  {
+    version: 68,
+    sql: `
+LOCK TABLE events, source_heads, message_dispositions, thread_heads IN SHARE ROW EXCLUSIVE MODE;
+UPDATE thread_heads SET has_current_work = FALSE
+WHERE has_current_work = TRUE AND NOT EXISTS (
+  SELECT 1 FROM events e
+  JOIN message_dispositions d ON d.event_id = e.id AND d.org_id = e.org_id
+  WHERE e.org_id = thread_heads.org_id AND e.thread_id = thread_heads.thread_id
+    AND e.operation <> 'tombstone' AND d.disposition = 'current_work'
+    AND EXISTS (SELECT 1 FROM source_heads h WHERE h.current_event_id = e.id)
+);
+`,
+  },
+  {
+    version: 69,
+    sql: `
+LOCK TABLE connector_cursors IN ACCESS EXCLUSIVE MODE;
+ALTER TABLE connector_cursors ADD COLUMN lease_claim_token TEXT;
+UPDATE connector_cursors
+SET lease_owner = NULL, lease_expires_at = NULL
+WHERE lease_owner IS NOT NULL;
+`,
+  },
+  {
+    version: 70,
+    sql: `
+LOCK TABLE blobs IN ACCESS EXCLUSIVE MODE;
+ALTER TABLE blobs ADD COLUMN state TEXT NOT NULL DEFAULT 'protected'
+  CHECK (state IN ('reserved', 'available', 'deleting', 'protected'));
+ALTER TABLE blobs ADD COLUMN generation INTEGER NOT NULL DEFAULT 0 CHECK (generation >= 0);
+ALTER TABLE blobs ADD COLUMN write_lease_owner TEXT;
+ALTER TABLE blobs ADD COLUMN write_claim_token TEXT;
+ALTER TABLE blobs ADD COLUMN write_lease_expires_at TIMESTAMPTZ;
+ALTER TABLE blobs ADD COLUMN unreferenced_at TIMESTAMPTZ;
+ALTER TABLE blobs ADD COLUMN gc_claim_token TEXT;
+ALTER TABLE blobs ADD COLUMN gc_started_at TIMESTAMPTZ;
+CREATE INDEX blobs_gc_candidate_idx
+  ON blobs (state, unreferenced_at, content_hash);
+CREATE TABLE blob_references (
+  owner_org_id TEXT NOT NULL,
+  owner_type TEXT NOT NULL CHECK (owner_type IN ('event', 'context_artifact', 'outbound_attempt')),
+  owner_id TEXT NOT NULL,
+  reference_kind TEXT NOT NULL
+    CHECK (reference_kind IN ('body', 'attachment', 'artifact_body', 'evidence', 'reply_recovery')),
+  content_hash TEXT NOT NULL REFERENCES blobs(content_hash),
+  created_at TIMESTAMPTZ NOT NULL,
+  PRIMARY KEY (owner_org_id, owner_type, owner_id, reference_kind, content_hash)
+);
+CREATE INDEX blob_references_hash_idx
+  ON blob_references (content_hash);
+CREATE INDEX blob_references_owner_idx
+  ON blob_references (owner_org_id, owner_type, owner_id);
+`,
+  },
+  {
+    version: 71,
+    sql: `
+LOCK TABLE blob_references, outbound_attempts, blobs IN ACCESS EXCLUSIVE MODE;
+ALTER TABLE blob_references DROP CONSTRAINT IF EXISTS blob_references_owner_type_check;
+ALTER TABLE blob_references DROP CONSTRAINT IF EXISTS blob_references_reference_kind_check;
+ALTER TABLE blob_references
+  ADD CONSTRAINT blob_references_owner_type_check
+  CHECK (owner_type IN ('event', 'context_artifact', 'outbound_attempt'));
+ALTER TABLE blob_references
+  ADD CONSTRAINT blob_references_reference_kind_check
+  CHECK (reference_kind IN ('body', 'attachment', 'artifact_body', 'evidence', 'reply_recovery'));
+INSERT INTO blobs (content_hash, media_type, byte_size, created_at, state)
+SELECT DISTINCT recovery_hash, 'application/vnd.regenic.reply-recovery+json', 0, updated_at, 'protected'
+FROM outbound_attempts WHERE recovery_hash IS NOT NULL
+ON CONFLICT (content_hash) DO NOTHING;
+UPDATE blobs SET state = 'protected', unreferenced_at = NULL,
+  gc_claim_token = NULL, gc_started_at = NULL
+WHERE content_hash IN (
+  SELECT DISTINCT recovery_hash FROM outbound_attempts WHERE recovery_hash IS NOT NULL
+);
+INSERT INTO blob_references (
+  owner_org_id, owner_type, owner_id, reference_kind, content_hash, created_at
+)
+SELECT org_id, 'outbound_attempt', client_request_id, 'reply_recovery', recovery_hash, updated_at
+FROM outbound_attempts WHERE recovery_hash IS NOT NULL
+ON CONFLICT DO NOTHING;
+`,
+  },
+  {
+    version: 72,
+    sql: `
+LOCK TABLE events, blob_references, blobs IN ACCESS EXCLUSIVE MODE;
+UPDATE blobs SET state = 'protected', unreferenced_at = NULL,
+  gc_claim_token = NULL, gc_started_at = NULL
+WHERE content_hash IN (
+  SELECT DISTINCT content_hash FROM events WHERE content_hash IS NOT NULL
+);
+INSERT INTO blob_references (
+  owner_org_id, owner_type, owner_id, reference_kind, content_hash, created_at
+)
+SELECT org_id, 'event', id, 'body', content_hash, ingested_at
+FROM events WHERE content_hash IS NOT NULL
+ON CONFLICT DO NOTHING;
+`,
+  },
+  {
+    version: 73,
+    sql: `
+LOCK TABLE context_artifacts, blobs, blob_references IN ACCESS EXCLUSIVE MODE;
+INSERT INTO blobs (content_hash, media_type, byte_size, created_at, state)
+SELECT DISTINCT content_hash, media_type, 0, recorded_at, 'protected'
+FROM (
+  SELECT payload_json->>'body_hash' AS content_hash,
+    'application/vnd.regenic.context-artifact+json' AS media_type,
+    recorded_at, payload_json,
+    payload_json->>'body_storage' IS DISTINCT FROM 'artifact' AS external_blob
+  FROM context_artifacts
+  UNION ALL
+  SELECT refs.reference->>'content_hash' AS content_hash,
+    'application/octet-stream' AS media_type,
+    artifact.recorded_at, artifact.payload_json, TRUE AS external_blob
+  FROM context_artifacts artifact
+  CROSS JOIN LATERAL jsonb_array_elements(
+    CASE WHEN jsonb_typeof(artifact.payload_json->'input_refs') = 'array'
+      THEN artifact.payload_json->'input_refs' ELSE '[]'::jsonb END
+  ) AS refs(reference)
+) legacy
+WHERE content_hash ~ '^[a-f0-9]{64}$'
+  AND external_blob
+ON CONFLICT (content_hash) DO NOTHING;
+UPDATE blobs SET state = 'protected', unreferenced_at = NULL,
+  gc_claim_token = NULL, gc_started_at = NULL
+WHERE content_hash IN (
+  SELECT payload_json->>'body_hash'
+  FROM context_artifacts
+  WHERE payload_json->>'body_storage' IS DISTINCT FROM 'artifact'
+    AND COALESCE(payload_json->>'body_hash', '') ~ '^[a-f0-9]{64}$'
+  UNION
+  SELECT refs.reference->>'content_hash'
+  FROM context_artifacts artifact
+  CROSS JOIN LATERAL jsonb_array_elements(
+    CASE WHEN jsonb_typeof(artifact.payload_json->'input_refs') = 'array'
+      THEN artifact.payload_json->'input_refs' ELSE '[]'::jsonb END
+  ) AS refs(reference)
+  WHERE refs.reference->>'content_hash' ~ '^[a-f0-9]{64}$'
+);
+INSERT INTO blob_references (
+  owner_org_id, owner_type, owner_id, reference_kind, content_hash, created_at
+)
+SELECT org_id, 'context_artifact', id, 'artifact_body',
+  payload_json->>'body_hash', recorded_at
+FROM context_artifacts
+WHERE payload_json->>'body_storage' IS DISTINCT FROM 'artifact'
+  AND COALESCE(payload_json->>'body_hash', '') ~ '^[a-f0-9]{64}$'
+ON CONFLICT DO NOTHING;
+INSERT INTO blob_references (
+  owner_org_id, owner_type, owner_id, reference_kind, content_hash, created_at
+)
+SELECT artifact.org_id, 'context_artifact', artifact.id, 'evidence',
+  refs.reference->>'content_hash', artifact.recorded_at
+FROM context_artifacts artifact
+CROSS JOIN LATERAL jsonb_array_elements(
+  CASE WHEN jsonb_typeof(artifact.payload_json->'input_refs') = 'array'
+    THEN artifact.payload_json->'input_refs' ELSE '[]'::jsonb END
+) AS refs(reference)
+WHERE refs.reference->>'content_hash' ~ '^[a-f0-9]{64}$'
+ON CONFLICT DO NOTHING;
+`,
+  },
+  {
+    version: 74,
+    sql: `ALTER TABLE work_runs ADD COLUMN completion_policy_version INTEGER
+      CHECK (completion_policy_version IS NULL OR completion_policy_version = 1);`,
+  },
 ] as const;
 
 export const PG_BASELINE_SQL = `
@@ -684,8 +908,36 @@ CREATE TABLE blobs (
   content_hash TEXT PRIMARY KEY,
   media_type TEXT NOT NULL,
   byte_size INTEGER NOT NULL CHECK (byte_size >= 0),
-  created_at TIMESTAMPTZ NOT NULL
+  created_at TIMESTAMPTZ NOT NULL,
+  state TEXT NOT NULL DEFAULT 'protected'
+    CHECK (state IN ('reserved', 'available', 'deleting', 'protected')),
+  generation INTEGER NOT NULL DEFAULT 0 CHECK (generation >= 0),
+  write_lease_owner TEXT,
+  write_claim_token TEXT,
+  write_lease_expires_at TIMESTAMPTZ,
+  unreferenced_at TIMESTAMPTZ,
+  gc_claim_token TEXT,
+  gc_started_at TIMESTAMPTZ
 );
+
+CREATE INDEX blobs_gc_candidate_idx
+  ON blobs (state, unreferenced_at, content_hash);
+
+CREATE TABLE blob_references (
+  owner_org_id TEXT NOT NULL,
+  owner_type TEXT NOT NULL CHECK (owner_type IN ('event', 'context_artifact', 'outbound_attempt')),
+  owner_id TEXT NOT NULL,
+  reference_kind TEXT NOT NULL
+    CHECK (reference_kind IN ('body', 'attachment', 'artifact_body', 'evidence', 'reply_recovery')),
+  content_hash TEXT NOT NULL REFERENCES blobs(content_hash),
+  created_at TIMESTAMPTZ NOT NULL,
+  PRIMARY KEY (owner_org_id, owner_type, owner_id, reference_kind, content_hash)
+);
+
+CREATE INDEX blob_references_hash_idx
+  ON blob_references (content_hash);
+CREATE INDEX blob_references_owner_idx
+  ON blob_references (owner_org_id, owner_type, owner_id);
 
 CREATE TABLE events (
   sequence BIGINT GENERATED ALWAYS AS IDENTITY,
@@ -752,6 +1004,7 @@ CREATE TABLE connector_cursors (
   cursor_value TEXT,
   cursor_version INTEGER NOT NULL,
   lease_owner TEXT,
+  lease_claim_token TEXT,
   lease_expires_at TIMESTAMPTZ,
   updated_at TIMESTAMPTZ NOT NULL,
   PRIMARY KEY (installation_id, stream_key)
@@ -797,6 +1050,7 @@ CREATE INDEX ingest_quarantines_attempt_idx
 CREATE TABLE message_dispositions (
   event_id TEXT PRIMARY KEY REFERENCES events(id),
   org_id TEXT NOT NULL,
+  version INTEGER NOT NULL DEFAULT 0 CHECK (version >= 0),
   disposition TEXT NOT NULL CHECK (
     disposition IN ('current_work', 'outside_current_work', 'pending')
   ),
@@ -914,6 +1168,10 @@ CREATE TABLE work_runs (
   work_item_id TEXT NOT NULL REFERENCES work_items(id),
   recipe_id TEXT NOT NULL,
   executor_type TEXT NOT NULL,
+  executor_config_json JSONB,
+  include_context BOOLEAN,
+  completion_policy_version INTEGER
+    CHECK (completion_policy_version IS NULL OR completion_policy_version = 1),
   external_run_id TEXT,
   agent_thread_id TEXT,
   status TEXT NOT NULL,
@@ -927,6 +1185,7 @@ CREATE TABLE work_runs (
 );
 
 ALTER TABLE work_items ADD COLUMN current_run_id TEXT REFERENCES work_runs(id) DEFERRABLE INITIALLY DEFERRED;
+ALTER TABLE work_items ADD COLUMN acknowledged_run_id TEXT REFERENCES work_runs(id) DEFERRABLE INITIALLY DEFERRED;
 ALTER TABLE work_items ADD COLUMN version INTEGER NOT NULL DEFAULT 0 CHECK (version >= 0);
 ALTER TABLE work_items ADD COLUMN visibility_intent_version INTEGER NOT NULL DEFAULT 0 CHECK (visibility_intent_version >= 0);
 ALTER TABLE work_runs ADD COLUMN version INTEGER NOT NULL DEFAULT 0 CHECK (version >= 0);
@@ -974,6 +1233,7 @@ CREATE TABLE work_deliveries (
   id TEXT PRIMARY KEY,
   org_id TEXT NOT NULL,
   work_item_id TEXT NOT NULL REFERENCES work_items(id),
+  version INTEGER NOT NULL DEFAULT 0 CHECK (version >= 0),
   recipe_id TEXT NOT NULL,
   kind TEXT NOT NULL,
   unit_key TEXT NOT NULL,
@@ -1002,6 +1262,38 @@ CREATE INDEX work_deliveries_org_status_idx
 CREATE UNIQUE INDEX work_deliveries_run_idx ON work_deliveries (org_id, run_id) WHERE run_id IS NOT NULL;
 CREATE UNIQUE INDEX work_deliveries_legacy_item_idx ON work_deliveries (org_id, work_item_id) WHERE run_id IS NULL;
 CREATE INDEX work_deliveries_item_idx ON work_deliveries (org_id, work_item_id, created_at, id);
+
+CREATE TABLE conversation_lifecycle_jobs (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  event_id TEXT NOT NULL,
+  job_type TEXT NOT NULL CHECK (job_type = 'cancel_execution'),
+  run_id TEXT NOT NULL,
+  schema_version INTEGER NOT NULL CHECK (schema_version >= 1),
+  status TEXT NOT NULL CHECK (status IN ('pending', 'running', 'succeeded', 'failed', 'dead')),
+  attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+  lease_owner TEXT,
+  claim_token TEXT,
+  lease_expires_at TIMESTAMPTZ,
+  next_retry_at TIMESTAMPTZ,
+  last_error_code TEXT,
+  last_error TEXT,
+  outcome_code TEXT,
+  created_at TIMESTAMPTZ NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL,
+  completed_at TIMESTAMPTZ,
+  FOREIGN KEY (org_id, event_id) REFERENCES conversation_lifecycle_events(org_id, id),
+  FOREIGN KEY (org_id, run_id) REFERENCES work_runs(org_id, id),
+  UNIQUE (org_id, job_type, run_id)
+);
+CREATE INDEX conversation_lifecycle_jobs_pending_idx
+  ON conversation_lifecycle_jobs (created_at, id) WHERE status = 'pending';
+CREATE INDEX conversation_lifecycle_jobs_failed_due_idx
+  ON conversation_lifecycle_jobs (next_retry_at, created_at, id) WHERE status = 'failed';
+CREATE INDEX conversation_lifecycle_jobs_running_expired_idx
+  ON conversation_lifecycle_jobs (lease_expires_at, created_at, id) WHERE status = 'running';
+CREATE INDEX conversation_lifecycle_jobs_org_idx
+  ON conversation_lifecycle_jobs (org_id, status, updated_at, id);
 
 CREATE TABLE connector_stream_members (
   installation_id TEXT NOT NULL REFERENCES connector_installations(id),

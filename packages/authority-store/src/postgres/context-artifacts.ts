@@ -1,4 +1,6 @@
 import type {
+  BlobReservation,
+  ContextArtifactEvidenceReferenceBackfill,
   ContextArtifactState,
   ContextArtifact,
   ContextArtifactQuery,
@@ -25,6 +27,7 @@ import {
   validateContextSnapshotIndexQuery,
   validateContextBundle,
   validateContextProjectionCheckpoint,
+  BlobReservationConflictError,
 } from "@regenic/domain";
 import type {
   PoolClient,
@@ -40,8 +43,14 @@ import {
   CatalogCursorRow,
 } from "./sync";
 import { decodeContextArtifacts, packContextArtifact } from "../context-artifact-segments";
+import { completeBlobReservations } from "./events";
 
-async function decodeArtifacts(db: PgSql, orgId: string, payloads: unknown[]): Promise<ContextArtifact[]> {
+async function decodeArtifacts(
+  db: PgSql,
+  orgId: string,
+  payloads: unknown[],
+  client?: PoolClient,
+): Promise<ContextArtifact[]> {
   return decodeContextArtifacts(orgId, payloads, async (hashes) => {
     const values = new Map<string, unknown>();
     for (let offset = 0; offset < hashes.length; offset += 300) {
@@ -49,6 +58,7 @@ async function decodeArtifacts(db: PgSql, orgId: string, payloads: unknown[]): P
         `SELECT content_hash, payload_json FROM context_artifact_segments
          WHERE org_id = $1 AND content_hash = ANY($2::text[])`,
         [orgId, hashes.slice(offset, offset + 300)],
+        client,
       );
       for (const row of rows) values.set(row.content_hash, row.payload_json);
     }
@@ -64,10 +74,86 @@ interface ArtifactStateRow {
   superseded_by: string | null;
 }
 
-export async function putArtifact(db: PgSql, artifact: ContextArtifact): Promise<ContextArtifact> {
+export async function putArtifact(
+  db: PgSql,
+  artifact: ContextArtifact,
+  blobReservations?: readonly BlobReservation[],
+): Promise<ContextArtifact> {
     requireContextValue(validateContextArtifact(artifact), "artifact");
     const { payload, segments } = packContextArtifact(artifact);
     await db.withTx(async (client) => {
+    const referencedHashes = new Set([
+      ...(artifact.body_hash && artifact.body_storage !== "artifact" ? [artifact.body_hash] : []),
+      ...artifact.input_refs.flatMap((reference) => reference.content_hash ? [reference.content_hash] : []),
+    ]);
+    if (blobReservations) {
+      assertCompleteArtifactReservations(referencedHashes, blobReservations);
+      await completeBlobReservations(db, client, blobReservations, referencedHashes);
+    }
+    if (artifact.body_hash && artifact.body_storage !== "artifact") {
+      const body = artifact.attrs === undefined
+        ? undefined
+        : Buffer.from(canonicalContextJson(artifact.attrs), "utf8");
+      await db.execute(
+        `INSERT INTO blobs (
+           content_hash, media_type, byte_size, created_at, state
+         ) VALUES ($1, 'application/vnd.regenic.context-artifact+json', $2, $3, 'protected')
+         ON CONFLICT (content_hash) DO NOTHING`,
+        [artifact.body_hash, body?.byteLength ?? 0, artifact.recorded_at],
+        client,
+      );
+      await db.execute(
+        `INSERT INTO blob_references (
+           owner_org_id, owner_type, owner_id, reference_kind, content_hash, created_at
+         ) VALUES ($1, 'context_artifact', $2, 'artifact_body', $3, $4)
+         ON CONFLICT DO NOTHING`,
+        [artifact.org_id, artifact.id, artifact.body_hash, artifact.recorded_at],
+        client,
+      );
+      const updated = await db.execute(
+        blobReservations
+          ? `UPDATE blobs SET unreferenced_at = NULL WHERE content_hash = $1`
+          : `UPDATE blobs SET state = 'protected', unreferenced_at = NULL
+             WHERE content_hash = $1 AND state IN ('available', 'protected')
+               AND write_claim_token IS NULL`,
+        [artifact.body_hash],
+        client,
+      );
+      if (!blobReservations && updated !== 1) {
+        throw new Error("Cannot protect context artifact Blob reference");
+      }
+    }
+    for (const reference of artifact.input_refs) {
+      if (!reference.content_hash) continue;
+      await db.execute(
+        `INSERT INTO blobs (
+           content_hash, media_type, byte_size, created_at, state
+         ) VALUES ($1, 'application/octet-stream', 0, $2, 'protected')
+         ON CONFLICT (content_hash) DO NOTHING`,
+        [reference.content_hash, artifact.recorded_at],
+        client,
+      );
+      await db.execute(
+        `INSERT INTO blob_references (
+           owner_org_id, owner_type, owner_id, reference_kind, content_hash, created_at
+         ) VALUES ($1, 'context_artifact', $2, 'evidence', $3, $4)
+         ON CONFLICT DO NOTHING`,
+        [artifact.org_id, artifact.id, reference.content_hash, artifact.recorded_at],
+        client,
+      );
+      const updated = await db.execute(
+        blobReservations
+          ? `UPDATE blobs SET unreferenced_at = NULL WHERE content_hash = $1`
+          : `UPDATE blobs SET state = 'protected', unreferenced_at = NULL
+             WHERE content_hash = $1 AND state IN ('available', 'protected')
+               AND write_claim_token IS NULL`,
+        [reference.content_hash],
+        client,
+      );
+      if (!blobReservations && updated !== 1) {
+        throw new Error("Cannot protect context artifact evidence Blob reference");
+      }
+    }
     const entries = [...segments].sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0);
     for (let offset = 0; offset < entries.length; offset += 300) {
       const batch = entries.slice(offset, offset + 300);
@@ -111,6 +197,17 @@ export async function putArtifact(db: PgSql, artifact: ContextArtifact): Promise
     return parseContextJson<ContextArtifact>(canonicalContextJson(artifact));
   }
 
+function assertCompleteArtifactReservations(
+  referencedHashes: ReadonlySet<string>,
+  reservations: readonly BlobReservation[],
+): void {
+  const hashes = new Set(reservations.map((reservation) => reservation.content_hash));
+  if (hashes.size !== reservations.length || hashes.size !== referencedHashes.size
+    || [...referencedHashes].some((hash) => !hashes.has(hash))) {
+    throw new Error("Context artifact reservations must exactly match its Blob references");
+  }
+}
+
 export async function getArtifact(db: PgSql, orgId: string, id: string): Promise<ContextArtifact | null> {
     const row = await db.queryOne<{ payload_json: unknown; lifecycle_status: ContextArtifact["status"] }>(
       `SELECT a.payload_json, s.status AS lifecycle_status FROM context_artifacts a JOIN context_artifact_states s ON s.org_id = a.org_id AND s.artifact_id = a.id WHERE a.org_id = $1 AND a.id = $2`,
@@ -131,7 +228,7 @@ export async function listArtifacts(db: PgSql, query: ContextArtifactQuery): Pro
         SELECT a.payload_json, s.status AS lifecycle_status FROM context_artifacts a
         JOIN context_artifact_states s ON s.org_id = a.org_id AND s.artifact_id = a.id
         WHERE ${parts.clauses.join(" AND ")}
-        ORDER BY a.recorded_at ASC, a.id ASC
+        ORDER BY a.recorded_at ASC, a.id COLLATE "C" ASC
         ${parts.limitSql}
       `,
       parts.params,
@@ -139,6 +236,53 @@ export async function listArtifacts(db: PgSql, query: ContextArtifactQuery): Pro
     const artifacts = await decodeArtifacts(db, query.org_id, rows.map((row) => row.payload_json));
     return artifacts.map((artifact, index) => ({ ...artifact, status: rows[index].lifecycle_status }));
   }
+
+export async function backfillArtifactEvidenceReferences(
+  db: PgSql,
+  input: ContextArtifactEvidenceReferenceBackfill,
+): Promise<void> {
+  await db.withTx(async (client) => {
+    const row = await db.queryOne<{ payload_json: unknown }>(
+      `SELECT payload_json FROM context_artifacts WHERE org_id = $1 AND id = $2 FOR UPDATE`,
+      [input.org_id, input.artifact_id],
+      client,
+    );
+    if (!row) throw new Error("Context artifact changed during evidence reference backfill");
+    const [artifact] = await decodeArtifacts(db, input.org_id, [row.payload_json], client);
+    if (!artifact || artifact.input_hash !== input.expected_input_hash) {
+      throw new Error("Context artifact changed during evidence reference backfill");
+    }
+    const hashes = [...new Set(artifact.input_refs.flatMap((reference) =>
+      reference.content_hash ? [reference.content_hash] : []))].sort();
+    for (const hash of hashes) {
+      await db.execute(
+        `INSERT INTO blobs (
+           content_hash, media_type, byte_size, created_at, state
+         ) VALUES ($1, 'application/octet-stream', 0, $2, 'protected')
+         ON CONFLICT (content_hash) DO NOTHING`,
+        [hash, artifact.recorded_at],
+        client,
+      );
+      const protectedBlob = await db.execute(
+        `UPDATE blobs SET state = 'protected', unreferenced_at = NULL,
+           gc_claim_token = NULL, gc_started_at = NULL
+         WHERE content_hash = $1 AND state IN ('available', 'protected')
+           AND write_claim_token IS NULL`,
+        [hash],
+        client,
+      );
+      if (protectedBlob !== 1) throw new BlobReservationConflictError(hash);
+      await db.execute(
+        `INSERT INTO blob_references (
+           owner_org_id, owner_type, owner_id, reference_kind, content_hash, created_at
+         ) VALUES ($1, 'context_artifact', $2, 'evidence', $3, $4)
+         ON CONFLICT DO NOTHING`,
+        [input.org_id, input.artifact_id, hash, artifact.recorded_at],
+        client,
+      );
+    }
+  });
+}
 
 export async function listArtifactIndexes(db: PgSql, query: ContextArtifactQuery): Promise<ContextArtifactIndex[]> {
     const parts = artifactListParts(query);
@@ -157,11 +301,12 @@ export async function listArtifactIndexes(db: PgSql, query: ContextArtifactQuery
         FROM context_artifacts a
         JOIN context_artifact_states s ON s.org_id = a.org_id AND s.artifact_id = a.id
         WHERE ${parts.clauses.join(" AND ")}
+        ORDER BY a.recorded_at ASC, a.id COLLATE "C" ASC
+        ${parts.limitSql}
       `,
       parts.params,
     );
-    return rows
-      .map((row) => {
+    return rows.map((row) => {
         const recordedAt = toIso(row.recorded_at);
         return {
           id: row.id,
@@ -170,9 +315,7 @@ export async function listArtifactIndexes(db: PgSql, query: ContextArtifactQuery
           recorded_at: recordedAt,
           preview: contextArtifactPreviewFromStored(row.preview_json),
         };
-      })
-      .sort((left, right) => compareRecordedId(left.recorded_at, left.id, right.recorded_at, right.id))
-      .slice(0, parts.limit);
+      });
   }
 
 export async function rebuildArtifactPreviews(client: PoolClient): Promise<void> {
@@ -216,7 +359,6 @@ async function previewJson(payload: unknown, orgId: string, client: PoolClient):
 function artifactListParts(query: ContextArtifactQuery): {
   clauses: string[];
   params: unknown[];
-  limit: number;
   limitSql: string;
 } | null {
   const validation = validateContextArtifactQuery(query);
@@ -243,18 +385,14 @@ function artifactListParts(query: ContextArtifactQuery): {
   if (stableQuery.generation) {
     clauses.push(`a.generation = ${p(stableQuery.generation)}`);
   }
-  const limit = stableQuery.limit ?? Number.POSITIVE_INFINITY;
+  if (stableQuery.after_recorded_at !== undefined && stableQuery.after_id !== undefined) {
+    clauses.push(`(a.recorded_at > ${p(stableQuery.after_recorded_at)} OR (a.recorded_at = ${p(stableQuery.after_recorded_at)} AND a.id COLLATE "C" > ${p(stableQuery.after_id)}))`);
+  }
   const limitSql =
-    typeof stableQuery.limit === "number" && Number.isFinite(stableQuery.limit)
+    stableQuery.limit !== undefined
       ? `LIMIT ${p(stableQuery.limit)}`
       : "";
-  return { clauses, params, limit, limitSql };
-}
-
-function compareRecordedId(leftAt: string, leftId: string, rightAt: string, rightId: string): number {
-  const leftKey = `${leftAt}\u0000${leftId}`;
-  const rightKey = `${rightAt}\u0000${rightId}`;
-  return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
+  return { clauses, params, limitSql };
 }
 
 export async function getArtifactState(db: PgSql, orgId: string, artifactId: string): Promise<ContextArtifactState | null> {

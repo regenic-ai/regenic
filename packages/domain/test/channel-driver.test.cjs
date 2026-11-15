@@ -88,6 +88,349 @@ describe("channel driver registry", () => {
     assert.deepEqual(streamKeysForThreadId(""), []);
   });
 
+  it("keeps local attention acknowledgment successful when source acknowledgment fails", async (t) => {
+    let acknowledged = 0;
+    const errors = [];
+    t.mock.method(console, "error", (...args) => errors.push(args));
+    const failures = [
+      { matchesThread() { throw new Error("match failed"); } },
+      { matchesThread: () => true, ownsThread() { throw new Error("ownership failed"); } },
+      {
+        matchesThread: () => true,
+        ownsThread: () => true,
+        capabilities() { throw new Error("capabilities failed"); },
+        async ackAttention() {},
+      },
+      {
+        matchesThread: () => true,
+        ownsThread: () => true,
+        capabilities: () => ({ sync: true, reply: false, create: false, attention: true }),
+        async ackAttention() {
+          acknowledged += 1;
+          throw new Error("source unavailable");
+        },
+      },
+    ];
+
+    for (const [index, failure] of failures.entries()) {
+      const connectorType = `attention-source-${index}`;
+      const drivers = new ChannelDriverRegistry().register(stubDriver({
+        connector_type: connectorType,
+        matchesThread: () => true,
+        ownsThread: () => true,
+        capabilities: () => ({ sync: true, reply: false, create: false, attention: true }),
+        ...failure,
+      }));
+      const installation = {
+        id: `attention-installation-${index}`,
+        org_id: "local-owner",
+        connector_type: connectorType,
+        status: "enabled",
+        config: {},
+        created_at: "2026-08-21T00:00:00.000Z",
+      };
+
+      await assert.doesNotReject(
+        drivers.ackAttention(
+          [installation],
+          { source: connectorType, target: "thread-1" },
+          { last_read_external_id: "message-1" },
+          {},
+        ),
+      );
+    }
+
+    assert.equal(acknowledged, 1);
+    assert.equal(errors.length, failures.length);
+    assert.ok(errors.every(([message]) =>
+      message === "channel source attention acknowledgment failed"));
+  });
+
+  it("isolates source-attention matching and reader failures from other threads", async (t) => {
+    const errors = [];
+    t.mock.method(console, "error", (...args) => errors.push(args));
+    const behaviors = [
+      {
+        id: "match-failure",
+        matchesThread(_installation, thread) {
+          if (thread.target === "match-failure") throw new Error("match failed");
+          return false;
+        },
+      },
+      {
+        id: "capability-failure",
+        matchesThread: (_installation, thread) => thread.target === "capability-failure",
+        capabilities() { throw new Error("capabilities failed"); },
+      },
+      {
+        id: "reader-failure",
+        matchesThread: (_installation, thread) => thread.target === "reader-failure",
+        async readAttention() { throw new Error("reader failed"); },
+      },
+      {
+        id: "healthy",
+        matchesThread: (_installation, thread) => thread.target === "healthy",
+        async readAttention() {
+          return new Map([["healthy", { unread: true, unread_count: 1 }]]);
+        },
+      },
+    ];
+    const drivers = new ChannelDriverRegistry();
+    const installations = behaviors.map((behavior) => {
+      drivers.register(stubDriver({
+        connector_type: behavior.id,
+        matchesThread: () => false,
+        ownsThread: (_installation, thread) => thread.target === behavior.id,
+        capabilities: () => ({ sync: true, reply: false, create: false, attention: true }),
+        async readAttention() { return new Map(); },
+        ...behavior,
+      }));
+      return {
+        id: `installation-${behavior.id}`,
+        org_id: "local-owner",
+        connector_type: behavior.id,
+        status: "enabled",
+        config: {},
+        created_at: "2026-08-21T00:00:00.000Z",
+      };
+    });
+
+    const result = await drivers.readAttention(
+      installations,
+      behaviors.map(({ id }) => ({ source: id, target: id })),
+      {},
+    );
+    assert.deepEqual(result.get("healthy"), { unread: true, unread_count: 1 });
+    assert.equal(result.size, 1);
+    assert.equal(errors.length, 3);
+    assert.ok(errors.every(([message]) =>
+      message === "channel source attention read failed"));
+  });
+
+  it("isolates receipt matching and reader failures from other threads", async (t) => {
+    const errors = [];
+    t.mock.method(console, "error", (...args) => errors.push(args));
+    const behaviors = [
+      {
+        id: "match-failure",
+        matchesThread(_installation, thread) {
+          if (thread.target === "match-failure") throw new Error("match failed");
+          return false;
+        },
+      },
+      {
+        id: "capability-failure",
+        matchesThread: (_installation, thread) => thread.target === "capability-failure",
+        capabilities() { throw new Error("capabilities failed"); },
+      },
+      {
+        id: "reader-failure",
+        matchesThread: (_installation, thread) => thread.target === "reader-failure",
+        async readReceipts() { throw new Error("reader failed"); },
+      },
+      {
+        id: "healthy",
+        matchesThread: (_installation, thread) => thread.target === "healthy",
+        async readReceipts(_installation, threads) {
+          return new Map([[threads[0].outbound[0].external_id, { state: "read" }]]);
+        },
+      },
+    ];
+    const drivers = new ChannelDriverRegistry();
+    const installations = behaviors.map((behavior) => {
+      drivers.register(stubDriver({
+        connector_type: behavior.id,
+        matchesThread: () => false,
+        ownsThread: (_installation, thread) => thread.target === behavior.id,
+        capabilities: () => ({ sync: true, reply: false, create: false, receipts: true }),
+        async readReceipts() { return new Map(); },
+        ...behavior,
+      }));
+      return {
+        id: `installation-${behavior.id}`,
+        org_id: "local-owner",
+        connector_type: behavior.id,
+        status: "enabled",
+        config: {},
+        created_at: "2026-08-21T00:00:00.000Z",
+      };
+    });
+    const threads = behaviors.map(({ id }) => ({
+      source: id,
+      target: id,
+      outbound: [{ external_id: `message-${id}`, occurred_at: "2026-08-21T00:00:00.000Z" }],
+    }));
+
+    const result = await drivers.readReceipts(installations, threads, {});
+    assert.deepEqual(result.get("message-healthy"), { state: "read" });
+    assert.equal(result.size, 1);
+    assert.equal(errors.length, 3);
+    assert.ok(errors.every(([message]) =>
+      message === "channel source receipt read failed"));
+  });
+
+  it("isolates prompt matching, capability, and reader failures", async (t) => {
+    const errors = [];
+    t.mock.method(console, "error", (...args) => errors.push(args));
+    const behaviors = [
+      {
+        id: "match-failure",
+        matchesThread(_installation, thread) {
+          if (thread.target === "match-failure") throw new Error("match failed");
+          return false;
+        },
+      },
+      {
+        id: "capability-failure",
+        matchesThread: (_installation, thread) => thread.target === "capability-failure",
+        capabilities() { throw new Error("capabilities failed"); },
+      },
+      {
+        id: "reader-failure",
+        matchesThread: (_installation, thread) => thread.target === "reader-failure",
+        async listPrompts() { throw new Error("reader failed"); },
+      },
+      {
+        id: "healthy",
+        matchesThread: (_installation, thread) => thread.target === "healthy",
+        async listPrompts() {
+          return [{ prompt_id: "prompt-healthy" }];
+        },
+      },
+    ];
+    const drivers = new ChannelDriverRegistry();
+    const installations = behaviors.map((behavior) => {
+      drivers.register(stubDriver({
+        connector_type: behavior.id,
+        matchesThread: () => false,
+        ownsThread: (_installation, thread) => thread.target === behavior.id,
+        capabilities: () => ({ sync: true, reply: false, create: false, prompts: true }),
+        async listPrompts() { return []; },
+        ...behavior,
+      }));
+      return {
+        id: `installation-${behavior.id}`,
+        org_id: "local-owner",
+        connector_type: behavior.id,
+        status: "enabled",
+        config: {},
+        created_at: "2026-08-21T00:00:00.000Z",
+      };
+    });
+
+    const result = await drivers.listPromptsForThreads(
+      installations,
+      behaviors.map(({ id }) => ({ source: id, target: id })),
+      {},
+    );
+    assert.deepEqual(result.get("healthy:healthy"), [{ prompt_id: "prompt-healthy" }]);
+    assert.equal(result.size, 1);
+    assert.equal(errors.length, 3);
+    assert.ok(errors.every(([message]) =>
+      message === "channel prompt lookup failed"));
+  });
+
+  it("isolates conversation label matching and reader failures", async (t) => {
+    const errors = [];
+    t.mock.method(console, "error", (...args) => errors.push(args));
+    const behaviors = [
+      {
+        id: "match-failure",
+        matchesThread(_installation, thread) {
+          if (thread.target === "match-failure") throw new Error("match failed");
+          return false;
+        },
+      },
+      {
+        id: "reader-failure",
+        matchesThread: (_installation, thread) => thread.target === "reader-failure",
+        async resolveConversationLabels() { throw new Error("lookup failed"); },
+      },
+      {
+        id: "healthy",
+        matchesThread: (_installation, thread) => thread.target === "healthy",
+        async resolveConversationLabels() {
+          return new Map([["healthy:healthy", "Healthy source"]]);
+        },
+      },
+    ];
+    const drivers = new ChannelDriverRegistry();
+    const installations = behaviors.map((behavior) => {
+      drivers.register(stubDriver({
+        connector_type: behavior.id,
+        matchesThread: () => false,
+        ownsThread: (_installation, thread) => thread.target === behavior.id,
+        async resolveConversationLabels() { return new Map(); },
+        ...behavior,
+      }));
+      return {
+        id: `installation-${behavior.id}`,
+        org_id: "local-owner",
+        connector_type: behavior.id,
+        status: "enabled",
+        config: {},
+        created_at: "2026-08-21T00:00:00.000Z",
+      };
+    });
+
+    const labels = await drivers.resolveConversationLabels(
+      installations,
+      behaviors.map(({ id }) => ({ source: id, target: id })),
+    );
+    assert.equal(labels.get("healthy:healthy"), "Healthy source");
+    assert.equal(labels.size, 1);
+    assert.equal(errors.length, 2);
+    assert.ok(errors.every(([message]) =>
+      message === "channel conversation label lookup failed"));
+  });
+
+  it("uses conservative capability defaults when thread selection or metadata fails", (t) => {
+    const errors = [];
+    t.mock.method(console, "error", (...args) => errors.push(args));
+    const brokenDrivers = [
+      new ChannelDriverRegistry().register(stubDriver({
+        connector_type: "broken-match",
+        matchesThread() { throw new Error("match failed"); },
+      })),
+      new ChannelDriverRegistry().register(stubDriver({
+        connector_type: "broken-capabilities",
+        matchesThread: () => true,
+        ownsThread: () => true,
+        capabilities() { throw new Error("capabilities failed"); },
+      })),
+    ];
+    const thread = { source: "broken", target: "thread-1" };
+    const selectors = [
+      ["canSend", (drivers, installation) => drivers.canSend([installation], thread), false],
+      ["awaitReply", (drivers, installation) => drivers.awaitReply([installation], thread), false],
+      ["holdWhileWorking", (drivers, installation) => drivers.holdWhileWorking([installation], thread), false],
+      ["listTitle", (drivers, installation) => drivers.listTitle([installation], thread), "face"],
+      ["hydrateOnOpen", (drivers, installation) => drivers.hydrateOnOpen([installation], thread), false],
+      ["canPrompt", (drivers, installation) => drivers.canPrompt([installation], thread), false],
+      ["canAttention", (drivers, installation) => drivers.canAttention([installation], thread), false],
+      ["canReceipt", (drivers, installation) => drivers.canReceipt([installation], thread), false],
+    ];
+    const installations = brokenDrivers.map((_, index) => ({
+      id: `broken-installation-${index}`,
+      org_id: "local-owner",
+      connector_type: index === 0 ? "broken-match" : "broken-capabilities",
+      status: "enabled",
+      config: {},
+      created_at: "2026-08-21T00:00:00.000Z",
+    }));
+
+    for (const [name, select, fallback] of selectors) {
+      for (const [index, drivers] of brokenDrivers.entries()) {
+        assert.doesNotThrow(
+          () => assert.equal(select(drivers, installations[index]), fallback),
+          name,
+        );
+      }
+    }
+    assert.equal(errors.length, selectors.length * brokenDrivers.length);
+    assert.ok(errors.every(([message]) => message === "channel capability lookup failed"));
+  });
+
   it("resolves reply from installation + thread, not channel name in the kernel", () => {
     const drivers = new ChannelDriverRegistry()
       .register(

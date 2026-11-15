@@ -17,8 +17,8 @@ const {
 } = require("@regenic/dsh-connector");
 const { feishuChatDriver, FeishuChatPollConnector } = require("@regenic/feishu-connector");
 
-describe("connector pages commit through the host runtime", () => {
-  it("settles a Feishu page and keeps the cursor", async () => {
+describe("connector pages require the host atomic store", () => {
+  it("rejects a Feishu page split across independent stores", async () => {
     const connector = new FeishuChatPollConnector(
       {
         async listMessages() {
@@ -42,7 +42,7 @@ describe("connector pages commit through the host runtime", () => {
         now: () => "2026-08-12T00:00:00.000Z",
       },
     );
-    const { runtime, store } = coupledStores();
+    const { runtime, authority } = independentStores();
     await runtime.createInstallation({
       id: "feishu-installation",
       org_id: "local-owner",
@@ -51,31 +51,24 @@ describe("connector pages commit through the host runtime", () => {
       config: { chat_id: "oc_1" },
       created_at: "2026-08-12T00:00:00.000Z",
     });
-    const run = await new ConnectorRunner(
+    await assert.rejects(new ConnectorRunner(
       connector,
-      new IngestionService(new MemoryBlobStore(), store),
-      store,
+      new IngestionService(new MemoryBlobStore(), authority),
+      runtime,
       () => "2026-08-12T00:00:00.000Z",
     ).poll({
       installation_id: "feishu-installation",
       stream_key: "chat:oc_1",
       lease_owner: "worker-a",
       lease_duration_ms: 30_000,
-    });
+    }), /same atomic Authority and runtime store/);
     const cursor = await runtime.getCursor("feishu-installation", "chat:oc_1");
 
-    assert.equal(run.status, "completed");
-    assert.equal(run.result.records[0].status, "accepted");
-    assert.equal(
-      cursor.cursor,
-      JSON.stringify({
-        start_time: "1723420800",
-        recent_seeded: true,
-      }),
-    );
+    assert.equal(authority.allEvents().length, 0);
+    assert.equal(cursor.cursor, undefined);
   });
 
-  it("settles a Cursor page", async () => {
+  it("rejects a Cursor page split across independent stores", async () => {
     const connector = new CursorAgentPollConnector(
       {
         async getAgent() {
@@ -106,7 +99,7 @@ describe("connector pages commit through the host runtime", () => {
         now: () => "2026-08-21T00:06:00.000Z",
       },
     );
-    const { runtime, store } = coupledStores();
+    const { runtime, authority } = independentStores();
     await runtime.createInstallation({
       id: "cursor-installation",
       org_id: "local-owner",
@@ -115,22 +108,21 @@ describe("connector pages commit through the host runtime", () => {
       config: { agent_id: "bc-1" },
       created_at: "2026-08-21T00:00:00.000Z",
     });
-    const run = await new ConnectorRunner(
+    await assert.rejects(new ConnectorRunner(
       connector,
-      new IngestionService(new MemoryBlobStore(), store),
-      store,
+      new IngestionService(new MemoryBlobStore(), authority),
+      runtime,
       () => "2026-08-21T00:06:00.000Z",
     ).poll({
       installation_id: "cursor-installation",
       stream_key: "agent:bc-1",
       lease_owner: "worker-a",
       lease_duration_ms: 30_000,
-    });
-    assert.equal(run.status, "completed");
-    assert.equal(run.result.records[0].status, "accepted");
+    }), /same atomic Authority and runtime store/);
+    assert.equal(authority.allEvents().length, 0);
   });
 
-  it("settles a DSH journal page and keeps the seq cursor", async () => {
+  it("rejects a DSH journal page split across independent stores", async () => {
     const connector = new DshSessionPollConnector(
       new DshCliSessionClient(new MemoryDshRunLog([{
         run_id: "run-0",
@@ -147,7 +139,7 @@ describe("connector pages commit through the host runtime", () => {
         now: () => "2026-08-21T00:00:00.000Z",
       },
     );
-    const { runtime, store } = coupledStores();
+    const { runtime, authority } = independentStores();
     await runtime.createInstallation({
       id: "dsh-installation",
       org_id: "local-owner",
@@ -156,22 +148,21 @@ describe("connector pages commit through the host runtime", () => {
       config: { transport: "cli", mailbox: "dsh-main" },
       created_at: "2026-08-21T00:00:00.000Z",
     });
-    const settled = await new ConnectorRunner(
+    await assert.rejects(new ConnectorRunner(
       connector,
-      new IngestionService(new MemoryBlobStore(), store),
-      store,
+      new IngestionService(new MemoryBlobStore(), authority),
+      runtime,
       () => "2026-08-21T00:00:00.000Z",
     ).poll({
       installation_id: "dsh-installation",
       stream_key: "session:dsh-main",
       lease_owner: "worker-a",
       lease_duration_ms: 30_000,
-    });
+    }), /same atomic Authority and runtime store/);
     const cursor = await runtime.getCursor("dsh-installation", "session:dsh-main");
 
-    assert.equal(settled.status, "completed");
-    assert.equal(settled.result.records[0].status, "accepted");
-    assert.equal(cursor.cursor, "1");
+    assert.equal(authority.allEvents().length, 0);
+    assert.equal(cursor.cursor, undefined);
   });
 
   it("dedupes a split Feishu image echo against reply outbound ids", async () => {
@@ -255,31 +246,9 @@ describe("connector pages commit through the host runtime", () => {
   });
 });
 
-function coupledStores() {
-  const events = new MemoryAuthorityStore();
-  const runtime = new MemoryConnectorRuntimeStore();
-  const store = new Proxy({}, {
-    get(_target, prop) {
-      if (prop === "then") {
-        return undefined;
-      }
-      if (prop === "commitSyncPage") {
-        return async (input) => {
-          const committed = await events.commitSyncPage(input);
-          await runtime.commitSyncPage(input);
-          return committed;
-        };
-      }
-      const runtimeValue = runtime[prop];
-      if (typeof runtimeValue === "function") {
-        return runtimeValue.bind(runtime);
-      }
-      const eventValue = events[prop];
-      if (typeof eventValue === "function") {
-        return eventValue.bind(events);
-      }
-      return runtimeValue ?? eventValue;
-    },
-  });
-  return { events, runtime, store };
+function independentStores() {
+  return {
+    runtime: new MemoryConnectorRuntimeStore(),
+    authority: new MemoryAuthorityStore(),
+  };
 }

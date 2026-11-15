@@ -13,7 +13,7 @@ database from two kernels simultaneously.
 
 ## 1. Prerequisites and pinned model
 
-- For source development, use **Node.js 22**, pnpm 9.15.0 and a cloned repository.
+- For source development, use **Node.js 22**, pnpm 12.16.1 and a cloned repository.
 - Install **Python 3.12**. On Windows the desktop installer tries `py -3.12`, then
   `python`; on macOS/Linux it tries `python3.12`, then `python3`. The actual version
   must be 3.12.

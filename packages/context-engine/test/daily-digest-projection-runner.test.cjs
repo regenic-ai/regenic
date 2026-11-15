@@ -1,6 +1,7 @@
 const assert = require("node:assert/strict");
 const { describe, it } = require("node:test");
 const {
+  canonicalContextJson,
   MemoryBlobStore,
   MemoryContextArtifactStore,
   DEFAULT_DAILY_DIGEST_POLICY,
@@ -35,6 +36,8 @@ function sourceEvent(overrides = {}) {
 describe("DailyDigestProjectionCoordinator", () => {
   it("supersedes only a changed proposed digest for the same UTC period", async () => {
     const artifacts = new MemoryContextArtifactStore();
+    artifacts.seedProtectedBlob(HASH_A);
+    artifacts.seedProtectedBlob(HASH_B);
     const blobs = new MemoryBlobStore();
     let events = [sourceEvent()];
     const source = {
@@ -75,11 +78,15 @@ describe("DailyDigestProjectionCoordinator", () => {
     assert.notEqual(first.artifact_id, second.artifact_id);
     assert.equal((await artifacts.getArtifactState("example-org", first.artifact_id)).status, "superseded");
     assert.equal((await artifacts.getArtifactState("example-org", second.artifact_id)).status, "proposed");
-    assert.equal((await artifacts.getArtifact("example-org", second.artifact_id)).supersedes_id, first.artifact_id);
+    const artifact = await artifacts.getArtifact("example-org", second.artifact_id);
+    assert.equal(artifact.supersedes_id, first.artifact_id);
+    assert.equal(await blobs.exists(artifact.body_hash), true);
+    assert.equal(Buffer.from(await blobs.get(artifact.body_hash)).toString("utf8"), canonicalContextJson(artifact.attrs));
   });
 
   it("persists one stable alert for an eligible head omitted by quota", async () => {
     const artifacts = new MemoryContextArtifactStore();
+    artifacts.seedProtectedBlob(HASH_A);
     const blobs = new MemoryBlobStore();
     const selected = sourceEvent({
       event: { ...sourceEvent().event, event_id: "event-selected", external_id: "selected-1" },

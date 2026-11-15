@@ -26,6 +26,7 @@ import {
   threadIdOf,
   withSurfaceGeneration,
   type ArrangementDecision,
+  type InboxDispositionCommand,
   type AuthorityStore,
   type BlobStore,
   type ConnectorInstallation,
@@ -192,6 +193,40 @@ export interface ConversationPromptInput {
 const MAX_TITLE_LENGTH = 120;
 const ATTENTION_CACHE_MAX = 500;
 const RECEIPT_CACHE_MAX = 4_000;
+
+function inboxDispositionCommand(
+  orgId: string,
+  eventId: string,
+  action: InboxDispositionCommand["action"],
+  commandId: unknown,
+  issuedAt: unknown,
+  disposition?: ArrangementDecision["disposition"],
+): InboxDispositionCommand {
+  if (
+    typeof commandId !== "string" ||
+    !commandId.trim() ||
+    commandId !== commandId.trim() ||
+    commandId.length > 128 ||
+    typeof issuedAt !== "string" ||
+    !Number.isFinite(Date.parse(issuedAt)) ||
+    Date.parse(issuedAt) < Date.now() - 90 * 24 * 60 * 60 * 1000 ||
+    Date.parse(issuedAt) > Date.now() + 5 * 60 * 1000
+  ) {
+    throw new PersonalConnectorError(
+      "invalid_command",
+      "A valid command_id and issued_at are required. Refresh the inbox and try again.",
+      400,
+    );
+  }
+  return {
+    org_id: orgId,
+    event_id: eventId,
+    action,
+    ...(disposition !== undefined ? { disposition } : {}),
+    command_id: commandId,
+    issued_at: issuedAt,
+  };
+}
 
 function rememberBounded<T>(
   cache: Map<string, T>,
@@ -561,9 +596,42 @@ export class PersonalInboxService {
       .catch(() => undefined);
   }
 
+  private async commitInboxDispositionTransition(
+    authority: AuthorityStore,
+    event: EventRecord,
+    input: {
+      expected: ArrangementDecision;
+      decision: ArrangementDecision;
+      command: InboxDispositionCommand;
+    },
+  ): Promise<ArrangementDecision> {
+    const result = await authority.transitionDisposition(input);
+    if (result.outcome === "conflict") {
+      throw new PersonalConnectorError(
+        "inbox_disposition_conflict",
+        "Inbox disposition changed; refresh and retry.",
+        409,
+      );
+    }
+    if (result.outcome === "command_conflict") {
+      throw new PersonalConnectorError(
+        "command_conflict",
+        "This command_id was already used for a different inbox action.",
+        409,
+      );
+    }
+    if (result.outcome === "applied") {
+      this.publishThreadUpdated(conversationId(event.source, event.external_id, event.id));
+      this.touchInboxDigest({ immediate: true });
+    }
+    return result.decision;
+  }
+
   async triageInboxEvent(
     eventId: string,
     disposition: ArrangementDecision["disposition"],
+    commandId: unknown,
+    issuedAt: unknown,
   ): Promise<ArrangementDecision> {
     if (!['current_work', 'outside_current_work', 'pending'].includes(disposition)) {
       throw new PersonalConnectorError("invalid_config", "Invalid inbox disposition", 400);
@@ -571,6 +639,7 @@ export class PersonalInboxService {
     const host = this.runtime.requireHost();
     const authority = host.get("authority");
     const orgId = this.runtime.orgId();
+    const command = inboxDispositionCommand(orgId, eventId, "triage", commandId, issuedAt, disposition);
     const event = await authority.getEvent(orgId, eventId);
     const current = event ? await authority.getDisposition(event.id) : null;
     if (!event || !current) {
@@ -580,18 +649,24 @@ export class PersonalInboxService {
       ...current,
       disposition,
       reason_codes: [...new Set([...current.reason_codes, "human_triage"])],
-      decided_at: new Date().toISOString(),
+      decided_at: command.issued_at,
     };
-    await authority.putDisposition(decision);
-    this.publishThreadUpdated(conversationId(event.source, event.external_id, event.id));
-    this.touchInboxDigest({ immediate: true });
-    return decision;
+    return this.commitInboxDispositionTransition(authority, event, {
+      expected: current,
+      decision,
+      command,
+    });
   }
 
-  async resetInboxTriage(eventId: string): Promise<ArrangementDecision> {
+  async resetInboxTriage(
+    eventId: string,
+    commandId: unknown,
+    issuedAt: unknown,
+  ): Promise<ArrangementDecision> {
     const host = this.runtime.requireHost();
     const authority = host.get("authority");
     const orgId = this.runtime.orgId();
+    const command = inboxDispositionCommand(orgId, eventId, "reset", commandId, issuedAt);
     const event = await authority.getEvent(orgId, eventId);
     const current = event ? await authority.getDisposition(event.id) : null;
     if (!event || !current) {
@@ -604,18 +679,24 @@ export class PersonalInboxService {
       kind: body.surface?.kind,
       text: body.body_text,
       weight_hints: event.weight_hints,
-      now: new Date().toISOString(),
+      now: command.issued_at,
     });
-    await authority.putDisposition(decision);
-    this.publishThreadUpdated(conversationId(event.source, event.external_id, event.id));
-    this.touchInboxDigest({ immediate: true });
-    return decision;
+    return this.commitInboxDispositionTransition(authority, event, {
+      expected: current,
+      decision,
+      command,
+    });
   }
 
-  async reapplyInboxDispatchPolicy(eventId: string): Promise<ArrangementDecision> {
+  async reapplyInboxDispatchPolicy(
+    eventId: string,
+    commandId: unknown,
+    issuedAt: unknown,
+  ): Promise<ArrangementDecision> {
     const host = this.runtime.requireHost();
     const authority = host.get("authority");
     const orgId = this.runtime.orgId();
+    const command = inboxDispositionCommand(orgId, eventId, "reapply_policy", commandId, issuedAt);
     const event = await authority.getEvent(orgId, eventId);
     const current = event ? await authority.getDisposition(event.id) : null;
     if (!event || !current) {
@@ -630,16 +711,17 @@ export class PersonalInboxService {
       text: body.body_text,
       weight_hints: event.weight_hints,
       dispatch_policy: policy,
-      now: new Date().toISOString(),
+      now: command.issued_at,
     });
     const decision: ArrangementDecision = {
       ...arranged,
       reason_codes: [...new Set([...arranged.reason_codes, "personal_dispatch_policy"])],
     };
-    await authority.putDisposition(decision);
-    this.publishThreadUpdated(conversationId(event.source, event.external_id, event.id));
-    this.touchInboxDigest({ immediate: true });
-    return decision;
+    return this.commitInboxDispositionTransition(authority, event, {
+      expected: current,
+      decision,
+      command,
+    });
   }
 
   async listFollowUps(): Promise<PersonalFollowUpView[]> {
@@ -1706,7 +1788,7 @@ export class PersonalInboxService {
         }
       }
     }
-    const pref = await host.get("authority").putConversationPref({
+    const pref = await this.work.ackDoneThread(threadId, {
       org_id: this.runtime.orgId(),
       thread_id: threadId,
       last_read_at: lastReadAt,
@@ -1725,7 +1807,6 @@ export class PersonalInboxService {
       },
       host,
     );
-    await this.work.ackDoneThread(threadId);
     this.touchInboxDigest({ immediate: true });
     return toPrefView(pref);
   }
@@ -1749,6 +1830,9 @@ export class PersonalInboxService {
   async setInboxEventHidden(
     eventId: string,
     hidden: boolean,
+    expectedVisibilityVersion: unknown,
+    commandId: unknown,
+    issuedAt: unknown,
   ): Promise<ConversationPrefView> {
     const host = this.runtime.requireHost();
     const authority = host.get("authority");
@@ -1761,9 +1845,9 @@ export class PersonalInboxService {
     return this.updateConversationPrefs({
       thread_id: conversationId(event.source, event.external_id, event.id),
       hidden,
-      expected_visibility_version: (await authority.getConversationPref(
-        orgId, conversationId(event.source, event.external_id, event.id),
-      ))?.visibility_version ?? 0,
+      expected_visibility_version: expectedVisibilityVersion,
+      command_id: commandId,
+      issued_at: issuedAt,
     });
   }
 

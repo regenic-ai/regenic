@@ -35,6 +35,7 @@ export const SYNC_SOAK_METRIC_NAMES = [
   "database_transaction_ms",
   "writer_wait_ms",
   "lease_conflicts",
+  "lease_renewal_errors",
   "throttled",
   "source_429",
   "retryable_failures",

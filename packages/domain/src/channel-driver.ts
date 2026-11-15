@@ -389,21 +389,45 @@ export class ChannelDriverRegistry {
     );
   }
 
+  private readThreadCapability<T>(
+    installations: ConnectorInstallation[],
+    thread: ConversationThread,
+    fallback: T,
+    read: (driver: ChannelDriver, installation: ConnectorInstallation) => T,
+  ): T {
+    try {
+      const found = this.findForThread(installations, thread);
+      return found ? read(found.driver, found.installation) : fallback;
+    } catch (error) {
+      console.error("channel capability lookup failed", {
+        source: thread.source,
+      }, error);
+      return fallback;
+    }
+  }
+
   canSend(
     installations: ConnectorInstallation[],
     thread: ConversationThread,
   ): boolean {
-    const found = this.findForThread(installations, thread);
-    return Boolean(found && driverCanReply(found.driver, found.installation));
+    return this.readThreadCapability(
+      installations,
+      thread,
+      false,
+      driverCanReply,
+    );
   }
 
   awaitReply(
     installations: ConnectorInstallation[],
     thread: ConversationThread,
   ): boolean {
-    const found = this.findForThread(installations, thread);
-    return Boolean(
-      found && found.driver.capabilities(found.installation).await_reply,
+    return this.readThreadCapability(
+      installations,
+      thread,
+      false,
+      (driver, installation) =>
+        driver.capabilities(installation).await_reply === true,
     );
   }
 
@@ -411,9 +435,12 @@ export class ChannelDriverRegistry {
     installations: ConnectorInstallation[],
     thread: ConversationThread,
   ): boolean {
-    const found = this.findForThread(installations, thread);
-    return Boolean(
-      found && found.driver.capabilities(found.installation).hold_while_working,
+    return this.readThreadCapability(
+      installations,
+      thread,
+      false,
+      (driver, installation) =>
+        driver.capabilities(installation).hold_while_working === true,
     );
   }
 
@@ -421,9 +448,12 @@ export class ChannelDriverRegistry {
     installations: ConnectorInstallation[],
     thread: ConversationThread,
   ): ListTitleMode {
-    const found = this.findForThread(installations, thread);
-    return normalizeListTitle(
-      found?.driver.capabilities(found.installation).list_title,
+    return this.readThreadCapability(
+      installations,
+      thread,
+      "face",
+      (driver, installation) =>
+        normalizeListTitle(driver.capabilities(installation).list_title),
     );
   }
 
@@ -442,19 +472,25 @@ export class ChannelDriverRegistry {
       }
     >();
     for (const thread of threads) {
-      const found = this.findForThread(installations, thread);
-      if (!found?.driver.resolveConversationLabels) {
-        continue;
-      }
-      const group = groups.get(found.installation.id);
-      if (group) {
-        group.threads.push(thread);
-      } else {
-        groups.set(found.installation.id, {
-          installation: found.installation,
-          driver: found.driver,
-          threads: [thread],
-        });
+      try {
+        const found = this.findForThread(installations, thread);
+        if (!found?.driver.resolveConversationLabels) {
+          continue;
+        }
+        const group = groups.get(found.installation.id);
+        if (group) {
+          group.threads.push(thread);
+        } else {
+          groups.set(found.installation.id, {
+            installation: found.installation,
+            driver: found.driver,
+            threads: [thread],
+          });
+        }
+      } catch (error) {
+        console.error("channel conversation label lookup failed", {
+          source: thread.source,
+        }, error);
       }
     }
     await Promise.all(
@@ -474,8 +510,11 @@ export class ChannelDriverRegistry {
               labels.set(id, trimmed);
             }
           }
-        } catch {
-          // A lookup failure leaves that source unlabeled. It must not block inbox.
+        } catch (error) {
+          console.error("channel conversation label lookup failed", {
+            source: group.threads[0]?.source,
+            installation_id: group.installation.id,
+          }, error);
         }
       }),
     );
@@ -511,9 +550,12 @@ export class ChannelDriverRegistry {
     installations: ConnectorInstallation[],
     thread: ConversationThread,
   ): boolean {
-    const found = this.findForThread(installations, thread);
-    return Boolean(
-      found && found.driver.capabilities(found.installation).hydrate_on_open,
+    return this.readThreadCapability(
+      installations,
+      thread,
+      false,
+      (driver, installation) =>
+        driver.capabilities(installation).hydrate_on_open === true,
     );
   }
 
@@ -521,9 +563,12 @@ export class ChannelDriverRegistry {
     installations: ConnectorInstallation[],
     thread: ConversationThread,
   ): boolean {
-    const found = this.findForThread(installations, thread);
-    return Boolean(
-      found && found.driver.capabilities(found.installation).prompts,
+    return this.readThreadCapability(
+      installations,
+      thread,
+      false,
+      (driver, installation) =>
+        driver.capabilities(installation).prompts === true,
     );
   }
 
@@ -531,9 +576,12 @@ export class ChannelDriverRegistry {
     installations: ConnectorInstallation[],
     thread: ConversationThread,
   ): boolean {
-    const found = this.findForThread(installations, thread);
-    return Boolean(
-      found && found.driver.capabilities(found.installation).attention,
+    return this.readThreadCapability(
+      installations,
+      thread,
+      false,
+      (driver, installation) =>
+        driver.capabilities(installation).attention === true,
     );
   }
 
@@ -541,9 +589,12 @@ export class ChannelDriverRegistry {
     installations: ConnectorInstallation[],
     thread: ConversationThread,
   ): boolean {
-    const found = this.findForThread(installations, thread);
-    return Boolean(
-      found && found.driver.capabilities(found.installation).receipts,
+    return this.readThreadCapability(
+      installations,
+      thread,
+      false,
+      (driver, installation) =>
+        driver.capabilities(installation).receipts === true,
     );
   }
 
@@ -553,21 +604,24 @@ export class ChannelDriverRegistry {
     host: Host | ConnectorHost,
     env: NodeJS.ProcessEnv = process.env,
   ): Promise<ThreadPrompt[]> {
-    const found = this.findForThread(installations, thread);
-    if (
-      !found?.driver.listPrompts ||
-      !found.driver.capabilities(found.installation).prompts
-    ) {
-      return [];
-    }
     try {
+      const found = this.findForThread(installations, thread);
+      if (
+        !found?.driver.listPrompts ||
+        !found.driver.capabilities(found.installation).prompts
+      ) {
+        return [];
+      }
       return await found.driver.listPrompts(
         found.installation,
         thread,
         asConnectorHost(host),
         env,
       );
-    } catch {
+    } catch (error) {
+      console.error("channel prompt lookup failed", {
+        source: thread.source,
+      }, error);
       return [];
     }
   }
@@ -642,22 +696,28 @@ export class ChannelDriverRegistry {
       }
     >();
     for (const thread of uniqueThreads(threads)) {
-      const found = this.findForThread(installations, thread);
-      if (
-        !found?.driver.readAttention ||
-        !found.driver.capabilities(found.installation).attention
-      ) {
-        continue;
-      }
-      const group = groups.get(found.installation.id);
-      if (group) {
-        group.threads.push(thread);
-      } else {
-        groups.set(found.installation.id, {
-          installation: found.installation,
-          driver: found.driver,
-          threads: [thread],
-        });
+      try {
+        const found = this.findForThread(installations, thread);
+        if (
+          !found?.driver.readAttention ||
+          !found.driver.capabilities(found.installation).attention
+        ) {
+          continue;
+        }
+        const group = groups.get(found.installation.id);
+        if (group) {
+          group.threads.push(thread);
+        } else {
+          groups.set(found.installation.id, {
+            installation: found.installation,
+            driver: found.driver,
+            threads: [thread],
+          });
+        }
+      } catch (error) {
+        console.error("channel source attention read failed", {
+          source: thread.source,
+        }, error);
       }
     }
     await Promise.all(
@@ -675,8 +735,11 @@ export class ChannelDriverRegistry {
           for (const [id, value] of part) {
             attention.set(id, value);
           }
-        } catch {
-          // A source overlay failure must not block inbox.
+        } catch (error) {
+          console.error("channel source attention read failed", {
+            source: group.threads[0]?.source,
+            installation_id: group.installation.id,
+          }, error);
         }
       }),
     );
@@ -690,14 +753,14 @@ export class ChannelDriverRegistry {
     host: Host | ConnectorHost,
     env: NodeJS.ProcessEnv = process.env,
   ): Promise<void> {
-    const found = this.findForThread(installations, thread);
-    if (
-      !found?.driver.ackAttention ||
-      !found.driver.capabilities(found.installation).attention
-    ) {
-      return;
-    }
     try {
+      const found = this.findForThread(installations, thread);
+      if (
+        !found?.driver.ackAttention ||
+        !found.driver.capabilities(found.installation).attention
+      ) {
+        return;
+      }
       await found.driver.ackAttention(
         found.installation,
         thread,
@@ -705,8 +768,10 @@ export class ChannelDriverRegistry {
         asConnectorHost(host),
         env,
       );
-    } catch {
-      // Local cursor still stands. Source ack is best-effort.
+    } catch (error) {
+      console.error("channel source attention acknowledgment failed", {
+        source: thread.source,
+      }, error);
     }
   }
 
@@ -729,22 +794,28 @@ export class ChannelDriverRegistry {
       if (thread.outbound.length === 0) {
         continue;
       }
-      const found = this.findForThread(installations, thread);
-      if (
-        !found?.driver.readReceipts ||
-        !found.driver.capabilities(found.installation).receipts
-      ) {
-        continue;
-      }
-      const group = groups.get(found.installation.id);
-      if (group) {
-        group.threads.push(thread);
-      } else {
-        groups.set(found.installation.id, {
-          installation: found.installation,
-          driver: found.driver,
-          threads: [thread],
-        });
+      try {
+        const found = this.findForThread(installations, thread);
+        if (
+          !found?.driver.readReceipts ||
+          !found.driver.capabilities(found.installation).receipts
+        ) {
+          continue;
+        }
+        const group = groups.get(found.installation.id);
+        if (group) {
+          group.threads.push(thread);
+        } else {
+          groups.set(found.installation.id, {
+            installation: found.installation,
+            driver: found.driver,
+            threads: [thread],
+          });
+        }
+      } catch (error) {
+        console.error("channel source receipt read failed", {
+          source: thread.source,
+        }, error);
       }
     }
     await Promise.all(
@@ -762,8 +833,11 @@ export class ChannelDriverRegistry {
           for (const [id, value] of part) {
             receipts.set(id, value);
           }
-        } catch {
-          // Receipt lookup must not block inbox.
+        } catch (error) {
+          console.error("channel source receipt read failed", {
+            source: group.threads[0]?.source,
+            installation_id: group.installation.id,
+          }, error);
         }
       }),
     );

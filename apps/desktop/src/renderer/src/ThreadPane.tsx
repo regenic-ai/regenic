@@ -87,7 +87,9 @@ export const ThreadPane = memo(function ThreadPane({
   onSelectNext,
   paneRef,
   onRunWork,
+  onReconcileDelivery,
   onDismissWork,
+  onAcknowledgeWork,
   onBindRecipe,
   forwardTargets = [],
   createTargets = [],
@@ -120,7 +122,9 @@ export const ThreadPane = memo(function ThreadPane({
   onSelectNext?: () => void;
   paneRef?: { current: HTMLElement | null };
   onRunWork?: () => Promise<void>;
+  onReconcileDelivery?: (resolution: "sent" | "not_sent") => Promise<void>;
   onDismissWork?: () => Promise<void>;
+  onAcknowledgeWork?: () => Promise<void>;
   onBindRecipe?: () => void;
   forwardTargets?: InboxThread[];
   createTargets?: CreateTarget[];
@@ -463,12 +467,26 @@ export const ThreadPane = memo(function ThreadPane({
       thread.work?.status === "failed" ||
       thread.work?.status === "skipped" ||
       (thread.work?.status === "done" && needsDeliveryRetry));
+  const canReconcileDelivery = thread.work?.delivery?.status === "uncertain" &&
+    Boolean(onReconcileDelivery);
   const canDismiss =
     Boolean(onDismissWork) &&
     Boolean(thread.work) &&
     (thread.work?.status === "open" ||
       thread.work?.status === "running" ||
       thread.work?.status === "waiting_human");
+  const canAcknowledge = Boolean(onAcknowledgeWork)
+    && Boolean(resultSummary)
+    && thread.work?.status === "done"
+    && Boolean(thread.work?.run_id)
+    && thread.work?.acknowledged_run_id !== thread.work?.run_id
+    && thread.work?.auto_completed !== true
+    && (thread.work?.can_write_back !== true || thread.work?.delivery?.write_back === "sent");
+  const canAcknowledgeFailure = Boolean(onAcknowledgeWork)
+    && Boolean(resultSummary)
+    && thread.work?.status === "failed"
+    && Boolean(thread.work?.run_id)
+    && thread.work?.acknowledged_run_id !== thread.work?.run_id;
   const canBind = Boolean(onBindRecipe) && !thread.work?.recipe_id;
   const canForwardConversation = merged.some(canForwardItem);
   const tags = threadFaceTags(thread);
@@ -587,7 +605,7 @@ export const ThreadPane = memo(function ThreadPane({
                 ) : null}
               </p>
             </div>
-            {canForwardConversation || canRun || canDismiss || canBind ? (
+            {canForwardConversation || canRun || canDismiss || canAcknowledge || canAcknowledgeFailure || canBind || canReconcileDelivery ? (
               <div className="thread-actions">
                 {canForwardConversation ? (
                   <button
@@ -621,6 +639,30 @@ export const ThreadPane = memo(function ThreadPane({
                     {t("thread.dismiss")}
                   </button>
                 ) : null}
+                {canAcknowledge ? (
+                  <button
+                    type="button"
+                    className="ghost thread-run"
+                    title={t("thread.acknowledgeResultTitle")}
+                    onClick={() => {
+                      void onAcknowledgeWork?.();
+                    }}
+                  >
+                    {t("thread.acknowledgeResult")}
+                  </button>
+                ) : null}
+                {canAcknowledgeFailure ? (
+                  <button
+                    type="button"
+                    className="ghost thread-run"
+                    title={t("thread.acknowledgeFailureTitle")}
+                    onClick={() => {
+                      void onAcknowledgeWork?.();
+                    }}
+                  >
+                    {t("thread.acknowledgeFailure")}
+                  </button>
+                ) : null}
                 {canRun ? (
                   <button
                     type="button"
@@ -638,6 +680,32 @@ export const ThreadPane = memo(function ThreadPane({
                       ? t("thread.retryDelivery")
                       : t("thread.startRun")}
                   </button>
+                ) : null}
+                {canReconcileDelivery ? (
+                  <>
+                    <button
+                      type="button"
+                      className="ghost thread-run"
+                      title={t("thread.confirmDeliverySent")}
+                      onClick={() => {
+                        if (!window.confirm(t("thread.confirmDeliverySentPrompt"))) return;
+                        void onReconcileDelivery?.("sent");
+                      }}
+                    >
+                      {t("thread.confirmDeliverySent")}
+                    </button>
+                    <button
+                      type="button"
+                      className="ghost thread-run"
+                      title={t("thread.confirmDeliveryNotSent")}
+                      onClick={() => {
+                        if (!window.confirm(t("thread.confirmDeliveryNotSentPrompt"))) return;
+                        void onReconcileDelivery?.("not_sent");
+                      }}
+                    >
+                      {t("thread.confirmDeliveryNotSent")}
+                    </button>
+                  </>
                 ) : null}
               </div>
             ) : null}

@@ -177,11 +177,13 @@ export class PersonalController {
   @Post("inbox/:eventId/triage")
   triageInboxEvent(
     @Param("eventId") eventId: string,
-    @Body() body: { disposition?: string } | undefined,
+    @Body() body: { disposition?: string; command_id?: unknown; issued_at?: unknown } | undefined,
   ) {
     return this.guard(() => this.inbox.triageInboxEvent(
       eventId,
       body?.disposition as "current_work" | "outside_current_work" | "pending",
+      body?.command_id,
+      body?.issued_at,
     ));
   }
 
@@ -192,13 +194,23 @@ export class PersonalController {
   }
 
   @Post("inbox/:eventId/fold")
-  foldInboxEvent(@Param("eventId") eventId: string) {
-    return this.guard(() => this.inbox.setInboxEventHidden(eventId, true));
+  foldInboxEvent(
+    @Param("eventId") eventId: string,
+    @Body() body: { expected_visibility_version?: unknown; command_id?: unknown; issued_at?: unknown } | undefined,
+  ) {
+    return this.guard(() => this.inbox.setInboxEventHidden(
+      eventId, true, body?.expected_visibility_version, body?.command_id, body?.issued_at,
+    ));
   }
 
   @Post("inbox/:eventId/unfold")
-  unfoldInboxEvent(@Param("eventId") eventId: string) {
-    return this.guard(() => this.inbox.setInboxEventHidden(eventId, false));
+  unfoldInboxEvent(
+    @Param("eventId") eventId: string,
+    @Body() body: { expected_visibility_version?: unknown; command_id?: unknown; issued_at?: unknown } | undefined,
+  ) {
+    return this.guard(() => this.inbox.setInboxEventHidden(
+      eventId, false, body?.expected_visibility_version, body?.command_id, body?.issued_at,
+    ));
   }
 
   @Post("inbox/:eventId/pin")
@@ -212,13 +224,20 @@ export class PersonalController {
   }
 
   @Post("inbox/:eventId/triage/reset")
-  resetInboxTriage(@Param("eventId") eventId: string) {
-    return this.guard(() => this.inbox.resetInboxTriage(eventId));
+  resetInboxTriage(
+    @Param("eventId") eventId: string,
+    @Body() body: { command_id?: unknown; issued_at?: unknown } | undefined,
+  ) {
+    return this.guard(() => this.inbox.resetInboxTriage(eventId, body?.command_id, body?.issued_at));
   }
 
   @Post("inbox/:eventId/dispatch-policy/reapply")
-  reapplyInboxDispatchPolicy(@Param("eventId") eventId: string) {
-    return this.guard(() => this.inbox.reapplyInboxDispatchPolicy(eventId));
+  reapplyInboxDispatchPolicy(
+    @Param("eventId") eventId: string,
+    @Body() body: { command_id?: unknown; issued_at?: unknown } | undefined,
+  ) {
+    return this.guard(() =>
+      this.inbox.reapplyInboxDispatchPolicy(eventId, body?.command_id, body?.issued_at));
   }
 
   @Post("presence")
@@ -615,6 +634,62 @@ export class PersonalController {
     ));
   }
 
+  @Get("cancellation-jobs")
+  listCancellationJobFailures() {
+    return this.guard(() => this.work.listCancellationJobFailures());
+  }
+
+  @Get("work-identity-diagnostics")
+  listWorkIdentityDiagnostics() {
+    return this.guard(() => this.work.listWorkIdentityDiagnostics());
+  }
+
+  @Post("cancellation-jobs/:id/retry")
+  retryCancellationJob(
+    @Param("id") id: string,
+    @Body() body: {
+      expected_attempts?: unknown;
+      command_id?: unknown;
+      issued_at?: unknown;
+    } | undefined,
+  ) {
+    return this.guard(() => this.work.retryCancellationJob(
+      id, body?.expected_attempts, body?.command_id, body?.issued_at,
+    ));
+  }
+
+  @Post("work-items/:id/retry-delivery")
+  retryWorkDelivery(
+    @Param("id") id: string,
+    @Body() body: {
+      expected_version?: unknown;
+      delivery?: unknown;
+      command_id?: unknown;
+      issued_at?: unknown;
+    } | undefined,
+  ) {
+    return this.guard(() => this.work.retryWorkDelivery(
+      id, body?.expected_version, body?.delivery, body?.command_id, body?.issued_at,
+    ));
+  }
+
+  @Post("work-items/:id/reconcile-delivery")
+  reconcileWorkDelivery(
+    @Param("id") id: string,
+    @Body() body: {
+      resolution?: unknown;
+      expected_version?: unknown;
+      delivery?: unknown;
+      command_id?: unknown;
+      issued_at?: unknown;
+    } | undefined,
+  ) {
+    return this.guard(() => this.work.reconcileWorkDelivery(
+      id, body?.resolution, body?.expected_version, body?.delivery,
+      body?.command_id, body?.issued_at,
+    ));
+  }
+
   @Get("work-runs/:id/reads")
   workRunReads(@Param("id") id: string) {
     return this.guard(() => this.work.workRunReads(id));
@@ -627,6 +702,23 @@ export class PersonalController {
   ) {
     return this.guard(() => this.work.dismissWorkItem(
       id, body?.expected_version, body?.command_id, body?.issued_at,
+    ));
+  }
+
+  @Post("work-items/:id/acknowledge")
+  acknowledgeWorkResult(
+    @Param("id") id: string,
+    @Body() body: {
+      run_id?: unknown;
+      expected_version?: unknown;
+      expected_run_version?: unknown;
+      command_id?: unknown;
+      issued_at?: unknown;
+    } | undefined,
+  ) {
+    return this.guard(() => this.work.acknowledgeWorkResult(
+      id, body?.run_id, body?.expected_version, body?.expected_run_version,
+      body?.command_id, body?.issued_at,
     ));
   }
 

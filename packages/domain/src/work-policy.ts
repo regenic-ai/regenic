@@ -309,6 +309,23 @@ export function hiddenExecutorThreadIds(
   return hidden;
 }
 
+export function automaticWorkCompletionReady(
+  item: WorkItem,
+  run?: WorkRun | null,
+  delivery?: WorkDelivery | null,
+): boolean {
+  if (!run || run.completion_policy_version !== 1 || run.status !== "completed"
+    || run.start_state === "pending" || run.start_state === "uncertain"
+    || !run.external_run_id || !item.head_event_id || item.status !== "done"
+    || item.current_run_id !== run.id || item.org_id !== run.org_id
+    || item.id !== run.work_item_id || item.recipe_id !== run.recipe_id) return false;
+  if (run.write_back_required === false) return true;
+  return run.write_back_required === true && Boolean(
+    delivery && delivery.org_id === item.org_id && delivery.work_item_id === item.id
+    && delivery.run_id === run.id && delivery.status === "acked" && delivery.write_back === "sent",
+  );
+}
+
 export function workFaceOf(
   item: WorkItem,
   recipe?: Recipe | null,
@@ -325,6 +342,9 @@ export function workFaceOf(
     executor_type: run?.executor_type ?? recipe?.executor_type,
     ...(run?.start_state ? { start_state: run.start_state } : {}),
     ...(run ? { run_id: run.id } : {}),
+    ...(run ? { run_version: run.version ?? 0 } : {}),
+    ...(item.acknowledged_run_id ? { acknowledged_run_id: item.acknowledged_run_id } : {}),
+    ...(automaticWorkCompletionReady(item, run, delivery) ? { auto_completed: true } : {}),
     agent_thread_id: run?.agent_thread_id,
     head_event_id: item.head_event_id,
     can_write_back: run?.write_back_required ?? (recipe ? recipeWantsWriteBack(recipe) : undefined),

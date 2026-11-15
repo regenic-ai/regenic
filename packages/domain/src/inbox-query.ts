@@ -431,7 +431,8 @@ export function selectInboxItems(
     } else {
       const openThreads = new Set(
         selected
-          .filter((item) => item.decision.disposition === "current_work")
+          .filter((item) => item.event.operation !== "tombstone"
+            && item.decision.disposition === "current_work")
           .map((item) => eventThreadId(item.event)),
       );
       selected = headsByThread(

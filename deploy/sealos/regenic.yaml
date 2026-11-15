@@ -26,6 +26,8 @@ metadata:
 spec:
   serviceName: regenic
   replicas: 1
+  updateStrategy:
+    type: RollingUpdate
   revisionHistoryLimit: 1
   persistentVolumeClaimRetentionPolicy:
     whenDeleted: Retain
@@ -39,6 +41,8 @@ spec:
         app: regenic
     spec:
       automountServiceAccountToken: false
+      # Connector shutdown drains for up to 11 seconds before startup migrations run.
+      terminationGracePeriodSeconds: 30
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000

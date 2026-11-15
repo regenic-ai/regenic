@@ -25,14 +25,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node: ["22.12.0", "24.12.0"]
+        node: ["22.12.0", "24.12.0", "26.13.0"]
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
       - uses: pnpm/action-setup@v4
         with:
-          version: 9.15.0
+          version: 12.16.1
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
@@ -64,7 +64,7 @@ jobs:
           persist-credentials: false
       - uses: pnpm/action-setup@v4
         with:
-          version: 9.15.0
+          version: 12.16.1
       - uses: actions/setup-node@v4
         with:
           node-version: "24.12.0"
@@ -89,6 +89,27 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  desktop-node26-runtime:
+    name: Desktop runtime / macOS / Node 26.13.0
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.16.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "26.13.0"
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Verify Electron and desktop kernel Node and SQLite runtime
+        run: pnpm --filter @regenic/desktop predev
+      - name: Verify desktop launch on Node 26
+        run: pnpm test:desktop
+
   soak:
     name: Nightly / lifecycle soak
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
@@ -100,7 +121,7 @@ jobs:
           persist-credentials: false
       - uses: pnpm/action-setup@v4
         with:
-          version: 9.15.0
+          version: 12.16.1
       - uses: actions/setup-node@v4
         with:
           node-version: "24.12.0"
@@ -138,7 +159,7 @@ jobs:
           persist-credentials: false
       - uses: pnpm/action-setup@v4
         with:
-          version: 9.15.0
+          version: 12.16.1
       - uses: actions/setup-node@v4
         with:
           node-version: "24.12.0"
@@ -164,7 +185,7 @@ jobs:
           persist-credentials: false
       - uses: pnpm/action-setup@v4
         with:
-          version: 9.15.0
+          version: 12.16.1
       - uses: actions/setup-node@v4
         with:
           node-version: "24.12.0"

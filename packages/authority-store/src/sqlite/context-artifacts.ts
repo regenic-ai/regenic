@@ -1,5 +1,7 @@
 import Database from "better-sqlite3";
 import type {
+  BlobReservation,
+  ContextArtifactEvidenceReferenceBackfill,
   ContextArtifact,
   ContextArtifactQuery,
   ContextArtifactState,
@@ -26,7 +28,9 @@ import {
   validateContextSnapshotIndexQuery,
   validateContextBundle,
   validateContextProjectionCheckpoint,
+  BlobReservationConflictError,
 } from "@regenic/domain";
+import { completeBlobReservations } from "./events";
 import {
   CatalogCursorRow,
 } from "./sync";
@@ -42,11 +46,71 @@ function artifactDecoder(db: Database.Database, orgId: string) {
   });
 }
 
-export async function putArtifact(db: Database.Database, artifact: ContextArtifact): Promise<ContextArtifact> {
+export async function putArtifact(
+  db: Database.Database,
+  artifact: ContextArtifact,
+  blobReservations?: readonly BlobReservation[],
+): Promise<ContextArtifact> {
     requireContextValue(validateContextArtifact(artifact), "artifact");
     
     const { payload, segments } = packContextArtifact(artifact);
     db.transaction(() => {
+    const referencedHashes = new Set([
+      ...(artifact.body_hash && artifact.body_storage !== "artifact" ? [artifact.body_hash] : []),
+      ...artifact.input_refs.flatMap((reference) => reference.content_hash ? [reference.content_hash] : []),
+    ]);
+    if (blobReservations) {
+      assertCompleteArtifactReservations(referencedHashes, blobReservations);
+      completeBlobReservations(db, blobReservations, referencedHashes);
+    }
+    if (artifact.body_hash && artifact.body_storage !== "artifact") {
+      const body = artifact.attrs === undefined
+        ? undefined
+        : Buffer.from(canonicalContextJson(artifact.attrs), "utf8");
+      db.prepare(
+        `INSERT OR IGNORE INTO blobs (
+           content_hash, media_type, byte_size, created_at, state
+         ) VALUES (?, 'application/vnd.regenic.context-artifact+json', ?, ?, 'protected')`,
+      ).run(artifact.body_hash, body?.byteLength ?? 0, artifact.recorded_at);
+      db.prepare(
+        `INSERT OR IGNORE INTO blob_references (
+           owner_org_id, owner_type, owner_id, reference_kind, content_hash, created_at
+         ) VALUES (?, 'context_artifact', ?, 'artifact_body', ?, ?)`,
+      ).run(artifact.org_id, artifact.id, artifact.body_hash, artifact.recorded_at);
+      const protectedBlob = db.prepare(
+        blobReservations
+          ? `UPDATE blobs SET unreferenced_at = NULL WHERE content_hash = ?`
+          : `UPDATE blobs SET state = 'protected', unreferenced_at = NULL
+             WHERE content_hash = ? AND state IN ('available', 'protected')
+               AND write_claim_token IS NULL`,
+      ).run(artifact.body_hash);
+      if (!blobReservations && protectedBlob.changes !== 1) {
+        throw new Error("Cannot protect context artifact Blob reference");
+      }
+    }
+    for (const reference of artifact.input_refs) {
+      if (!reference.content_hash) continue;
+      db.prepare(
+        `INSERT OR IGNORE INTO blobs (
+           content_hash, media_type, byte_size, created_at, state
+         ) VALUES (?, 'application/octet-stream', 0, ?, 'protected')`,
+      ).run(reference.content_hash, artifact.recorded_at);
+      db.prepare(
+        `INSERT OR IGNORE INTO blob_references (
+           owner_org_id, owner_type, owner_id, reference_kind, content_hash, created_at
+         ) VALUES (?, 'context_artifact', ?, 'evidence', ?, ?)`,
+      ).run(artifact.org_id, artifact.id, reference.content_hash, artifact.recorded_at);
+      const protectedBlob = db.prepare(
+        blobReservations
+          ? `UPDATE blobs SET unreferenced_at = NULL WHERE content_hash = ?`
+          : `UPDATE blobs SET state = 'protected', unreferenced_at = NULL
+             WHERE content_hash = ? AND state IN ('available', 'protected')
+               AND write_claim_token IS NULL`,
+      ).run(reference.content_hash);
+      if (!blobReservations && protectedBlob.changes !== 1) {
+        throw new Error("Cannot protect context artifact evidence Blob reference");
+      }
+    }
     const insertSegment = db.prepare(
       `INSERT INTO context_artifact_segments (org_id, content_hash, payload_json)
        VALUES (?, ?, ?) ON CONFLICT (org_id, content_hash) DO NOTHING`,
@@ -81,6 +145,17 @@ export async function putArtifact(db: Database.Database, artifact: ContextArtifa
     return parseContextJson<ContextArtifact>(canonicalContextJson(artifact));
   }
 
+function assertCompleteArtifactReservations(
+  referencedHashes: ReadonlySet<string>,
+  reservations: readonly BlobReservation[],
+): void {
+  const hashes = new Set(reservations.map((reservation) => reservation.content_hash));
+  if (hashes.size !== reservations.length || hashes.size !== referencedHashes.size
+    || [...referencedHashes].some((hash) => !hashes.has(hash))) {
+    throw new Error("Context artifact reservations must exactly match its Blob references");
+  }
+}
+
 export async function getArtifact(db: Database.Database, orgId: string, id: string): Promise<ContextArtifact | null> {
     const stored = getContextJson<unknown>(db,
       "context_artifacts",
@@ -104,17 +179,52 @@ export async function listArtifacts(db: Database.Database, query: ContextArtifac
           SELECT a.id, a.recorded_at, a.payload_json, s.status AS lifecycle_status FROM context_artifacts a
           JOIN context_artifact_states s ON s.org_id = a.org_id AND s.artifact_id = a.id
           WHERE ${parts.clauses.join(" AND ")}
+          ORDER BY a.recorded_at ASC, a.id COLLATE BINARY ASC
+          ${parts.limitSql}
         `,
       )
       .all(...parts.params) as Array<{
         id: string; recorded_at: string; payload_json: string; lifecycle_status: ContextArtifact["status"];
       }>;
     const decode = artifactDecoder(db, query.org_id);
-    return rows
-      .sort(compareContextArtifactOrder)
-      .slice(0, parts.limit)
-      .map((row) => ({ ...decode(row.payload_json), status: row.lifecycle_status }));
+    return rows.map((row) => ({ ...decode(row.payload_json), status: row.lifecycle_status }));
   }
+
+export function backfillArtifactEvidenceReferences(
+  db: Database.Database,
+  input: ContextArtifactEvidenceReferenceBackfill,
+): void {
+  db.transaction(() => {
+    const row = db.prepare(
+      `SELECT payload_json FROM context_artifacts WHERE org_id = ? AND id = ?`,
+    ).get(input.org_id, input.artifact_id) as { payload_json: string } | undefined;
+    if (!row) throw new Error("Context artifact changed during evidence reference backfill");
+    const artifact = artifactDecoder(db, input.org_id)(row.payload_json);
+    if (artifact.input_hash !== input.expected_input_hash) {
+      throw new Error("Context artifact changed during evidence reference backfill");
+    }
+    for (const hash of [...new Set(artifact.input_refs.flatMap((reference) =>
+      reference.content_hash ? [reference.content_hash] : []))].sort()) {
+      db.prepare(
+        `INSERT OR IGNORE INTO blobs (
+           content_hash, media_type, byte_size, created_at, state
+         ) VALUES (?, 'application/octet-stream', 0, ?, 'protected')`,
+      ).run(hash, artifact.recorded_at);
+      const protectedBlob = db.prepare(
+        `UPDATE blobs SET state = 'protected', unreferenced_at = NULL,
+           gc_claim_token = NULL, gc_started_at = NULL
+         WHERE content_hash = ? AND state IN ('available', 'protected')
+           AND write_claim_token IS NULL`,
+      ).run(hash);
+      if (protectedBlob.changes !== 1) throw new BlobReservationConflictError(hash);
+      db.prepare(
+        `INSERT OR IGNORE INTO blob_references (
+           owner_org_id, owner_type, owner_id, reference_kind, content_hash, created_at
+         ) VALUES (?, 'context_artifact', ?, 'evidence', ?, ?)`,
+      ).run(input.org_id, input.artifact_id, hash, artifact.recorded_at);
+    }
+  }).immediate();
+}
 
 export async function listArtifactIndexes(db: Database.Database, query: ContextArtifactQuery): Promise<ContextArtifactIndex[]> {
     const parts = artifactListParts(query);
@@ -128,6 +238,8 @@ export async function listArtifactIndexes(db: Database.Database, query: ContextA
           FROM context_artifacts a
           JOIN context_artifact_states s ON s.org_id = a.org_id AND s.artifact_id = a.id
           WHERE ${parts.clauses.join(" AND ")}
+          ORDER BY a.recorded_at ASC, a.id COLLATE BINARY ASC
+          ${parts.limitSql}
         `,
       )
       .all(...parts.params) as Array<{
@@ -137,10 +249,7 @@ export async function listArtifactIndexes(db: Database.Database, query: ContextA
         preview_json: string;
         lifecycle_status: string;
       }>;
-    return rows
-      .sort((left, right) => compareRecordedId(left.recorded_at, left.id, right.recorded_at, right.id))
-      .slice(0, parts.limit)
-      .map((row) => ({
+    return rows.map((row) => ({
         id: row.id,
         kind: row.kind,
         status: row.lifecycle_status,
@@ -175,7 +284,7 @@ function previewJson(payload: string, decode: (payload: unknown) => ContextArtif
 function artifactListParts(query: ContextArtifactQuery): {
   clauses: string[];
   params: unknown[];
-  limit: number;
+  limitSql: string;
 } | null {
   const validation = validateContextArtifactQuery(query);
   requireContextValue(validation, "artifact query");
@@ -200,10 +309,16 @@ function artifactListParts(query: ContextArtifactQuery): {
     clauses.push("a.generation = ?");
     params.push(stableQuery.generation);
   }
+  if (stableQuery.after_recorded_at !== undefined && stableQuery.after_id !== undefined) {
+    clauses.push("(a.recorded_at > ? OR (a.recorded_at = ? AND a.id COLLATE BINARY > ?))");
+    params.push(stableQuery.after_recorded_at, stableQuery.after_recorded_at, stableQuery.after_id);
+  }
+  const limitSql = stableQuery.limit === undefined ? "" : "LIMIT ?";
+  if (stableQuery.limit !== undefined) params.push(stableQuery.limit);
   return {
     clauses,
     params,
-    limit: stableQuery.limit ?? Number.POSITIVE_INFINITY,
+    limitSql,
   };
 }
 
@@ -540,19 +655,6 @@ function requireContextValue(
       `Invalid context ${label}: ${result.issues.map((issue) => issue.message).join("; ")}`,
     );
   }
-}
-
-function compareContextArtifactOrder(
-  left: Pick<ContextArtifact, "id" | "recorded_at">,
-  right: Pick<ContextArtifact, "id" | "recorded_at">,
-): number {
-  return compareRecordedId(left.recorded_at, left.id, right.recorded_at, right.id);
-}
-
-function compareRecordedId(leftAt: string, leftId: string, rightAt: string, rightId: string): number {
-  const leftKey = `${leftAt}\u0000${leftId}`;
-  const rightKey = `${rightAt}\u0000${rightId}`;
-  return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
 }
 
 interface ArtifactStateRow {

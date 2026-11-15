@@ -22,6 +22,7 @@ export class PersonalWorkFlush {
   constructor(
     private readonly runtime: PersonalRuntimeService,
     private readonly channel: PersonalWorkChannel,
+    private readonly onWorkUpdated: (workItemId: string) => void,
   ) {}
 
   async flushDeliveries(): Promise<void> {
@@ -38,6 +39,7 @@ export class PersonalWorkFlush {
           });
           if (expired.outcome === "conflict") return;
           current = expired.delivery;
+          if (expired.outcome === "applied") this.publishWorkUpdate(current.work_item_id);
         }
         const item = await authority.getWorkItem(orgId, current.work_item_id);
         if (!item) throw new Error(`Delivery work item no longer exists: ${current.work_item_id}`);
@@ -48,6 +50,7 @@ export class PersonalWorkFlush {
           if (stopped.outcome === "conflict") throw new Error(
             `Delivery cancellation rejected: ${stopped.reason}`,
           );
+          if (stopped.outcome === "applied") this.publishWorkUpdate(current.work_item_id);
           return;
         }
         if (shouldFlushDelivery(current, now)) await this.flushOne(item, undefined, current);
@@ -75,6 +78,7 @@ export class PersonalWorkFlush {
     const current = claimed.delivery;
     const token = current.claim_token;
     if (!token || !current.payload) throw new Error("Claimed delivery has no token or payload");
+    let notifyAfterCommit = false;
     const settle = async (
       change: Extract<WorkDeliveryCommand, { token: string }>,
     ): Promise<void> => {
@@ -82,6 +86,7 @@ export class PersonalWorkFlush {
       if (result.outcome === "conflict") throw new PersonalConnectorError(
         "delivery_claim_conflict", `Delivery settlement rejected: ${result.reason}`, 409,
       );
+      if (result.outcome === "applied" && change.kind !== "receipt") notifyAfterCommit = true;
     };
     const identity = { org_id: item.org_id, delivery_id: delivery.id, owner: this.owner, token };
     let accepted = current.channel_receipt?.accepted === true;
@@ -101,10 +106,21 @@ export class PersonalWorkFlush {
       const result = await authority.transitionWorkDelivery({
         ...identity, kind, error: deliveryErrorMessage(error), now: new Date().toISOString(),
       });
+      if (result.outcome === "applied") notifyAfterCommit = true;
       if (result.outcome === "conflict") console.error("personal write-back settlement conflict", {
         delivery_id: delivery.id, reason: result.reason,
       });
       if (force) throw error;
+    } finally {
+      if (notifyAfterCommit) this.publishWorkUpdate(item.id);
+    }
+  }
+
+  private publishWorkUpdate(workItemId: string): void {
+    try {
+      this.onWorkUpdated(workItemId);
+    } catch (error) {
+      console.error("personal work lifecycle notification failed", { work_item_id: workItemId }, error);
     }
   }
 }

@@ -1,11 +1,17 @@
 const assert = require("node:assert/strict");
+const { spawn } = require("node:child_process");
+const { once } = require("node:events");
 const { mkdir, rm } = require("node:fs/promises");
 const { randomUUID } = require("node:crypto");
 const { join } = require("node:path");
 const { describe, it } = require("node:test");
 const { DatabaseSync } = require("node:sqlite");
 const { SqliteAuthorityStore } = require("@regenic/authority-store/sqlite");
-const { MemoryExecutorRegistry, createSessionTaskExecutor, createHttpTaskExecutor } = require("@regenic/domain");
+const { PostgresAuthorityStore } = require("@regenic/authority-store/postgres");
+const { Client } = require("pg");
+const {
+  MemoryExecutorRegistry, createSessionTaskExecutor, createHttpTaskExecutor, enqueueWriteBack,
+} = require("@regenic/domain");
 const { dshTaskExecutor } = require("../../../packages/dsh-connector/dist");
 const { PersonalWorkDispatch } = require("../dist/personal-work-dispatch");
 const { PersonalWorkSupervise } = require("../dist/personal-work-supervise");
@@ -21,36 +27,89 @@ const submitDismissal = (service, id, version) =>
   service.dismissWorkItem(id, version, `dismiss-${randomUUID()}`, new Date().toISOString());
 const submitRun = (service, id, version, commandId = `start-${randomUUID()}`) =>
   service.runWorkItem(id, version, commandId, new Date().toISOString());
+async function waitForCancellationJob(authority, runId) {
+  for (let attempt = 0; attempt < 200; attempt++) {
+    const job = (await authority.listCancellationJobs(ORG)).find((candidate) => candidate.run_id === runId);
+    if (job && ["succeeded", "failed", "dead"].includes(job.status)) return job;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`Cancellation job for ${runId} did not settle`);
+}
 
-async function fixture(t, maxConcurrent) {
+async function fixture(t, maxConcurrent, { initialStatus = "open", withTrigger = false, postgres = false } = {}) {
   const root = join(process.cwd(), `.test-work-start-${randomUUID()}`);
   await mkdir(root, { recursive: true });
   const path = join(root, "authority.db");
-  const ports = { authority: new SqliteAuthorityStore(path) };
+  const ports = {};
+  let admin;
+  let schema;
+  let postgresUrl;
   t.after(async () => {
-    ports.authority.close();
-    await rm(root, { recursive: true, force: true });
+    try {
+      await ports.authority?.close();
+    } finally {
+      try {
+        if (schema) await admin.query(`DROP SCHEMA ${schema} CASCADE`);
+      } finally {
+        try {
+          await admin?.end();
+        } finally {
+          await rm(root, { recursive: true, force: true });
+        }
+      }
+    }
   });
+  if (postgres) {
+    const url = new URL(process.env.TEST_DATABASE_URL);
+    admin = new Client({ connectionString: url.toString() });
+    await admin.connect();
+    const isolated = `crash_${randomUUID().replaceAll("-", "")}`;
+    await admin.query(`CREATE SCHEMA ${isolated}`);
+    schema = isolated;
+    url.searchParams.set("options", `-csearch_path=${schema}`);
+    postgresUrl = url.toString();
+    ports.authority = await PostgresAuthorityStore.open(postgresUrl);
+  } else {
+    ports.authority = new SqliteAuthorityStore(path);
+  }
   t.mock.method(console, "error", () => {});
   const now = new Date().toISOString();
-  const recipe = {
+  const recipeInput = {
     id: "recipe-1", org_id: ORG, name: "Start safely", match: { record_class: "task" },
     trigger: { kind: "push" }, executor_type: "session", executor_config: {},
     include_context: false, can_write_back: false, enabled: true, max_concurrent: maxConcurrent,
     created_at: now, updated_at: now,
   };
   const item = {
-    id: "work-1", org_id: ORG, recipe_id: recipe.id, thread_id: "feishu:oc_1",
-    unit_key: "task-1", record_class: "task", thread_facet: "ticket", status: "open",
+    id: "work-1", org_id: ORG, recipe_id: recipeInput.id,
+    thread_id: withTrigger ? "source:crash-recovery" : "feishu:oc_1",
+    unit_key: "task-1", record_class: "task", thread_facet: "ticket", status: initialStatus,
+    ...(withTrigger ? { head_event_id: "crash-trigger" } : {}),
     created_at: now, updated_at: now,
   };
-  await ports.authority.putRecipe(recipe);
-  await ports.authority.putWorkItem(item);
+  await ports.authority.putRecipe(recipeInput);
+  if (withTrigger) {
+    await ports.authority.append({
+      id: item.head_event_id, org_id: ORG, source: "source", external_id: "crash-trigger",
+      thread_id: item.thread_id, content_hash: "a".repeat(64),
+      content_media_type: "text/plain", content_byte_size: 1,
+      occurred_at: now, expected_head_id: null,
+    });
+    await ports.authority.putDispositionIfAbsent({
+      event_id: item.head_event_id, org_id: ORG, disposition: "current_work",
+      layer: "L1_event", reason_codes: ["task"], score: 1, decided_at: now,
+    });
+  }
+  const savedItem = initialStatus === "open"
+    ? await createTestWorkItem(ports.authority, item)
+    : await seedTestWorkItem({ ports, path }, item);
+  const recipe = await ports.authority.getRecipe(ORG, recipeInput.id);
   const calls = { spawn: 0, stdin: 0, stdinText: "", status: 0, attach: 0 };
   const hooks = {};
   let executor = createSessionTaskExecutor({ executor_type: "session", source: "dsh" });
   ports.executors = { get: () => executor };
-  const runtime = { isReady: () => true, orgId: () => ORG, requireHost: () => ({ get: (name) => ports[name] }) };
+  const runtime = { isReady: () => true, orgId: () => ORG, getOptions: () => null,
+    requireHost: () => ({ get: (name) => ports[name] }) };
   const ctx = {
     org_id: ORG, env: {},
     async spawnSysout() {
@@ -81,11 +140,11 @@ async function fixture(t, maxConcurrent) {
   const dispatch = (supervisor = supervise()) => new PersonalWorkDispatch(
     runtime, channel, supervisor, { attach: () => { calls.attach += 1; } },
   );
-  const service = (events = { workUpdated() {} }) => new PersonalWorkService(
-    runtime, {}, { ensureMounted: async () => {} }, { touchInboxDigest() {} }, {}, events,
+  const service = (events = { workUpdated() {} }, inbox = { touchInboxDigest() {} }) => new PersonalWorkService(
+    runtime, {}, { ensureMounted: async () => {} }, inbox, {}, events,
   );
   return {
-    ports, item, recipe, calls, hooks, channel, supervise, dispatch, service, runtime, path,
+    ports, item: savedItem, recipe, calls, hooks, channel, supervise, dispatch, service, runtime, path, postgresUrl,
     setExecutor(next) { executor = next; },
     reopen() {
       ports.authority.close();
@@ -94,12 +153,509 @@ async function fixture(t, maxConcurrent) {
   };
 }
 
+async function crashAfterCommittedDismissal(path, driver, command, claimJob, postgresUrl) {
+  const child = spawn(process.execPath, ["-e", `
+    const [modulePath, path, driver, commandJson, claimJob] = process.argv.slice(1);
+    const stores = require(modulePath);
+    async function main() {
+      const store = driver === "postgres"
+        ? await stores.PostgresAuthorityStore.open(process.env.REGENIC_CRASH_TEST_DATABASE_URL, { migrate: false })
+        : driver === "writer RPC"
+          ? await stores.SqliteSplitAuthorityStore.open(path) : new stores.SqliteAuthorityStore(path);
+      const command = JSON.parse(commandJson);
+      const result = await store.dismissWorkItem(command);
+      if (result.outcome !== "applied") throw new Error(JSON.stringify(result));
+      const jobs = claimJob === "true"
+        ? await store.claimCancellationJobs({
+            org_id: command.expected_item.org_id, owner: "crashed-worker",
+            now: new Date().toISOString(), lease_ms: 1, limit: 1,
+          })
+        : await store.listCancellationJobs(command.expected_item.org_id);
+      if (jobs.length !== 1) throw new Error("Expected one durable cancellation job");
+      process.on("message", () => {});
+      process.send({ result, job: jobs[0] });
+    }
+    main().catch((error) => { console.error(error); process.exit(1); });
+  `, require.resolve(`@regenic/authority-store/${driver === "postgres" ? "postgres" : "sqlite"}`),
+  path, driver, JSON.stringify(command), String(claimJob)], {
+    env: { ...process.env, ...(postgresUrl ? { REGENIC_CRASH_TEST_DATABASE_URL: postgresUrl } : {}) },
+    stdio: ["ignore", "ignore", "pipe", "ipc"],
+  });
+  let stderr = "";
+  child.stderr.setEncoding("utf8").on("data", (chunk) => { stderr += chunk; });
+  const exited = once(child, "exit");
+  const watchdog = setTimeout(() => child.kill("SIGKILL"), driver === "postgres" ? 45_000 : 15_000);
+  try {
+    const [message] = await Promise.race([
+      once(child, "message"),
+      exited.then(([code, signal]) => {
+        throw new Error(`Dismissal child exited before its commit checkpoint (${code}, ${signal}): ${stderr}`);
+      }),
+    ]);
+    assert.equal(message.result.outcome, "applied");
+    assert.equal(child.kill("SIGKILL"), true);
+    const [code, signal] = await exited;
+    assert.equal(code, null);
+    assert.equal(signal, "SIGKILL");
+    return message;
+  } finally {
+    clearTimeout(watchdog);
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill("SIGKILL");
+      await exited;
+    }
+  }
+}
+
+async function createTestWorkItem(authority, item) {
+  const recipe = await authority.getRecipe(item.org_id, item.recipe_id);
+  assert.ok(recipe);
+  const result = await authority.createWorkItem({
+    item,
+    recipe,
+    expected_recipe: recipe,
+  });
+  assert.equal(result.outcome, "applied");
+  return result.item;
+}
+
+async function seedTestWorkItem(f, item) {
+  const db = new DatabaseSync(f.path);
+  try {
+    db.prepare(`INSERT INTO work_items (
+      id, org_id, thread_id, unit_key, head_event_id, record_class, thread_facet, status,
+      recipe_id, created_at, updated_at, current_run_id, version, visibility_intent_version,
+      acknowledged_run_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      thread_id = excluded.thread_id,
+      unit_key = excluded.unit_key,
+      head_event_id = excluded.head_event_id,
+      record_class = excluded.record_class,
+      thread_facet = excluded.thread_facet,
+      status = excluded.status,
+      recipe_id = excluded.recipe_id,
+      updated_at = excluded.updated_at,
+      current_run_id = excluded.current_run_id,
+      version = excluded.version,
+      visibility_intent_version = excluded.visibility_intent_version,
+      acknowledged_run_id = excluded.acknowledged_run_id`).run(
+      item.id, item.org_id, item.thread_id, item.unit_key, item.head_event_id ?? null,
+      item.record_class, item.thread_facet, item.status, item.recipe_id ?? null,
+      item.created_at, item.updated_at, item.current_run_id ?? null, item.version ?? 0,
+      item.visibility_intent_version ?? 0, item.acknowledged_run_id ?? null,
+    );
+  } finally {
+    db.close();
+  }
+  return f.ports.authority.getWorkItem(item.org_id, item.id);
+}
+
+async function seedTestWorkRun(f, run) {
+  const db = new DatabaseSync(f.path);
+  try {
+    db.prepare(`INSERT INTO work_runs (
+      id, org_id, work_item_id, recipe_id, executor_type, external_run_id, agent_thread_id,
+      status, start_state, result_json, created_at, updated_at, version, write_back_required,
+      write_back_target_json, trigger_kind, executor_config_json, include_context
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      run.id, run.org_id, run.work_item_id, run.recipe_id, run.executor_type,
+      run.external_run_id ?? null, run.agent_thread_id ?? null, run.status,
+      run.start_state ?? null, run.result === undefined ? null : JSON.stringify(run.result),
+      run.created_at, run.updated_at, run.version ?? 0,
+      run.write_back_required === undefined ? null : Number(run.write_back_required),
+      run.write_back_target === undefined ? null : JSON.stringify(run.write_back_target),
+      run.trigger_kind ?? null,
+      run.executor_config === undefined ? null : JSON.stringify(run.executor_config),
+      run.include_context === undefined ? null : Number(run.include_context),
+    );
+  } finally {
+    db.close();
+  }
+  return f.ports.authority.getWorkRun(run.org_id, run.id);
+}
+
+async function seedTestWorkDelivery(f, delivery) {
+  const db = new DatabaseSync(f.path);
+  try {
+    db.prepare(`INSERT INTO work_deliveries (
+      id, org_id, work_item_id, version, recipe_id, kind, unit_key, event_id,
+      status, write_back, attempts, last_error, next_retry_at, payload_json,
+      lease_expires_at, idempotency_key, channel_receipt_json, created_at, updated_at,
+      run_id, target_json, lease_owner, claim_token, cancel_requested_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      delivery.id, delivery.org_id, delivery.work_item_id, delivery.version ?? 0,
+      delivery.recipe_id, delivery.kind, delivery.unit_key, delivery.event_id ?? null,
+      delivery.status, delivery.write_back, delivery.attempts, delivery.last_error ?? null,
+      delivery.next_retry_at ?? null,
+      delivery.payload === undefined ? null : JSON.stringify(delivery.payload),
+      delivery.lease_expires_at ?? null, delivery.idempotency_key ?? null,
+      delivery.channel_receipt === undefined ? null : JSON.stringify(delivery.channel_receipt),
+      delivery.created_at, delivery.updated_at, delivery.run_id ?? null,
+      delivery.target === undefined ? null : JSON.stringify(delivery.target),
+      delivery.lease_owner ?? null, delivery.claim_token ?? null,
+      delivery.cancel_requested_at ?? null,
+    );
+  } finally {
+    db.close();
+  }
+  return f.ports.authority.getWorkDelivery(delivery.org_id, delivery.id);
+}
+
+async function dismissItem(authority, item) {
+  const result = await authority.dismissWorkItem({
+    expected_item: item, now: new Date().toISOString(),
+  });
+  assert.equal(result.outcome, "applied");
+  return result.item;
+}
+
+async function observeRun(authority, item, run, status, result) {
+  const observed = await authority.commitWorkObservation({
+    expected_item: item,
+    expected_run: run,
+    handle: {
+      external_run_id: run.external_run_id,
+      agent_thread_id: run.agent_thread_id,
+      status,
+      ...(result ? { result } : {}),
+    },
+    can_write_back: false,
+    trigger_kind: run.trigger_kind ?? "push",
+    now: new Date().toISOString(),
+  });
+  assert.equal(observed.outcome, "applied");
+  return observed.transition;
+}
+
 describe("durable executor start", () => {
+  it("publishes dismissal lifecycle effects only after the authority commit", async (t) => {
+    const f = await fixture(t);
+    const updated = [];
+    const digestChanges = [];
+    const service = f.service(
+      { workUpdated: (id) => updated.push(id) },
+      { touchInboxDigest: () => digestChanges.push(true) },
+    );
+
+    const result = await submitDismissal(service, f.item.id, f.item.version ?? 0);
+
+    assert.equal(result.work_item.status, "skipped");
+    assert.deepEqual(updated, [f.item.id]);
+    assert.deepEqual(digestChanges, [true]);
+  });
+
+  it("publishes work-result acknowledgment lifecycle effects after commit", async (t) => {
+    const f = await fixture(t);
+    const item = { ...f.item, head_event_id: "head-event", version: 3 };
+    const updatedItem = { ...item, acknowledged_run_id: "run-1" };
+    const run = { id: "run-1", version: 2 };
+    let committed = false;
+    t.mock.method(f.ports.authority, "getWorkItem", async () => item);
+    t.mock.method(f.ports.authority, "acknowledgeWorkResult", async () => {
+      committed = true;
+      return { outcome: "applied", item: updatedItem };
+    });
+    t.mock.method(f.ports.authority, "getWorkRun", async () => run);
+
+    const updated = [];
+    const digestChanges = [];
+    const service = f.service(
+      { workUpdated: (id) => {
+        assert.equal(committed, true);
+        updated.push(id);
+      } },
+      { touchInboxDigest: () => {
+        assert.equal(committed, true);
+        digestChanges.push(true);
+      } },
+    );
+    const result = await service.acknowledgeWorkResult(
+      item.id, run.id, item.version, run.version, "ack-result-1", new Date().toISOString(),
+    );
+
+    assert.equal(result.work_item.acknowledged_run_id, run.id);
+    assert.deepEqual(updated, [item.id]);
+    assert.deepEqual(digestChanges, [true]);
+  });
+
+  it("leaves inbox digest refresh to the outer attention acknowledgment", async (t) => {
+    const f = await fixture(t);
+    const item = {
+      ...f.item,
+      status: "done",
+      head_event_id: "head-event",
+      current_run_id: "run-1",
+      version: 3,
+    };
+    const run = { id: "run-1", version: 2 };
+    const pref = {
+      org_id: ORG,
+      thread_id: item.thread_id,
+      last_read_at: new Date().toISOString(),
+      last_read_external_id: "head-event",
+      updated_at: new Date().toISOString(),
+    };
+    t.mock.method(f.ports.authority, "getWorkItemByThread", async () => item);
+    t.mock.method(f.ports.authority, "getWorkRun", async () => run);
+    t.mock.method(f.ports.authority, "acknowledgeWorkResult", async () => ({
+      outcome: "applied",
+      item: { ...item, acknowledged_run_id: run.id },
+    }));
+    t.mock.method(f.ports.authority, "getConversationPref", async () => pref);
+
+    const digestChanges = [];
+    const service = f.service({}, {
+      touchInboxDigest: () => digestChanges.push(true),
+    });
+    assert.deepEqual(await service.ackDoneThread(item.thread_id, pref), pref);
+    assert.deepEqual(digestChanges, []);
+  });
+
+  it("does not publish acknowledgment lifecycle effects when the authority rejects it", async (t) => {
+    const f = await fixture(t);
+    const item = { ...f.item, head_event_id: "head-event", version: 3 };
+    t.mock.method(f.ports.authority, "getWorkItem", async () => item);
+    t.mock.method(f.ports.authority, "acknowledgeWorkResult", async () => ({
+      outcome: "conflict", reason: "stale_item",
+    }));
+
+    const updated = [];
+    const digestChanges = [];
+    const service = f.service(
+      { workUpdated: (id) => updated.push(id) },
+      { touchInboxDigest: () => digestChanges.push(true) },
+    );
+    await assert.rejects(
+      service.acknowledgeWorkResult(
+        item.id, "run-1", item.version, 2, "ack-result-2", new Date().toISOString(),
+      ),
+      code("work_acknowledgment_conflict"),
+    );
+
+    assert.deepEqual(updated, []);
+    assert.deepEqual(digestChanges, []);
+  });
+
+  it("audits delivery retries and replays without flushing twice, including after restart", async (t) => {
+    const f = await fixture(t, undefined, { initialStatus: "done" });
+    const now = new Date().toISOString();
+    const failed = {
+      ...enqueueWriteBack({
+        org_id: ORG, work_item_id: f.item.id, recipe_id: f.recipe.id, kind: "push",
+        unit_key: f.item.unit_key, payload: { summary: "Completed result" }, now,
+      }),
+      status: "dead",
+      write_back: "failed",
+      attempts: 3,
+      last_error: "pre-send failure",
+    };
+    const savedFailed = await seedTestWorkDelivery(f, failed);
+    const item = await f.ports.authority.getWorkItem(ORG, f.item.id);
+    const snapshot = {
+      id: failed.id,
+      version: savedFailed.version,
+      status: failed.status,
+      write_back: failed.write_back,
+      attempts: failed.attempts,
+    };
+    const updated = [];
+    const digestChanges = [];
+    const service = f.service(
+      { workUpdated: (id) => updated.push(id) },
+      { touchInboxDigest: () => digestChanges.push(true) },
+    );
+    let flushes = 0;
+    service.flush.flushOne = async () => { flushes += 1; };
+    const commandId = `retry-${randomUUID()}`;
+    const issuedAt = new Date().toISOString();
+
+    await service.retryWorkDelivery(f.item.id, item.version, snapshot, commandId, issuedAt);
+    assert.equal(flushes, 1);
+    assert.deepEqual(updated, [item.id]);
+    assert.deepEqual(digestChanges, [true]);
+    const queued = await f.ports.authority.getWorkDelivery(ORG, failed.id);
+    assert.equal(queued.status, "queued");
+    assert.equal(queued.idempotency_key, failed.idempotency_key);
+    assert.deepEqual(queued.payload, failed.payload);
+    f.reopen();
+    await service.retryWorkDelivery(f.item.id, item.version, snapshot, commandId, issuedAt);
+    assert.equal(flushes, 1);
+    assert.deepEqual(updated, [item.id], "a replay does not repeat post-commit notifications");
+    assert.deepEqual(digestChanges, [true]);
+    await assert.rejects(
+      service.retryWorkDelivery(
+        f.item.id, item.version, { ...snapshot, attempts: snapshot.attempts + 1 }, commandId, issuedAt,
+      ),
+      code("delivery_retry_conflict"),
+    );
+    assert.equal(flushes, 1);
+    const claim = await f.ports.authority.transitionWorkDelivery({
+      org_id: ORG, delivery_id: queued.id, kind: "claim",
+      owner: "test-worker", now: new Date().toISOString(), force: true,
+    });
+    assert.equal(claim.outcome, "applied");
+    const failure = await f.ports.authority.transitionWorkDelivery({
+      org_id: ORG, delivery_id: queued.id, kind: "failed", owner: "test-worker",
+      token: claim.delivery.claim_token, error: "pre-send failure", now: new Date().toISOString(),
+    });
+    assert.equal(failure.outcome, "applied");
+    await service.retryWorkDelivery(f.item.id, item.version, {
+      id: queued.id,
+      version: failure.delivery.version,
+      status: "write_back",
+      write_back: "failed",
+      attempts: 1,
+    }, `retry-${randomUUID()}`, new Date().toISOString());
+    assert.equal(flushes, 2);
+    assert.deepEqual(updated, [item.id, item.id]);
+    assert.deepEqual(digestChanges, [true, true]);
+  });
+
+  it("does not allow a delivery retry to bypass unknown acceptance reconciliation", async (t) => {
+    const f = await fixture(t, undefined, { initialStatus: "done" });
+    const now = new Date().toISOString();
+    const uncertain = {
+      ...enqueueWriteBack({
+        org_id: ORG, work_item_id: f.item.id, recipe_id: f.recipe.id, kind: "push",
+        unit_key: f.item.unit_key, payload: { summary: "Completed result" }, now,
+      }),
+      status: "uncertain",
+      last_error: "acceptance unknown",
+    };
+    const saved = await seedTestWorkDelivery(f, uncertain);
+    const item = await f.ports.authority.getWorkItem(ORG, f.item.id);
+    const service = f.service();
+    let flushes = 0;
+    service.flush.flushOne = async () => { flushes += 1; };
+    await assert.rejects(
+      service.retryWorkDelivery(f.item.id, item.version, {
+        id: uncertain.id,
+        version: saved.version,
+        status: uncertain.status,
+        write_back: uncertain.write_back,
+        attempts: uncertain.attempts,
+      }, `retry-${randomUUID()}`, new Date().toISOString()),
+      code("delivery_retry_conflict"),
+    );
+    assert.equal(flushes, 0);
+  });
+
+  it("audits sent and not-sent reconciliation without forging receipts or reviving dismissed work", async (t) => {
+    const makeUncertain = async (fixture, workId, status) => {
+      const item = await fixture.ports.authority.getWorkItem(ORG, workId);
+      assert.equal(item.status, status);
+      const now = new Date().toISOString();
+      const delivery = {
+        ...enqueueWriteBack({
+          org_id: ORG,
+          work_item_id: item.id,
+          recipe_id: fixture.recipe.id,
+          kind: "push",
+          unit_key: item.unit_key,
+          payload: { summary: "Completed result" },
+          now,
+        }),
+        status: "uncertain",
+        last_error: "acceptance unknown",
+      };
+      const saved = await seedTestWorkDelivery(fixture, delivery);
+      return {
+        item,
+        delivery,
+        snapshot: {
+          id: delivery.id,
+          version: saved.version,
+          status: delivery.status,
+          write_back: delivery.write_back,
+          attempts: delivery.attempts,
+        },
+      };
+    };
+
+    const sentFixture = await fixture(t, undefined, { initialStatus: "done" });
+    const sent = await makeUncertain(sentFixture, sentFixture.item.id, "done");
+    const sentUpdates = [];
+    const sentDigestChanges = [];
+    const sentService = sentFixture.service(
+      { workUpdated: (id) => sentUpdates.push(id) },
+      { touchInboxDigest: () => sentDigestChanges.push(true) },
+    );
+    let sentFlushes = 0;
+    sentService.flush.flushOne = async () => { sentFlushes += 1; };
+    const sentCommandId = `reconcile-${randomUUID()}`;
+    const sentIssuedAt = new Date().toISOString();
+    await sentService.reconcileWorkDelivery(
+      sent.item.id, "sent", sent.item.version, sent.snapshot, sentCommandId, sentIssuedAt,
+    );
+    const confirmedSent = await sentFixture.ports.authority.getWorkDelivery(ORG, sent.delivery.id);
+    assert.equal(confirmedSent.status, "acked");
+    assert.equal(confirmedSent.write_back, "sent");
+    assert.equal(confirmedSent.channel_receipt, undefined);
+    assert.equal(sentFlushes, 0);
+    assert.deepEqual(sentUpdates, [sent.item.id]);
+    assert.deepEqual(sentDigestChanges, [true]);
+    sentFixture.reopen();
+    await sentService.reconcileWorkDelivery(
+      sent.item.id, "sent", sent.item.version, sent.snapshot, sentCommandId, sentIssuedAt,
+    );
+    assert.equal(sentFlushes, 0);
+    assert.deepEqual(sentUpdates, [sent.item.id]);
+    assert.deepEqual(sentDigestChanges, [true]);
+    await assert.rejects(
+      sentService.reconcileWorkDelivery(
+        sent.item.id, "not_sent", sent.item.version, sent.snapshot, sentCommandId, sentIssuedAt,
+      ),
+      code("delivery_reconciliation_conflict"),
+    );
+
+    const retryFixture = await fixture(t, undefined, { initialStatus: "done" });
+    const notSent = await makeUncertain(retryFixture, retryFixture.item.id, "done");
+    const retryUpdates = [];
+    const retryDigestChanges = [];
+    const retryService = retryFixture.service(
+      { workUpdated: (id) => retryUpdates.push(id) },
+      { touchInboxDigest: () => retryDigestChanges.push(true) },
+    );
+    let retryFlushes = 0;
+    retryService.flush.flushOne = async () => { retryFlushes += 1; };
+    const retryCommandId = `reconcile-${randomUUID()}`;
+    const retryIssuedAt = new Date().toISOString();
+    await retryService.reconcileWorkDelivery(
+      notSent.item.id, "not_sent", notSent.item.version, notSent.snapshot, retryCommandId, retryIssuedAt,
+    );
+    const queued = await retryFixture.ports.authority.getWorkDelivery(ORG, notSent.delivery.id);
+    assert.equal(queued.status, "queued");
+    assert.equal(queued.idempotency_key, notSent.delivery.idempotency_key);
+    assert.equal(retryFlushes, 1);
+    assert.deepEqual(retryUpdates, [notSent.item.id]);
+    assert.deepEqual(retryDigestChanges, [true]);
+    await retryService.reconcileWorkDelivery(
+      notSent.item.id, "not_sent", notSent.item.version, notSent.snapshot, retryCommandId, retryIssuedAt,
+    );
+    assert.equal(retryFlushes, 1);
+    assert.deepEqual(retryUpdates, [notSent.item.id]);
+    assert.deepEqual(retryDigestChanges, [true]);
+
+    const dismissedFixture = await fixture(t, undefined, { initialStatus: "skipped" });
+    const dismissed = await makeUncertain(dismissedFixture, dismissedFixture.item.id, "skipped");
+    const dismissedService = dismissedFixture.service();
+    let dismissedFlushes = 0;
+    dismissedService.flush.flushOne = async () => { dismissedFlushes += 1; };
+    await dismissedService.reconcileWorkDelivery(
+      dismissed.item.id, "not_sent", dismissed.item.version, dismissed.snapshot,
+      `reconcile-${randomUUID()}`, new Date().toISOString(),
+    );
+    const abandoned = await dismissedFixture.ports.authority.getWorkDelivery(ORG, dismissed.delivery.id);
+    assert.equal(abandoned.status, "acked");
+    assert.equal(abandoned.write_back, "skipped");
+    assert.equal(dismissedFlushes, 0);
+  });
+
   it("rejects a stale manual start before mounting executors or spawning", async (t) => {
     const f = await fixture(t);
     const expectedVersion = (await f.ports.authority.getWorkItem(ORG, f.item.id)).version;
-    await f.ports.authority.putWorkItem({ ...f.item });
-    const current = await f.ports.authority.getWorkItem(ORG, f.item.id);
+    const current = await dismissItem(f.ports.authority, f.item);
     assert.ok(current.version > expectedVersion);
     await assert.rejects(
       submitRun(f.service(), f.item.id, expectedVersion),
@@ -137,6 +693,42 @@ describe("durable executor start", () => {
       code("command_conflict"),
     );
     assert.deepEqual(f.calls, callsAfterFirst);
+  });
+
+  it("publishes an uncertain manual start after the authority checkpoint", async (t) => {
+    const f = await fixture(t);
+    f.setExecutor({
+      executor_type: "session",
+      capabilities: () => ({ start: true }),
+      catalog: () => ({ executor_type: "session", label: { literal: "S" }, fields: [] }),
+      async start() {
+        throw new Error("executor response was lost");
+      },
+    });
+    let committed = false;
+    const checkpointStart = f.ports.authority.checkpointWorkRunStart.bind(f.ports.authority);
+    t.mock.method(f.ports.authority, "checkpointWorkRunStart", async (...args) => {
+      const result = await checkpointStart(...args);
+      committed = result.outcome === "applied";
+      return result;
+    });
+    const updated = [];
+    const digestChanges = [];
+    const service = f.service(
+      { workUpdated: (id) => {
+        assert.equal(committed, true);
+        updated.push(id);
+      } },
+      { touchInboxDigest: () => digestChanges.push(true) },
+    );
+    const item = await f.ports.authority.getWorkItem(ORG, f.item.id);
+
+    await assert.rejects(submitRun(service, item.id, item.version), code("execution_start_uncertain"));
+
+    assert.deepEqual(updated, [item.id]);
+    assert.deepEqual(digestChanges, [true]);
+    const run = await f.ports.authority.getActiveWorkRun(ORG, item.id);
+    assert.equal(run.start_state, "uncertain");
   });
 
   it("captures the source visibility version and rejects a preference change racing reservation", async (t) => {
@@ -401,19 +993,17 @@ describe("durable executor start", () => {
 
   it("does not rewrite a prepared auxiliary snapshot after a pre-reservation exception", async (t) => {
     const f = await preparedAuxiliary(t);
-    const before = await f.ports.authority.putWorkItem({ ...f.prepared.work_item, status: "skipped" });
-    const put = t.mock.method(f.ports.authority, "putWorkItem");
+    const before = await dismissItem(f.ports.authority, f.prepared.work_item);
     const error = new Error("Cannot compose evidence");
     t.mock.method(f.service.dispatch, "startItem", async () => { throw error; });
     await assert.rejects(f.service.startPreparedAuxiliaryExecution(f.prepared, "evidence"), (actual) => actual === error);
-    assert.equal(put.mock.callCount(), 0);
     assert.deepEqual(await f.ports.authority.getWorkItem(ORG, before.id), before);
     assert.deepEqual(await f.ports.authority.listWorkRuns(ORG, before.id), []);
   });
 
   it("leaves unstarted auxiliary work unchanged when capacity is unavailable", async (t) => {
     const f = await preparedAuxiliary(t, 1);
-    const occupied = await f.ports.authority.putWorkItem({
+    const occupied = await createTestWorkItem(f.ports.authority, {
       ...f.prepared.work_item, id: "occupied-auxiliary", unit_key: "occupied-auxiliary",
     });
     assert.equal(await f.ports.authority.claimWorkRunStart({
@@ -424,10 +1014,8 @@ describe("durable executor start", () => {
         created_at: occupied.created_at, updated_at: occupied.updated_at,
       },
     }), true);
-    const put = t.mock.method(f.ports.authority, "putWorkItem");
     await assert.rejects(f.service.startPreparedAuxiliaryExecution(f.prepared, "evidence"), (error) =>
       error.code === "execution_start_conflict" && error.httpStatus === 429);
-    assert.equal(put.mock.callCount(), 0);
     assert.deepEqual(await f.ports.authority.getWorkItem(ORG, f.prepared.work_item.id), f.prepared.work_item);
     assert.deepEqual(await f.ports.authority.listWorkRuns(ORG, f.prepared.work_item.id), []);
     assert.equal(f.calls.spawn, 0);
@@ -437,9 +1025,7 @@ describe("durable executor start", () => {
     const f = await preparedAuxiliary(t);
     const first = await f.service.startPreparedAuxiliaryExecution(f.prepared, "first");
     const before = await f.ports.authority.getWorkItem(ORG, first.work_item.id);
-    const put = t.mock.method(f.ports.authority, "putWorkItem");
     await assert.rejects(f.service.startPreparedAuxiliaryExecution(f.prepared, "duplicate"), code("execution_start_conflict"));
-    assert.equal(put.mock.callCount(), 0);
     assert.deepEqual(await f.ports.authority.getWorkItem(ORG, before.id), before);
     assert.equal((await f.ports.authority.listWorkRuns(ORG, before.id)).length, 1);
     assert.equal(f.calls.spawn, 1);
@@ -448,7 +1034,7 @@ describe("durable executor start", () => {
 
   it("does not recover unrelated history after an auxiliary reservation failure", async (t) => {
     const f = await preparedAuxiliary(t);
-    await f.ports.authority.putWorkRun({
+    await seedTestWorkRun(f, {
       id: "unowned-history", org_id: ORG, work_item_id: f.prepared.work_item.id,
       recipe_id: f.prepared.recipe.id, executor_type: "session",
       status: "running", start_state: "uncertain",
@@ -478,7 +1064,7 @@ describe("durable executor start", () => {
   it("recovers the exact submitted auxiliary attempt after finalization fails", async (t) => {
     const f = await preparedAuxiliary(t);
     t.mock.method(f.service.supervise, "applyHandle", async () => {
-      await f.ports.authority.putWorkRun({
+      await seedTestWorkRun(f, {
         id: "newer-unowned-history", org_id: ORG, work_item_id: f.prepared.work_item.id,
         recipe_id: f.prepared.recipe.id, executor_type: "session", status: "completed",
         result: { summary: "Not this invocation" },
@@ -501,20 +1087,17 @@ describe("durable executor start", () => {
 
   it("preserves definite auxiliary startup failure without a fallback item rewrite", async (t) => {
     const f = await preparedAuxiliary(t);
-    const put = t.mock.method(f.ports.authority, "putWorkItem");
     f.hooks.spawn = async () => { throw new PersonalConnectorError("no_sender", "No sender", 400); };
     await assert.rejects(f.service.startPreparedAuxiliaryExecution(f.prepared, "evidence"), code("no_sender"));
     const item = await f.ports.authority.getWorkItem(ORG, f.prepared.work_item.id);
     const run = await f.ports.authority.getWorkRun(ORG, item.current_run_id);
     assert.equal(item.status, "failed");
     assert.equal(run.status, "failed");
-    assert.equal(put.mock.callCount(), 0);
   });
 
   it("preserves the atomic auxiliary preflight failure without changing the prior pointer", async (t) => {
     const f = await preparedAuxiliary(t);
     f.setExecutor(undefined);
-    const put = t.mock.method(f.ports.authority, "putWorkItem");
     await assert.rejects(f.service.startPreparedAuxiliaryExecution(f.prepared, "evidence"), code("invalid_config"));
     const item = await f.ports.authority.getWorkItem(ORG, f.prepared.work_item.id);
     const [run] = await f.ports.authority.listWorkRuns(ORG, item.id);
@@ -522,7 +1105,6 @@ describe("durable executor start", () => {
     assert.equal(item.current_run_id, undefined);
     assert.equal(item.version, f.prepared.work_item.version + 1);
     assert.equal(run.status, "failed");
-    assert.equal(put.mock.callCount(), 0);
   });
 
   it("does not recover a reserved auxiliary run after a successor replaced it", async (t) => {
@@ -530,11 +1112,11 @@ describe("durable executor start", () => {
     const error = new Error("Old attempt finalization failed");
     let successorItem;
     t.mock.method(f.service.supervise, "applyHandle", async (item, recipe, run) => {
-      await f.ports.authority.putWorkRun({ ...run, status: "completed", result: { summary: "Old attempt" } });
-      const done = await f.ports.authority.putWorkItem({ ...item, status: "done" });
+      const { item: done } = await observeRun(f.ports.authority, item, run, "completed", { summary: "Old attempt" });
       assert.equal(await f.ports.authority.claimWorkRunStart({
         expected_item: done, retry: "manual",
-        run: { ...run, id: "auxiliary-replacement", status: "running", start_state: "pending" },
+        run: { ...run, id: "auxiliary-replacement", status: "running", start_state: "pending",
+          external_run_id: undefined, agent_thread_id: undefined, version: 0, result: undefined },
       }), true);
       successorItem = await f.ports.authority.getWorkItem(ORG, item.id);
       throw error;
@@ -549,8 +1131,7 @@ describe("durable executor start", () => {
   it("returns an auxiliary result already committed before a post-observation exception", async (t) => {
     const f = await preparedAuxiliary(t);
     t.mock.method(f.service.supervise, "applyHandle", async (item, recipe, run) => {
-      await f.ports.authority.putWorkRun({ ...run, status: "completed", result: { summary: "Committed result" } });
-      await f.ports.authority.putWorkItem({ ...item, status: "done" });
+      await observeRun(f.ports.authority, item, run, "completed", { summary: "Committed result" });
       throw new Error("Notification unavailable");
     });
     const started = await f.service.startPreparedAuxiliaryExecution(f.prepared, "evidence");
@@ -564,11 +1145,11 @@ describe("durable executor start", () => {
   it("rejects a changed current pointer when returning an otherwise successful auxiliary start", async (t) => {
     const f = await preparedAuxiliary(t);
     const first = await f.service.startPreparedAuxiliaryExecution(f.prepared, "evidence");
-    await f.ports.authority.putWorkRun({ ...first.run, status: "completed", result: { summary: "Done" } });
-    const done = await f.ports.authority.putWorkItem({ ...first.work_item, status: "done" });
+    const { item: done } = await observeRun(f.ports.authority, first.work_item, first.run, "completed", { summary: "Done" });
     assert.equal(await f.ports.authority.claimWorkRunStart({
       expected_item: done, retry: "manual",
-      run: { ...first.run, id: "return-successor", status: "running", start_state: "pending" },
+      run: { ...first.run, id: "return-successor", status: "running", start_state: "pending",
+        external_run_id: undefined, agent_thread_id: undefined, version: 0, result: undefined },
     }), true);
     const successor = await f.ports.authority.getWorkItem(ORG, done.id);
     t.mock.method(f.service.dispatch, "startItem", async () => first.run);
@@ -589,6 +1170,166 @@ describe("durable executor start", () => {
     assert.equal(result.run.start_state, "pending");
     assert.equal(f.calls.spawn, 0);
     assert.equal(f.calls.stdin, 0);
+  });
+
+  for (const driver of ["direct", "writer RPC", "postgres"]) {
+    for (const claimJob of [false, true]) {
+      it(`recovers ${claimJob ? "an expired claimed" : "a pending"} cancellation after a ${driver} process is killed after commit`, {
+        skip: driver === "postgres" && !process.env.TEST_DATABASE_URL?.trim(),
+        timeout: driver === "postgres" ? 90_000 : 30_000,
+      }, async (t) => {
+        const f = await fixture(t, undefined, { withTrigger: true, postgres: driver === "postgres" });
+        const authority = f.ports.authority;
+        const now = new Date().toISOString();
+        const initialRun = {
+          id: "run-crash-recovery", org_id: ORG, work_item_id: f.item.id,
+          recipe_id: f.recipe.id, executor_type: "session", status: "running",
+          start_state: "pending", write_back_required: false, trigger_kind: "push",
+          created_at: now, updated_at: now,
+        };
+        assert.equal(await authority.claimWorkRunStart({ expected_item: f.item, run: initialRun }), true);
+        const submitted = await authority.checkpointWorkRunStart({
+          expected_item: await authority.getWorkItem(ORG, f.item.id),
+          expected_run: await authority.getWorkRun(ORG, initialRun.id),
+          kind: "submitted", external_run_id: "test:crash-execution", now,
+        });
+        assert.equal(submitted.outcome, "applied");
+        const disposition = await authority.getDisposition(f.item.head_event_id);
+        const command = {
+          expected_item: submitted.item, expected_version: submitted.item.version,
+          command_id: "dismiss-before-crash", issued_at: now, now,
+        };
+        await authority.close();
+        f.ports.authority = undefined;
+        let committed;
+        try {
+          committed = await crashAfterCommittedDismissal(f.path, driver, command, claimJob, f.postgresUrl);
+        } finally {
+          f.ports.authority = driver === "postgres"
+            ? await PostgresAuthorityStore.open(f.postgresUrl, { migrate: false })
+            : new SqliteAuthorityStore(f.path);
+        }
+        const recovered = f.ports.authority;
+        const item = await recovered.getWorkItem(ORG, f.item.id);
+        assert.equal(item.status, "skipped");
+        assert.equal(item.version, submitted.item.version + 1);
+        assert.equal(item.current_run_id, submitted.run.id);
+        assert.deepEqual(await recovered.getWorkRun(ORG, submitted.run.id), submitted.run);
+        assert.deepEqual(await recovered.getDisposition(f.item.head_event_id), disposition);
+        const pref = await recovered.getConversationPref(ORG, item.thread_id);
+        assert.equal(pref.hidden, true);
+        assert.equal(pref.hidden_reason, "policy");
+        assert.equal(pref.visibility_version, submitted.item.visibility_intent_version);
+        const [job] = await recovered.listCancellationJobs(ORG);
+        assert.equal(job.id, committed.job.id);
+        assert.equal(job.run_id, submitted.run.id);
+        assert.equal(job.status, claimJob ? "running" : "pending");
+        assert.equal(job.attempts, claimJob ? 1 : 0);
+        if (claimJob) {
+          const remaining = Date.parse(job.lease_expires_at) - Date.now();
+          if (remaining >= 0) await new Promise((resolve) => setTimeout(resolve, remaining + 1));
+          assert.ok(Date.parse(job.lease_expires_at) <= Date.now());
+        }
+        let cancellations = 0;
+        f.setExecutor({
+          executor_type: "session", capabilities: () => ({}),
+          cancel: async (target) => {
+            cancellations++;
+            assert.equal(target.id, submitted.run.id);
+            assert.equal(target.external_run_id, submitted.run.external_run_id);
+            return { status: "cancelled", external_run_id: target.external_run_id };
+          },
+        });
+        const updates = [];
+        let digestChanges = 0;
+        const service = f.service(
+          { workUpdated: (id) => updates.push(id) },
+          { touchInboxDigest: () => { digestChanges++; } },
+        );
+        service.channel = f.channel;
+        await service.drainCancellationJobs();
+        const [settled] = await recovered.listCancellationJobs(ORG);
+        assert.equal(settled.id, job.id);
+        assert.equal(settled.status, "succeeded");
+        assert.equal(settled.outcome_code, "observed_cancelled");
+        assert.equal(settled.attempts, claimJob ? 2 : 1);
+        assert.equal((await recovered.getWorkRun(ORG, submitted.run.id)).status, "cancelled");
+        assert.deepEqual(await recovered.getWorkItem(ORG, f.item.id), item);
+        assert.deepEqual(updates, [item.id]);
+        assert.equal(digestChanges, 1);
+        assert.equal((await recovered.dismissWorkItem(command)).outcome, "replayed");
+        if (claimJob) {
+          assert.equal(await recovered.settleCancellationJob({
+            kind: "failed", org_id: ORG, id: job.id, owner: "crashed-worker",
+            claim_token: committed.job.claim_token, now: new Date().toISOString(),
+            next_retry_at: new Date().toISOString(), error_code: "late_worker", error: "Late worker",
+          }), false);
+        }
+        await service.drainCancellationJobs();
+        await f.dispatch().fillOpenSlots();
+        await f.supervise().refreshRuns();
+        assert.equal(cancellations, 1);
+        assert.equal(f.calls.spawn, 0);
+        assert.equal(f.calls.stdin, 0);
+        assert.equal(f.calls.attach, 0);
+        assert.equal((await recovered.listWorkRuns(ORG, item.id)).length, 1);
+        assert.equal(await recovered.getWorkDeliveryByItem(ORG, item.id), null);
+        assert.deepEqual(await recovered.listCancellationJobs(ORG), [settled]);
+        assert.deepEqual(await recovered.getConversationPref(ORG, item.thread_id), pref);
+      });
+    }
+  }
+
+  it("recovers cancellation after restart when dismissal wins before the identity checkpoint", async (t) => {
+    const f = await fixture(t);
+    const checkpoint = f.ports.authority.checkpointWorkRunStart.bind(f.ports.authority);
+    t.mock.method(f.ports.authority, "checkpointWorkRunStart", async (input) => {
+      if (input.kind === "bound") {
+        const dismissed = await f.ports.authority.dismissWorkItem({
+          expected_item: input.expected_item,
+          now: new Date().toISOString(),
+        });
+        assert.equal(dismissed.outcome, "applied");
+      }
+      return checkpoint(input);
+    });
+
+    await assert.rejects(
+      f.dispatch().startItem(f.item, f.recipe, "evidence", "manual"),
+      code("execution_recovery_pending"),
+    );
+
+    const item = await f.ports.authority.getWorkItem(ORG, f.item.id);
+    const run = await f.ports.authority.getWorkRun(ORG, item.current_run_id);
+    const [job] = await f.ports.authority.listCancellationJobs(ORG);
+    assert.equal(item.status, "skipped");
+    assert.equal(run.start_state, "submitted");
+    assert.equal(run.external_run_id, "dsh:session-1");
+    assert.equal(job.run_id, run.id);
+    assert.equal(job.status, "pending");
+    assert.equal(f.calls.spawn, 1);
+    assert.equal(f.calls.stdin, 0);
+
+    f.reopen();
+    let cancelCalls = 0;
+    f.setExecutor({
+      executor_type: "session", capabilities: () => ({}),
+      cancel: async (target) => {
+        cancelCalls++;
+        assert.equal(target.external_run_id, "dsh:session-1");
+        return { status: "cancelled", external_run_id: target.external_run_id };
+      },
+    });
+    const service = f.service();
+    service.channel = f.channel;
+    await service.drainCancellationJobs();
+
+    const [settledJob] = await f.ports.authority.listCancellationJobs(ORG);
+    assert.equal(settledJob.status, "succeeded");
+    assert.equal(settledJob.outcome_code, "observed_cancelled");
+    assert.equal(cancelCalls, 1);
+    assert.equal((await f.ports.authority.getWorkRun(ORG, run.id)).status, "cancelled");
+    assert.equal((await f.ports.authority.getWorkItem(ORG, item.id)).status, "skipped");
   });
 
   it("shows a locally stopped answer in the initial response when cancellation wins startup", async (t) => {
@@ -621,7 +1362,7 @@ describe("durable executor start", () => {
     const recipe = await f.ports.authority.putRecipe({
       ...f.recipe, id: "system:search-answer:session", trigger: { kind: "manual" },
     });
-    const initial = await f.ports.authority.putWorkItem({
+    const initial = await createTestWorkItem(f.ports.authority, {
       ...f.item, id: "search-answer:auxiliary", recipe_id: recipe.id,
       thread_id: "system:search-answer:auxiliary", unit_key: "auxiliary",
       created_at: now, updated_at: now,
@@ -632,12 +1373,16 @@ describe("durable executor start", () => {
       write_back_required: false, trigger_kind: "manual", created_at: now, updated_at: now,
     };
     assert.equal(await f.ports.authority.claimWorkRunStart({ run, expected_item: initial }), true);
-    const savedRun = unstarted
-      ? await f.ports.authority.getWorkRun(ORG, run.id)
-      : await f.ports.authority.putWorkRun({
-        ...run, start_state: "submitted", external_run_id: "remote-auxiliary",
-      });
     const item = await f.ports.authority.getWorkItem(ORG, initial.id);
+    let savedRun = await f.ports.authority.getWorkRun(ORG, run.id);
+    if (!unstarted) {
+      const submitted = await f.ports.authority.checkpointWorkRunStart({
+        expected_item: item, expected_run: savedRun, kind: "submitted",
+        external_run_id: "remote-auxiliary", now,
+      });
+      assert.equal(submitted.outcome, "applied");
+      savedRun = submitted.run;
+    }
     const updates = [];
     const service = f.service({ workUpdated: (id) => updates.push(id) });
     service.channel = f.channel;
@@ -657,20 +1402,21 @@ describe("durable executor start", () => {
 
   it("atomically stops auxiliary work before remote cancellation without forging its exit", async (t) => {
     const f = await auxiliary(t);
-    const put = t.mock.method(f.ports.authority, "putWorkRun");
     const result = await f.service.cancelAuxiliaryExecution(f.item.id);
+    const job = await waitForCancellationJob(f.ports.authority, f.run.id);
+    assert.equal(job.status, "succeeded");
     assert.equal(result.work_item.status, "skipped");
     assert.equal(result.work_item.version, f.item.version + 1);
     assert.deepEqual(result.run, f.run);
-    assert.equal(put.mock.callCount(), 0);
     assert.equal(f.cancelCalls(), 1);
-    assert.deepEqual(f.updates, [f.item.id]);
+    assert.deepEqual(f.updates, [f.item.id, f.item.id]);
     const repeated = await f.service.cancelAuxiliaryExecution(f.item.id);
-    assert.deepEqual(repeated, result);
+    assert.equal(repeated.work_item.status, "skipped");
+    assert.equal(repeated.run.status, "completed");
     assert.equal(f.cancelCalls(), 1);
-    assert.deepEqual(f.updates, [f.item.id]);
+    assert.deepEqual(f.updates, [f.item.id, f.item.id]);
     f.reopen();
-    assert.deepEqual(await f.ports.authority.getWorkRun(ORG, f.run.id), f.run);
+    assert.equal((await f.ports.authority.getWorkRun(ORG, f.run.id)).status, "completed");
     const refreshed = await f.service.refreshAuxiliaryExecution(f.item.id);
     assert.equal(refreshed.work_item.status, "skipped");
     assert.equal(refreshed.run.status, "completed");
@@ -684,11 +1430,11 @@ describe("durable executor start", () => {
     const dismiss = f.ports.authority.dismissWorkItem.bind(f.ports.authority);
     let successor;
     t.mock.method(f.ports.authority, "dismissWorkItem", async (input) => {
-      await f.ports.authority.putWorkRun({ ...f.run, status: "completed", result: { summary: "Original completed" } });
-      const done = await f.ports.authority.putWorkItem({ ...f.item, status: "done" });
+      const { item: done } = await observeRun(f.ports.authority, f.item, f.run, "completed", { summary: "Original completed" });
       assert.equal(await f.ports.authority.claimWorkRunStart({
         expected_item: done, retry: "manual",
-        run: { ...f.run, id: "auxiliary-successor", status: "running", start_state: "pending" },
+        run: { ...f.run, id: "auxiliary-successor", status: "running", start_state: "pending",
+          external_run_id: undefined, agent_thread_id: undefined, version: 0, result: undefined },
       }), true);
       successor = await f.ports.authority.getWorkItem(ORG, f.item.id);
       return dismiss(input);
@@ -711,7 +1457,7 @@ describe("durable executor start", () => {
 
   it("returns the exact current auxiliary run rather than the newest history timestamp", async (t) => {
     const f = await auxiliary(t);
-    await f.ports.authority.putWorkRun({
+    await seedTestWorkRun(f, {
       ...f.run, id: "unrelated-newer-history", status: "failed",
       updated_at: new Date(Date.now() + 60_000).toISOString(),
     });
@@ -731,8 +1477,7 @@ describe("durable executor start", () => {
     const dismiss = f.ports.authority.dismissWorkItem.bind(f.ports.authority);
     let done;
     t.mock.method(f.ports.authority, "dismissWorkItem", async (input) => {
-      await f.ports.authority.putWorkRun({ ...f.run, status: "completed", result: { summary: "Finished before timeout" } });
-      done = await f.ports.authority.putWorkItem({ ...f.item, status: "done" });
+      done = (await observeRun(f.ports.authority, f.item, f.run, "completed", { summary: "Finished before timeout" })).item;
       return dismiss(input);
     });
     await f.service.expireSearchAnswers(Date.now());
@@ -751,7 +1496,7 @@ describe("durable executor start", () => {
     const get = f.ports.authority.getWorkItem.bind(f.ports.authority);
     let updated;
     t.mock.method(f.ports.authority, "getWorkItem", async (orgId, itemId) => {
-      updated = await f.ports.authority.putWorkItem({ ...f.item, status: "waiting_human" });
+      updated = (await observeRun(f.ports.authority, f.item, f.run, "waiting_human")).item;
       return get(orgId, itemId);
     });
     await f.service.expireSearchAnswers(Date.now());
@@ -781,6 +1526,8 @@ describe("durable executor start", () => {
     });
     const put = t.mock.method(f.ports.authority, "putSearchAnswer");
     await f.service.expireSearchAnswers(Date.now());
+    const job = await waitForCancellationJob(f.ports.authority, f.run.id);
+    assert.equal(job.status, "failed");
     assert.equal(cancelled, 1);
     assert.equal(put.mock.callCount(), 0);
     assert.equal((await f.ports.authority.getSearchAnswer(ORG, record.id)).outcome, "timed_out");
@@ -853,14 +1600,20 @@ describe("durable executor start", () => {
     const dismiss = f.ports.authority.dismissWorkItem.bind(f.ports.authority);
     let changed;
     t.mock.method(f.ports.authority, "dismissWorkItem", async (input) => {
-      changed = await f.ports.authority.putWorkItem(input.expected_item);
+      const current = await f.ports.authority.getWorkItem(ORG, input.expected_item.id);
+      const run = await f.ports.authority.getActiveWorkRun(ORG, current.id);
+      changed = (await observeRun(
+        f.ports.authority, current, run, "completed", { summary: "Completed before dismissal" },
+      )).item;
       return dismiss(input);
     });
     const run = (await f.ports.authority.listWorkRuns(ORG, f.item.id))[0];
     const expectedVersion = (await f.ports.authority.getWorkItem(ORG, f.item.id)).version;
     await assert.rejects(submitDismissal(f.service(), f.item.id, expectedVersion), code("work_dismissal_conflict"));
     assert.deepEqual(await f.ports.authority.getWorkItem(ORG, f.item.id), changed);
-    assert.deepEqual(await f.ports.authority.getWorkRun(ORG, run.id), run);
+    const changedRun = await f.ports.authority.getWorkRun(ORG, run.id);
+    assert.equal(changedRun.status, "completed");
+    assert.equal(changedRun.result.summary, "Completed before dismissal");
     assert.equal(cancelCalls, 0);
   });
 
@@ -881,7 +1634,15 @@ describe("durable executor start", () => {
     service.channel = f.channel;
     const expectedVersion = (await f.ports.authority.getWorkItem(ORG, f.item.id)).version;
     const result = await submitDismissal(service, f.item.id, expectedVersion);
+    let jobs;
+    for (let attempt = 0; attempt < 100; attempt++) {
+      jobs = await f.ports.authority.listCancellationJobs(ORG);
+      if (jobs[0]?.status === "failed") break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
     assert.equal(cancelledId, run.id);
+    assert.equal(jobs.length, 1);
+    assert.equal(jobs[0].status, "failed");
     assert.equal(result.work_item.status, "skipped");
     assert.deepEqual(result.run, run);
     assert.deepEqual(await f.ports.authority.getWorkRun(ORG, run.id), run);
@@ -893,11 +1654,100 @@ describe("durable executor start", () => {
     assert.deepEqual(await f.ports.authority.getWorkRun(ORG, run.id), run);
   });
 
+  it("records a cancelled run only when the executor confirms its terminal state", async (t) => {
+    const f = await fixture(t);
+    await f.dispatch().startItem(f.item, f.recipe, "evidence");
+    const run = (await f.ports.authority.listWorkRuns(ORG, f.item.id))[0];
+    let statusCalls = 0;
+    f.setExecutor({
+      executor_type: "session", capabilities: () => ({}),
+      cancel: async () => ({ status: "cancelled", external_run_id: run.external_run_id }),
+      status: async () => {
+        statusCalls++;
+        throw new Error("Status should not be queried after a terminal cancel response");
+      },
+    });
+    const service = f.service();
+    service.channel = f.channel;
+    await submitDismissal(
+      service, f.item.id, (await f.ports.authority.getWorkItem(ORG, f.item.id)).version,
+    );
+    const job = await waitForCancellationJob(f.ports.authority, run.id);
+    assert.equal(job.status, "succeeded");
+    assert.equal(job.outcome_code, "observed_cancelled");
+    assert.equal(statusCalls, 0);
+    assert.equal((await f.ports.authority.getWorkRun(ORG, run.id)).status, "cancelled");
+  });
+
+  it("verifies a void cancellation response by querying the executor before recording completion", async (t) => {
+    const f = await fixture(t);
+    await f.dispatch().startItem(f.item, f.recipe, "evidence");
+    const run = (await f.ports.authority.listWorkRuns(ORG, f.item.id))[0];
+    f.setExecutor({
+      executor_type: "session", capabilities: () => ({}),
+      cancel: async () => undefined,
+      status: async () => ({
+        status: "completed", external_run_id: run.external_run_id,
+        result: { summary: "Completed while cancellation raced" },
+      }),
+    });
+    const service = f.service();
+    service.channel = f.channel;
+    await submitDismissal(
+      service, f.item.id, (await f.ports.authority.getWorkItem(ORG, f.item.id)).version,
+    );
+    const job = await waitForCancellationJob(f.ports.authority, run.id);
+    assert.equal(job.status, "succeeded");
+    assert.equal(job.outcome_code, "observed_completed");
+    const savedRun = await f.ports.authority.getWorkRun(ORG, run.id);
+    assert.equal(savedRun.status, "completed");
+    assert.equal(savedRun.result.summary, "Completed while cancellation raced");
+    assert.equal((await f.ports.authority.getWorkItem(ORG, f.item.id)).status, "skipped");
+  });
+
+  it("processes a claimed cancellation batch concurrently so every lease can be renewed", async (t) => {
+    const f = await fixture(t);
+    await f.dispatch().startItem(f.item, f.recipe, "evidence");
+    const secondItem = {
+      ...f.item, id: "work-2", unit_key: "task-2",
+    };
+    await createTestWorkItem(f.ports.authority, secondItem);
+    await f.dispatch().startItem(secondItem, f.recipe, "evidence");
+    const runs = await f.ports.authority.listWorkRuns(ORG);
+    let active = 0;
+    let maxActive = 0;
+    f.setExecutor({
+      executor_type: "session", capabilities: () => ({}),
+      cancel: async (target) => {
+        active++;
+        maxActive = Math.max(maxActive, active);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        active--;
+        return { status: "cancelled", external_run_id: target.external_run_id };
+      },
+    });
+    const service = f.service();
+    service.channel = f.channel;
+    const drain = service.drainCancellationJobs.bind(service);
+    t.mock.method(service, "drainCancellationJobs", async () => {});
+    await Promise.all([f.item, secondItem].map(async (item) => {
+      const current = await f.ports.authority.getWorkItem(ORG, item.id);
+      await submitDismissal(service, item.id, current.version);
+    }));
+    await drain();
+    assert.equal(maxActive, 2);
+    for (const run of runs) {
+      assert.equal((await f.ports.authority.getWorkRun(ORG, run.id)).status, "cancelled");
+    }
+    assert.deepEqual((await f.ports.authority.listCancellationJobs(ORG))
+      .map((job) => job.status), ["succeeded", "succeeded"]);
+  });
+
   it("does not fold a dismissed conversation with unresolved delivery acceptance", async (t) => {
     const f = await fixture(t);
     const { enqueueWriteBack } = require("@regenic/domain");
     await f.dispatch().startItem(f.item, f.recipe, "evidence");
-    const delivery = await f.ports.authority.putWorkDelivery(enqueueWriteBack({
+    const delivery = await seedTestWorkDelivery(f, enqueueWriteBack({
       org_id: ORG, work_item_id: f.item.id, recipe_id: f.recipe.id, kind: "push",
       unit_key: f.item.unit_key, payload: { summary: "Previous result" }, now: f.item.created_at,
     }));
@@ -936,13 +1786,14 @@ describe("durable executor start", () => {
     assert.equal(result.run.start_state, "pending");
     assert.equal(result.run.external_run_id, undefined);
     assert.equal(cancelCalls, 0);
+    assert.deepEqual(await f.ports.authority.listCancellationJobs(ORG), []);
     assert.equal((await f.ports.authority.getWorkRun(ORG, run.id)).version, 0);
   });
 
   it("rebinds a settled trial only in the start claim and freezes its call-scoped keep-local decision", async (t) => {
-    const f = await fixture(t);
+    const f = await fixture(t, undefined, { initialStatus: "done" });
     const oldRecipe = await f.ports.authority.putRecipe({ ...f.recipe, id: "old-rule" });
-    const oldItem = await f.ports.authority.putWorkItem({
+    const oldItem = await seedTestWorkItem(f, {
       ...f.item, recipe_id: oldRecipe.id, status: "done",
     });
     const recipe = await f.ports.authority.putRecipe({ ...f.recipe, can_write_back: true });
@@ -950,9 +1801,7 @@ describe("durable executor start", () => {
     supervisor.setWriteBackOverride(oldItem.id, true);
     const service = f.service();
     service.dispatch = f.dispatch(supervisor);
-    const put = t.mock.method(f.ports.authority, "putWorkItem");
     const result = await service.tryRecipe(recipe.id, { thread_id: oldItem.thread_id, write_back: false });
-    assert.equal(put.mock.callCount(), 0);
     assert.equal(result.work_item.id, oldItem.id);
     assert.equal(result.work_item.version, oldItem.version + 1);
     assert.equal(result.work_item.recipe_id, recipe.id);
@@ -962,6 +1811,25 @@ describe("durable executor start", () => {
     await f.supervise().refreshRuns();
     assert.equal(await f.ports.authority.getWorkDeliveryByItem(ORG, oldItem.id), null);
     assert.equal((await f.ports.authority.getWorkRun(ORG, result.run.id)).write_back_required, false);
+  });
+
+  it("does not start a trial when atomic work-item preparation loses a race", async (t) => {
+    const f = await fixture(t);
+    const recipe = await f.ports.authority.putRecipe({
+      ...f.recipe, match: { record_class: "utterance" },
+    });
+    const create = t.mock.method(f.ports.authority, "createWorkItem", async () => ({
+      outcome: "conflict", reason: "work_exists",
+    }));
+    const service = f.service();
+    service.dispatch = f.dispatch();
+    await assert.rejects(service.tryRecipe(recipe.id, { thread_id: "dsh:new-trial-thread" }),
+      code("conflict"));
+    assert.equal(create.mock.callCount(), 1);
+    assert.equal(create.mock.calls[0].arguments[0].expected_recipe.id, recipe.id);
+    assert.equal(f.calls.spawn, 0);
+    assert.equal((await f.ports.authority.listWorkItems(ORG)).length, 1);
+    assert.equal((await f.ports.authority.listWorkRuns(ORG)).length, 0);
   });
 
   it("flushes only the immediately completed trial's own frozen delivery", async (t) => {
@@ -994,15 +1862,15 @@ describe("durable executor start", () => {
   });
 
   it("does not rebind or reopen a trial sample ignored after it was selected", async (t) => {
-    const f = await fixture(t);
-    const sample = await f.ports.authority.putWorkItem({ ...f.item, recipe_id: undefined, status: "failed" });
+    const f = await fixture(t, undefined, { initialStatus: "failed" });
+    const sample = await seedTestWorkItem(f, { ...f.item, recipe_id: undefined, status: "failed" });
     const claim = f.ports.authority.claimWorkRunStart.bind(f.ports.authority);
     let ignored;
     t.mock.method(f.ports.authority, "claimWorkRunStart", async (input) => {
       assert.equal(input.expected_item.id, sample.id);
       assert.equal(input.expected_item.recipe_id, undefined);
       assert.equal(input.rebind, "manual");
-      ignored = await f.ports.authority.putWorkItem({ ...sample, status: "skipped" });
+      ignored = await dismissItem(f.ports.authority, sample);
       return claim(input);
     });
     const service = f.service();
@@ -1015,10 +1883,9 @@ describe("durable executor start", () => {
   });
 
   it("does not abandon an earlier queued delivery to make a new trial startable", async (t) => {
-    const f = await fixture(t);
-    const { enqueueWriteBack } = require("@regenic/domain");
-    const sample = await f.ports.authority.putWorkItem({ ...f.item, status: "done" });
-    const delivery = await f.ports.authority.putWorkDelivery(enqueueWriteBack({
+    const f = await fixture(t, undefined, { initialStatus: "done" });
+    const sample = f.item;
+    const delivery = await seedTestWorkDelivery(f, enqueueWriteBack({
       org_id: ORG, work_item_id: sample.id, recipe_id: f.recipe.id, kind: "push",
       unit_key: sample.unit_key, payload: { summary: "Previous result" }, now: sample.updated_at,
     }));
@@ -1033,8 +1900,8 @@ describe("durable executor start", () => {
   });
 
   it("preserves the trial sample binding when another run wins the reservation", async (t) => {
-    const f = await fixture(t);
-    const sample = await f.ports.authority.putWorkItem({ ...f.item, status: "failed" });
+    const f = await fixture(t, undefined, { initialStatus: "failed" });
+    const sample = f.item;
     const claim = f.ports.authority.claimWorkRunStart.bind(f.ports.authority);
     let winner;
     t.mock.method(f.ports.authority, "claimWorkRunStart", async (input) => {
@@ -1053,22 +1920,20 @@ describe("durable executor start", () => {
 
   async function failedWork(f) {
     const now = new Date(Date.now() - 3_600_000).toISOString();
-    await f.ports.authority.putWorkRun({
+    await seedTestWorkRun(f, {
       id: "failed-run", org_id: ORG, work_item_id: f.item.id, recipe_id: f.recipe.id,
       executor_type: "session", status: "failed", result: { summary: "Failed" },
       created_at: now, updated_at: now,
     });
-    return f.ports.authority.putWorkItem({ ...f.item, status: "failed", updated_at: now });
+    return seedTestWorkItem(f, { ...f.item, updated_at: now });
   }
 
   it("automatically retries failed work without first reopening it", async (t) => {
-    const f = await fixture(t);
+    const f = await fixture(t, undefined, { initialStatus: "failed" });
     const failed = await failedWork(f);
     const before = await f.ports.authority.getWorkRun(ORG, "failed-run");
-    const put = t.mock.method(f.ports.authority, "putWorkItem");
     await f.dispatch().retryOrResume(failed, f.recipe, "evidence");
     assert.equal(f.calls.spawn, 1);
-    assert.equal(put.mock.callCount(), 0);
     const item = await f.ports.authority.getWorkItem(ORG, f.item.id);
     assert.equal(item.status, "running");
     assert.equal(item.version, failed.version + 1);
@@ -1076,15 +1941,42 @@ describe("durable executor start", () => {
     assert.deepEqual(await f.ports.authority.getWorkRun(ORG, before.id), before);
   });
 
+  it("keeps legacy failed items without a current-run pointer eligible for automatic retry", async (t) => {
+    const f = await fixture(t, undefined, { initialStatus: "failed" });
+    const failed = await failedWork(f);
+    assert.equal(failed.current_run_id, undefined);
+    assert.equal(failed.acknowledged_run_id, undefined);
+
+    await f.dispatch().fillOpenSlots();
+
+    assert.equal(f.calls.spawn, 1);
+    const retried = await f.ports.authority.getWorkItem(ORG, failed.id);
+    assert.equal(retried.status, "running");
+    assert.notEqual(retried.current_run_id, undefined);
+    assert.equal(retried.acknowledged_run_id, undefined);
+  });
+
+  it("does not automatically retry the exact failed run after it was acknowledged", async (t) => {
+    const f = await fixture(t, undefined, { initialStatus: "failed" });
+    const failed = await failedWork(f);
+    t.mock.method(f.ports.authority, "listWorkItems", async () => [{
+      ...failed, current_run_id: "failed-run", acknowledged_run_id: "failed-run",
+    }]);
+
+    await f.dispatch().fillOpenSlots();
+
+    assert.equal(f.calls.spawn, 0);
+  });
+
   for (const mode of ["automatic", "manual"]) {
     it(`does not undo a concurrent ignore at ${mode} retry reservation`, async (t) => {
-      const f = await fixture(t);
+      const f = await fixture(t, undefined, { initialStatus: "failed" });
       const failed = await failedWork(f);
       const claim = f.ports.authority.claimWorkRunStart.bind(f.ports.authority);
       let ignored;
       t.mock.method(f.ports.authority, "claimWorkRunStart", async (input) => {
         assert.equal(input.expected_item.status, "failed");
-        ignored = await f.ports.authority.putWorkItem({ ...failed, status: "skipped" });
+        ignored = await dismissItem(f.ports.authority, failed);
         return claim(input);
       });
       if (mode === "automatic") {
@@ -1104,11 +1996,19 @@ describe("durable executor start", () => {
   }
 
   it("keeps a failed item failed when an automatic retry has no capacity", async (t) => {
-    const f = await fixture(t, 1);
+    const f = await fixture(t, 1, { initialStatus: "failed" });
     const failed = await failedWork(f);
-    await f.ports.authority.putWorkItem({
-      ...f.item, id: "occupied", unit_key: "occupied", status: "running",
-    });
+    const occupied = await createTestWorkItem(f.ports.authority, {
+      ...f.item, id: "occupied", unit_key: "occupied", status: "open",
+    }, f.recipe);
+    assert.equal(await f.ports.authority.claimWorkRunStart({
+      expected_item: occupied,
+      run: {
+        id: "occupied-run", org_id: ORG, work_item_id: occupied.id, recipe_id: occupied.recipe_id,
+        executor_type: "session", status: "running", start_state: "pending",
+        created_at: occupied.created_at, updated_at: occupied.updated_at,
+      },
+    }), true);
     await f.dispatch().retryOrResume(failed, f.recipe, "evidence");
     assert.deepEqual(await f.ports.authority.getWorkItem(ORG, f.item.id), failed);
     assert.equal(f.calls.spawn, 0);
@@ -1116,15 +2016,13 @@ describe("durable executor start", () => {
   });
 
   it("manually retries a settled item without rewriting its old run or opening an intermediate state", async (t) => {
-    const f = await fixture(t);
+    const f = await fixture(t, undefined, { initialStatus: "failed" });
     const failed = await failedWork(f);
     const service = f.service();
     service.dispatch = f.dispatch();
-    const put = t.mock.method(f.ports.authority, "putWorkItem");
     const result = await submitRun(service,
       f.item.id, (await f.ports.authority.getWorkItem(ORG, f.item.id)).version,
     );
-    assert.equal(put.mock.callCount(), 0);
     assert.equal(result.work_item.version, failed.version + 1);
     assert.equal(result.work_item.status, "running");
     assert.equal(result.work_item.current_run_id, result.run.id);
@@ -1136,9 +2034,9 @@ describe("durable executor start", () => {
     const f = await fixture(t);
     await f.dispatch().startItem(f.item, f.recipe, "evidence");
     const live = await f.ports.authority.getActiveWorkRun(ORG, f.item.id);
-    const skipped = await f.ports.authority.putWorkItem({
-      ...await f.ports.authority.getWorkItem(ORG, f.item.id), status: "skipped",
-    });
+    const skipped = await dismissItem(
+      f.ports.authority, await f.ports.authority.getWorkItem(ORG, f.item.id),
+    );
     const service = f.service();
     service.dispatch = f.dispatch();
     await assert.rejects(submitRun(service,
@@ -1151,7 +2049,10 @@ describe("durable executor start", () => {
 
   it("persists the selected destination before starting and ignores later recipe edits", async (t) => {
     const f = await fixture(t);
-    const recipe = { ...f.recipe, can_write_back: true, write_back_thread_id: "source:results" };
+    const recipe = {
+      ...f.recipe, can_write_back: true, write_back_thread_id: "source:results",
+      executor_config: { prompt: "Original instruction" },
+    };
     await f.ports.authority.putRecipe(recipe);
     f.hooks.spawn = async () => {
       const active = await f.ports.authority.getActiveWorkRun(ORG, f.item.id);
@@ -1159,12 +2060,20 @@ describe("durable executor start", () => {
       assert.deepEqual(active.write_back_target,
         { installation_id: "sender-1", source: "source", target: "results" });
       assert.equal(active.trigger_kind, "push");
+      assert.deepEqual(active.executor_config, recipe.executor_config);
+      await f.ports.authority.putRecipe({
+        ...recipe, can_write_back: false, write_back_thread_id: "other:room",
+        executor_config: { prompt: "New instruction" },
+      });
       return { source: "dsh", target: "session-1" };
     };
     const run = await f.dispatch().startItem(f.item, recipe, "evidence");
-    await f.ports.authority.putRecipe({ ...recipe, can_write_back: false, write_back_thread_id: "other:room" });
+    assert.match(f.calls.stdinText, /Original instruction/);
+    assert.doesNotMatch(f.calls.stdinText, /New instruction/);
     f.reopen();
     await f.supervise().refreshRuns();
+    assert.deepEqual((await f.ports.authority.getWorkRun(ORG, run.id)).executor_config,
+      { prompt: "Original instruction" });
     const delivery = await f.ports.authority.getWorkDeliveryByItem(ORG, f.item.id);
     assert.equal(delivery.run_id, run.id);
     assert.deepEqual(delivery.target, run.write_back_target);
@@ -1254,9 +2163,13 @@ describe("durable executor start", () => {
 
   it("passes the shared instruction to the executor, including the legacy config alias", async (t) => {
     const f = await fixture(t);
+    await f.ports.authority.putRecipe({
+      ...f.recipe, executor_config: { instruction: "Handle this carefully." },
+    });
+    const recipe = await f.ports.authority.getRecipe(ORG, f.recipe.id);
     await f.dispatch().startItem(
       f.item,
-      { ...f.recipe, executor_config: { instruction: "Handle this carefully." } },
+      recipe,
       "evidence",
     );
     assert.match(
@@ -1306,7 +2219,7 @@ describe("durable executor start", () => {
       t.mock.method(f.ports.authority, "checkpointWorkRunStart", async (input) => {
         assert.equal(input.kind, kind);
         before = await f.ports.authority.getWorkRun(ORG, input.expected_run.id);
-        await f.ports.authority.putWorkItem({ ...input.expected_item, status: "skipped" });
+        await dismissItem(f.ports.authority, input.expected_item);
         return checkpoint(input);
       });
       await assert.rejects(f.dispatch().startItem(f.item, f.recipe, "evidence", "manual"),
@@ -1325,7 +2238,7 @@ describe("durable executor start", () => {
     t.mock.method(f.ports.authority, "checkpointWorkRunStart", async (input) => {
       if (input.kind === "submitted" && input.expected_run.start_state === "submitted") {
         before = await f.ports.authority.getWorkRun(ORG, input.expected_run.id);
-        await f.ports.authority.putWorkItem({ ...input.expected_item, status: "skipped" });
+        await dismissItem(f.ports.authority, input.expected_item);
       }
       return checkpoint(input);
     });
@@ -1365,15 +2278,14 @@ describe("durable executor start", () => {
       await apply(...args);
       const saved = await f.ports.authority.getActiveWorkRun(ORG, f.item.id);
       originalId = saved.id;
-      await f.ports.authority.putWorkRun({ ...saved, status: "completed" });
-      await f.ports.authority.putWorkItem({
-        ...await f.ports.authority.getWorkItem(ORG, f.item.id), status: "open",
-      });
+      const currentItem = await f.ports.authority.getWorkItem(ORG, f.item.id);
+      const { item: done } = await observeRun(f.ports.authority, currentItem, saved, "completed");
       assert.equal(await f.ports.authority.claimWorkRunStart({
+        expected_item: done, retry: "manual",
         run: {
           ...saved, id: "successor-run", executor_type: "different-executor",
           status: "running", start_state: "pending", external_run_id: undefined,
-          agent_thread_id: undefined, version: 0,
+          agent_thread_id: undefined, version: 0, result: undefined,
         },
       }), true);
     });
@@ -1426,7 +2338,11 @@ describe("durable executor start", () => {
       const record = f.ports.authority.recordWorkRunStartFailure.bind(f.ports.authority);
       let ignored;
       t.mock.method(f.ports.authority, "recordWorkRunStartFailure", async (input) => {
-        ignored = await f.ports.authority.putWorkItem({ ...f.item, status: "skipped" });
+        const dismissed = await f.ports.authority.dismissWorkItem({
+          expected_item: f.item, now: new Date().toISOString(),
+        });
+        assert.equal(dismissed.outcome, "applied");
+        ignored = dismissed.item;
         return record(input);
       });
       if (mode === "manual") {
@@ -1461,10 +2377,10 @@ describe("durable executor start", () => {
   });
 
   it("keeps the existing trial binding and completed result on invalid executor configuration", async (t) => {
-    const f = await fixture(t);
+    const f = await fixture(t, undefined, { initialStatus: "done" });
     const oldRecipe = await f.ports.authority.putRecipe({ ...f.recipe, id: "old-rule" });
-    const item = await f.ports.authority.putWorkItem({ ...f.item, recipe_id: oldRecipe.id, status: "done" });
-    const completed = await f.ports.authority.putWorkRun({
+    const item = await seedTestWorkItem(f, { ...f.item, recipe_id: oldRecipe.id, status: "done" });
+    const completed = await seedTestWorkRun(f, {
       id: "original-result", org_id: ORG, work_item_id: item.id, recipe_id: oldRecipe.id,
       executor_type: "session", status: "completed", result: { summary: "Original result" },
       created_at: item.created_at, updated_at: item.updated_at,
@@ -1489,7 +2405,7 @@ describe("durable executor start", () => {
 
   it("does not bind an unbound automatic sample through an unknown-executor failure", async (t) => {
     const f = await fixture(t);
-    const item = await f.ports.authority.putWorkItem({ ...f.item, recipe_id: undefined });
+    const item = await seedTestWorkItem(f, { ...f.item, recipe_id: undefined });
     f.setExecutor(undefined);
     await f.dispatch().startItem(item, f.recipe, "evidence");
     assert.deepEqual(await f.ports.authority.getWorkItem(ORG, item.id), item);
@@ -1549,7 +2465,8 @@ describe("durable executor start", () => {
     }
     assert.equal(f.calls.spawn, 1);
     assert.equal(f.calls.stdin, 1);
-    assert.equal(f.calls.status, 0);
+    assert.equal(f.calls.status, 1);
+    assert.equal((await f.ports.authority.getActiveWorkRun(ORG, f.item.id)).start_state, "uncertain");
   });
 
   it("recovers a submitted session after final handle persistence fails", async (t) => {
@@ -1634,10 +2551,10 @@ describe("durable executor start", () => {
   it("reserves recipe capacity across dispatchers but preserves manual override", async (t) => {
     const f = await fixture(t, 1);
     const other = { ...f.item, id: "work-2", unit_key: "task-2" };
-    await f.ports.authority.putWorkItem(other);
+    const savedOther = await createTestWorkItem(f.ports.authority, other);
     const results = await Promise.all([
       f.dispatch().startItem(f.item, f.recipe, "evidence"),
-      f.dispatch().startItem(other, f.recipe, "evidence"),
+      f.dispatch().startItem(savedOther, f.recipe, "evidence"),
     ]);
     assert.equal(results.filter(Boolean).length, 1);
     assert.equal(f.calls.spawn, 1);
@@ -1667,11 +2584,11 @@ describe("durable executor start", () => {
       status: "open",
     };
     await f.ports.authority.putRecipe(recipe);
-    await f.ports.authority.putWorkItem(item);
+    const savedItem = await createTestWorkItem(f.ports.authority, item);
     const run = {
       id: "run-search-answer",
       org_id: ORG,
-      work_item_id: item.id,
+      work_item_id: savedItem.id,
       recipe_id: recipe.id,
       executor_type: "session",
       external_run_id: "dsh:answer-1",
@@ -1681,7 +2598,7 @@ describe("durable executor start", () => {
       created_at: now,
       updated_at: now,
     };
-    assert.equal(await f.ports.authority.claimWorkRunStart({ run }), true);
+    assert.equal(await f.ports.authority.claimWorkRunStart({ run, expected_item: savedItem }), true);
     const service = f.service();
     assert.equal((await service.activeSessionIds()).has(item.thread_id), false);
     assert.equal((await service.inboxFaces([item.thread_id])).has(item.thread_id), false);
@@ -1709,11 +2626,11 @@ describe("durable executor start", () => {
       updated_at: createdAt,
     };
     await f.ports.authority.putRecipe(recipe);
-    await f.ports.authority.putWorkItem(item);
+    const savedItem = await createTestWorkItem(f.ports.authority, item);
     const run = {
       id: "run-search-answer-timeout",
       org_id: ORG,
-      work_item_id: item.id,
+      work_item_id: savedItem.id,
       recipe_id: recipe.id,
       executor_type: "session",
       external_run_id: "dsh:answer-timeout",
@@ -1723,8 +2640,14 @@ describe("durable executor start", () => {
       created_at: createdAt,
       updated_at: createdAt,
     };
-    assert.equal(await f.ports.authority.claimWorkRunStart({ run }), true);
-    await f.ports.authority.putWorkRun({ ...run, start_state: undefined });
+    assert.equal(await f.ports.authority.claimWorkRunStart({ run, expected_item: savedItem }), true);
+    const submitted = await f.ports.authority.checkpointWorkRunStart({
+      expected_item: await f.ports.authority.getWorkItem(ORG, item.id),
+      expected_run: await f.ports.authority.getWorkRun(ORG, run.id),
+      kind: "submitted", external_run_id: run.external_run_id,
+      agent_thread_id: run.agent_thread_id, now: createdAt,
+    });
+    assert.equal(submitted.outcome, "applied");
     await f.ports.authority.putSearchAnswer({
       id: "timeout",
       org_id: ORG,
@@ -1798,6 +2721,22 @@ describe("durable executor start", () => {
     assert.equal(requests.length, 1);
   });
 
+  it("keeps an HTTP start without an external identity uncertain and does not retry it", async (t) => {
+    const f = await fixture(t);
+    let requests = 0;
+    f.setExecutor(createHttpTaskExecutor({
+      executor_type: "session", label: "Remote", base_url: "https://agent.example",
+      fetch: async () => { requests += 1; return Response.json({ status: "running" }); },
+    }));
+    await f.dispatch().startItem(f.item, f.recipe, "evidence");
+    f.reopen();
+    await f.dispatch().retryOrResume(f.item, f.recipe, "evidence");
+    const run = await f.ports.authority.getActiveWorkRun(ORG, f.item.id);
+    assert.equal(run.start_state, "uncertain");
+    assert.equal(run.external_run_id, undefined);
+    assert.equal(requests, 1);
+  });
+
   it("recovers an acknowledged HTTP handle after finalization fails without another POST", async (t) => {
     const f = await fixture(t);
     const requests = [];
@@ -1856,14 +2795,14 @@ describe("durable executor start", () => {
       const f = await fixture(t, 1);
       const now = new Date().toISOString();
       const healthyRecipe = { ...f.recipe, id: "recipe-healthy", can_write_back: true };
-      const failedItem = {
+      const failedItem = await seedTestWorkItem(f, {
         ...f.item, status: "open",
         created_at: new Date(Date.now() - 1_000).toISOString(),
-      };
+      });
       const healthyItem = {
         ...f.item, id: "work-healthy", recipe_id: healthyRecipe.id,
         thread_id: "feishu:oc_healthy", unit_key: "task-healthy",
-        status: "open", created_at: now,
+        status: "open", created_at: now, updated_at: now,
       };
       const failedRun = {
         id: "run-offline", org_id: ORG, work_item_id: failedItem.id,
@@ -1878,12 +2817,18 @@ describe("durable executor start", () => {
       };
       const authority = f.ports.authority;
       await authority.putRecipe(healthyRecipe);
-      await authority.putWorkItem(failedItem);
-      await authority.putWorkItem(healthyItem);
-      assert.equal(await authority.claimWorkRunStart({ run: failedRun }), true);
-      assert.equal(await authority.claimWorkRunStart({ run: healthyRun }), true);
-      await authority.putWorkRun({ ...failedRun, start_state: "submitted" });
-      await authority.putWorkRun({ ...healthyRun, start_state: "submitted" });
+      const savedFailedItem = failedItem;
+      const savedHealthyItem = await createTestWorkItem(authority, healthyItem);
+      assert.equal(await authority.claimWorkRunStart({ run: failedRun, expected_item: savedFailedItem }), true);
+      assert.equal(await authority.claimWorkRunStart({ run: healthyRun, expected_item: savedHealthyItem }), true);
+      for (const run of [failedRun, healthyRun]) {
+        const submitted = await authority.checkpointWorkRunStart({
+          expected_item: await authority.getWorkItem(ORG, run.work_item_id),
+          expected_run: await authority.getWorkRun(ORG, run.id),
+          kind: "submitted", external_run_id: run.external_run_id, now,
+        });
+        assert.equal(submitted.outcome, "applied");
+      }
       const beforeRun = await authority.getWorkRun(ORG, failedRun.id);
       const beforeItem = await authority.getWorkItem(ORG, failedItem.id);
       const calls = { offline: 0, healthy: 0 };
@@ -1962,7 +2907,7 @@ describe("durable executor start", () => {
   it("tells the agent what earlier runs on the item did", async (t) => {
     const f = await fixture(t);
     const earlier = new Date(Date.now() - 60_000).toISOString();
-    await f.ports.authority.putWorkRun({
+    await seedTestWorkRun(f, {
       id: "run-earlier", org_id: ORG, work_item_id: f.item.id, recipe_id: f.recipe.id,
       executor_type: "session", status: "failed", result: { summary: "Refund API timed out" },
       created_at: earlier, updated_at: earlier,
@@ -1999,10 +2944,10 @@ describe("durable executor start", () => {
     );
     await dispatch.startItem(f.item, f.recipe, "evidence");
     assert.equal(seen[0], undefined);
-    const reopened = await f.ports.authority.putWorkItem({
-      ...f.item, status: "open", updated_at: new Date().toISOString(),
-    });
-    const run = await dispatch.startItem(reopened, { ...f.recipe, include_context: true }, "evidence");
+    const settled = await f.ports.authority.getWorkItem(ORG, f.item.id);
+    await f.ports.authority.putRecipe({ ...f.recipe, include_context: true });
+    const recipe = await f.ports.authority.getRecipe(ORG, f.recipe.id);
+    const run = await dispatch.startItem(settled, recipe, "evidence", "manual");
     assert.deepEqual(seen[1].task, { thread_id: f.item.thread_id });
     assert.equal(seen[1].access.run_id, run.id);
     assert.equal(seen[1].access.agent_key, "rgk1.sig");

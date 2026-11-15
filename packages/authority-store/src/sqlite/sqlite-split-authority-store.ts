@@ -2,6 +2,11 @@ import type {
   ArrangementDecision,
   AuthorityStore,
   BlobRecord,
+  BlobInventoryRecord,
+  BlobInventoryPage,
+  BlobInventoryPageQuery,
+  BlobReservation,
+  ReserveBlobWritesInput,
   ConnectorInstallation,
   ConnectorLease,
   ConnectorRuntimeStore,
@@ -10,6 +15,7 @@ import type {
   ContextArtifactIndex,
   ContextArtifactDecision,
   ContextArtifactQuery,
+  ContextArtifactEvidenceReferenceBackfill,
   ContextArtifactState,
   ContextArtifactStore,
   ContextArtifactSupersession,
@@ -59,6 +65,7 @@ import type {
   ConversationVisibilityUpdateResult,
   ConversationPolicyFold,
   ConversationPolicyFoldResult,
+  ConversationPolicyVisibility,
   EventListQuery,
   EventRecord,
   EventRevision,
@@ -67,6 +74,8 @@ import type {
   InboxSummary,
   IngestAttempt,
   IngestCommitRequest,
+  ConversationIntakeCommit,
+  EventAttachmentReferenceBackfill,
   IngestQuarantine,
   NewConnectorInstallation,
   NewEvent,
@@ -82,6 +91,7 @@ import type {
   RepointContentInput,
   ResetConnectorCursor,
   ReleaseConnectorLease,
+  RenewConnectorLease,
   SetConnectorInstallationConfig,
   SetConnectorInstallationStatus,
   SettleIngestAttempt,
@@ -91,6 +101,14 @@ import type {
   Recipe,
   StoreClearResult,
   StoreFootprint,
+  CancellationJob,
+  ClaimCancellationJobs,
+  CommitCancellationJobObservation,
+  CommitCancellationJobObservationResult,
+  RetryCancellationJob,
+  RetryCancellationJobResult,
+  RenewCancellationJob,
+  SettleCancellationJob,
   WorkDelivery,
   WorkItem,
   WorkRun,
@@ -107,8 +125,12 @@ import type {
   WorkRunStartFailureResult,
   WorkDismissal,
   WorkDismissalResult,
+  WorkAcknowledgment,
+  WorkAcknowledgmentResult,
   WorkItemCreation,
   WorkItemCreationResult,
+  WorkItemObservation,
+  WorkItemObservationResult,
   WorkItemCreationAbort,
   WorkItemCreationAbortResult,
   SearchAnswerRecord,
@@ -153,6 +175,7 @@ export class SqliteSplitAuthorityStore
     DailyDigestJobStore,
     DailyDigestPolicyStore
 {
+  readonly atomicSyncPage = true;
   private constructor(
     private readonly reader: SqliteWriteClient,
     private readonly writer: SqliteWriteClient,
@@ -185,6 +208,24 @@ export class SqliteSplitAuthorityStore
       Map<string, BlobRecord> | Array<[string, BlobRecord]>
     >("findBlobs", [contentHashes]);
     return result instanceof Map ? result : new Map(result);
+  }
+
+  async inspectBlobInventory(
+    contentHashes: readonly string[],
+  ): Promise<Map<string, BlobInventoryRecord>> {
+    return this.reader.call("inspectBlobInventory", [contentHashes]);
+  }
+
+  async listBlobInventoryPage(query: BlobInventoryPageQuery): Promise<BlobInventoryPage> {
+    return this.reader.call("listBlobInventoryPage", [query]);
+  }
+
+  async reserveBlobWrites(input: ReserveBlobWritesInput): Promise<BlobReservation[]> {
+    return this.writer.call("reserveBlobWrites", [input]);
+  }
+
+  async releaseBlobReservations(reservations: readonly BlobReservation[]): Promise<void> {
+    await this.writer.call("releaseBlobReservations", [reservations]);
   }
 
   async findBySourceIdentity(
@@ -225,6 +266,12 @@ export class SqliteSplitAuthorityStore
     return this.reader.call("listEvents", [orgId, query]);
   }
 
+  async backfillEventAttachmentReferences(
+    input: EventAttachmentReferenceBackfill,
+  ): Promise<void> {
+    return this.writer.call("backfillEventAttachmentReferences", [input]);
+  }
+
   async openContextRead(orgId: string, query?: ContextAuthorityReadQuery): Promise<ContextAuthorityRead> {
     return this.reader.call("openContextRead", [orgId, query]);
   }
@@ -236,8 +283,11 @@ export class SqliteSplitAuthorityStore
     return this.reader.call("openContextReadForThread", [orgId, threadId]);
   }
 
-  async putArtifact(artifact: ContextArtifact): Promise<ContextArtifact> {
-    return this.writer.call("putArtifact", [artifact]);
+  async putArtifact(
+    artifact: ContextArtifact,
+    blobReservations?: readonly BlobReservation[],
+  ): Promise<ContextArtifact> {
+    return this.writer.call("putArtifact", [artifact, blobReservations]);
   }
 
   async getArtifact(orgId: string, id: string): Promise<ContextArtifact | null> {
@@ -246,6 +296,12 @@ export class SqliteSplitAuthorityStore
 
   async listArtifacts(query: ContextArtifactQuery): Promise<ContextArtifact[]> {
     return this.reader.call("listArtifacts", [query]);
+  }
+
+  async backfillArtifactEvidenceReferences(
+    input: ContextArtifactEvidenceReferenceBackfill,
+  ): Promise<void> {
+    return this.writer.call("backfillArtifactEvidenceReferences", [input]);
   }
 
   async listArtifactIndexes(query: ContextArtifactQuery): Promise<ContextArtifactIndex[]> {
@@ -733,6 +789,12 @@ export class SqliteSplitAuthorityStore
     return this.writer.call("commitIngest", [request]);
   }
 
+  async commitConversationIntake(
+    request: ConversationIntakeCommit,
+  ): Promise<EventRecord[]> {
+    return this.writer.call("commitConversationIntake", [request]);
+  }
+
   async repointContentHash(input: RepointContentInput): Promise<number> {
     return this.writer.call("repointContentHash", [input]);
   }
@@ -741,8 +803,14 @@ export class SqliteSplitAuthorityStore
     await this.writer.call("vacuumStore", []);
   }
 
-  async putDisposition(decision: ArrangementDecision): Promise<void> {
-    await this.writer.call("putDisposition", [decision]);
+  async putDispositionIfAbsent(decision: ArrangementDecision): Promise<boolean> {
+    return this.writer.call("putDispositionIfAbsent", [decision]);
+  }
+
+  async transitionDisposition(
+    input: import("@regenic/domain").InboxDispositionTransition,
+  ): Promise<import("@regenic/domain").InboxDispositionTransitionResult> {
+    return this.writer.call("transitionDisposition", [input]);
   }
 
   async putConversationPref(
@@ -761,6 +829,12 @@ export class SqliteSplitAuthorityStore
     input: ConversationPolicyFold,
   ): Promise<ConversationPolicyFoldResult> {
     return this.writer.call("setConversationPolicyHidden", [input]);
+  }
+
+  async setConversationPolicyVisibility(
+    input: ConversationPolicyVisibility,
+  ): Promise<ConversationPolicyFoldResult> {
+    return this.writer.call("setConversationPolicyVisibility", [input]);
   }
 
   async summarizeStore(orgId: string): Promise<StoreFootprint> {
@@ -784,6 +858,18 @@ export class SqliteSplitAuthorityStore
 
   async putRecipe(recipe: Recipe): Promise<Recipe> {
     return this.writer.call("putRecipe", [recipe]);
+  }
+
+  async putRecipeIfUnchanged(
+    input: import("@regenic/domain").RecipeWrite,
+  ): Promise<import("@regenic/domain").RecipeWriteResult> {
+    return this.writer.call("putRecipeIfUnchanged", [input]);
+  }
+
+  async advanceRecipePullSchedule(
+    input: import("@regenic/domain").RecipePullScheduleAdvance,
+  ): Promise<boolean> {
+    return this.writer.call("advanceRecipePullSchedule", [input]);
   }
 
   async deleteRecipe(orgId: string, id: string): Promise<boolean> {
@@ -816,10 +902,6 @@ export class SqliteSplitAuthorityStore
     return this.reader.call("getWorkItemByUnitKey", [orgId, threadId, unitKey]);
   }
 
-  async putWorkItem(item: WorkItem): Promise<WorkItem> {
-    return this.writer.call("putWorkItem", [item]);
-  }
-
   async listWorkRuns(orgId: string, workItemId?: string): Promise<WorkRun[]> {
     return this.reader.call("listWorkRuns", [orgId, workItemId]);
   }
@@ -839,12 +921,38 @@ export class SqliteSplitAuthorityStore
     return this.reader.call("listHiddenExecutorThreadIds", [orgId]);
   }
 
-  async putWorkRun(run: WorkRun): Promise<WorkRun> {
-    return this.writer.call("putWorkRun", [run]);
-  }
-
   async getWorkRunStartReplay(command: WorkRunStartCommand): Promise<WorkRunStartReplay> {
     return this.reader.call("getWorkRunStartReplay", [command]);
+  }
+
+  async claimCancellationJobs(input: ClaimCancellationJobs): Promise<CancellationJob[]> {
+    return this.writer.call("claimCancellationJobs", [input]);
+  }
+
+  async renewCancellationJob(input: RenewCancellationJob): Promise<boolean> {
+    return this.writer.call("renewCancellationJob", [input]);
+  }
+
+  async settleCancellationJob(input: SettleCancellationJob): Promise<boolean> {
+    return this.writer.call("settleCancellationJob", [input]);
+  }
+
+  async commitCancellationJobObservation(
+    input: CommitCancellationJobObservation,
+  ): Promise<CommitCancellationJobObservationResult> {
+    return this.writer.call("commitCancellationJobObservation", [input]);
+  }
+
+  async listCancellationJobs(
+    orgId: string,
+    limit?: number,
+    statuses?: CancellationJob["status"][],
+  ): Promise<CancellationJob[]> {
+    return this.reader.call("listCancellationJobs", [orgId, limit, statuses]);
+  }
+
+  async retryCancellationJob(input: RetryCancellationJob): Promise<RetryCancellationJobResult> {
+    return this.writer.call("retryCancellationJob", [input]);
   }
 
   async claimWorkRunStart(input: WorkRunStartClaim): Promise<boolean> {
@@ -863,8 +971,16 @@ export class SqliteSplitAuthorityStore
     return this.writer.call("dismissWorkItem", [input]);
   }
 
+  async acknowledgeWorkResult(input: WorkAcknowledgment): Promise<WorkAcknowledgmentResult> {
+    return this.writer.call("acknowledgeWorkResult", [input]);
+  }
+
   async createWorkItem(input: WorkItemCreation): Promise<WorkItemCreationResult> {
     return this.writer.call("createWorkItem", [input]);
+  }
+
+  async observeWorkItem(input: WorkItemObservation): Promise<WorkItemObservationResult> {
+    return this.writer.call("observeWorkItem", [input]);
   }
 
   async abortWorkItemCreation(input: WorkItemCreationAbort): Promise<WorkItemCreationAbortResult> {
@@ -909,10 +1025,6 @@ export class SqliteSplitAuthorityStore
     workItemId: string,
   ): Promise<WorkDelivery | null> {
     return this.reader.call("getWorkDeliveryByItem", [orgId, workItemId]);
-  }
-
-  async putWorkDelivery(delivery: WorkDelivery): Promise<WorkDelivery> {
-    return this.writer.call("putWorkDelivery", [delivery]);
   }
 
   async transitionWorkDelivery(input: WorkDeliveryCommand): Promise<WorkDeliveryCommandResult> {
@@ -998,6 +1110,10 @@ export class SqliteSplitAuthorityStore
 
   async releaseLease(input: ReleaseConnectorLease): Promise<boolean> {
     return this.writer.call("releaseLease", [input]);
+  }
+
+  async renewLease(input: RenewConnectorLease): Promise<ConnectorLease | null> {
+    return this.writer.call("renewLease", [input]);
   }
 
   async resetCursor(

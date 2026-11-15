@@ -329,7 +329,13 @@ export const ContextArtifactQuerySchema: z.ZodType<ContextArtifactQuery> = z
       .optional(),
     generation: nonEmptyStringSchema.optional(),
     limit: nonNegativeIntegerSchema.max(10_000).optional(),
+    after_recorded_at: timestampSchema.optional(),
+    after_id: nonEmptyStringSchema.optional(),
   })
+  .refine(
+    (query) => (query.after_recorded_at === undefined) === (query.after_id === undefined),
+    "Artifact cursor requires both recorded_at and id",
+  )
   .strict();
 
 export const ContextProjectionCheckpointSchema: z.ZodType<ContextProjectionCheckpoint> = z

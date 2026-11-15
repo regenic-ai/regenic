@@ -93,5 +93,9 @@ describe("AgentRun contract", () => {
     assert.throws(() => handoffAgentRun(running, {
       ...handoff, to: { actor_type: "human", actor_id: "person-2" },
     }, handoff.created_at), /Invalid AgentRun Handoff/);
+    assert.equal(handoffAgentRun(running, {
+      ...handoff,
+      standard_bindings: [{ version_id: "version-1", standard_id: "standard-1" }],
+    }, handoff.created_at).handoff_id, handoff.id);
   });
 });

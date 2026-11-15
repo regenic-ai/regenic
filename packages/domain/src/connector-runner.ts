@@ -4,6 +4,7 @@ import type {
   ChannelConnector,
   ConnectorPollOptions,
   ConnectorQuotaHint,
+  ConnectorLease,
   ConnectorRuntimeStore,
   IngestBatch,
   IngestBatchResult,
@@ -13,6 +14,8 @@ import type {
   WebhookRequest,
 } from "./ingestion";
 import {
+  assertAttemptInstallationBinding,
+  IngestPageProcessingError,
   ingestAttemptQuarantines,
   ingestAttemptSummary,
 } from "./ingestion";
@@ -40,6 +43,7 @@ export interface IngestBatchProcessor {
   ingest(
     input: unknown,
     page?: SyncPageCommit,
+    pageRuntimeStore?: ConnectorRuntimeStore,
   ): Promise<IngestSubmissionResult>;
 }
 
@@ -129,12 +133,13 @@ export class ConnectorRunner {
       };
     }
     const startedAt = this.now();
+    const leaseOwner = `${input.lease_owner}:${randomUUID()}`;
     const labels = this.metricLabels(input);
     const leaseStartedAt = Date.now();
     const lease = await this.runtimeStore.acquireLease({
       installation_id: input.installation_id,
       stream_key: input.stream_key,
-      lease_owner: input.lease_owner,
+      lease_owner: leaseOwner,
       now: startedAt,
       lease_duration_ms: input.lease_duration_ms,
       preempt: currentSyncLane() === "interactive",
@@ -152,7 +157,8 @@ export class ConnectorRunner {
       await this.runtimeStore.releaseLease({
         installation_id: input.installation_id,
         stream_key: input.stream_key,
-        lease_owner: input.lease_owner,
+        lease_owner: leaseOwner,
+        claim_token: lease.claim_token,
         now: this.now(),
       });
       this.metrics.record({ name: "throttled", value: 1, labels });
@@ -163,10 +169,31 @@ export class ConnectorRunner {
       };
     }
 
+    const heartbeat = this.startLeaseHeartbeat(input, leaseOwner, lease);
+    const expireLease = async (now: string): Promise<ConnectorPollRunResult> => {
+      await heartbeat.stop();
+      await this.runtimeStore.releaseLease({
+        installation_id: input.installation_id,
+        stream_key: input.stream_key,
+        lease_owner: leaseOwner,
+        claim_token: lease.claim_token,
+        now,
+      });
+      this.metrics.record({ name: "lease_conflicts", value: 1, labels });
+      return {
+        status: "lease_unavailable",
+        installation_id: input.installation_id,
+        stream_key: input.stream_key,
+      };
+    };
+
     let pollResult;
     const pollStartedAt = Date.now();
     const timeoutMs = input.timeout_ms ?? 0;
-    const signal = timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : undefined;
+    const timeoutSignal = timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : undefined;
+    const signal = timeoutSignal
+      ? AbortSignal.any([timeoutSignal, heartbeat.signal])
+      : heartbeat.signal;
     const commitCursor = input.commit_cursor !== false;
     const pollCursor =
       input.cursor !== undefined
@@ -177,18 +204,40 @@ export class ConnectorRunner {
           ? { value: lease.cursor }
           : null;
     try {
-      pollResult = await withDeadline(
+      const pollOperation = withDeadline(
         poll(pollCursor, pollOptions(input, signal)),
         timeoutMs,
         `poll ${input.installation_id}:${input.stream_key}`,
+      ).then(
+        (result) => ({ kind: "result" as const, result }),
+        (error: unknown) => ({ kind: "error" as const, error }),
       );
+      const outcome = await Promise.race([
+        pollOperation,
+        heartbeat.lostPromise.then(() => ({ kind: "lease_lost" as const })),
+      ]);
+      if (outcome.kind === "lease_lost") {
+        return expireLease(this.now());
+      }
+      if (outcome.kind === "error") throw outcome.error;
+      pollResult = outcome.result;
     } catch (error) {
+      await heartbeat.stop();
       await this.runtimeStore.releaseLease({
         installation_id: input.installation_id,
         stream_key: input.stream_key,
-        lease_owner: input.lease_owner,
+        lease_owner: leaseOwner,
+        claim_token: lease.claim_token,
         now: this.now(),
       });
+      if (heartbeat.lost) {
+        this.metrics.record({ name: "lease_conflicts", value: 1, labels });
+        return {
+          status: "lease_unavailable",
+          installation_id: input.installation_id,
+          stream_key: input.stream_key,
+        };
+      }
       if (isRateLimitError(error)) {
         this.metrics.record({ name: "source_429", value: 1, labels });
       }
@@ -201,6 +250,10 @@ export class ConnectorRunner {
         labels,
       );
     }
+    const afterPoll = this.now();
+    if (heartbeat.lost || leaseHasExpired(afterPoll, heartbeat.lease_expires_at)) {
+      return expireLease(afterPoll);
+    }
     const attempt: NewIngestAttempt = {
       id: randomUUID(),
       org_id: pollResult.batch.org_id,
@@ -209,31 +262,73 @@ export class ConnectorRunner {
       delivery_id: pollResult.batch.delivery_id,
       started_at: startedAt,
     };
+    try {
+      assertAttemptInstallationBinding(
+        attempt,
+        await this.runtimeStore.findInstallation(input.installation_id),
+      );
+    } catch (error) {
+      await heartbeat.stop();
+      await this.runtimeStore.releaseLease({
+        installation_id: input.installation_id,
+        stream_key: input.stream_key,
+        lease_owner: leaseOwner,
+        claim_token: lease.claim_token,
+        now: this.now(),
+      });
+      if (heartbeat.lost) {
+        this.metrics.record({ name: "lease_conflicts", value: 1, labels });
+        return {
+          status: "lease_unavailable",
+          installation_id: input.installation_id,
+          stream_key: input.stream_key,
+        };
+      }
+      throw error;
+    }
+    const afterInstallationLookup = this.now();
+    if (heartbeat.lost || leaseHasExpired(afterInstallationLookup, heartbeat.lease_expires_at)) {
+      return expireLease(afterInstallationLookup);
+    }
     const settleBase = {
       attempt_id: attempt.id,
       installation_id: input.installation_id,
       stream_key: input.stream_key,
-      lease_owner: input.lease_owner,
+      lease_owner: leaseOwner,
+      claim_token: lease.claim_token,
     };
 
     const returnedCursor =
       pollResult.next_cursor ?? pollResult.batch.next_cursor;
     const storedCursor = commitCursor ? returnedCursor : undefined;
     if (pollResult.batch.records.length === 0) {
+      if (!(await heartbeat.renewBeforeCommit())) {
+        return expireLease(this.now());
+      }
       const settleStartedAt = Date.now();
-      await this.commitPage({
-        attempt,
-        settle: {
-          ...settleBase,
-          finished_at: this.now(),
-          accepted_count: 0,
-          duplicate_count: 0,
-          quarantined_count: 0,
-          retryable_failure_count: 0,
-          next_cursor: storedCursor,
-          quarantines: [],
-        },
-      });
+      try {
+        await this.commitPage({
+          attempt,
+          settle: {
+            ...settleBase,
+            finished_at: this.now(),
+            accepted_count: 0,
+            duplicate_count: 0,
+            quarantined_count: 0,
+            retryable_failure_count: 0,
+            next_cursor: storedCursor,
+            quarantines: [],
+          },
+        });
+      } catch (error) {
+        if (!isLostLease(error)) throw error;
+        this.metrics.record({ name: "lease_conflicts", value: 1, labels });
+        return {
+          status: "lease_unavailable",
+          installation_id: input.installation_id,
+          stream_key: input.stream_key,
+        };
+      }
       recordSyncDuration(this.metrics, "settle_ms", settleStartedAt, labels);
       return {
         status: "completed",
@@ -264,9 +359,15 @@ export class ConnectorRunner {
           next_cursor: storedCursor,
         },
       };
-      const submission = await this.processor.ingest(pollResult.batch, page);
+      const submission = await this.processor.ingest(pollResult.batch, page, this.runtimeStore);
       result = this.requireValidResult(submission);
+      if (submission.valid && submission.page_committed) {
+        await heartbeat.stop();
+      }
       if (submission.valid && !submission.page_committed) {
+        if (!(await heartbeat.renewBeforeCommit())) {
+          return expireLease(this.now());
+        }
         const settleStartedAt = Date.now();
         await this.commitPage({
           attempt,
@@ -276,6 +377,28 @@ export class ConnectorRunner {
       }
     } catch (error) {
       if (isLostLease(error)) {
+        await heartbeat.stop();
+        this.metrics.record({ name: "lease_conflicts", value: 1, labels });
+        return {
+          status: "lease_unavailable",
+          installation_id: input.installation_id,
+          stream_key: input.stream_key,
+        };
+      }
+      const partialRecords =
+        error instanceof IngestPageProcessingError ? error.partial_records : [];
+      const partialSummary = ingestAttemptSummary(partialRecords);
+      const reportedError =
+        error instanceof IngestPageProcessingError ? error.original_error : error;
+      const failedAt = this.now();
+      if (!(await heartbeat.renewBeforeCommit())) {
+        await this.runtimeStore.releaseLease({
+          installation_id: input.installation_id,
+          stream_key: input.stream_key,
+          lease_owner: leaseOwner,
+          claim_token: lease.claim_token,
+          now: failedAt,
+        });
         this.metrics.record({ name: "lease_conflicts", value: 1, labels });
         return {
           status: "lease_unavailable",
@@ -288,24 +411,36 @@ export class ConnectorRunner {
           attempt,
           settle: {
             ...settleBase,
-            finished_at: this.now(),
-            accepted_count: 0,
-            duplicate_count: 0,
-            quarantined_count: 0,
-            retryable_failure_count: 1,
+            finished_at: failedAt,
+            ...partialSummary,
+            retryable_failure_count: partialSummary.retryable_failure_count + 1,
             error_code: "internal_error",
-            quarantines: [],
+            quarantines: ingestAttemptQuarantines(
+              partialRecords,
+              failedAt,
+              () => randomUUID(),
+            ),
           },
         });
-      } catch {
+      } catch (settlementError) {
+        await heartbeat.stop();
         await this.runtimeStore.releaseLease({
           installation_id: input.installation_id,
           stream_key: input.stream_key,
-          lease_owner: input.lease_owner,
+          lease_owner: leaseOwner,
+          claim_token: lease.claim_token,
           now: this.now(),
         });
+        if (isLostLease(settlementError)) {
+          this.metrics.record({ name: "lease_conflicts", value: 1, labels });
+          return {
+            status: "lease_unavailable",
+            installation_id: input.installation_id,
+            stream_key: input.stream_key,
+          };
+        }
       }
-      throw error;
+      throw reportedError;
     } finally {
       recordSyncDuration(this.metrics, "ingest_ms", ingestStartedAt, labels);
     }
@@ -397,6 +532,7 @@ export class ConnectorRunner {
       installation_id: string;
       stream_key: string;
       lease_owner: string;
+      claim_token: string;
     },
     records: IngestRecordResult[],
     settle: SyncPageCommit["settle"],
@@ -416,6 +552,89 @@ export class ConnectorRunner {
     quota?: ConnectorQuotaHint,
   ): boolean {
     return this.quota?.tryConsume(installationId, quota) ?? true;
+  }
+
+  private startLeaseHeartbeat(
+    input: RunConnectorPollInput,
+    leaseOwner: string,
+    lease: ConnectorLease,
+  ): {
+    signal: AbortSignal;
+    lostPromise: Promise<void>;
+    readonly lost: boolean;
+    readonly lease_expires_at: string;
+    renewBeforeCommit(): Promise<boolean>;
+    stop(): Promise<void>;
+  } {
+    const controller = new AbortController();
+    let resolveLost!: () => void;
+    const lostPromise = new Promise<void>((resolve) => {
+      resolveLost = resolve;
+    });
+    let stopped = false;
+    let lost = false;
+    let pending: Promise<void> | undefined;
+    let leaseExpiresAt = lease.lease_expires_at;
+    const labels = this.metricLabels(input);
+    const loseLease = () => {
+      if (lost) return;
+      lost = true;
+      resolveLost();
+      controller.abort();
+    };
+    const renew = (force = false): Promise<void> => {
+      if (lost || (stopped && !force)) return Promise.resolve();
+      if (pending) return pending;
+      pending = this.runtimeStore.renewLease({
+        installation_id: input.installation_id,
+        stream_key: input.stream_key,
+        lease_owner: leaseOwner,
+        claim_token: lease.claim_token,
+        now: this.now(),
+        lease_duration_ms: input.lease_duration_ms,
+      }).then((renewed) => {
+        if (!renewed) {
+          loseLease();
+        } else {
+          leaseExpiresAt = renewed.lease_expires_at;
+        }
+      }, () => {
+        this.metrics.record({
+          name: "lease_renewal_errors",
+          value: 1,
+          labels: { ...labels, status: "storage_error" },
+        });
+        loseLease();
+      }).finally(() => {
+        pending = undefined;
+      });
+      return pending;
+    };
+    const interval = setInterval(
+      () => { void renew(); },
+      Math.max(1, Math.floor(input.lease_duration_ms / 3)),
+    );
+    interval.unref?.();
+
+    return {
+      signal: controller.signal,
+      lostPromise,
+      get lost() { return lost; },
+      get lease_expires_at() { return leaseExpiresAt; },
+      async renewBeforeCommit() {
+        stopped = true;
+        clearInterval(interval);
+        if (pending) await pending;
+        if (lost) return false;
+        await renew(true);
+        return !lost;
+      },
+      async stop() {
+        stopped = true;
+        clearInterval(interval);
+        if (pending) await pending;
+      },
+    };
   }
 
   private metricLabels(
@@ -517,6 +736,15 @@ function isLostLease(error: unknown): boolean {
   return (
     error instanceof Error && error.message.includes("lease is not held")
   );
+}
+
+function leaseHasExpired(now: string, expiresAt: string): boolean {
+  const nowMs = Date.parse(now);
+  const expiresMs = Date.parse(expiresAt);
+  if (!Number.isFinite(nowMs) || !Number.isFinite(expiresMs)) {
+    throw new Error("Connector lease has an invalid timestamp");
+  }
+  return nowMs >= expiresMs;
 }
 
 function isRateLimitError(error: unknown): boolean {

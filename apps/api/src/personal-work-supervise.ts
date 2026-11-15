@@ -1,7 +1,7 @@
 import {
   recipeTriggerOf,
   recipeWantsWriteBack,
-  workRunNeedsStartConfirmation,
+  workRunHandleMatchesExecution,
   type ExecutorContext,
   type ExecutorRunHandle,
   type Recipe,
@@ -10,7 +10,7 @@ import {
   type WorkRun,
 } from "@regenic/domain";
 import { PersonalWorkChannel } from "./personal-work-channel";
-import { foldFinishedWorkThreads } from "./personal-work-lifecycle";
+import { releaseFinishedAgentThread } from "./personal-work-lifecycle";
 import { PersonalRuntimeService } from "./personal-runtime.service";
 import type { PersonalWorkWait } from "./personal-work-wait";
 import { isWorkTickShutdown } from "./personal-work-support";
@@ -109,11 +109,17 @@ export class PersonalWorkSupervise {
     recipe: Recipe | null,
     run: WorkRun,
   ): Promise<void> {
-    if (workRunNeedsStartConfirmation(run)) {
+    if (run.start_state === "pending") {
       return;
     }
-    if (item.status === "skipped" && !run.external_run_id) {
-      console.error("personal work ignored execution requires reconciliation", {
+    if (run.start_state === "uncertain") {
+      if (item.status === "skipped") return;
+      await this.reconcileUncertainStart(item, recipe, run);
+      return;
+    }
+    if ((!run.external_run_id && !run.agent_thread_id)
+      || (item.status === "skipped" && !run.external_run_id)) {
+      console.error("personal work execution requires identity reconciliation", {
         org_id: item.org_id, work_item_id: item.id, run_id: run.id,
         code: "execution_identity_unknown",
       });
@@ -126,11 +132,45 @@ export class PersonalWorkSupervise {
     }
     const ctx = this.channel.contextFor(executor);
     let handle = await executor.status(run, ctx);
+    this.requireMatchingHandle(run, handle);
     const now = Date.now();
     if (item.status !== "skipped" && isStaleWork(item.created_at, now, workReapStaleMs()) && handle.status === "running") {
       handle = await this.reapIfInboxEnded(item, run, handle, executor, ctx, now);
     }
     await this.applyHandle(item, recipe, run, handle);
+  }
+
+  private async reconcileUncertainStart(
+    item: WorkItem,
+    recipe: Recipe | null,
+    run: WorkRun,
+  ): Promise<void> {
+    if (!run.external_run_id && !run.agent_thread_id) return;
+    const host = this.runtime.requireHost();
+    const executor = host.get("executors").get(run.executor_type);
+    if (!executor) return;
+    const handle = await executor.status(run, this.channel.contextFor(executor));
+    if (!hasPositiveStartEvidence(handle)
+      || !handle.external_run_id?.trim()
+      || !workRunHandleMatchesExecution(run, handle)) return;
+    const authority = host.get("authority");
+    const confirmed = await authority.checkpointWorkRunStart({
+      expected_item: item,
+      expected_run: run,
+      kind: "submitted",
+      external_run_id: handle.external_run_id,
+      ...(run.agent_thread_id ? { agent_thread_id: run.agent_thread_id } : {}),
+      ...(handle.result ? { result: handle.result } : {}),
+      now: new Date().toISOString(),
+    });
+    if (confirmed.outcome === "conflict") {
+      throw new PersonalConnectorError(
+        "execution_start_conflict",
+        `Work start confirmation rejected: ${confirmed.reason}. Refresh the work item.`,
+        409,
+      );
+    }
+    await this.applyHandle(confirmed.item, recipe, confirmed.run, handle);
   }
 
   private async reapIfInboxEnded(
@@ -159,6 +199,7 @@ export class PersonalWorkSupervise {
       }
       if (followed) {
         handle = await executor.status(run, ctx);
+        this.requireMatchingHandle(run, handle);
       }
     }
     if (handle.status !== "running" || !sysoutId) {
@@ -206,10 +247,21 @@ export class PersonalWorkSupervise {
       return handle;
     }
     const latest = await executor.status(run, ctx);
+    this.requireMatchingHandle(run, latest);
     if (latest.status !== "running") {
       return latest;
     }
     return handleFromInboxEnd(run, scan, transcript);
+  }
+
+  private requireMatchingHandle(run: WorkRun, handle: ExecutorRunHandle): void {
+    if (!workRunHandleMatchesExecution(run, handle)) {
+      throw new PersonalConnectorError(
+        "execution_observation_conflict",
+        "Executor observation does not match the bound run identity.",
+        409,
+      );
+    }
   }
 
   private logReapProbe(
@@ -279,6 +331,12 @@ export class PersonalWorkSupervise {
         "execution_observation_conflict",
         result.reason === "completed_result_changed"
           ? "Completed work results are immutable. Start a new attempt to change the result."
+          : result.reason === "execution_identity_mismatch"
+          ? "Executor observation does not match the bound run identity."
+          : result.reason === "execution_start_unconfirmed"
+          ? "Executor start must be confirmed before applying an observation."
+          : result.reason === "execution_identity_unknown"
+          ? "Executor identity could not be verified. Reconcile this run before applying an observation."
           : "Work changed while its executor was being observed. Refresh the work item before applying another observation.",
         409,
       );
@@ -295,14 +353,7 @@ export class PersonalWorkSupervise {
       this.writeBackOverride.delete(item.id);
       this.waits?.drop(run.id);
       if (!isSystemRecipeId(run.recipe_id)) {
-        await foldFinishedWorkThreads(
-          authority,
-          item.org_id,
-          item.thread_id,
-          nextRun.agent_thread_id,
-          now,
-          transition.item.visibility_intent_version ?? 0,
-        );
+        releaseFinishedAgentThread(nextRun.agent_thread_id);
         if (transition.item.status !== item.status) {
           this.touchInboxDigest?.();
         }
@@ -312,4 +363,17 @@ export class PersonalWorkSupervise {
       this.workUpdated?.(item.id);
     }
   }
+}
+
+function hasPositiveStartEvidence(handle: ExecutorRunHandle): boolean {
+  if (handle.status === "completed" || handle.status === "cancelled") return true;
+  if (handle.status === "running") {
+    return handle.transcript?.turn?.state === "open"
+      || handle.transcript?.activity === "working";
+  }
+  if (handle.status === "waiting_human") {
+    return (handle.prompts?.length ?? 0) > 0
+      || handle.transcript?.activity === "awaiting_user";
+  }
+  return false;
 }

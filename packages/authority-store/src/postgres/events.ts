@@ -1,4 +1,5 @@
 import type {
+  ArrangementDecision,
   IngestOperation,
   SourceIdentity,
   NewEvent,
@@ -10,8 +11,14 @@ import type {
   EventListQuery,
   ContextAuthorityRead,
   ContextAuthorityReadQuery,
+  BlobReservation,
   BlobRecord,
+  BlobInventoryRecord,
+  BlobInventoryPage,
+  BlobInventoryPageQuery,
+  EventAttachmentReferenceBackfill,
   RepointContentInput,
+  ReserveBlobWritesInput,
   IngestCommitRequest,
   EventRevision,
   TombstoneEvent,
@@ -23,7 +30,11 @@ import {
   threadExternalIdLike,
   hashCanonicalContext,
   conversationId,
+  assertBlobInventoryPageQuery,
   AuthorityConflictError,
+  BlobReservationConflictError,
+  assertEventDispositionBinding,
+  assertIngestDispositionBindings,
 } from "@regenic/domain";
 import {
   randomUUID,
@@ -38,7 +49,12 @@ import {
 import {
   putDispositionWithinTransaction,
   refreshThreadHeadWithinTransaction,
+  unfoldCurrentWorkWithinTransaction,
 } from "./inbox";
+import {
+  lockConversationThreads,
+  type ConversationLockKey,
+} from "./conversation-lock";
 import { contextReadScope } from "../context-read-scope";
 
 export interface EventRow {
@@ -70,6 +86,14 @@ interface BlobRow {
   created_at: unknown;
 }
 
+interface BlobInventoryRow extends BlobRow {
+  state: BlobInventoryRecord["state"];
+  generation: number;
+  unreferenced_at: unknown;
+  write_lease_expires_at: unknown;
+  reference_count: number;
+}
+
 interface InsertEventInput extends SourceIdentity {
   id?: string;
   operation: IngestOperation;
@@ -99,10 +123,27 @@ export async function bindSourceIdentityAliases(db: PgSql, input: SourceIdentity
       if (!event) {
         throw new Error(`Unknown event for identity alias: ${input.event_id}`);
       }
+      await lockConversationThreads(db, client, [{
+        org_id: input.org_id,
+        thread_id: event.thread_id ?? conversationId(event.source, event.external_id, event.id),
+      }]);
+      const exists = await db.queryOne("SELECT 1 FROM events WHERE org_id = $1 AND id = $2",
+        [input.org_id, input.event_id], client);
+      if (!exists) throw new Error(`Unknown event for identity alias: ${input.event_id}`);
+      const isCurrent = Boolean(await db.queryOne(
+        "SELECT 1 FROM source_heads WHERE org_id = $1 AND current_event_id = $2 LIMIT 1",
+        [input.org_id, input.event_id], client,
+      ));
       for (const alias of input.aliases) {
         const externalId = alias.external_id.trim();
         if (!alias.source.trim() || !externalId) {
           continue;
+        }
+        if (!isCurrent && !await db.queryOne(
+          "SELECT 1 FROM source_heads WHERE org_id = $1 AND source = $2 AND external_id = $3",
+          [input.org_id, alias.source, externalId], client,
+        )) {
+          throw new AuthorityConflictError();
         }
         await db.execute(
           `
@@ -163,7 +204,8 @@ export async function getOutboundAttempt(db: PgSql, orgId: string, clientRequest
   }
 
 export async function claimOutboundAttempt(db: PgSql, input: NewOutboundAttempt): Promise<boolean> {
-    return await db.execute(`
+  return db.withTx(async (client) => {
+    const changed = await db.execute(`
       INSERT INTO outbound_attempts (
         org_id, client_request_id, thread_id, status, recovery_hash, created_at, updated_at
       ) VALUES ($1, $2, $3, 'pending', $4, $5, $5)
@@ -179,14 +221,16 @@ export async function claimOutboundAttempt(db: PgSql, input: NewOutboundAttempt)
     `, [
       input.org_id, input.client_request_id, input.thread_id,
       input.recovery_hash ?? null, input.now,
-    ]) === 1;
-  }
+    ], client);
+    if (changed !== 1) return false;
+    await syncOutboundRecoveryBlobReference(db, client, input);
+    return true;
+  });
+}
 
 export async function putOutboundAttempt(db: PgSql, input: OutboundAttemptPut): Promise<OutboundAttemptRecord> {
-    const previous = await getOutboundAttempt(db, 
-      input.org_id,
-      input.client_request_id,
-    );
+  return db.withTx(async (client) => {
+    const previous = await getOutboundAttempt(db, input.org_id, input.client_request_id, client);
     const createdAt = previous?.created_at ?? input.now;
     await db.execute(
       `
@@ -215,14 +259,26 @@ export async function putOutboundAttempt(db: PgSql, input: OutboundAttemptPut): 
         createdAt,
         input.now,
       ],
+      client,
     );
+    const persisted = await getOutboundAttempt(
+      db,
+      input.org_id,
+      input.client_request_id,
+      client,
+    );
+    const recoveryHash = persisted?.recovery_hash;
+    await syncOutboundRecoveryBlobReference(db, client, {
+      ...input,
+      recovery_hash: recoveryHash,
+    });
     return {
       org_id: input.org_id,
       client_request_id: input.client_request_id,
       thread_id: input.thread_id,
       ...(input.event_id ? { event_id: input.event_id } : {}),
       status: input.status,
-      recovery_hash: input.recovery_hash ?? previous?.recovery_hash,
+      recovery_hash: recoveryHash,
       receipt: input.receipt ?? previous?.receipt,
       ...(input.channel_message_ids
         ? { channel_message_ids: [...input.channel_message_ids] }
@@ -230,7 +286,85 @@ export async function putOutboundAttempt(db: PgSql, input: OutboundAttemptPut): 
       created_at: createdAt,
       updated_at: input.now,
     };
+  });
+}
+
+async function syncOutboundRecoveryBlobReference(
+  db: PgSql,
+  client: PoolClient,
+  input: NewOutboundAttempt | OutboundAttemptPut,
+): Promise<void> {
+  const expected = new Set(input.recovery_hash ? [input.recovery_hash] : []);
+  const reservations = input.blob_reservations;
+  const oldRows = await db.query<{ content_hash: string }>(
+    `SELECT content_hash FROM blob_references
+     WHERE owner_org_id = $1 AND owner_type = 'outbound_attempt'
+       AND owner_id = $2 AND reference_kind = 'reply_recovery'`,
+    [input.org_id, input.client_request_id],
+    client,
+  );
+  if (reservations !== undefined) {
+    const hashes = new Set(reservations.map((reservation) => reservation.content_hash));
+    if (hashes.size !== reservations.length || hashes.size !== expected.size
+      || [...expected].some((hash) => !hashes.has(hash))) {
+      throw new Error("Outbound recovery reservations must exactly match the stored recovery hash");
+    }
+    await completeBlobReservations(db, client, reservations, expected);
+  } else if (input.recovery_hash && !oldRows.some((row) => row.content_hash === input.recovery_hash)) {
+    await insertBlobRow(
+      db,
+      input.recovery_hash,
+      "application/vnd.regenic.reply-recovery+json",
+      0,
+      input.now,
+      client,
+    );
+    const protectedBlob = await db.execute(
+      `UPDATE blobs SET state = 'protected', unreferenced_at = NULL
+       WHERE content_hash = $1 AND state IN ('available', 'protected')
+         AND write_claim_token IS NULL`,
+      [input.recovery_hash],
+      client,
+    );
+    if (protectedBlob !== 1) throw new BlobReservationConflictError(input.recovery_hash);
   }
+
+  await db.execute(
+    `DELETE FROM blob_references WHERE owner_org_id = $1 AND owner_type = 'outbound_attempt'
+       AND owner_id = $2 AND reference_kind = 'reply_recovery'`,
+    [input.org_id, input.client_request_id],
+    client,
+  );
+  if (input.recovery_hash) {
+    const eligible = await db.execute(
+      `UPDATE blobs SET unreferenced_at = NULL
+       WHERE content_hash = $1 AND state IN ('available', 'protected')
+         AND write_claim_token IS NULL`,
+      [input.recovery_hash],
+      client,
+    );
+    if (eligible !== 1) throw new BlobReservationConflictError(input.recovery_hash);
+    await db.execute(
+      `INSERT INTO blob_references (
+         owner_org_id, owner_type, owner_id, reference_kind, content_hash, created_at
+       ) VALUES ($1, 'outbound_attempt', $2, 'reply_recovery', $3, $4)
+       ON CONFLICT DO NOTHING`,
+      [input.org_id, input.client_request_id, input.recovery_hash, input.now],
+      client,
+    );
+  }
+  for (const { content_hash } of oldRows) {
+    if (content_hash === input.recovery_hash) continue;
+    await db.execute(
+      `UPDATE blobs SET unreferenced_at = $1
+       WHERE content_hash = $2 AND NOT EXISTS (
+         SELECT 1 FROM blob_references r WHERE r.content_hash = blobs.content_hash
+       )`,
+      [input.now, content_hash],
+      client,
+    );
+  }
+}
 
 export async function getEvent(db: PgSql, orgId: string, eventId: string, client?: PoolClient): Promise<EventRecord | null> {
     const row = await db.queryOne<EventRow>(
@@ -286,13 +420,16 @@ export async function listEvents(db: PgSql, orgId: string, query?: EventListQuer
         : undefined;
     const limitSql = limit === undefined ? "" : `LIMIT ${p(limit)}`;
     const order = query?.order === "recent" ? "DESC" : "ASC";
+    const orderBy = query?.order === "ingested"
+      ? "ingested_at ASC, id ASC"
+      : `sequence ${order}`;
     const rows = await db.query<EventRow>(
       `
         SELECT id, org_id, source, external_id, operation, content_hash,
                parent_event_id, thread_id, actor_id, required_scope_ids,
                direction_tags, weight_hints, attrs,
                occurred_at, ingested_at
-        FROM events WHERE ${clauses.join(" AND ")} ORDER BY sequence ${order}
+        FROM events WHERE ${clauses.join(" AND ")} ORDER BY ${orderBy}
         ${limitSql}
       `,
       params,
@@ -396,6 +533,118 @@ export async function findBlobs(db: PgSql, contentHashes: readonly string[]): Pr
     return found;
   }
 
+  export async function inspectBlobInventory(
+    db: PgSql,
+    contentHashes: readonly string[],
+  ): Promise<Map<string, BlobInventoryRecord>> {
+    const unique = [...new Set(contentHashes.filter((hash) => hash.length > 0))];
+    const found = new Map<string, BlobInventoryRecord>();
+    const chunkSize = 400;
+    for (let offset = 0; offset < unique.length; offset += chunkSize) {
+      const chunk = unique.slice(offset, offset + chunkSize);
+      const params: unknown[] = [];
+      const placeholders = chunk.map((hash) => {
+        params.push(hash);
+        return `$${params.length}`;
+      });
+      const rows = await db.query<BlobInventoryRow>(`
+        SELECT b.content_hash, b.media_type, b.byte_size, b.created_at, b.state,
+               b.generation, b.unreferenced_at, b.write_lease_expires_at,
+               COUNT(r.content_hash)::INTEGER AS reference_count
+        FROM blobs b
+        LEFT JOIN blob_references r ON r.content_hash = b.content_hash
+        WHERE b.content_hash IN (${placeholders.join(", ")})
+        GROUP BY b.content_hash
+      `, params);
+      for (const row of rows) {
+        found.set(row.content_hash, {
+          content_hash: row.content_hash,
+          media_type: row.media_type,
+          byte_size: asNumber(row.byte_size),
+          created_at: toIso(row.created_at),
+          state: row.state,
+          generation: asNumber(row.generation),
+          unreferenced_at: row.unreferenced_at === null ? null : toIso(row.unreferenced_at),
+          write_lease_expires_at: row.write_lease_expires_at === null
+            ? null
+            : toIso(row.write_lease_expires_at),
+          reference_count: asNumber(row.reference_count),
+        });
+      }
+    }
+    return found;
+  }
+
+  export async function listBlobInventoryPage(
+    db: PgSql,
+    query: BlobInventoryPageQuery,
+  ): Promise<BlobInventoryPage> {
+    assertBlobInventoryPageQuery(query);
+    const rows = await db.query<BlobInventoryRow>(`
+      SELECT b.content_hash, b.media_type, b.byte_size, b.created_at, b.state,
+             b.generation, b.unreferenced_at, b.write_lease_expires_at,
+             COUNT(r.content_hash)::INTEGER AS reference_count
+      FROM blobs b
+      LEFT JOIN blob_references r ON r.content_hash = b.content_hash
+      WHERE ($1::TEXT IS NULL OR b.content_hash > $1)
+      GROUP BY b.content_hash
+      ORDER BY b.content_hash
+      LIMIT $2
+    `, [query.after_hash ?? null, query.limit + 1]);
+    const hasMore = rows.length > query.limit;
+    const entries = rows.slice(0, query.limit).map((row) => ({
+      content_hash: row.content_hash,
+      media_type: row.media_type,
+      byte_size: asNumber(row.byte_size),
+      created_at: toIso(row.created_at),
+      state: row.state,
+      generation: asNumber(row.generation),
+      unreferenced_at: row.unreferenced_at === null ? null : toIso(row.unreferenced_at),
+      write_lease_expires_at: row.write_lease_expires_at === null
+        ? null
+        : toIso(row.write_lease_expires_at),
+      reference_count: asNumber(row.reference_count),
+    }));
+    return {
+      entries,
+      next_after_hash: hasMore ? entries.at(-1)?.content_hash ?? null : null,
+    };
+  }
+
+export async function backfillEventAttachmentReferences(
+  db: PgSql,
+  input: EventAttachmentReferenceBackfill,
+): Promise<void> {
+  if (!/^[a-f0-9]{64}$/.test(input.expected_content_hash) ||
+    input.attachment_hashes.some((hash) => !/^[a-f0-9]{64}$/.test(hash))) {
+    throw new Error("Invalid Event attachment reference hash");
+  }
+  await db.withTx(async (client) => {
+    const event = await db.queryOne<{ content_hash: string | null; ingested_at: unknown }>(
+      `SELECT content_hash, ingested_at FROM events WHERE org_id = $1 AND id = $2 FOR UPDATE`,
+      [input.org_id, input.event_id],
+      client,
+    );
+    if (!event || event.content_hash !== input.expected_content_hash) {
+      throw new Error("Event changed during attachment reference backfill");
+    }
+    const ingestedAt = toIso(event.ingested_at);
+    for (const hash of [...new Set(input.attachment_hashes)].sort()) {
+      await insertBlobRow(db, hash, "application/octet-stream", 0, ingestedAt, client);
+      const protectedBlob = await db.execute(
+        `UPDATE blobs SET state = 'protected', unreferenced_at = NULL,
+           gc_claim_token = NULL, gc_started_at = NULL
+         WHERE content_hash = $1 AND state IN ('available', 'protected')
+           AND write_claim_token IS NULL`,
+        [hash],
+        client,
+      );
+      if (protectedBlob !== 1) throw new BlobReservationConflictError(hash);
+      await insertBlobReference(db, input.org_id, input.event_id, "attachment", hash, ingestedAt, client);
+    }
+  });
+}
+
 export async function append(db: PgSql, input: NewEvent): Promise<EventRecord> {
     return insert(db, { ...input, operation: "create" });
   }
@@ -403,6 +652,12 @@ export async function append(db: PgSql, input: NewEvent): Promise<EventRecord> {
 export async function repointContentHash(db: PgSql, input: RepointContentInput): Promise<number> {
     return db.withTx(async (client) => {
       const now = new Date().toISOString();
+      const affectedEvents = await db.query<{ id: string; org_id: string }>(
+        `SELECT id, org_id FROM events WHERE content_hash = $1 ORDER BY id FOR UPDATE`,
+        [input.old_content_hash],
+        client,
+      );
+      if (affectedEvents.length === 0) return 0;
       await insertBlobRow(db, 
         input.new_content_hash,
         input.content_media_type,
@@ -424,16 +679,57 @@ export async function repointContentHash(db: PgSql, input: RepointContentInput):
         [input.new_content_hash, input.old_content_hash],
         client,
       );
+      if (updated > 0) {
+        const referencedHashes = new Set([
+          input.new_content_hash,
+          ...(input.extra_blobs ?? []).map((blob) => blob.content_hash),
+        ]);
+        if (input.blob_reservations) {
+          assertCompleteRepointReservations(referencedHashes, input.blob_reservations);
+          await completeBlobReservations(db, client, input.blob_reservations, referencedHashes);
+        } else {
+          await protectRepointBlobs(db, client, referencedHashes);
+        }
+        await db.execute(
+          `DELETE FROM blob_references
+           WHERE owner_type = 'event' AND owner_id = ANY($1::text[])`,
+          [affectedEvents.map((event) => event.id)],
+          client,
+        );
+        for (const event of affectedEvents) {
+          await insertBlobReference(
+            db,
+            event.org_id,
+            event.id,
+            "body",
+            input.new_content_hash,
+            now,
+            client,
+          );
+          for (const blob of input.extra_blobs ?? []) {
+            await insertBlobReference(
+              db,
+              event.org_id,
+              event.id,
+              "attachment",
+              blob.content_hash,
+              now,
+              client,
+            );
+          }
+        }
+      }
       if (input.old_content_hash !== input.new_content_hash) {
         await db.execute(
           `
-            DELETE FROM blobs
+            UPDATE blobs SET unreferenced_at = $2
             WHERE content_hash = $1
-              AND content_hash NOT IN (
-                SELECT content_hash FROM events WHERE content_hash IS NOT NULL
+              AND NOT EXISTS (
+                SELECT 1 FROM blob_references r
+                WHERE r.content_hash = blobs.content_hash
               )
           `,
-          [input.old_content_hash],
+          [input.old_content_hash, now],
           client,
         );
       }
@@ -441,12 +737,40 @@ export async function repointContentHash(db: PgSql, input: RepointContentInput):
     });
   }
 
+function assertCompleteRepointReservations(
+  referencedHashes: ReadonlySet<string>,
+  reservations: readonly BlobReservation[],
+): void {
+  const hashes = new Set(reservations.map((reservation) => reservation.content_hash));
+  if (hashes.size !== reservations.length || hashes.size !== referencedHashes.size
+    || [...referencedHashes].some((hash) => !hashes.has(hash))) {
+    throw new Error("Content repoint reservations must exactly match its Blob references");
+  }
+}
+
+async function protectRepointBlobs(
+  db: PgSql,
+  client: PoolClient,
+  referencedHashes: ReadonlySet<string>,
+): Promise<void> {
+  for (const hash of referencedHashes) {
+    const updated = await db.execute(
+      `UPDATE blobs SET state = 'protected', unreferenced_at = NULL
+       WHERE content_hash = $1 AND state IN ('available', 'protected')
+         AND write_claim_token IS NULL`,
+      [hash],
+      client,
+    );
+    if (updated !== 1) throw new BlobReservationConflictError(hash);
+  }
+}
+
 async function insertBlobRow(db: PgSql, contentHash: string, mediaType: string | undefined, byteSize: number | undefined, createdAt: string, client: PoolClient): Promise<void> {
     await db.execute(
       `
         INSERT INTO blobs (
-          content_hash, media_type, byte_size, created_at
-        ) VALUES ($1, $2, $3, $4)
+          content_hash, media_type, byte_size, created_at, state
+        ) VALUES ($1, $2, $3, $4, 'protected')
         ON CONFLICT (content_hash) DO NOTHING
       `,
       [contentHash, mediaType ?? "application/octet-stream", byteSize ?? 0, createdAt],
@@ -454,41 +778,397 @@ async function insertBlobRow(db: PgSql, contentHash: string, mediaType: string |
     );
   }
 
-export async function commitIngestOn(db: PgSql, client: PoolClient, request: IngestCommitRequest): Promise<EventRecord[]> {
-    if (request.appends.length === 0 && request.dispositions.length === 0) {
+export async function reserveBlobWrites(
+  db: PgSql,
+  input: ReserveBlobWritesInput,
+): Promise<BlobReservation[]> {
+  const blobs = [...new Map(input.blobs.map((blob) => [blob.content_hash, blob])).values()]
+    .sort((left, right) => left.content_hash.localeCompare(right.content_hash));
+  const forceWrite = new Set(input.force_write_hashes ?? []);
+  if (!input.owner_id.trim() ||
+    !Number.isSafeInteger(input.lease_duration_ms) ||
+    input.lease_duration_ms < 1 ||
+    blobs.some((blob) =>
+      !/^[a-f0-9]{64}$/.test(blob.content_hash) ||
+      !blob.media_type.trim() ||
+      !Number.isSafeInteger(blob.byte_size) ||
+      blob.byte_size < 0) ||
+    [...forceWrite].some((hash) => !blobs.some((blob) => blob.content_hash === hash))) {
+    throw new Error("Invalid Blob reservation request");
+  }
+
+  return db.withTx(async (client) => {
+    const plans: BlobReservation[] = [];
+    for (const blob of blobs) {
+      let current = await db.queryOne<{
+        state: "reserved" | "available" | "deleting" | "protected";
+        generation: number;
+        write_claim_token: string | null;
+        lease_active: boolean;
+      }>(
+        `SELECT state, generation, write_claim_token,
+                write_lease_expires_at > CURRENT_TIMESTAMP AS lease_active
+         FROM blobs WHERE content_hash = $1 FOR UPDATE`,
+        [blob.content_hash],
+        client,
+      );
+      if (!current) {
+        const token = randomUUID();
+        await db.execute(
+          `INSERT INTO blobs (
+             content_hash, media_type, byte_size, created_at, state, generation,
+             write_lease_owner, write_claim_token, write_lease_expires_at, unreferenced_at
+           ) VALUES (
+             $1, $2, $3, CURRENT_TIMESTAMP, 'reserved', 1, $4, $5,
+             CURRENT_TIMESTAMP + ($6::double precision * INTERVAL '1 millisecond'),
+             CURRENT_TIMESTAMP
+           )
+           ON CONFLICT (content_hash) DO NOTHING`,
+          [
+            blob.content_hash,
+            blob.media_type,
+            blob.byte_size,
+            input.owner_id,
+            token,
+            input.lease_duration_ms,
+          ],
+          client,
+        );
+        current = await db.queryOne<{
+          state: "reserved" | "available" | "deleting" | "protected";
+          generation: number;
+          write_claim_token: string | null;
+          lease_active: boolean;
+        }>(
+          `SELECT state, generation, write_claim_token,
+                  write_lease_expires_at > CURRENT_TIMESTAMP AS lease_active
+           FROM blobs WHERE content_hash = $1 FOR UPDATE`,
+          [blob.content_hash],
+          client,
+        );
+        if (!current) throw new Error("Blob reservation row disappeared");
+        if (current.write_claim_token !== token) {
+          if (current.state === "deleting" || current.lease_active) {
+            throw new BlobReservationConflictError(blob.content_hash);
+          }
+        } else {
+          plans.push({
+            content_hash: blob.content_hash,
+            generation: asNumber(current.generation),
+            mode: "write",
+            claim_token: token,
+          });
+          continue;
+        }
+      }
+
+      if (current.state === "deleting" || current.lease_active) {
+        throw new BlobReservationConflictError(blob.content_hash);
+      }
+
+      const needsWrite = current.state === "reserved" || forceWrite.has(blob.content_hash);
+      if (needsWrite) {
+        const generation = asNumber(current.generation) + 1;
+        const token = randomUUID();
+        await db.execute(
+          `UPDATE blobs
+           SET state = CASE WHEN state = 'protected' THEN 'protected' ELSE 'reserved' END,
+               generation = $2, write_lease_owner = $3, write_claim_token = $4,
+               write_lease_expires_at = CURRENT_TIMESTAMP + ($5::double precision * INTERVAL '1 millisecond'),
+               unreferenced_at = CASE WHEN state = 'protected' THEN unreferenced_at ELSE CURRENT_TIMESTAMP END
+           WHERE content_hash = $1`,
+          [
+            blob.content_hash,
+            generation,
+            input.owner_id,
+            token,
+            input.lease_duration_ms,
+          ],
+          client,
+        );
+        plans.push({
+          content_hash: blob.content_hash,
+          generation,
+          mode: "write",
+          claim_token: token,
+        });
+      } else {
+        if (current.write_claim_token !== null) {
+          await db.execute(
+            `UPDATE blobs SET write_lease_owner = NULL, write_claim_token = NULL,
+               write_lease_expires_at = NULL WHERE content_hash = $1`,
+            [blob.content_hash],
+            client,
+          );
+        }
+        plans.push({
+          content_hash: blob.content_hash,
+          generation: asNumber(current.generation),
+          mode: "reuse",
+        });
+      }
+    }
+    return plans;
+  });
+}
+
+export async function releaseBlobReservations(
+  db: PgSql,
+  reservations: readonly BlobReservation[],
+): Promise<void> {
+  await db.withTx(async (client) => {
+    for (const reservation of reservations) {
+      if (reservation.mode !== "write") continue;
+      await db.execute(
+        `UPDATE blobs SET write_lease_owner = NULL, write_claim_token = NULL,
+           write_lease_expires_at = NULL,
+           unreferenced_at = CASE
+             WHEN state = 'protected' THEN unreferenced_at
+             WHEN EXISTS (
+               SELECT 1 FROM blob_references r WHERE r.content_hash = blobs.content_hash
+             ) THEN NULL
+             ELSE COALESCE(unreferenced_at, CURRENT_TIMESTAMP)
+           END
+         WHERE content_hash = $1 AND generation = $2 AND write_claim_token = $3`,
+        [reservation.content_hash, reservation.generation, reservation.claim_token],
+        client,
+      );
+    }
+  });
+}
+
+export async function completeBlobReservations(
+  db: PgSql,
+  client: PoolClient,
+  reservations: readonly BlobReservation[] | undefined,
+  referencedHashes: ReadonlySet<string>,
+): Promise<void> {
+  const seen = new Set<string>();
+  for (const reservation of reservations ?? []) {
+    if (seen.has(reservation.content_hash)) {
+      throw new Error("Blob reservations must contain unique hashes");
+    }
+    seen.add(reservation.content_hash);
+    if (reservation.mode === "write") {
+      if (!referencedHashes.has(reservation.content_hash)) {
+        throw new Error("Blob write reservation is not referenced by the owner commit");
+      }
+      const updated = await db.execute(
+        `UPDATE blobs
+         SET state = CASE WHEN state = 'protected' THEN 'protected' ELSE 'available' END,
+             write_lease_owner = NULL, write_claim_token = NULL,
+             write_lease_expires_at = NULL, unreferenced_at = NULL
+         WHERE content_hash = $1 AND generation = $2 AND write_claim_token = $3
+           AND state IN ('reserved', 'protected')
+           AND write_lease_expires_at > CURRENT_TIMESTAMP`,
+        [reservation.content_hash, reservation.generation, reservation.claim_token],
+        client,
+      );
+      if (updated !== 1) throw new BlobReservationConflictError(reservation.content_hash);
+    } else {
+      const updated = await db.execute(
+        `UPDATE blobs SET unreferenced_at = NULL
+         WHERE content_hash = $1 AND generation = $2
+           AND state IN ('available', 'protected') AND write_claim_token IS NULL`,
+        [reservation.content_hash, reservation.generation],
+        client,
+      );
+      if (updated !== 1) throw new BlobReservationConflictError(reservation.content_hash);
+    }
+  }
+}
+
+async function insertBlobReference(
+  db: PgSql,
+  orgId: string,
+  eventId: string,
+  kind: "body" | "attachment",
+  contentHash: string,
+  createdAt: string,
+  client: PoolClient,
+): Promise<void> {
+  const eligible = await db.execute(
+    `UPDATE blobs SET unreferenced_at = NULL
+     WHERE content_hash = $1 AND state IN ('available', 'protected')
+       AND write_claim_token IS NULL`,
+    [contentHash],
+    client,
+  );
+  if (eligible !== 1) throw new BlobReservationConflictError(contentHash);
+  await db.execute(
+    `INSERT INTO blob_references (
+       owner_org_id, owner_type, owner_id, reference_kind, content_hash, created_at
+     ) VALUES ($1, 'event', $2, $3, $4, $5)
+     ON CONFLICT DO NOTHING`,
+    [orgId, eventId, kind, contentHash, createdAt],
+    client,
+  );
+}
+
+export async function commitIngestOn(
+  db: PgSql,
+  client: PoolClient,
+  request: IngestCommitRequest,
+  additionalConversations: readonly ConversationLockKey[] = [],
+): Promise<EventRecord[]> {
+    assertIngestDispositionBindings(request);
+    if (
+      request.appends.length === 0 &&
+      request.dispositions.length === 0 &&
+      additionalConversations.length === 0
+    ) {
       return [];
     }
+    await completeBlobReservations(
+      db,
+      client,
+      request.blob_reservations,
+      new Set(request.appends.flatMap((append) => [
+        ...(append.content_hash ? [append.content_hash] : []),
+        ...(append.extra_blobs ?? []).map((blob) => blob.content_hash),
+      ])),
+    );
+    const appends = request.appends.map((append) => ({
+      ...append,
+      id: append.id ?? randomUUID(),
+    }));
+    const conversations: ConversationLockKey[] = [
+      ...additionalConversations,
+      ...appends.map((append) => ({
+        org_id: append.org_id,
+        thread_id: append.thread_id ?? conversationId(
+          append.source,
+          append.external_id,
+          append.id,
+        ),
+      })),
+    ];
+    for (const append of appends) {
+      const previous = await previousConversationLock(db, client, append.org_id, append.expected_head_id);
+      if (previous) conversations.push(previous);
+    }
+    await lockConversationThreads(db, client, conversations);
     const events: EventRecord[] = [];
-    for (const input of request.appends) {
+    for (const input of appends) {
+      const operation = input.operation ?? "create";
+      if (operation === "tombstone") {
+        const current = await findCurrent(db, input, client);
+        if ((current?.id ?? null) !== input.expected_head_id) {
+          throw new AuthorityConflictError();
+        }
+        events.push(await insertWithinTransaction(db, {
+          ...input,
+          operation,
+          content_hash: current?.content_hash ?? input.content_hash,
+          parent_event_id: current?.id,
+        }, client));
+        continue;
+      }
       events.push(
         await insertWithinTransaction(db, 
-          { ...input, operation: "create" },
+          {
+            ...input,
+            operation,
+            ...(operation === "revise" && input.parent_event_id
+              ? { parent_event_id: input.parent_event_id }
+              : {}),
+          },
           client,
         ),
       );
     }
+    const eventsById = new Map(events.map((event) => [event.id, event]));
+    const appendsByEventId = new Map(
+      events.map((event, index) => [event.id, appends[index]]),
+    );
     for (const decision of request.dispositions) {
-      await putDispositionWithinTransaction(db, decision, client);
+      const event = eventsById.get(decision.event_id);
+      if (!event) {
+        throw new Error("Ingest disposition event was not created");
+      }
+      await persistIngestionDisposition(
+        db,
+        event,
+        decision,
+        appendsByEventId.get(event.id)?.parent_event_id,
+        client,
+      );
     }
     return events;
   }
 
 export async function appendRevision(db: PgSql, input: EventRevision): Promise<EventRecord> {
-    return insert(db, { ...input, operation: "revise" });
+    assertEventDispositionBinding(input);
+    const eventInput = { ...input, id: input.id ?? randomUUID() };
+    return db.withTx(async (client) => {
+      const previous = await previousConversationLock(db, client, input.org_id, input.expected_head_id);
+      await lockConversationThreads(db, client, [{
+        org_id: input.org_id,
+        thread_id: input.thread_id ?? conversationId(
+          input.source,
+          input.external_id,
+          eventInput.id,
+        ),
+      }, ...(previous ? [previous] : [])]);
+      await completeBlobReservations(
+        db,
+        client,
+        input.blob_reservations,
+        new Set([
+          input.content_hash,
+          ...(input.extra_blobs ?? []).map((blob) => blob.content_hash),
+        ]),
+      );
+      const event = await insertWithinTransaction(db, { ...eventInput, operation: "revise" }, client);
+      if (input.disposition) {
+        await persistIngestionDisposition(
+          db,
+          event,
+          input.disposition,
+          input.parent_event_id,
+          client,
+        );
+      }
+      return event;
+    });
   }
 
 export async function markTombstone(db: PgSql, input: TombstoneEvent): Promise<EventRecord> {
+    assertEventDispositionBinding(input);
+    const eventInput = { ...input, id: input.id ?? randomUUID() };
     return db.withTx(async (client) => {
+      const previous = await previousConversationLock(db, client, input.org_id, input.expected_head_id);
+      await lockConversationThreads(db, client, [{
+        org_id: input.org_id,
+        thread_id: input.thread_id ?? conversationId(
+          input.source,
+          input.external_id,
+          eventInput.id,
+        ),
+      }, ...(previous ? [previous] : [])]);
       const current = await findCurrent(db, input, client);
-      return insertWithinTransaction(db, 
+      if ((current?.id ?? null) !== input.expected_head_id) {
+        throw new AuthorityConflictError();
+      }
+      const event = await insertWithinTransaction(db,
         {
-          ...input,
+          ...eventInput,
           operation: "tombstone",
           content_hash: current?.content_hash,
           parent_event_id: current?.id,
         },
         client,
       );
+      if (input.disposition) {
+        await persistIngestionDisposition(
+          db,
+          event,
+          input.disposition,
+          current?.id,
+          client,
+        );
+      }
+      return event;
     });
   }
 
@@ -510,12 +1190,40 @@ async function findCurrent(db: PgSql, identity: SourceIdentity, client?: PoolCli
   }
 
 async function insert(db: PgSql, input: InsertEventInput): Promise<EventRecord> {
-    return db.withTx((client) => insertWithinTransaction(db, input, client));
+    const eventInput = { ...input, id: input.id ?? randomUUID() };
+    return db.withTx(async (client) => {
+      const previous = await previousConversationLock(db, client, input.org_id, input.expected_head_id);
+      await lockConversationThreads(db, client, [{
+        org_id: input.org_id,
+        thread_id: input.thread_id ?? conversationId(
+          input.source,
+          input.external_id,
+          eventInput.id,
+        ),
+      }, ...(previous ? [previous] : [])]);
+      return insertWithinTransaction(db, eventInput, client);
+    });
   }
 
-async function insertWithinTransaction(db: PgSql, input: InsertEventInput, client: PoolClient): Promise<EventRecord> {
+async function previousConversationLock(
+  db: PgSql, client: PoolClient, orgId: string, eventId: string | null | undefined,
+): Promise<ConversationLockKey | undefined> {
+  if (!eventId) return undefined;
+  const event = await db.queryOne<{ source: string; external_id: string; thread_id: string | null }>(
+    "SELECT source, external_id, thread_id FROM events WHERE org_id = $1 AND id = $2",
+    [orgId, eventId], client,
+  );
+  return event ? {
+    org_id: orgId,
+    thread_id: event.thread_id ?? conversationId(event.source, event.external_id, eventId),
+  } : undefined;
+}
+
+async function insertWithinTransaction(
+  db: PgSql, input: InsertEventInput & { id: string }, client: PoolClient,
+): Promise<EventRecord> {
     const event: EventRecord = {
-      id: input.id ?? randomUUID(),
+      id: input.id,
       org_id: input.org_id,
       source: input.source,
       external_id: input.external_id,
@@ -611,6 +1319,28 @@ async function insertWithinTransaction(db: PgSql, input: InsertEventInput, clien
     if (headUpdate !== 1) {
       throw new AuthorityConflictError();
     }
+    if (event.content_hash) {
+      await insertBlobReference(
+        db,
+        event.org_id,
+        event.id,
+        "body",
+        event.content_hash,
+        event.ingested_at,
+        client,
+      );
+    }
+    for (const blob of input.extra_blobs ?? []) {
+      await insertBlobReference(
+        db,
+        event.org_id,
+        event.id,
+        "attachment",
+        blob.content_hash,
+        event.ingested_at,
+        client,
+      );
+    }
     await db.execute(
       `
         INSERT INTO context_projection_outbox (
@@ -626,13 +1356,66 @@ async function insertWithinTransaction(db: PgSql, input: InsertEventInput, clien
       ],
       client,
     );
-    await refreshThreadHeadWithinTransaction(db, 
-      event.org_id,
-      event.thread_id,
-      client,
-    );
+    const threadId = event.thread_id ?? conversationId(event.source, event.external_id, event.id);
+    const previous = await previousConversationLock(db, client, event.org_id, input.expected_head_id);
+    if (previous && previous.thread_id !== threadId) {
+      await refreshThreadHeadWithinTransaction(db, event.org_id, previous.thread_id, client);
+    }
+    await refreshThreadHeadWithinTransaction(db, event.org_id, threadId, client);
     return event;
   }
+
+async function persistIngestionDisposition(
+  db: PgSql,
+  event: EventRecord,
+  decision: ArrangementDecision,
+  previousEventId: string | undefined,
+  client: PoolClient,
+): Promise<void> {
+  const saved = await putDispositionWithinTransaction(db, decision, client);
+  const previous = previousEventId
+    ? await db.queryOne<{ disposition: ArrangementDecision["disposition"] }>(
+        `SELECT disposition FROM message_dispositions WHERE event_id = $1`,
+        [previousEventId],
+        client,
+      )
+    : undefined;
+  if (
+    decision.disposition !== "current_work" &&
+    previous?.disposition !== "current_work"
+  ) {
+    return;
+  }
+  const threadId =
+    event.thread_id ??
+    conversationId(event.source, event.external_id, event.id);
+  if (saved.disposition === "current_work" && event.operation !== "tombstone") {
+    await unfoldCurrentWorkWithinTransaction(db, client, {
+      org_id: event.org_id, thread_id: threadId, event_id: event.id,
+      cause: "current_work_ingested", dedupe_id: event.id, now: event.ingested_at,
+    });
+  }
+  await db.execute(`INSERT INTO conversation_lifecycle_events (
+    id, org_id, thread_id, aggregate_type, aggregate_id, aggregate_version,
+    event_type, command_id, dedupe_key, schema_version, payload_json, occurred_at, created_at
+  ) VALUES ($1, $2, $3, 'source_event', $4, 1, 'current_work_changed', NULL, $5, 1, $6, $7, $8)`,
+  [
+    randomUUID(),
+    event.org_id,
+    threadId,
+    event.id,
+    JSON.stringify(["source_event", event.id, 1, "current_work_changed"]),
+    jsonb({
+      source: "ingestion",
+      previous: previousEventId
+        ? { event_id: previousEventId, disposition: previous?.disposition ?? null }
+        : null,
+      result: saved,
+    }),
+    decision.decided_at,
+    event.ingested_at,
+  ], client);
+}
 
 export function toEvent(db: PgSql, row: EventRow): EventRecord {
     const requiredScopeIds = row.required_scope_ids

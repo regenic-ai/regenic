@@ -1,7 +1,3 @@
-import {
-  type ArrangementDecision,
-  type EventRecord,
-} from "@regenic/domain";
 import { PersonalKernelStoppedError } from "./personal-runtime.service";
 
 export function delay(ms: number): Promise<void> {
@@ -44,26 +40,4 @@ export function isWorkTickShutdown(error: unknown): boolean {
     (error instanceof TypeError && /database connection is not open/i.test(message)) ||
     /Service is not available/i.test(message)
   );
-}
-
-export async function forceDisposition(
-  authority: {
-    getDisposition(eventId: string): Promise<ArrangementDecision | null>;
-    putDisposition(decision: ArrangementDecision): Promise<void>;
-  },
-  event: EventRecord,
-  disposition: ArrangementDecision["disposition"],
-  reason: string,
-  now: string,
-): Promise<void> {
-  const current = await authority.getDisposition(event.id);
-  await authority.putDisposition({
-    event_id: event.id,
-    org_id: event.org_id,
-    disposition,
-    layer: current?.layer ?? "L1_event",
-    reason_codes: [...new Set([...(current?.reason_codes ?? []), reason])],
-    score: current?.score ?? 0.7,
-    decided_at: now,
-  });
 }

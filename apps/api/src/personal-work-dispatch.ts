@@ -10,7 +10,6 @@ import {
   formatWorkRunHistory,
   isActiveWorkStatus,
   isPullDue,
-  openOrUpdateWorkItem,
   parseConversationThread,
   pullUnitKey,
   ACTIVE_WORK_STATUSES,
@@ -23,17 +22,10 @@ import {
   recipeWantsContext,
   recipeTextMatches,
   recipeTriggerOf,
-  isOccupiedRecipeSlot,
-  isTaskInboxItem,
-  selectRecipeForSubject,
-  shouldAcceptPushRecord,
   shouldRetryFailedPush,
   taskInstructionOf,
   workSubjectFromEvent,
   type ExecutorContext,
-  type ConnectorInstallation,
-  type EventRecord,
-  type InboxItem,
   type Recipe,
   type TaskExecutor,
   type WorkItem,
@@ -42,16 +34,15 @@ import {
   type WorkRunStartCheckpointResult,
   type WorkContextAccess,
 } from "@regenic/domain";
-import { resolveInboxBodies, resolveInboxBody, type InboxBody } from "./inbox-body";
+import { resolveInboxBody } from "./inbox-body";
 import { PersonalConnectorError } from "./personal-errors";
 import { PersonalWorkChannel } from "./personal-work-channel";
 import { PersonalWorkWait } from "./personal-work-wait";
 import { PersonalWorkSupervise } from "./personal-work-supervise";
 import { PersonalRuntimeService } from "./personal-runtime.service";
 import { shouldDeferWorkForThread } from "./personal-sync-phase";
+import { isSystemRecipeId } from "./personal-system-work";
 
-/** How many inbox rows one dispatch tick may open. The next tick continues after them. */
-const INBOX_OBSERVE_PAGE = 16;
 /** Failed retries are a second pass so open work is not stuck behind them. */
 const FAILED_RETRY_PAGE = 20;
 
@@ -60,9 +51,6 @@ export class PersonalWorkDispatch {
   /** Per-recipe claim order so parallel starts reserve slots one at a time. */
   private readonly startLanes = new Map<string, Promise<void>>();
   private autoWork: Promise<void>[] = [];
-  /** Order tasks move on their own cursor so the email backlog cannot block them. */
-  private orderScan: { occurred_at: string; id: string } | null = null;
-  private opsScan: { occurred_at: string; id: string } | null = null;
   private failedScan = 0;
 
   constructor(
@@ -73,20 +61,11 @@ export class PersonalWorkDispatch {
     private readonly contextAccess?: {
       accessFor(runId: string, options?: { agent_key?: boolean }): WorkContextAccess;
     },
+    private readonly onCommittedWorkUpdate?: (workItemId: string) => void,
+    private readonly completionPolicyVersion?: () => 1 | undefined,
   ) {}
 
-  async reconcileInbox(): Promise<void> {
-    try {
-      await this.observeInbox();
-    } finally {
-      await this.drainAutoWork();
-    }
-  }
-
-  /**
-   * Start work already opened, up to each recipe cap, before the inbox walk.
-   * The walk decides new rows. It does not have to finish before slots fill.
-   */
+  /** Start atomically observed open work up to each recipe's concurrency cap. */
   async fillOpenSlots(): Promise<void> {
     try {
       const host = this.runtime.requireHost();
@@ -105,7 +84,8 @@ export class PersonalWorkDispatch {
       for (const item of items) {
         if (item.status === "open") {
           open.push(item);
-        } else if (item.status === "failed") {
+        } else if (item.status === "failed"
+          && !(item.current_run_id && item.acknowledged_run_id === item.current_run_id)) {
           failed.push(item);
         }
       }
@@ -137,6 +117,9 @@ export class PersonalWorkDispatch {
     ) {
       return;
     }
+    if (!(await this.hasCurrentWorkTrigger(item))) {
+      return;
+    }
     await this.retryOrResume(
       item,
       recipe,
@@ -145,85 +128,15 @@ export class PersonalWorkDispatch {
     );
   }
 
-  private async observeInbox(): Promise<void> {
-    const host = this.runtime.requireHost();
-    const orgId = this.runtime.orgId();
-    const authority = host.get("authority");
-    const [recipes, items, hiddenIds, taskRows] = await Promise.all([
-      authority.listRecipes(orgId),
-      authority.listWorkItems(orgId, { statuses: [...ACTIVE_WORK_STATUSES] }),
-      authority.listHiddenExecutorThreadIds(orgId),
-      authority.listInbox(orgId, { tasks: true, needs_work: true }),
-    ]);
-    if (taskRows.length === 0 && items.length === 0) {
-      return;
+  private async hasCurrentWorkTrigger(item: WorkItem): Promise<boolean> {
+    if (!item.head_event_id) {
+      return true;
     }
-    const hidden = new Set(hiddenIds);
-    const observeRows = uniqueInboxItems(taskRows).sort(compareInboxItems);
-    const orderRows = observeRows.filter((row) => isOrderTask(row));
-    const otherRows = observeRows.filter((row) => !isOrderTask(row));
-    const orderPage = takeInboxScanPage(orderRows, this.orderScan, INBOX_OBSERVE_PAGE);
-    const opsPage = takeInboxScanPage(otherRows, this.opsScan, INBOX_OBSERVE_PAGE);
-    this.orderScan = orderPage.next;
-    this.opsScan = opsPage.next;
-    const page = [...orderPage.page, ...opsPage.page];
-    const bodies = await resolveInboxBodies(
-      authority,
-      host.get("blobs"),
-      page.map((row) => row.event.content_hash),
-      "meta",
-    );
-    const installations = await authority.listInstallations(orgId);
-    const coveredEvents = new Set(observeRows.map((row) => row.event.id));
-    const seenEvents = new Set<string>();
-    for (const row of page) {
-      const threadId = conversationId(row.event.source, row.event.external_id, row.event.id);
-      if (hidden.has(threadId) || seenEvents.has(row.event.id)) {
-        continue;
-      }
-      seenEvents.add(row.event.id);
-      const body = row.event.content_hash
-        ? (bodies.get(row.event.content_hash) ?? {})
-        : {};
-      await this.observeHead({
-        event: row.event,
-        threadId,
-        body,
-        recipes,
-        installations,
-        fallbackType: isTaskInboxItem(row) ? "task" : undefined,
-      });
-    }
-    for (const item of items) {
-      if (
-        hidden.has(item.thread_id) ||
-        (item.head_event_id &&
-          (seenEvents.has(item.head_event_id) ||
-            coveredEvents.has(item.head_event_id)))
-      ) {
-        continue;
-      }
-      if (isOccupiedRecipeSlot(item.status) || !item.head_event_id) {
-        continue;
-      }
-      const event = await authority.getEvent(orgId, item.head_event_id);
-      if (!event) {
-        continue;
-      }
-      const body = await resolveInboxBodies(
-        authority,
-        host.get("blobs"),
-        [event.content_hash],
-        "meta",
-      );
-      await this.observeHead({
-        event,
-        threadId: item.thread_id,
-        body: event.content_hash ? (body.get(event.content_hash) ?? {}) : {},
-        recipes,
-        installations,
-      });
-    }
+    const result = await this.runtime.requireHost().get("authority").observeWorkItem({
+      expected_item: item,
+      item,
+    });
+    return result.outcome !== "conflict";
   }
 
   async dispatchPullRecipes(): Promise<void> {
@@ -296,18 +209,26 @@ export class PersonalWorkDispatch {
         if (!subject) {
           continue;
         }
-        const opened = await authority.putWorkItem({
-          id: `work-${randomUUID()}`,
-          org_id: orgId,
-          thread_id: threadId,
-          unit_key,
-          record_class: subject.record_class,
-          thread_facet: subject.thread_facet,
-          status: "open",
-          recipe_id: recipe.id,
-          created_at: nowIso,
-          updated_at: nowIso,
+        const created = await authority.createWorkItem({
+          item: {
+            id: `work-${randomUUID()}`,
+            org_id: orgId,
+            thread_id: threadId,
+            unit_key,
+            record_class: subject.record_class,
+            thread_facet: subject.thread_facet,
+            status: "open",
+            recipe_id: recipe.id,
+            created_at: nowIso,
+            updated_at: nowIso,
+          },
+          recipe,
+          expected_recipe: recipe,
         });
+        if (created.outcome === "conflict") {
+          continue;
+        }
+        const opened = created.item;
         items.push(opened);
         await this.beginStart(
           opened,
@@ -316,9 +237,10 @@ export class PersonalWorkDispatch {
           recipe.max_concurrent !== undefined,
         );
       }
-      await authority.putRecipe({
-        ...recipe,
+      await authority.advanceRecipePullSchedule({
+        expected_recipe: recipe,
         next_run_at: advanceRecipePull(recipe.trigger, fireAt, nowIso),
+        updated_at: nowIso,
       });
     }
   }
@@ -615,16 +537,21 @@ export class PersonalWorkDispatch {
       work_item_id: item.id,
       recipe_id: recipe.id,
       executor_type: executor.executor_type,
+      executor_config: recipe.executor_config,
+      include_context: includeContext,
       status: "running",
       start_state: "pending",
       write_back_required: writeBackRequired,
       trigger_kind: recipeTriggerOf(recipe).kind,
+      ...(!isSystemRecipeId(recipe.id) && this.completionPolicyVersion?.() === 1
+        ? { completion_policy_version: 1 as const } : {}),
       ...(writeBackTarget ? { write_back_target: writeBackTarget } : {}),
       created_at: now,
       updated_at: now,
     };
     const claimed = await authority.claimWorkRunStart({
       run,
+      expected_recipe: recipe,
       expected_item: item,
       ...(options?.command ? {
         expected_version: options.command.expected_version,
@@ -636,6 +563,10 @@ export class PersonalWorkDispatch {
         : mode === "auto" && recipe.trigger.kind === "push" && item.recipe_id !== recipe.id
           && (recipe.match.text_contains || recipe.match.text_excludes) ? "automatic" : undefined,
       max_concurrent: mode === "manual" ? undefined : recipe.max_concurrent,
+      require_current_work_trigger:
+        mode === "auto" &&
+        recipe.trigger.kind === "push" &&
+        Boolean(item.head_event_id),
       visibility_intent_version: visibilityIntentVersion,
     });
     if (!claimed) {
@@ -659,7 +590,7 @@ export class PersonalWorkDispatch {
       return undefined;
     }
     try {
-      return await this.startReservedItem(item, recipe, executor, run, composed, workspace, includeContext, mode);
+      return await this.startReservedItem(item, recipe, executor, run, composed, workspace, mode);
     } catch (error) {
       if (mode === "auxiliary") {
         const [savedItem, savedRun] = await Promise.all([
@@ -685,11 +616,15 @@ export class PersonalWorkDispatch {
     run: WorkRun,
     composed: ReturnType<typeof composeWorkConversation>,
     workspace: boolean,
-    includeContext: boolean,
     mode: "auto" | "manual" | "auxiliary",
   ): Promise<WorkRun | undefined> {
     const host = this.runtime.requireHost();
     const authority = host.get("authority");
+    const frozenRecipe = {
+      ...recipe,
+      executor_config: run.executor_config ?? recipe.executor_config,
+      include_context: run.include_context ?? recipeWantsContext(recipe),
+    };
     const runningItem = await authority.getWorkItem(item.org_id, item.id);
     if (!runningItem || runningItem.current_run_id !== run.id) {
       throw new Error(`Claimed work item identity disappeared: ${item.id}`);
@@ -703,8 +638,8 @@ export class PersonalWorkDispatch {
         {
           run_id: run.id,
           work_item: runningItem,
-          recipe,
-          task_instruction: taskInstructionOf(recipe.executor_config),
+          recipe: frozenRecipe,
+          task_instruction: taskInstructionOf(frozenRecipe.executor_config),
           evidence_text: formatWorkEvidence({
             thread_id: item.thread_id,
             record_class: item.record_class,
@@ -712,7 +647,7 @@ export class PersonalWorkDispatch {
             source: item.thread_id.split(":")[0] ?? "",
             text: composed.inline_text,
           }),
-          conversation: includeContext
+          conversation: frozenRecipe.include_context
             ? {
                 current: composed.current,
                 current_line: composed.current_line,
@@ -748,6 +683,7 @@ export class PersonalWorkDispatch {
           expected_item: latestItem, expected_run: saved,
           kind: "failed", error: definite.message, now: failedAt,
         });
+        this.publishCommittedWorkUpdate(item.id);
         console.error("personal work start failed", {
           run_id: run.id,
           error: definite.message,
@@ -768,6 +704,7 @@ export class PersonalWorkDispatch {
             error: `Executor start could not be confirmed: ${deliveryErrorMessage(error)}. Check the executor before dismissing this attempt and starting a new one.`,
             now: new Date().toISOString(),
           });
+          this.publishCommittedWorkUpdate(item.id);
         }
       }
       if (mode !== "auto") {
@@ -914,100 +851,6 @@ export class PersonalWorkDispatch {
     return (await resolveInboxBody(authority, host.get("blobs"), event?.content_hash, "meta")).body_text;
   }
 
-  private async observeHead(input: {
-    event: EventRecord;
-    threadId: string;
-    body: InboxBody;
-    recipes: Recipe[];
-    installations: ConnectorInstallation[];
-    fallbackType?: string;
-  }): Promise<void> {
-    const host = this.runtime.requireHost();
-    const orgId = this.runtime.orgId();
-    const authority = host.get("authority");
-    try {
-      parseConversationThread(input.threadId);
-    } catch {
-      return;
-    }
-    const surface = input.body.surface;
-    if (
-      !shouldAcceptPushRecord({
-        kind: surface?.kind,
-        direction: surface?.direction,
-        external_id: input.event.external_id,
-        type: surface?.type ?? input.fallbackType,
-      })
-    ) {
-      return;
-    }
-    const existing = await authority.getWorkItemByThread(orgId, input.threadId);
-    const subject = workSubjectFromEvent({
-      type: surface?.type ?? input.fallbackType,
-      source: input.event.source,
-      thread_id: input.threadId,
-      unit_kind: surface?.unit_kind,
-      body_text: input.body.body_text,
-      prompts: false,
-      hint: surface?.thread_facet,
-      prior_facet:
-        existing && isActiveWorkStatus(existing.status)
-          ? existing.thread_facet
-          : undefined,
-    });
-    if (!subject) {
-      return;
-    }
-    const recipe = selectRecipeForSubject(input.recipes, subject);
-    const byUnit = await authority.getWorkItemByUnitKey(
-      orgId,
-      input.threadId,
-      input.event.id,
-    );
-    if (byUnit) {
-      if (recipe && recipeAllowsPushDispatch(recipe)) {
-        await this.retryOrResume(
-          byUnit,
-          recipe,
-          input.body.body_text,
-          recipe.max_concurrent !== undefined,
-        );
-      }
-      return;
-    }
-    // An unstarted older unit must not absorb a matching trigger if its own body fails.
-    const reuseExisting =
-      existing &&
-      !isOccupiedRecipeSlot(existing.status) &&
-      existing.head_event_id !== input.event.id &&
-      recipe &&
-      recipe.trigger.kind === "push" &&
-      (recipe.match.text_contains || recipe.match.text_excludes) &&
-      !recipeTextMatches(recipe.match, await this.filterBodyText(existing.thread_id, existing.head_event_id))
-        ? null
-        : existing;
-    const next = openOrUpdateWorkItem({
-      existing: reuseExisting,
-      org_id: orgId,
-      subject,
-      head_event_id: input.event.id,
-      recipe,
-      now: new Date().toISOString(),
-    });
-    if (!next) {
-      return;
-    }
-    const saved = await authority.putWorkItem(next);
-    if (saved.status === "open" && recipe && recipeAllowsPushDispatch(recipe)) {
-      await this.retryOrResume(
-        saved,
-        recipe,
-        input.body.body_text,
-        recipe.max_concurrent !== undefined,
-      );
-    }
-  }
-
   private async noteStartFailed(
     item: WorkItem,
     recipe: Recipe,
@@ -1021,6 +864,8 @@ export class PersonalWorkDispatch {
       expected_item: item,
       run: {
         ...failedWorkStart({ item, recipe, error, now }),
+        executor_config: recipe.executor_config,
+        include_context: recipeWantsContext(recipe),
         status: "failed", write_back_required: false, trigger_kind: recipeTriggerOf(recipe).kind,
       },
       mode: mode === "auto" ? "automatic" : mode,
@@ -1033,8 +878,20 @@ export class PersonalWorkDispatch {
       console.error("personal work start failure rejected", result.reason, error);
       return;
     }
+    this.publishCommittedWorkUpdate(item.id);
     if (mode === "auto") {
       console.error("personal work start failed", error);
+    }
+  }
+
+  private publishCommittedWorkUpdate(workItemId: string): void {
+    try {
+      this.onCommittedWorkUpdate?.(workItemId);
+    } catch (error) {
+      console.error("personal work start lifecycle notification failed", {
+        work_item_id: workItemId,
+        error,
+      });
     }
   }
 }
@@ -1053,55 +910,6 @@ function definiteLocalStartFailure(
 
 function failedRunCount(runs: WorkRun[]): number {
   return runs.filter((run) => run.status === "failed").length;
-}
-
-function isOrderTask(row: InboxItem): boolean {
-  return (row.event.thread_id ?? "").startsWith("crm:order:");
-}
-
-function compareInboxItems(left: InboxItem, right: InboxItem): number {
-  if (left.event.occurred_at !== right.event.occurred_at) {
-    return left.event.occurred_at < right.event.occurred_at ? -1 : 1;
-  }
-  if (left.event.id === right.event.id) {
-    return 0;
-  }
-  return left.event.id < right.event.id ? -1 : 1;
-}
-
-function isAfterInboxScan(
-  event: { occurred_at: string; id: string },
-  scan: { occurred_at: string; id: string },
-): boolean {
-  if (event.occurred_at !== scan.occurred_at) {
-    return event.occurred_at > scan.occurred_at;
-  }
-  return event.id > scan.id;
-}
-
-/** One forward page. Reaching the end arms the next tick to start over. */
-function takeInboxScanPage(
-  rows: InboxItem[],
-  scan: { occurred_at: string; id: string } | null,
-  limit: number,
-): { page: InboxItem[]; next: { occurred_at: string; id: string } | null } {
-  if (rows.length <= limit) {
-    return { page: rows, next: null };
-  }
-  let start = 0;
-  if (scan) {
-    const found = rows.findIndex((row) => isAfterInboxScan(row.event, scan));
-    start = found < 0 ? 0 : found;
-  }
-  const page = rows.slice(start, start + limit);
-  const last = page[page.length - 1];
-  if (!last || start + page.length >= rows.length) {
-    return { page, next: null };
-  }
-  return {
-    page,
-    next: { occurred_at: last.event.occurred_at, id: last.event.id },
-  };
 }
 
 function interleaveByRecipe(items: WorkItem[]): WorkItem[] {
@@ -1140,17 +948,4 @@ function takeRingPage<T>(items: T[], start: number, limit: number): { page: T[];
   const page = items.slice(index, index + limit);
   const next = index + page.length;
   return { page, next: next >= items.length ? 0 : next };
-}
-
-function uniqueInboxItems(rows: InboxItem[]): InboxItem[] {
-  const seen = new Set<string>();
-  const unique: InboxItem[] = [];
-  for (const row of rows) {
-    if (seen.has(row.event.id)) {
-      continue;
-    }
-    seen.add(row.event.id);
-    unique.push(row);
-  }
-  return unique;
 }

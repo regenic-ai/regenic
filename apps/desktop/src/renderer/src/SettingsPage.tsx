@@ -2,6 +2,9 @@ import { useEffect, useRef, useState, type UIEvent } from "react";
 import {
   applyDataDirectory,
   applyKernelSettings,
+  fetchCancellationJobs,
+  fetchWorkIdentityDiagnostics,
+  retryCancellationJob,
   clearStore,
   currentApiOrigin,
   fetchKernelSettings,
@@ -20,6 +23,8 @@ import type {
   DataDirectoryAction,
   DataDirectoryPlan,
   DataDirectoryView,
+  CancellationJobView,
+  WorkIdentityDiagnosticView,
   KernelMode,
   Locale,
   MessageDisposition,
@@ -104,6 +109,12 @@ export function SettingsPage({
   const [dispatchMessage, setDispatchMessage] = useState<string | null>(null);
   const [dispatchFailed, setDispatchFailed] = useState(false);
   const [savedDispatch, setSavedDispatch] = useState<PersonalDispatchPolicy | null>(null);
+  const [cancellationJobs, setCancellationJobs] = useState<CancellationJobView[]>([]);
+  const [cancellationJobsError, setCancellationJobsError] = useState<string | null>(null);
+  const [retryingCancellationJob, setRetryingCancellationJob] = useState<string | null>(null);
+  const [workIdentityDiagnostics, setWorkIdentityDiagnostics] = useState<WorkIdentityDiagnosticView[]>([]);
+  const [workIdentityDiagnosticsError, setWorkIdentityDiagnosticsError] = useState<string | null>(null);
+  const [workIdentityDiagnosticsBusy, setWorkIdentityDiagnosticsBusy] = useState(false);
   const [savedKernel, setSavedKernel] = useState<{ mode: KernelMode; customOrigin: string }>({
     mode: "local", customOrigin: "http://127.0.0.1:4370",
   });
@@ -153,6 +164,61 @@ export function SettingsPage({
       });
     return () => { cancelled = true; };
   }, [activeOrigin, t]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetchWorkIdentityDiagnostics()
+      .then((items) => {
+        if (!cancelled) {
+          setWorkIdentityDiagnostics(items);
+          setWorkIdentityDiagnosticsError(null);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setWorkIdentityDiagnosticsError(t("settings.workIdentityDiagnosticsError"));
+      });
+    return () => { cancelled = true; };
+  }, [activeOrigin, t]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetchCancellationJobs()
+      .then((jobs) => {
+        if (!cancelled) {
+          setCancellationJobs(jobs);
+          setCancellationJobsError(null);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setCancellationJobsError(t("settings.cancellationJobsError"));
+      });
+    return () => { cancelled = true; };
+  }, [activeOrigin, t]);
+
+  const retryCancellation = async (job: CancellationJobView) => {
+    setRetryingCancellationJob(job.id);
+    setCancellationJobsError(null);
+    try {
+      await retryCancellationJob(job);
+      setCancellationJobs(await fetchCancellationJobs());
+    } catch {
+      setCancellationJobsError(t("settings.cancellationRetryError"));
+    } finally {
+      setRetryingCancellationJob(null);
+    }
+  };
+
+  const refreshWorkIdentityDiagnostics = async () => {
+    setWorkIdentityDiagnosticsBusy(true);
+    setWorkIdentityDiagnosticsError(null);
+    try {
+      setWorkIdentityDiagnostics(await fetchWorkIdentityDiagnostics());
+    } catch {
+      setWorkIdentityDiagnosticsError(t("settings.workIdentityDiagnosticsError"));
+    } finally {
+      setWorkIdentityDiagnosticsBusy(false);
+    }
+  };
 
   const savePersonalDispatch = async () => {
     if (!dispatchPolicy) return;
@@ -403,6 +469,8 @@ export function SettingsPage({
     ["settings-semantic", t("semantic.title")],
     ["settings-kernel", t("settings.kernel")],
     ["settings-data", t("settings.store")],
+    ["settings-cancellation-jobs", t("settings.cancellationJobs")],
+    ["settings-work-identity", t("settings.workIdentityDiagnostics")],
     ["settings-danger", t("settings.danger")],
   ] as const;
 
@@ -807,6 +875,96 @@ export function SettingsPage({
                 )}
               </div>
             ) : null}
+          </section>
+
+          <section className="card" id="settings-cancellation-jobs">
+            <div className="card-head">
+              <h2>{t("settings.cancellationJobs")}</h2>
+            </div>
+            <p className="muted">{t("settings.cancellationJobsLead")}</p>
+            {cancellationJobsError ? <p className="error">{cancellationJobsError}</p> : null}
+            {cancellationJobs.length === 0 && !cancellationJobsError ? (
+              <p className="muted">{t("settings.cancellationJobsEmpty")}</p>
+            ) : null}
+            {cancellationJobs.map((job) => (
+              <div className="settings-row" key={job.id}>
+                <div>
+                  <strong>{job.status === "dead"
+                    ? t("settings.cancellationDead")
+                    : t("settings.cancellationFailed")}</strong>
+                  <p className="muted">
+                    {t("settings.cancellationJobDetails", {
+                      run: job.run_id,
+                      attempts: String(job.attempts),
+                      code: job.last_error_code ?? t("settings.cancellationUnknownError"),
+                    })}
+                  </p>
+                  {job.last_error ? <p className="muted">{job.last_error}</p> : null}
+                </div>
+                {job.status === "dead" ? (
+                  <button
+                    type="button"
+                    className="ghost"
+                    disabled={retryingCancellationJob !== null}
+                    onClick={() => void retryCancellation(job)}
+                  >
+                    {retryingCancellationJob === job.id
+                      ? t("settings.cancellationRetrying")
+                      : t("settings.cancellationRetry")}
+                  </button>
+                ) : null}
+              </div>
+            ))}
+          </section>
+
+          <section className="card" id="settings-work-identity">
+            <div className="card-head">
+              <h2>{t("settings.workIdentityDiagnostics")}</h2>
+              <button
+                type="button"
+                className="ghost"
+                disabled={workIdentityDiagnosticsBusy}
+                onClick={() => void refreshWorkIdentityDiagnostics()}
+              >
+                {t("followUps.refresh")}
+              </button>
+            </div>
+            <p className="muted">{t("settings.workIdentityDiagnosticsLead")}</p>
+            {workIdentityDiagnosticsError ? (
+              <p className="error">{workIdentityDiagnosticsError}</p>
+            ) : null}
+            {workIdentityDiagnostics.length === 0 && !workIdentityDiagnosticsError ? (
+              <p className="muted">{t("settings.workIdentityDiagnosticsEmpty")}</p>
+            ) : null}
+            {workIdentityDiagnostics.map((item) => (
+              <div className="settings-row" key={item.work_item_id}>
+                <div>
+                  <strong>{t("settings.workIdentityDiagnosticReason", {
+                    reason: t(`settings.workIdentityReason.${item.reason}`),
+                  })}</strong>
+                  <p className="muted">
+                    {t("settings.workIdentityDiagnosticDetails", {
+                      item: item.work_item_id,
+                      thread: item.thread_id,
+                      unit: item.unit_key,
+                      status: item.item_status,
+                    })}
+                  </p>
+                  {item.current_run_id ? (
+                    <p className="muted">
+                      {t("settings.workIdentityCurrentRun", { run: item.current_run_id })}
+                    </p>
+                  ) : null}
+                  {item.candidate_run_ids.length > 0 ? (
+                    <p className="muted">
+                      {t("settings.workIdentityCandidates", {
+                        runs: item.candidate_run_ids.join(", "),
+                      })}
+                    </p>
+                  ) : null}
+                </div>
+              </div>
+            ))}
           </section>
 
           <section className="card danger-zone" id="settings-danger">

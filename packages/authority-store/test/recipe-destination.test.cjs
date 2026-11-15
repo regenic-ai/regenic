@@ -169,11 +169,37 @@ describe("recipe destination migrations", () => {
   }, async (t) => {
     const store = await openPostgres(t, async (db) => {
       const historicalSchema = PG_BASELINE_SQL
+        .replace(/CREATE TABLE conversation_lifecycle_events \([\s\S]*?CREATE UNIQUE INDEX conversation_lifecycle_events_command_unique_idx[\s\S]*?;\n/, "")
+        .replace(/CREATE TABLE conversation_lifecycle_jobs \([\s\S]*?CREATE INDEX conversation_lifecycle_jobs_org_idx[\s\S]*?;\n/, "")
+        .replace(
+          "  state TEXT NOT NULL DEFAULT 'protected'\n    CHECK (state IN ('reserved', 'available', 'deleting', 'protected')),\n  generation INTEGER NOT NULL DEFAULT 0 CHECK (generation >= 0),\n  write_lease_owner TEXT,\n  write_claim_token TEXT,\n  write_lease_expires_at TIMESTAMPTZ,\n  unreferenced_at TIMESTAMPTZ,\n  gc_claim_token TEXT,\n  gc_started_at TIMESTAMPTZ\n",
+          "",
+        )
+        .replace(
+          "  created_at TIMESTAMPTZ NOT NULL,\n);\n\nCREATE INDEX blobs_gc_candidate_idx",
+          "  created_at TIMESTAMPTZ NOT NULL\n);\n\nCREATE INDEX blobs_gc_candidate_idx",
+        )
+        .replace("CREATE INDEX blobs_gc_candidate_idx\n  ON blobs (state, unreferenced_at, content_hash);\n", "")
+        .replace(/CREATE TABLE blob_references \([\s\S]*?CREATE INDEX blob_references_owner_idx[\s\S]*?;\n/, "")
         .replace("  write_back_thread_id TEXT,\n", "")
         .replace("  write_back_required BOOLEAN,\n", "")
         .replace("  trigger_kind TEXT CHECK (trigger_kind IN ('push', 'pull', 'manual')),\n", "")
         .replace("  write_back_target_json JSONB,\n", "")
+        .replace("  executor_config_json JSONB,\n  include_context BOOLEAN,\n", "")
         .replace("CREATE UNIQUE INDEX work_runs_org_id_idx ON work_runs (org_id, id);\n", "")
+        .replace("  lease_claim_token TEXT,\n", "")
+        .replace(
+          "  hidden_reason TEXT,\n  visibility_version INTEGER NOT NULL DEFAULT 0 CHECK (visibility_version >= 0),\n",
+          "  hidden_reason TEXT,\n",
+        )
+        .replace(
+          "  event_id TEXT PRIMARY KEY REFERENCES events(id),\n  org_id TEXT NOT NULL,\n  version INTEGER NOT NULL DEFAULT 0 CHECK (version >= 0),\n",
+          "  event_id TEXT PRIMARY KEY REFERENCES events(id),\n  org_id TEXT NOT NULL,\n",
+        )
+        .replace(
+          "  work_item_id TEXT NOT NULL REFERENCES work_items(id),\n  version INTEGER NOT NULL DEFAULT 0 CHECK (version >= 0),\n  recipe_id TEXT NOT NULL,\n",
+          "  work_item_id TEXT NOT NULL REFERENCES work_items(id),\n  recipe_id TEXT NOT NULL,\n",
+        )
         .replace("  run_id TEXT,\n  target_json JSONB,\n", "")
         .replace("  lease_owner TEXT,\n  claim_token TEXT,\n  cancel_requested_at TIMESTAMPTZ,\n", "")
         .replace("  FOREIGN KEY (org_id, run_id) REFERENCES work_runs(org_id, id)", "  UNIQUE (org_id, work_item_id)")
@@ -181,8 +207,11 @@ describe("recipe destination migrations", () => {
         .replace("CREATE UNIQUE INDEX work_deliveries_legacy_item_idx ON work_deliveries (org_id, work_item_id) WHERE run_id IS NULL;\n", "")
         .replace("CREATE INDEX work_deliveries_item_idx ON work_deliveries (org_id, work_item_id, created_at, id);\n", "")
         .replace("ALTER TABLE work_items ADD COLUMN current_run_id TEXT REFERENCES work_runs(id) DEFERRABLE INITIALLY DEFERRED;\n", "")
+        .replace("ALTER TABLE work_items ADD COLUMN acknowledged_run_id TEXT REFERENCES work_runs(id) DEFERRABLE INITIALLY DEFERRED;\n", "")
         .replace("ALTER TABLE work_items ADD COLUMN version INTEGER NOT NULL DEFAULT 0 CHECK (version >= 0);\n", "")
+        .replace("ALTER TABLE work_items ADD COLUMN visibility_intent_version INTEGER NOT NULL DEFAULT 0 CHECK (visibility_intent_version >= 0);\n", "")
         .replace("ALTER TABLE work_runs ADD COLUMN version INTEGER NOT NULL DEFAULT 0 CHECK (version >= 0);\n", "");
+      assert.doesNotMatch(historicalSchema, /CREATE TABLE conversation_lifecycle_(events|jobs)/);
       await db.query(historicalSchema);
       await db.query("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL)");
       await db.query("INSERT INTO schema_migrations VALUES (55, $1)", [NOW]);

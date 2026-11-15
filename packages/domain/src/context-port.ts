@@ -19,7 +19,13 @@ import type {
   ContextSnapshotIndexQuery,
   ContextRetrievalTrace,
 } from "./context-snapshot";
-import type { EventRecord, JsonValue, WeightHints } from "./ingestion";
+import type {
+  BlobReservation,
+  EventRecord,
+  JsonValue,
+  ReserveBlobWritesInput,
+  WeightHints,
+} from "./ingestion";
 import type { ContextEmbeddingMaterial, EmbeddingGeneration } from "./embedding-provider";
 
 export interface ContextProjectionCapabilities {
@@ -56,6 +62,14 @@ export interface ContextArtifactQuery {
   statuses?: ContextArtifactStatus[];
   generation?: string;
   limit?: number;
+  after_recorded_at?: string;
+  after_id?: string;
+}
+
+export interface ContextArtifactEvidenceReferenceBackfill {
+  org_id: string;
+  artifact_id: string;
+  expected_input_hash: string;
 }
 
 export interface ContextBundleLookup {
@@ -66,9 +80,17 @@ export interface ContextBundleLookup {
 }
 
 export interface ContextArtifactStore extends ContextArtifactLifecycleStore {
-  putArtifact(artifact: ContextArtifact): Promise<ContextArtifact>;
+  reserveBlobWrites(input: ReserveBlobWritesInput): Promise<BlobReservation[]>;
+  releaseBlobReservations(reservations: readonly BlobReservation[]): Promise<void>;
+  putArtifact(
+    artifact: ContextArtifact,
+    blobReservations?: readonly BlobReservation[],
+  ): Promise<ContextArtifact>;
   getArtifact(orgId: string, id: string): Promise<ContextArtifact | null>;
   listArtifacts(query: ContextArtifactQuery): Promise<ContextArtifact[]>;
+  backfillArtifactEvidenceReferences(
+    input: ContextArtifactEvidenceReferenceBackfill,
+  ): Promise<void>;
   listArtifactIndexes(query: ContextArtifactQuery): Promise<ContextArtifactIndex[]>;
   getArtifactState(orgId: string, artifactId: string): Promise<ContextArtifactState | null>;
   decideArtifact(input: ContextArtifactDecision): Promise<ContextArtifactState>;

@@ -114,26 +114,61 @@ describe("recipe text filters", () => {
   it("starts only matching push events while still ingesting rejected tasks", async (t) => {
     const f = await fixture(t);
     await f.ingest("please APPROVE this DRAFT");
-    await f.dispatch.reconcileInbox();
+    await f.dispatch.fillOpenSlots();
     assert.equal(f.starts(), 0);
     assert.equal((await f.authority.listWorkItems(ORG)).length, 1);
     await f.ingest("please APPROVE this release");
-    await f.dispatch.reconcileInbox();
+    await f.dispatch.fillOpenSlots();
     assert.equal(f.starts(), 1);
     const runs = await f.authority.listWorkRuns(ORG);
     assert.equal(runs.length, 1);
     assert.equal(runs[0].recipe_id, f.recipe.id);
   });
 
+  it("does not start an existing work item after its trigger leaves current work", async (t) => {
+    const f = await fixture(t);
+    const eventId = await f.ingest("please approve this release");
+    const event = await f.authority.getEvent(ORG, eventId);
+    const observed = await f.authority.getWorkItemByUnitKey(ORG, event.thread_id, event.id);
+    assert.ok(observed);
+    const decision = await f.authority.getDisposition(event.id);
+    assert.ok(decision);
+    const decidedAt = new Date(Date.parse(event.ingested_at) + 1).toISOString();
+    const updatedDecision = {
+      ...decision,
+      disposition: "outside_current_work",
+      reason_codes: ["manual_triage"],
+      score: 0,
+      decided_at: decidedAt,
+    };
+    const transition = await f.authority.transitionDisposition({
+      expected: decision,
+      decision: updatedDecision,
+      command: {
+        org_id: ORG,
+        event_id: event.id,
+        action: "triage",
+        disposition: updatedDecision.disposition,
+        command_id: "recipe-filter-triage",
+        issued_at: decidedAt,
+      },
+    });
+    assert.equal(transition.outcome, "applied");
+
+    await f.dispatch.fillOpenSlots();
+
+    assert.equal(f.starts(), 0);
+    assert.deepEqual(
+      await f.authority.getWorkItem(ORG, observed.id),
+      observed,
+    );
+  });
+
   it("does not bypass changed filters through fill-open-slots or manual starts", async (t) => {
     const f = await fixture(t);
     const eventId = await f.ingest("please approve this draft");
-    const item = await f.authority.putWorkItem({
-      id: "queued", org_id: ORG, recipe_id: f.recipe.id,
-      thread_id: "test-chat:room", unit_key: eventId, head_event_id: eventId,
-      record_class: "task", thread_facet: "ticket", status: "open",
-      created_at: f.now, updated_at: f.now,
-    });
+    const item = await f.authority.getWorkItemByUnitKey(ORG, "test-chat:room", eventId);
+    assert.ok(item);
     await f.dispatch.fillOpenSlots();
     assert.equal(f.starts(), 0);
     await assert.rejects(f.dispatch.startItem(item, f.recipe, "approve", "manual"),
@@ -142,36 +177,63 @@ describe("recipe text filters", () => {
     assert.equal((await f.authority.listWorkRuns(ORG)).length, 0);
   });
 
-  it("binds a newly created filtered rule to a matching task already in the inbox", async (t) => {
+  it("does not retroactively bind a rule to work observed before the rule existed", async (t) => {
     const f = await fixture(t);
     await f.authority.deleteRecipe(ORG, f.recipe.id);
     await f.ingest("approve release");
-    await f.dispatch.reconcileInbox();
+    await f.dispatch.fillOpenSlots();
     const before = (await f.authority.listWorkItems(ORG))[0];
     assert.equal(before.recipe_id, undefined);
     assert.equal(f.starts(), 0);
     await f.authority.putRecipe(f.recipe);
-    const put = t.mock.method(f.authority, "putWorkItem");
-    await f.dispatch.reconcileInbox();
-    assert.equal(f.starts(), 1);
+    await f.dispatch.fillOpenSlots();
+    assert.equal(f.starts(), 0);
     const saved = await f.authority.getWorkItem(ORG, before.id);
-    assert.equal(saved.recipe_id, f.recipe.id);
-    assert.equal(saved.version, before.version + 1);
-    assert.equal(put.mock.callCount(), 0);
+    assert.deepEqual(saved, before);
   });
 
   it("does not bind a matching filtered rule before its start has capacity", async (t) => {
     const f = await fixture(t, { max_concurrent: 1 });
     await f.authority.deleteRecipe(ORG, f.recipe.id);
     await f.ingest("approve release");
-    await f.dispatch.reconcileInbox();
+    await f.dispatch.fillOpenSlots();
     const before = (await f.authority.listWorkItems(ORG))[0];
     await f.authority.putRecipe(f.recipe);
-    await f.authority.putWorkItem({
-      ...before, id: "occupied", unit_key: "occupied", thread_id: "test-chat:occupied",
-      recipe_id: f.recipe.id, status: "running",
+    const occupiedItem = {
+      id: "occupied",
+      org_id: ORG,
+      thread_id: "test-chat:occupied",
+      unit_key: "occupied",
+      record_class: "task",
+      thread_facet: "ticket",
+      recipe_id: f.recipe.id,
+      status: "open",
+      created_at: f.now,
+      updated_at: f.now,
+    };
+    const created = await f.authority.createWorkItem({
+      item: occupiedItem,
+      recipe: f.recipe,
+      expected_recipe: f.recipe,
     });
-    await f.dispatch.reconcileInbox();
+    assert.equal(created.outcome, "applied");
+    assert.equal(await f.authority.claimWorkRunStart({
+      run: {
+        id: "occupied-run",
+        org_id: ORG,
+        work_item_id: occupiedItem.id,
+        recipe_id: f.recipe.id,
+        executor_type: f.recipe.executor_type,
+        status: "running",
+        start_state: "pending",
+        created_at: f.now,
+        updated_at: f.now,
+      },
+      expected_item: created.item,
+      expected_recipe: f.recipe,
+      max_concurrent: 1,
+    }), true);
+    await f.dispatch.fillOpenSlots();
     assert.equal(f.starts(), 0);
     assert.deepEqual(await f.authority.getWorkItem(ORG, before.id), before);
   });
@@ -180,29 +242,22 @@ describe("recipe text filters", () => {
     const f = await fixture(t);
     await f.authority.deleteRecipe(ORG, f.recipe.id);
     await f.ingest("approve release");
-    await f.dispatch.reconcileInbox();
+    await f.dispatch.fillOpenSlots();
     const before = (await f.authority.listWorkItems(ORG))[0];
     await f.authority.putRecipe(f.recipe);
-    const claim = f.authority.claimWorkRunStart.bind(f.authority);
-    let ignored;
-    t.mock.method(f.authority, "claimWorkRunStart", async (input) => {
-      assert.equal(input.rebind, "automatic");
-      ignored = await f.authority.putWorkItem({ ...before, status: "skipped" });
-      return claim(input);
-    });
-    await f.dispatch.reconcileInbox();
+    await f.dispatch.fillOpenSlots();
     assert.equal(f.starts(), 0);
-    assert.deepEqual(await f.authority.getWorkItem(ORG, before.id), ignored);
+    assert.deepEqual(await f.authority.getWorkItem(ORG, before.id), before);
     assert.equal((await f.authority.listWorkRuns(ORG)).length, 0);
   });
 
   it("ignores a rejected follow-up while a matching run is active", async (t) => {
     const f = await fixture(t);
     const acceptedId = await f.ingest("approve release");
-    await f.dispatch.reconcileInbox();
+    await f.dispatch.fillOpenSlots();
     assert.equal(f.starts(), 1);
     await f.ingest("approve draft");
-    await f.dispatch.reconcileInbox();
+    await f.dispatch.fillOpenSlots();
     const running = (await f.authority.listWorkItems(ORG)).find((item) => item.status === "running");
     assert.equal(running.head_event_id, acceptedId);
     assert.equal(f.starts(), 1);
@@ -212,12 +267,8 @@ describe("recipe text filters", () => {
     const f = await fixture(t);
     const eventId = await f.ingest("approve draft");
     await f.ingest("approve release");
-    const item = await f.authority.putWorkItem({
-      id: "older", org_id: ORG, recipe_id: f.recipe.id,
-      thread_id: "test-chat:room", unit_key: eventId, head_event_id: eventId,
-      record_class: "task", thread_facet: "ticket", status: "open",
-      created_at: f.now, updated_at: f.now,
-    });
+    const item = await f.authority.getWorkItemByUnitKey(ORG, "test-chat:room", eventId);
+    assert.ok(item);
     await f.dispatch.startItem(item, f.recipe);
     assert.equal(f.starts(), 0);
   });
@@ -225,15 +276,11 @@ describe("recipe text filters", () => {
   it("rejects a nonmatching try and anchors a matching try to the latest message", async (t) => {
     const f = await fixture(t);
     const rejectedId = await f.ingest("approve draft");
-    const old = await f.authority.putWorkItem({
-      id: "old", org_id: ORG, recipe_id: f.recipe.id,
-      thread_id: "test-chat:room", unit_key: rejectedId, head_event_id: rejectedId,
-      record_class: "task", thread_facet: "ticket", status: "done",
-      created_at: f.now, updated_at: f.now,
-    });
+    const old = await f.authority.getWorkItemByUnitKey(ORG, "test-chat:room", rejectedId);
+    assert.ok(old);
     await assert.rejects(f.service.tryRecipe(f.recipe.id, {}),
       (error) => error.code === "invalid_config");
-    assert.equal((await f.authority.getWorkItem(ORG, old.id)).status, "done");
+    assert.equal((await f.authority.getWorkItem(ORG, old.id)).status, "open");
     const latestId = await f.ingest("approve release");
     const result = await f.service.tryRecipe(f.recipe.id, {});
     assert.notEqual(result.work_item.id, old.id);
@@ -246,9 +293,25 @@ describe("recipe text filters", () => {
     await f.ingest("approve draft");
     await f.dispatch.dispatchPullRecipes();
     assert.equal(f.starts(), 1);
-    assert.equal((await f.authority.listWorkItems(ORG)).length, 1);
+    const items = await f.authority.listWorkItems(ORG);
+    assert.equal(items.length, 2);
+    assert.equal(items.filter((item) => item.recipe_id === f.recipe.id).length, 1);
     assert.ok((await f.authority.getRecipe(ORG, f.recipe.id)).next_run_at > f.now);
     assert.deepEqual((await f.authority.getRecipe(ORG, f.recipe.id)).match, f.recipe.match);
+  });
+
+  it("does not start or advance a scheduled occurrence when atomic creation conflicts", async (t) => {
+    const f = await fixture(t, { trigger: { kind: "pull", interval_ms: 60_000 } });
+    const before = await f.authority.getRecipe(ORG, f.recipe.id);
+    const create = t.mock.method(f.authority, "createWorkItem", async () => ({
+      outcome: "conflict", reason: "stale_recipe",
+    }));
+    await f.dispatch.dispatchPullRecipes();
+    assert.equal(create.mock.callCount(), 1);
+    assert.equal(create.mock.calls[0].arguments[0].expected_recipe.id, f.recipe.id);
+    assert.equal(f.starts(), 0);
+    assert.deepEqual(await f.authority.listWorkItems(ORG), []);
+    assert.deepEqual(await f.authority.getRecipe(ORG, f.recipe.id), before);
   });
 
   it("resumes a queued scheduled occurrence when the latest message stops matching", async (t) => {
@@ -257,7 +320,9 @@ describe("recipe text filters", () => {
     const queued = t.mock.method(f.dispatch, "startItem", async () => undefined);
     await f.dispatch.dispatchPullRecipes();
     assert.equal(f.starts(), 0);
-    const [item] = await f.authority.listWorkItems(ORG);
+    const item = (await f.authority.listWorkItems(ORG)).find((candidate) =>
+      candidate.recipe_id === f.recipe.id);
+    assert.ok(item);
     assert.equal(item.status, "open");
     assert.equal(item.head_event_id, undefined);
     queued.mock.restore();
@@ -267,7 +332,7 @@ describe("recipe text filters", () => {
     await f.dispatch.fillOpenSlots();
     assert.equal(f.starts(), 1);
     assert.equal((await f.authority.getWorkItem(ORG, item.id)).status, "running");
-    assert.equal((await f.authority.listWorkItems(ORG)).length, 1);
+    assert.equal((await f.authority.listWorkItems(ORG)).length, 3);
     await f.dispatch.fillOpenSlots();
     assert.equal(f.starts(), 1);
   });
@@ -290,9 +355,9 @@ describe("recipe text filters", () => {
       const edited = normalizeRecipe({ name: "Renamed" }, ORG, f.now, f.recipe);
       assert.deepEqual(edited.match, f.recipe.match);
       await f.authority.putRecipe(edited);
-      await f.ingest("approve draft");
+      const eventId = await f.ingest("approve draft");
       const result = await f.service.tryRecipe(f.recipe.id, {});
-      assert.equal(result.work_item.head_event_id, undefined);
+      assert.equal(result.work_item.head_event_id, eventId);
       assert.equal(result.work_item.status, "running");
       assert.equal(f.starts(), 1);
       assert.equal(f.taskInstruction(), "Handle this as a trial.");
@@ -302,7 +367,7 @@ describe("recipe text filters", () => {
   it("binds a manual rule despite its inactive filters, but does not auto-start it", async (t) => {
     const f = await fixture(t, { trigger: { kind: "manual" } });
     const eventId = await f.ingest("approve draft");
-    await f.dispatch.reconcileInbox();
+    await f.dispatch.fillOpenSlots();
     const [item] = await f.authority.listWorkItems(ORG);
     assert.equal(item.recipe_id, f.recipe.id);
     assert.equal(item.head_event_id, eventId);
@@ -311,18 +376,41 @@ describe("recipe text filters", () => {
     assert.equal(f.starts(), 1);
   });
 
-  it("rechecks push filters on failed retries and refuses a missing triggering event", async (t) => {
+  it("rechecks current push filters before retrying a failed run", async (t) => {
     const f = await fixture(t);
-    const eventId = await f.ingest("approve draft");
-    const item = await f.authority.putWorkItem({
-      id: "retry", org_id: ORG, recipe_id: f.recipe.id,
-      thread_id: "test-chat:room", unit_key: eventId, head_event_id: eventId,
-      record_class: "task", thread_facet: "ticket", status: "failed",
-      created_at: f.now, updated_at: "2020-01-01T00:00:00.000Z",
+    const eventId = await f.ingest("approve release");
+    await f.dispatch.fillOpenSlots();
+    assert.equal(f.starts(), 1);
+    const event = await f.authority.getEvent(ORG, eventId);
+    const item = await f.authority.getWorkItemByUnitKey(ORG, event.thread_id, event.id);
+    const run = await f.authority.getActiveWorkRun(ORG, item.id);
+    const failed = await f.authority.commitWorkObservation({
+      expected_item: item,
+      expected_run: run,
+      handle: {
+        external_run_id: run.external_run_id,
+        status: "failed",
+        result: { summary: "Failed run" },
+      },
+      can_write_back: false,
+      trigger_kind: "push",
+      now: new Date().toISOString(),
+    });
+    assert.equal(failed.outcome, "applied");
+    await f.authority.putRecipe({
+      ...f.recipe,
+      match: { ...f.recipe.match, text_excludes: "release" },
+      updated_at: new Date(Date.parse(f.now) + 10_000).toISOString(),
     });
     await f.dispatch.fillOpenSlots();
-    assert.equal(f.starts(), 0);
-    await f.ingest("approve release");
+    assert.equal(f.starts(), 1);
+  });
+
+  it("refuses a start without its triggering event", async (t) => {
+    const f = await fixture(t);
+    const eventId = await f.ingest("approve release");
+    const event = await f.authority.getEvent(ORG, eventId);
+    const item = await f.authority.getWorkItemByUnitKey(ORG, event.thread_id, event.id);
     await f.dispatch.startItem({ ...item, head_event_id: undefined }, f.recipe);
     assert.equal(f.starts(), 0);
     assert.equal((await f.authority.listWorkRuns(ORG)).length, 0);

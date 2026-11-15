@@ -5,8 +5,9 @@ const { tmpdir } = require("node:os");
 const { join } = require("node:path");
 const { describe, it } = require("node:test");
 const Database = require("better-sqlite3");
-const { canonicalContextJson, hashCanonicalContext, hashContextArtifactInputs } = require("@regenic/domain");
+const { canonicalContextJson, conversationId, hashCanonicalContext, hashContextArtifactInputs } = require("@regenic/domain");
 const { SqliteAuthorityStore } = require("../dist/sqlite");
+const { MIGRATIONS } = require("../dist/sqlite/migrations");
 const { packContextArtifact, decodeContextArtifacts } = require("../dist/context-artifact-segments");
 const { rebuildArtifactPreviews } = require("../dist/sqlite/context-artifacts");
 
@@ -82,6 +83,14 @@ describe("shared immutable Context artifact segments", () => {
       assert.deepEqual(await store.getArtifact("example-org", `summary-${count}`), artifact(count));
     }
     assert.deepEqual(await store.listArtifacts({ org_id: "example-org", limit: 2 }), [artifact(1), artifact(2)]);
+    const firstPage = await store.listArtifacts({ org_id: "example-org", limit: 1 });
+    const secondPage = await store.listArtifacts({
+      org_id: "example-org",
+      limit: 1,
+      after_recorded_at: firstPage[0].recorded_at,
+      after_id: firstPage[0].id,
+    });
+    assert.deepEqual(secondPage, [artifact(2)]);
     const [preview] = await store.listArtifactIndexes({ org_id: "example-org", limit: 1 });
     assert.equal(preview.preview.readable_count, 1);
     context.diagnostic(`Stored manifests, previews, and segments: 64=${halfwayBytes} bytes, 128=${finalBytes} bytes; legacy manifests=${legacyBytes} bytes`);
@@ -98,31 +107,35 @@ describe("shared immutable Context artifact segments", () => {
   });
 
   it("upgrades the preceding schema without rewriting legacy manifests and can rebuild shared previews", async (context) => {
-    const binding = await storage(context);
+    const root = await mkdtemp(join(tmpdir(), "regenic-shared-artifacts-"));
+    const path = join(root, "authority.db");
+    const database = new Database(path);
+    let upgraded;
+    context.after(async () => {
+      database.close();
+      upgraded?.close();
+      await rm(root, { recursive: true, force: true });
+    });
+    database.function("conversation_id", (source, externalId, fallbackId) =>
+      conversationId(source, externalId, fallbackId));
+    for (const migration of MIGRATIONS.filter(({ version }) => version <= 50)) {
+      database.exec(migration.sql);
+    }
+    database.pragma("user_version = 50");
     const { body_storage, ...legacy } = artifact(1);
-    await binding.store.putArtifact(legacy);
-    const before = binding.database.prepare("SELECT payload_json FROM context_artifacts").get().payload_json;
-    binding.database.exec("DROP TABLE context_artifact_segments");
-    binding.database.exec(`
-      ALTER TABLE recipes DROP COLUMN trigger_at_minute;
-      ALTER TABLE recipes DROP COLUMN trigger_weekdays;
-      ALTER TABLE recipes DROP COLUMN trigger_timezone;
-      ALTER TABLE recipes DROP COLUMN write_back_thread_id;
-      ALTER TABLE work_items DROP COLUMN current_run_id;
-      ALTER TABLE work_items DROP COLUMN version;
-      ALTER TABLE work_runs DROP COLUMN version;
-      ALTER TABLE work_runs DROP COLUMN write_back_required;
-      ALTER TABLE work_runs DROP COLUMN write_back_target_json;
-      ALTER TABLE work_runs DROP COLUMN trigger_kind;
-      DROP INDEX work_runs_org_id_idx;
-    `);
-    binding.database.pragma("user_version = 50");
-    const upgraded = binding.reopen();
-    assert.equal(binding.database.prepare("SELECT payload_json FROM context_artifacts").get().payload_json, before);
+    const before = canonicalContextJson(legacy);
+    database.prepare(`INSERT INTO context_artifacts
+      (org_id, id, kind, status, generation, recorded_at, payload_json, preview_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, '')`)
+      .run(legacy.org_id, legacy.id, legacy.kind, legacy.status, legacy.generation, legacy.recorded_at, before);
+    database.prepare(`INSERT INTO context_artifact_states (org_id, artifact_id, status, decided_at)
+      VALUES (?, ?, ?, ?)`).run(legacy.org_id, legacy.id, legacy.status, legacy.recorded_at);
+    upgraded = new SqliteAuthorityStore(path);
+    assert.equal(database.prepare("SELECT payload_json FROM context_artifacts").get().payload_json, before);
     assert.deepEqual(await upgraded.getArtifact(legacy.org_id, legacy.id), legacy);
     await upgraded.putArtifact(artifact(2));
-    binding.database.exec("UPDATE context_artifacts SET preview_json = '{}'");
-    rebuildArtifactPreviews(binding.database);
+    database.exec("UPDATE context_artifacts SET preview_json = '{}'");
+    rebuildArtifactPreviews(database);
     const previews = await upgraded.listArtifactIndexes({ org_id: legacy.org_id });
     assert.deepEqual(previews.map((item) => item.preview.readable_count), [1, 2]);
   });
@@ -181,6 +194,7 @@ describe("shared immutable Context artifact segments", () => {
       calls += 1;
       return new Map(hashes.map((hash) => [hash, packed.segments.get(hash)]));
     });
+
     assert.deepEqual(values, [value]);
     assert.ok(calls < 10);
     const { body_storage, ...legacy } = artifact(1);
@@ -189,6 +203,39 @@ describe("shared immutable Context artifact segments", () => {
     }), [legacy]);
     await assert.rejects(decodeContextArtifacts("other-org", [packed.payload], async () => new Map()), /another organization/);
     await assert.rejects(decodeContextArtifacts(value.org_id, [packed.payload], async () => new Map()), /Missing Context artifact segment/);
+  });
+
+  it("backfills evidence references from verified immutable shared manifests", async (context) => {
+    const { store, database } = await storage(context);
+    const value = artifact(65);
+    const evidenceHash = value.input_refs[0].content_hash;
+    await store.putArtifact(value);
+    database.prepare(`
+      DELETE FROM blob_references
+      WHERE owner_org_id = ? AND owner_type = 'context_artifact' AND owner_id = ? AND reference_kind = 'evidence'
+    `).run(value.org_id, value.id);
+    database.prepare("DELETE FROM blobs WHERE content_hash = ?").run(evidenceHash);
+
+    await store.backfillArtifactEvidenceReferences({
+      org_id: value.org_id,
+      artifact_id: value.id,
+      expected_input_hash: value.input_hash,
+    });
+    await store.backfillArtifactEvidenceReferences({
+      org_id: value.org_id,
+      artifact_id: value.id,
+      expected_input_hash: value.input_hash,
+    });
+    await assert.rejects(store.backfillArtifactEvidenceReferences({
+      org_id: value.org_id,
+      artifact_id: value.id,
+      expected_input_hash: "stale-input-hash",
+    }), /changed during evidence reference backfill/);
+
+    const inventory = await store.inspectBlobInventory([evidenceHash]);
+    assert.equal(inventory.get(evidenceHash).reference_count, 1);
+    assert.equal(inventory.get(evidenceHash).state, "protected");
+    assert.deepEqual(await store.getArtifact(value.org_id, value.id), value);
   });
 
   it("restores array trees across leaf and multi-level boundaries", async () => {

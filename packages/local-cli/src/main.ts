@@ -107,6 +107,9 @@ import {
 } from "./commands/standards";
 import { runCustomerServiceMcp } from "./commands/customer-service-mcp";
 import { runContextSearchMcp } from "./commands/context-search-mcp";
+import { blobGcDryRunCommand } from "./commands/blob-gc";
+import { blobReferenceBackfillCommand } from "./commands/blob-reference-backfill";
+import { contextArtifactReferenceBackfillCommand } from "./commands/context-artifact-reference-backfill";
 
 export interface LocalCliOptions {
   env?: NodeJS.ProcessEnv;
@@ -130,6 +133,15 @@ export async function runLocalCli(
   const createId = options.createId ?? randomUUID;
 
   switch (command) {
+    case "blob-gc-dry-run":
+      await blobGcDryRunCommand(commandOptions, stdout, now, env);
+      return;
+    case "blob-reference-backfill":
+      await blobReferenceBackfillCommand(commandOptions, stdout, env);
+      return;
+    case "context-artifact-reference-backfill":
+      await contextArtifactReferenceBackfillCommand(commandOptions, stdout, env);
+      return;
     case "context-search-mcp":
       await runContextSearchMcp(commandOptions, env, stdout);
       return;
@@ -197,16 +209,16 @@ export async function runLocalCli(
       await unsnoozeFollowUp(commandOptions, stdout, now);
       return;
     case "inbox-triage":
-      await triageInbox(commandOptions, stdout, now);
+      await triageInbox(commandOptions, stdout, now, createId);
       return;
     case "inbox-ack":
       await acknowledgeInboxEvent(commandOptions, stdout, now);
       return;
     case "inbox-fold":
-      await setInboxEventHidden(commandOptions, stdout, now, true);
+      await setInboxEventHidden(commandOptions, stdout, now, createId, true);
       return;
     case "inbox-unfold":
-      await setInboxEventHidden(commandOptions, stdout, now, false);
+      await setInboxEventHidden(commandOptions, stdout, now, createId, false);
       return;
     case "inbox-pin":
       await setInboxEventPinned(commandOptions, stdout, now, true);
@@ -215,7 +227,7 @@ export async function runLocalCli(
       await setInboxEventPinned(commandOptions, stdout, now, false);
       return;
     case "inbox-triage-reset":
-      await resetInboxTriage(commandOptions, stdout, now);
+      await resetInboxTriage(commandOptions, stdout, now, createId);
       return;
     case "dispatch-policy-get":
       await getPersonalDispatchPolicy(commandOptions, stdout);
@@ -230,7 +242,7 @@ export async function runLocalCli(
       await putPersonalFollowUpPolicy(commandOptions, stdout, now);
       return;
     case "inbox-dispatch-reapply":
-      await reapplyInboxDispatchPolicy(commandOptions, stdout, now);
+      await reapplyInboxDispatchPolicy(commandOptions, stdout, now, createId);
       return;
     case "context-assemble":
       await assembleContext(commandOptions, env, stdout, createId);
@@ -423,7 +435,7 @@ export async function runLocalCli(
       await listStandardHealthCommand(commandOptions, stdout, now);
       return;
     default:
-      throw new Error("Command must be one of: dsh-install, dsh-sync, dsh-send, status, quarantines, import-file, export-jsonl, render-digest, connector-enable, connector-disable, reset-cursor, publish-evidence-bundle, inbox, inbox-triage, inbox-triage-reset, context-assemble, context-search, context-snapshot, context-snapshot-history, context-snapshot-diff, context-replay, context-publish-evidence-bundle, context-ask, context-evaluate, context-daily-digest-project, context-daily-digest-get, context-daily-digest-alerts, context-daily-digest-alert-resolve, context-proposal-create, context-proposal-new-decision, context-proposal-new-standard, context-proposal-revise-standard, context-proposals, context-proposal-get, context-proposal-submit, context-proposal-review, context-proposal-reject, context-proposal-withdraw, context-decision-commit, context-decisions, context-decision-get, context-review-new-decision, context-review-new-run, context-decision-reviews, context-run-reviews, context-review-get, context-handoff-create, context-handoffs, context-handoff-get, context-handoff-ack, context-handoff-resolve, context-handoff-cancel, context-standard-version-commit, context-standards, context-standard-get, context-standard-versions, context-standard-version-get, context-standard-version-publish-trial, context-standard-version-publish-active, context-standard-version-promote, context-standard-version-deprecate, context-standard-gap-new, context-standard-gap-from-review, context-standard-gaps, context-standard-gap-get, context-standard-gap-convert, context-standard-gap-dismiss, context-run-new, context-runs, context-run-get, context-run-start, context-run-complete, context-run-handoff, context-run-cancel, context-run-drift-scan, context-standard-usage-project, context-standard-usage, context-standard-health, context-embedding-index, context-embedding-status, context-embedding-retry, context-embedding-backfill, context-embedding-activate, context-embedding-rollback, context-embedding-gc");
+      throw new Error("Command must be one of: blob-gc-dry-run, blob-reference-backfill, context-artifact-reference-backfill, dsh-install, dsh-sync, dsh-send, status, quarantines, import-file, export-jsonl, render-digest, connector-enable, connector-disable, reset-cursor, publish-evidence-bundle, inbox, inbox-triage, inbox-triage-reset, context-assemble, context-search, context-snapshot, context-snapshot-history, context-snapshot-diff, context-replay, context-publish-evidence-bundle, context-ask, context-evaluate, context-daily-digest-project, context-daily-digest-get, context-daily-digest-alerts, context-daily-digest-alert-resolve, context-proposal-create, context-proposal-new-decision, context-proposal-new-standard, context-proposal-revise-standard, context-proposals, context-proposal-get, context-proposal-submit, context-proposal-review, context-proposal-reject, context-proposal-withdraw, context-decision-commit, context-decisions, context-decision-get, context-review-new-decision, context-review-new-run, context-decision-reviews, context-run-reviews, context-review-get, context-handoff-create, context-handoffs, context-handoff-get, context-handoff-ack, context-handoff-resolve, context-handoff-cancel, context-standard-version-commit, context-standards, context-standard-get, context-standard-versions, context-standard-version-get, context-standard-version-publish-trial, context-standard-version-publish-active, context-standard-version-promote, context-standard-version-deprecate, context-standard-gap-new, context-standard-gap-from-review, context-standard-gaps, context-standard-gap-get, context-standard-gap-convert, context-standard-gap-dismiss, context-run-new, context-runs, context-run-get, context-run-start, context-run-complete, context-run-handoff, context-run-cancel, context-run-drift-scan, context-standard-usage-project, context-standard-usage, context-standard-health, context-embedding-index, context-embedding-status, context-embedding-retry, context-embedding-backfill, context-embedding-activate, context-embedding-rollback, context-embedding-gc");
   }
 }
 

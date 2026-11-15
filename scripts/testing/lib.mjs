@@ -80,7 +80,7 @@ export function evidence(name, value) {
 
 export function requireRuntime() {
   const [major, minor] = process.versions.node.split(".").map(Number);
-  if (!((major === 22 && minor >= 12) || major >= 24)) {
-    throw new Error("Testing lanes require Node 22.12+ (22.x) or Node 24+. Node >=20 alone does not support desktop strip-types.");
+  if (!((major === 22 && minor >= 12) || (major === 24 && minor >= 12) || major === 26)) {
+    throw new Error("Testing lanes require Node 22.12+ (22.x), 24.12+ (24.x), or 26.x. Node >=20 alone does not support desktop strip-types.");
   }
 }

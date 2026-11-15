@@ -1,13 +1,11 @@
 import type { ArrangementDecision, InboxItem } from "./arrangement";
 import type {
   ConversationPref,
-  ConversationPrefPatch,
-  ConversationPolicyFold,
-  ConversationPolicyFoldResult,
+  ConversationPolicyVisibility,
   EventRecord,
   InboxQuery,
 } from "./ingestion";
-import { conversationId } from "./message-contract";
+import { eventThreadId } from "./inbox-query";
 
 export const INBOX_LIST_VIEWS = ["shown", "hidden"] as const;
 
@@ -95,65 +93,7 @@ export interface ListSurfaceStore {
     orgId: string,
     threadId: string,
   ): Promise<ConversationPref | null>;
-  putConversationPref(input: ConversationPrefPatch): Promise<ConversationPref>;
-  setConversationPolicyHidden?(
-    input: ConversationPolicyFold,
-  ): Promise<ConversationPolicyFoldResult>;
   listInbox(orgId: string, query?: InboxQuery): Promise<InboxItem[]>;
-}
-
-export async function writeHiddenPref(
-  store: Pick<ListSurfaceStore, "getConversationPref" | "putConversationPref">,
-  orgId: string,
-  threadId: string,
-  next: { hidden: boolean; reason: HiddenReason | null },
-  now: string,
-): Promise<void> {
-  const pref = await store.getConversationPref(orgId, threadId);
-  const currentReason = effectiveHiddenReason({
-    hidden: pref?.hidden === true,
-    reason: pref?.hidden_reason,
-  });
-  const nextReason = next.hidden ? next.reason : null;
-  if (pref?.hidden === next.hidden && currentReason === nextReason) {
-    return;
-  }
-  await store.putConversationPref({
-    org_id: orgId,
-    thread_id: threadId,
-    hidden: next.hidden,
-    hidden_reason: nextReason,
-    updated_at: now,
-  });
-}
-
-export async function foldThreadByPolicy(
-  store: Pick<
-    ListSurfaceStore,
-    "getConversationPref" | "putConversationPref" | "setConversationPolicyHidden"
-  >,
-  orgId: string,
-  threadId: string,
-  now: string,
-): Promise<void> {
-  const pref = await store.getConversationPref(orgId, threadId);
-  const next = foldByPolicy({
-    hidden: pref?.hidden === true,
-    reason: pref?.hidden_reason,
-  });
-  if (!next) {
-    return;
-  }
-  if (store.setConversationPolicyHidden) {
-    await store.setConversationPolicyHidden({
-      org_id: orgId,
-      thread_id: threadId,
-      expected_visibility_version: pref?.visibility_version ?? 0,
-      updated_at: now,
-    });
-    return;
-  }
-  await writeHiddenPref(store, orgId, threadId, next, now);
 }
 
 export function listSurfacePatches(input: {
@@ -163,10 +103,10 @@ export function listSurfacePatches(input: {
   dispositions: ReadonlyMap<string, ArrangementDecision | null>;
   prefs: ReadonlyMap<string, ConversationPref | null>;
   onDesk: ReadonlyMap<string, boolean>;
-}): ConversationPrefPatch[] {
+}): ConversationPolicyVisibility[] {
   const byThread = new Map<string, EventRecord[]>();
   for (const event of input.events) {
-    const threadId = conversationId(event.source, event.external_id, event.id);
+    const threadId = eventThreadId(event);
     const bucket = byThread.get(threadId);
     if (bucket) {
       bucket.push(event);
@@ -174,7 +114,7 @@ export function listSurfacePatches(input: {
       byThread.set(threadId, [event]);
     }
   }
-  const patches: ConversationPrefPatch[] = [];
+  const patches: ConversationPolicyVisibility[] = [];
   for (const [threadId, threadEvents] of byThread) {
     let acceptedCurrentWork = false;
     let acceptedTombstone = false;
@@ -182,7 +122,8 @@ export function listSurfacePatches(input: {
       if (event.operation === "tombstone") {
         acceptedTombstone = true;
       }
-      if (input.dispositions.get(event.id)?.disposition === "current_work") {
+      if (event.operation !== "tombstone" &&
+        input.dispositions.get(event.id)?.disposition === "current_work") {
         acceptedCurrentWork = true;
       }
     }
@@ -209,8 +150,18 @@ export function listSurfacePatches(input: {
       org_id: input.orgId,
       thread_id: threadId,
       hidden: next.hidden,
-      hidden_reason: nextReason,
+      expected_visibility_version: pref?.visibility_version ?? 0,
       updated_at: input.now,
+      ...(next.hidden ? {
+        fold_current_tombstone_event_ids: threadEvents
+          .filter((event) => event.operation === "tombstone")
+          .map((event) => event.id),
+      } : {
+        unfold_current_work_event_ids: threadEvents
+          .filter((event) => event.operation !== "tombstone" &&
+            input.dispositions.get(event.id)?.disposition === "current_work")
+          .map((event) => event.id),
+      }),
     });
   }
   return patches;
@@ -225,7 +176,7 @@ export async function collectListSurfacePatches(
     dispositions?: readonly ArrangementDecision[];
     now?: string;
   } = {},
-): Promise<ConversationPrefPatch[]> {
+): Promise<ConversationPolicyVisibility[]> {
   if (eventIds.length === 0) {
     return [];
   }
@@ -251,7 +202,7 @@ export async function collectListSurfacePatches(
   }
   const byThread = new Map<string, EventRecord[]>();
   for (const event of events) {
-    const threadId = conversationId(event.source, event.external_id, event.id);
+    const threadId = eventThreadId(event);
     const bucket = byThread.get(threadId);
     if (bucket) {
       bucket.push(event);
@@ -264,12 +215,22 @@ export async function collectListSurfacePatches(
   const needsOnDesk = events.some((event) => event.operation === "tombstone");
   for (const threadId of byThread.keys()) {
     prefs.set(threadId, await store.getConversationPref(orgId, threadId));
-    onDesk.set(
-      threadId,
-      needsOnDesk
-        ? (await store.listInbox(orgId, { thread_ids: [threadId] })).length > 0
-        : false,
-    );
+    if (needsOnDesk) {
+      const tombstonedIdentities = new Set(
+        (byThread.get(threadId) ?? [])
+          .filter((event) => event.operation === "tombstone")
+          .map((event) => JSON.stringify([event.source, event.external_id])),
+      );
+      const listed = await store.listInbox(orgId, { thread_ids: [threadId] });
+      onDesk.set(threadId, listed.some((item) =>
+        !tombstonedIdentities.has(JSON.stringify([
+          item.event.source,
+          item.event.external_id,
+        ])),
+      ));
+    } else {
+      onDesk.set(threadId, false);
+    }
   }
   return listSurfacePatches({
     orgId,
@@ -279,15 +240,4 @@ export async function collectListSurfacePatches(
     prefs,
     onDesk,
   });
-}
-
-export async function applyListSurfaceAfterIngest(
-  store: ListSurfaceStore,
-  orgId: string,
-  eventIds: readonly string[],
-): Promise<void> {
-  const patches = await collectListSurfacePatches(store, orgId, eventIds);
-  for (const patch of patches) {
-    await store.putConversationPref(patch);
-  }
 }

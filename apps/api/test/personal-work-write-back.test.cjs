@@ -15,10 +15,21 @@ function recipeServiceFixture() {
   const authority = {
     getRecipe: async (_org, id) => recipes.get(id),
     putRecipe: async (recipe) => { recipes.set(recipe.id, recipe); return recipe; },
+    putRecipeIfUnchanged: async ({ recipe, expected_recipe }) => {
+      const current = recipes.get(recipe.id) ?? null;
+      if (expected_recipe === null ? current !== null : current !== expected_recipe) {
+        return { outcome: "conflict" };
+      }
+      recipes.set(recipe.id, recipe);
+      return { outcome: "applied", recipe };
+    },
     listInstallations: async () => [],
     getWorkItemByThread: async () => null,
     listInbox: async () => [],
-    putWorkItem: async (item) => { items.push(item); return item; },
+    createWorkItem: async ({ item }) => {
+      items.push(item);
+      return { outcome: "applied", item };
+    },
     getWorkDeliveryByItem: async () => null,
     getWorkItem: async (_org, id) => starts.findLast((start) => start.item.id === id)?.item
       ?? items.find((item) => item.id === id),
@@ -141,27 +152,81 @@ describe("recipe destination validation", () => {
     assert.equal(items.length, 0);
     const result = await service.tryRecipe(saved.id, { thread_id: "writable:source", write_back: true });
     assert.equal(result.work_item.id, "sample");
-    assert.equal(items.length, 0, "Reusing a sample must not reopen it through ordinary put");
+    assert.equal(items.length, 0, "Reusing a sample must not create another work item");
   });
 });
 
 describe("personal work write-back", () => {
-  async function flushFixture(channel) {
+  async function flushFixture(channel, onWorkUpdated = () => {}) {
     const authority = new MemoryWorkStore();
     const now = new Date().toISOString();
-    const item = {
-      id: "work", org_id: "owner", recipe_id: "rule", status: "done",
-      thread_id: "source:room", unit_key: "unit", record_class: "task", thread_facet: "ticket",
-      created_at: now, updated_at: now,
+    const recipe = {
+      id: "rule", org_id: "owner", name: "Write-back",
+      match: { record_class: "task" }, trigger: { kind: "push" },
+      executor_type: "test", executor_config: {}, include_context: false,
+      can_write_back: true, enabled: true, created_at: now, updated_at: now,
     };
-    await authority.putWorkItem(item);
-    const delivery = await authority.putWorkDelivery(enqueueWriteBack({
-      org_id: item.org_id, work_item_id: item.id, recipe_id: "rule", kind: "push",
-      unit_key: "unit", payload: { summary: "Done" }, now,
-    }));
+    await authority.putRecipe(recipe);
+    const triggerEventId = "write-back-trigger";
+    authority.recordCurrentWorkEvidence(triggerEventId);
+    const created = await authority.createWorkItem({
+      item: {
+        id: "work", org_id: "owner", recipe_id: recipe.id, status: "open",
+        thread_id: "source:room", unit_key: "unit", head_event_id: triggerEventId,
+        record_class: "task", thread_facet: "ticket", created_at: now, updated_at: now,
+      },
+      recipe,
+      expected_recipe: recipe,
+    });
+    assert.equal(created.outcome, "applied");
+    const startRun = {
+      id: "run", org_id: "owner", work_item_id: created.item.id, recipe_id: recipe.id,
+      executor_type: recipe.executor_type, status: "running", start_state: "pending",
+      write_back_required: true, write_back_target: {
+        installation_id: "sender", source: "source", target: "room",
+      },
+      trigger_kind: "push", created_at: now, updated_at: now,
+    };
+    assert.equal(await authority.claimWorkRunStart({
+      expected_item: created.item, expected_recipe: recipe, run: startRun,
+    }), true);
+    const reservedItem = await authority.getWorkItem("owner", created.item.id);
+    const reservedRun = await authority.getWorkRun("owner", startRun.id);
+    const submitted = await authority.checkpointWorkRunStart({
+      expected_item: reservedItem, expected_run: reservedRun,
+      kind: "submitted", external_run_id: "external-run", now,
+    });
+    assert.equal(submitted.outcome, "applied");
+    const completed = await authority.commitWorkObservation({
+      expected_item: submitted.item,
+      expected_run: submitted.run,
+      handle: {
+        status: "completed", external_run_id: "external-run",
+        result: { summary: "Done" },
+      },
+      can_write_back: true,
+      trigger_kind: "push",
+      now,
+    });
+    assert.equal(completed.outcome, "applied");
+    const item = completed.transition.item;
+    const delivery = await authority.getWorkDeliveryByItem("owner", item.id);
     const runtime = { orgId: () => item.org_id, requireHost: () => ({ get: () => authority }) };
-    return { authority, item, delivery, flush: new PersonalWorkFlush(runtime, channel) };
+    return { authority, item, delivery, flush: new PersonalWorkFlush(runtime, channel, onWorkUpdated) };
   }
+
+  it("publishes a work update after delivery settlement commits", async () => {
+    const updates = [];
+    const f = await flushFixture(
+      { writeBack: async () => "sent" },
+      (workItemId) => updates.push(workItemId),
+    );
+
+    await f.flush.flushOne(f.item, undefined, f.delivery);
+
+    assert.equal((await f.authority.getWorkDelivery("owner", f.delivery.id)).status, "acked");
+    assert.deepEqual(updates, [f.item.id]);
+  });
 
   it("allows only one flusher to enter external sending, including overlapping calls by the same worker", async () => {
     let release;
@@ -180,7 +245,7 @@ describe("personal work write-back", () => {
     const runtime = { requireHost: () => ({ get: () => f.authority }) };
     await Promise.all([
       f.flush.flushOne(f.item, undefined, f.delivery),
-      new PersonalWorkFlush(runtime, { writeBack: async () => { sends++; return "sent"; } })
+      new PersonalWorkFlush(runtime, { writeBack: async () => { sends++; return "sent"; } }, () => {})
         .flushOne(f.item, undefined, f.delivery),
     ]);
     assert.equal(sends, 1);
@@ -218,7 +283,7 @@ describe("personal work write-back", () => {
       recoveries++;
       assert.equal(row.channel_receipt.rpc_id, "late");
       return "sent";
-    } }).flushDeliveries();
+    } }, () => {}).flushDeliveries();
     assert.equal(recoveries, 1);
     assert.equal((await f.authority.getWorkDelivery("owner", f.delivery.id)).write_back, "sent");
   });
@@ -334,7 +399,6 @@ describe("personal work write-back", () => {
       getWorkItem: async () => item,
       getWorkDelivery: async (_org, id) => rows.get(id),
       getWorkDeliveryByItem: async () => { throw new Error("Must not settle by item"); },
-      putWorkDelivery: async (row) => { rows.set(row.id, row); return row; },
       transitionWorkDelivery: async (input) => {
         const result = planWorkDeliveryCommand(rows.get(input.delivery_id) ?? null, item.status, input);
         if (result.outcome === "applied") rows.set(input.delivery_id, result.delivery);
@@ -347,7 +411,7 @@ describe("personal work write-back", () => {
       await onReceipt({ accepted: true, rpc_id: "old-message" }, now);
       return "sent";
     } };
-    await new PersonalWorkFlush(runtime, channel).flushDeliveries();
+    await new PersonalWorkFlush(runtime, channel, () => {}).flushDeliveries();
     assert.equal(rows.get(original.id).status, "acked");
     assert.equal(rows.get(original.id).channel_receipt.rpc_id, "old-message");
     assert.deepEqual(rows.get(current.id), current);

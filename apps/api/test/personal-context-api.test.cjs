@@ -4,6 +4,7 @@ const { mkdtemp, rm } = require("node:fs/promises");
 const { tmpdir } = require("node:os");
 const { join } = require("node:path");
 const { afterEach, describe, it } = require("node:test");
+const { DatabaseSync } = require("node:sqlite");
 const { SqliteAuthorityStore } = require("@regenic/authority-store/sqlite");
 const { FsBlobStore } = require("@regenic/blob-store");
 const {
@@ -314,27 +315,69 @@ async function getJson(url) {
   return { response, text: await response.text() };
 }
 
+function seedTestHistoricalAgentRuns(database, runs) {
+  const db = new DatabaseSync(database);
+  try {
+    const insertRun = db.prepare(`INSERT INTO work_runs (
+      id, org_id, work_item_id, recipe_id, executor_type, status, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
+    for (const run of runs) {
+      insertRun.run(
+        run.id, run.org_id, run.work_item_id, run.recipe_id, run.executor_type,
+        run.status, run.created_at, run.updated_at,
+      );
+    }
+  } finally {
+    db.close();
+  }
+}
+
 async function seedAgentRun(database, blobRoot) {
   const eventIds = await ingestConversationEvidence(database, blobRoot);
   const authority = new SqliteAuthorityStore(database);
   const now = new Date().toISOString();
   const old = new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString();
-  await authority.putRecipe({
+  const recipe = {
     id: "recipe-ctx", org_id: "local-owner", name: "Ctx", match: { record_class: "message" },
     trigger: { kind: "push" }, executor_type: "session", executor_config: {},
     include_context: true, can_write_back: false, enabled: true, created_at: now, updated_at: now,
+  };
+  await authority.putRecipe(recipe);
+  const savedRecipe = await authority.getRecipe("local-owner", recipe.id);
+  const createdItem = await authority.createWorkItem({
+    item: {
+      id: "work-ctx", org_id: "local-owner", recipe_id: recipe.id,
+      thread_id: "synthetic-chat:customer-a", unit_key: "u-ctx", head_event_id: eventIds[1],
+      record_class: "message", thread_facet: "customer", status: "open",
+      created_at: now, updated_at: now,
+    },
+    recipe: savedRecipe,
+    expected_recipe: savedRecipe,
   });
-  await authority.putWorkItem({
-    id: "work-ctx", org_id: "local-owner", recipe_id: "recipe-ctx",
-    thread_id: "synthetic-chat:customer-a", unit_key: "u-ctx", head_event_id: eventIds[1],
-    record_class: "message", thread_facet: "customer", status: "running", created_at: now, updated_at: now,
-  });
-  for (const [id, status, created] of [["run-open", "running", now], ["run-done", "completed", now], ["run-old", "running", old]]) {
-    await authority.putWorkRun({
-      id, org_id: "local-owner", work_item_id: "work-ctx", recipe_id: "recipe-ctx",
-      executor_type: "session", status, created_at: created, updated_at: created,
-    });
-  }
+  assert.equal(createdItem.outcome, "applied");
+  const run = {
+    id: "run-open", org_id: "local-owner", work_item_id: createdItem.item.id,
+    recipe_id: recipe.id, executor_type: recipe.executor_type, status: "running",
+    start_state: "pending", created_at: now, updated_at: now,
+  };
+  assert.equal(await authority.claimWorkRunStart({
+    expected_item: createdItem.item,
+    expected_recipe: savedRecipe,
+    run,
+  }), true);
+
+  seedTestHistoricalAgentRuns(database, [
+    {
+      id: "run-done", org_id: "local-owner", work_item_id: "work-ctx",
+      recipe_id: recipe.id, executor_type: "session", status: "completed",
+      created_at: now, updated_at: now,
+    },
+    {
+      id: "run-old", org_id: "local-owner", work_item_id: "work-ctx",
+      recipe_id: recipe.id, executor_type: "session", status: "running",
+      created_at: old, updated_at: old,
+    },
+  ]);
   authority.close();
   return eventIds;
 }
@@ -929,7 +972,7 @@ describe("personal context API", () => {
       assert.equal(invalid.response.status, 400, invalid.text);
     }
   });
-  it("removes answer metadata when executor startup fails definitively", async () => {
+  it("retains answer metadata when a reserved executor startup fails definitively", async () => {
     const root = await createRoot();
     const { origin } = await startApi(
       root,
@@ -962,13 +1005,11 @@ describe("personal context API", () => {
         .find((item) => item.id.startsWith("search-answer:"));
       assert.ok(failedItem);
       assert.equal(failedItem.status, "failed");
-      assert.equal(
-        await ledger.getSearchAnswer(
-          "local-owner",
-          failedItem.id.slice("search-answer:".length),
-        ),
-        null,
-      );
+      const answerId = failedItem.id.slice("search-answer:".length);
+      const record = await ledger.getSearchAnswer("local-owner", answerId);
+      assert.equal(record.work_item_id, failedItem.id);
+      assert.match(JSON.parse(failed.text).error.message, new RegExp(answerId));
+      assert.equal((await ledger.listWorkRuns("local-owner", failedItem.id))[0].status, "failed");
     } finally {
       ledger.close();
     }
@@ -1111,12 +1152,20 @@ describe("personal context API", () => {
     assert.equal(polled.status, "running");
     const cancelled = await postJson(`${origin}/v1/me/context/search/answers/${job.answer_id}/cancel`, {});
     assert.equal(JSON.parse(cancelled.text).status, "cancelled");
-    assert.ok(executor.requests.some((request) => request.url === "/v1/runs/run-1/cancel"));
     let authority = new SqliteAuthorityStore(database);
     try {
       const item = await authority.getWorkItem("local-owner", job.work_item_id);
       assert.equal(item.status, "skipped");
       assert.equal((await authority.getWorkRun("local-owner", item.current_run_id)).status, "running");
+      let cancellation;
+      for (let attempt = 0; attempt < 200; attempt++) {
+        cancellation = (await authority.listCancellationJobs("local-owner"))
+          .find((entry) => entry.run_id === item.current_run_id);
+        if (cancellation?.status === "failed") break;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      assert.equal(cancellation?.status, "failed");
+      assert.ok(executor.requests.some((request) => request.url === "/v1/runs/run-1/cancel"));
     } finally {
       authority.close();
     }

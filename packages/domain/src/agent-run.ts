@@ -2,6 +2,7 @@ import type { ActorRef } from "./actor";
 import type { StandardBinding } from "./decision";
 import type { HandoffRecord } from "./handoff";
 import type { JsonValue } from "./ingestion";
+import { canonicalContextJson } from "./context-canonical";
 import { JsonValueSchema } from "./ingestion-schema";
 
 export const AGENT_RUN_SCHEMA_VERSION = "1.0" as const;
@@ -165,7 +166,7 @@ export function handoffAgentRun(
     || handoff.to.actor_type !== "human" || handoff.to.actor_id !== current.on_behalf_of.actor_id
     || handoff.agent_run_id !== current.id
     || handoff.context_snapshot_id !== current.context_snapshot_id
-    || JSON.stringify(handoff.standard_bindings) !== JSON.stringify(current.standard_bindings)
+    || canonicalContextJson(handoff.standard_bindings) !== canonicalContextJson(current.standard_bindings)
     || handoff.status !== "open" || handoff.created_at !== handedOffAt) {
     throw new Error("Invalid AgentRun Handoff");
   }

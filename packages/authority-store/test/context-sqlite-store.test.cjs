@@ -3,10 +3,13 @@ const { mkdtemp, rm } = require("node:fs/promises");
 const { tmpdir } = require("node:os");
 const { join } = require("node:path");
 const { afterEach, describe, it } = require("node:test");
+const Database = require("better-sqlite3");
 const {
   CONTEXT_BUNDLE_SCHEMA_VERSION,
   CONTEXT_SNAPSHOT_SCHEMA_VERSION,
   MemoryContextArtifactStore,
+  conversationId,
+  hashCanonicalContext,
   hashContextArtifactInputs,
   hashContextBundle,
   hashContextSnapshot,
@@ -32,6 +35,18 @@ async function createRoot() {
   const root = await mkdtemp(join(tmpdir(), "regenic-context-store-"));
   roots.push(root);
   return root;
+}
+
+function createVersion45Database(path) {
+  const Database = require("better-sqlite3");
+  const db = new Database(path);
+  db.function("conversation_id", (source, externalId, fallbackId) =>
+    conversationId(source, externalId, fallbackId));
+  for (const migration of MIGRATIONS.filter(({ version }) => version <= 45)) {
+    db.exec(migration.sql);
+  }
+  db.pragma("user_version = 45");
+  return db;
 }
 
 function ledger() {
@@ -1198,6 +1213,138 @@ describe("SQLite context artifact store", () => {
     await split.close();
   });
 
+  it("registers external artifact bodies as blob references in the artifact transaction", async () => {
+    const root = await createRoot();
+    const path = join(root, "authority.db");
+    const store = new SqliteAuthorityStore(path);
+    const inspect = new Database(path);
+    const attrs = { summary: "durable artifact body" };
+    const value = artifact({
+      id: "artifact-blob-body",
+      attrs,
+      body_hash: hashCanonicalContext(attrs),
+    });
+    try {
+      await store.putArtifact(value);
+      assert.deepEqual(
+        inspect.prepare(
+          `SELECT owner_org_id, owner_type, owner_id, reference_kind, content_hash
+           FROM blob_references WHERE owner_type = 'context_artifact' AND owner_id = ?
+           ORDER BY reference_kind`,
+        ).all(value.id),
+        [
+          {
+            owner_org_id: value.org_id,
+            owner_type: "context_artifact",
+            owner_id: value.id,
+            reference_kind: "artifact_body",
+            content_hash: value.body_hash,
+          },
+          {
+            owner_org_id: value.org_id,
+            owner_type: "context_artifact",
+            owner_id: value.id,
+            reference_kind: "evidence",
+            content_hash: HASH_A,
+          },
+        ],
+      );
+      assert.equal(
+        inspect.prepare(`SELECT state FROM blobs WHERE content_hash = ?`).get(value.body_hash).state,
+        "protected",
+      );
+    } finally {
+      inspect.close();
+      store.close();
+    }
+  });
+
+  it("fences context artifact body writes and commits their references with the owner", async () => {
+    const root = await createRoot();
+    const path = join(root, "authority.db");
+    const store = new SqliteAuthorityStore(path);
+    const inspect = new Database(path);
+    const attrs = { summary: "reserved artifact body" };
+    const value = artifact({
+      id: "artifact-reserved-body",
+      attrs,
+      body_hash: hashCanonicalContext(attrs),
+    });
+    const input = {
+      owner_id: "artifact-writer",
+      lease_duration_ms: 60_000,
+      blobs: [
+        { content_hash: value.body_hash, media_type: "application/vnd.regenic.context-artifact+json", byte_size: Buffer.byteLength(JSON.stringify(attrs)) },
+        { content_hash: HASH_A, media_type: "application/octet-stream", byte_size: 0 },
+      ],
+    };
+    try {
+      await store.putArtifact(artifact({ id: "artifact-evidence-seed", body_hash: undefined }));
+      const stale = await store.reserveBlobWrites(input);
+      await store.releaseBlobReservations(stale);
+      const current = await store.reserveBlobWrites(input);
+
+      await assert.rejects(store.putArtifact(value, stale), /Blob reservation/);
+      await store.putArtifact(value, current);
+      assert.equal(
+        inspect.prepare(`SELECT state FROM blobs WHERE content_hash = ?`).get(value.body_hash).state,
+        "available",
+      );
+      assert.equal(
+        inspect.prepare(`SELECT state FROM blobs WHERE content_hash = ?`).get(HASH_A).state,
+        "protected",
+      );
+      assert.equal(
+        inspect.prepare(
+          `SELECT COUNT(*) AS count FROM blob_references
+           WHERE owner_type = 'context_artifact' AND owner_id = ?`,
+        ).get(value.id).count,
+        2,
+      );
+    } finally {
+      inspect.close();
+      store.close();
+    }
+  });
+
+  it("passes context artifact reservations through split authority RPC", async () => {
+    const root = await createRoot();
+    const path = join(root, "authority.db");
+    const split = await SqliteSplitAuthorityStore.open(path);
+    const inspect = new Database(path);
+    const attrs = { summary: "split reserved artifact body" };
+    const value = artifact({
+      id: "split-artifact-reserved-body",
+      attrs,
+      body_hash: hashCanonicalContext(attrs),
+    });
+    try {
+      const reservations = await split.reserveBlobWrites({
+        owner_id: "split-artifact-writer",
+        lease_duration_ms: 60_000,
+        blobs: [
+          { content_hash: value.body_hash, media_type: "application/vnd.regenic.context-artifact+json", byte_size: Buffer.byteLength(JSON.stringify(attrs)) },
+          { content_hash: HASH_A, media_type: "application/octet-stream", byte_size: 0 },
+        ],
+      });
+      await split.putArtifact(value, reservations);
+      assert.equal(
+        inspect.prepare(`SELECT state FROM blobs WHERE content_hash = ?`).get(value.body_hash).state,
+        "available",
+      );
+      assert.equal(
+        inspect.prepare(
+          `SELECT COUNT(*) AS count FROM blob_references
+           WHERE owner_type = 'context_artifact' AND owner_id = ?`,
+        ).get(value.id).count,
+        2,
+      );
+    } finally {
+      inspect.close();
+      await split.close();
+    }
+  });
+
   it("filters artifacts deterministically", async () => {
     const root = await createRoot();
     const store = new SqliteAuthorityStore(join(root, "authority.db"));
@@ -1229,7 +1376,14 @@ describe("SQLite context artifact store", () => {
       await memory.putArtifact(value);
     }
     const query = { org_id: "example-org", limit: 1 };
-    assert.deepEqual(await sqlite.listArtifacts(query), await memory.listArtifacts(query));
+    const firstPage = await sqlite.listArtifacts(query);
+    assert.deepEqual(firstPage, await memory.listArtifacts(query));
+    const secondPageQuery = {
+      org_id: "example-org",
+      after_recorded_at: firstPage[0].recorded_at,
+      after_id: firstPage[0].id,
+    };
+    assert.deepEqual(await sqlite.listArtifacts(secondPageQuery), await memory.listArtifacts(secondPageQuery));
     assert.deepEqual(await sqlite.listArtifactIndexes(query), await memory.listArtifactIndexes(query));
     await assert.rejects(sqlite.listArtifacts({ org_id: "example-org", limit: -1 }), /Invalid context artifact query/);
     await assert.rejects(memory.listArtifacts({ org_id: "example-org", limit: -1 }), /Invalid context artifact query/);
@@ -1241,23 +1395,12 @@ describe("SQLite context artifact store", () => {
     const root = await createRoot();
     const path = join(root, "authority.db");
     const Database = require("better-sqlite3");
-    const store = new SqliteAuthorityStore(path);
-    store.close();
-    const legacy = new Database(path);
+    const legacy = createVersion45Database(path);
+    legacy.exec("ALTER TABLE context_artifacts ADD COLUMN preview_json TEXT NOT NULL DEFAULT ''");
     legacy.exec("DROP TABLE context_snapshot_index");
     legacy.exec("DROP INDEX IF EXISTS events_org_occurred_idx");
     legacy.exec("DROP TABLE outbound_attempts");
     legacy.exec(MIGRATIONS.find((migration) => migration.version === 23).sql);
-    legacy.exec("ALTER TABLE work_runs DROP COLUMN start_state");
-    legacy.exec("ALTER TABLE recipes DROP COLUMN write_back_thread_id");
-    legacy.exec("ALTER TABLE work_items DROP COLUMN current_run_id");
-    legacy.exec("ALTER TABLE work_items DROP COLUMN version");
-    legacy.exec("ALTER TABLE work_runs DROP COLUMN version");
-    legacy.exec("ALTER TABLE work_runs DROP COLUMN write_back_required");
-    legacy.exec("ALTER TABLE work_runs DROP COLUMN write_back_target_json");
-    legacy.exec("ALTER TABLE work_runs DROP COLUMN trigger_kind");
-    legacy.exec("DROP INDEX work_runs_org_id_idx");
-    legacy.pragma("user_version = 45");
     legacy.close();
 
     const reopened = new SqliteAuthorityStore(path);
@@ -1296,29 +1439,7 @@ describe("SQLite context artifact store", () => {
   it("lists context summaries from a preview and backfills older rows", async () => {
     const root = await createRoot();
     const path = join(root, "authority.db");
-    const Database = require("better-sqlite3");
-    let store = new SqliteAuthorityStore(path);
-    store.close();
-    const legacy = new Database(path);
-    legacy.exec("ALTER TABLE context_artifacts DROP COLUMN preview_json");
-    legacy.exec("ALTER TABLE outbound_attempts DROP COLUMN recovery_hash");
-    legacy.exec("ALTER TABLE outbound_attempts DROP COLUMN receipt_json");
-    legacy.exec("ALTER TABLE work_runs DROP COLUMN start_state");
-    legacy.exec(`
-      ALTER TABLE recipes DROP COLUMN trigger_at_minute;
-      ALTER TABLE recipes DROP COLUMN trigger_weekdays;
-      ALTER TABLE recipes DROP COLUMN trigger_timezone;
-      ALTER TABLE recipes DROP COLUMN write_back_thread_id;
-      ALTER TABLE work_items DROP COLUMN current_run_id;
-      ALTER TABLE work_items DROP COLUMN version;
-      ALTER TABLE work_runs DROP COLUMN version;
-      ALTER TABLE work_runs DROP COLUMN write_back_required;
-      ALTER TABLE work_runs DROP COLUMN write_back_target_json;
-      ALTER TABLE work_runs DROP COLUMN trigger_kind;
-      DROP INDEX work_runs_org_id_idx;
-    `);
-    // Last migration before preview_json (46) and the preview rebuild (47).
-    legacy.pragma("user_version = 45");
+    const legacy = createVersion45Database(path);
     const payload = JSON.stringify({
       id: "legacy-summary",
       kind: "thread_summary",
@@ -1343,7 +1464,7 @@ describe("SQLite context artifact store", () => {
     `).run("example-org", "legacy-summary", "2026-08-30T00:01:00.000Z");
     legacy.close();
 
-    store = new SqliteAuthorityStore(path);
+    const store = new SqliteAuthorityStore(path);
     const legacyIndex = (await store.listArtifactIndexes({ org_id: "example-org" }))[0];
     assert.equal(legacyIndex.preview.last_text, "time-newest");
     assert.equal(legacyIndex.preview.readable_count, 2);
@@ -1569,25 +1690,34 @@ describe("SQLite context artifact store", () => {
     await store.putSnapshotIndex(snapshotIndex(snapshotValue));
     await store.putCheckpoint(checkpoint);
     const searchItemId = "search-answer-work-item";
-    await store.putWorkItem({
-      id: searchItemId,
-      org_id: "example-org",
-      thread_id: "system:search-answer:search-answer-work-item",
-      unit_key: searchItemId,
-      record_class: "utterance",
-      thread_facet: "agent",
-      status: "open",
-      created_at: "2026-08-30T00:01:00.000Z",
-      updated_at: "2026-08-30T00:01:00.000Z",
+    const now = "2026-08-30T00:01:00.000Z";
+    const recipe = {
+      id: "search-answer-recipe", org_id: "example-org", name: "Search answer",
+      match: { record_class: "utterance" }, trigger: { kind: "push" },
+      executor_type: "session", executor_config: {}, include_context: false,
+      can_write_back: false, enabled: true, created_at: now, updated_at: now,
+    };
+    await store.putRecipe(recipe);
+    const savedRecipe = await store.getRecipe("example-org", recipe.id);
+    const createdItem = await store.createWorkItem({
+      item: {
+        id: searchItemId, org_id: "example-org", recipe_id: recipe.id,
+        thread_id: "system:search-answer:search-answer-work-item", unit_key: searchItemId,
+        record_class: "utterance", thread_facet: "agent", status: "open",
+        created_at: now, updated_at: now,
+      },
+      recipe: savedRecipe,
+      expected_recipe: savedRecipe,
     });
+    assert.equal(createdItem.outcome, "applied");
     await store.putSearchAnswer({
       id: "search-answer",
       org_id: "example-org",
       work_item_id: searchItemId,
       query: "Who was selected?",
       event_ids: ["event-1"],
-      created_at: "2026-08-30T00:01:00.000Z",
-      updated_at: "2026-08-30T00:01:00.000Z",
+      created_at: now,
+      updated_at: now,
     });
     const before = await store.summarizeStore("example-org");
     assert.deepEqual({

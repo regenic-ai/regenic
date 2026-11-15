@@ -155,11 +155,13 @@ export function decorateInboxItem(
     attention: attentionOf({
       prompts: prompts.length,
       awaiting_user:
-        awaitingUser.has(threadId) || surface.activity === "awaiting_user",
+        awaitingUser.has(threadId) || surface.activity === "awaiting_user" ||
+        workFace?.attention === "waiting_you",
       unread: attention.unread,
       work_status: workFace?.work?.status,
       can_write_back: workFace?.work?.can_write_back,
       has_result: workFace?.work?.has_result,
+      auto_completed: workFace?.work?.auto_completed,
       activity: surface.activity,
     }),
     work: workFace?.work,

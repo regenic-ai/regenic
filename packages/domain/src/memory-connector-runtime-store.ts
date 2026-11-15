@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type {
   AcquireConnectorLease,
   ConnectorInstallation,
@@ -10,6 +11,7 @@ import type {
   NewIngestAttempt,
   ResetConnectorCursor,
   ReleaseConnectorLease,
+  RenewConnectorLease,
   SetConnectorInstallationConfig,
   SetConnectorInstallationStatus,
   SettleIngestAttempt,
@@ -17,6 +19,11 @@ import type {
   CommitSyncPageResult,
 } from "./ingestion";
 import { catalogStreamKeysLeft } from "./sync-catalog";
+import {
+  assertAttemptInstallationBinding,
+  assertAttemptSettlementBinding,
+  assertSyncPageAttemptBinding,
+} from "./ingestion";
 import { MemorySyncStore } from "./sync-engine";
 import type {
   ApplySyncCatalogPageInput,
@@ -54,6 +61,7 @@ import {
 
 interface StoredCursor extends ConnectorStreamCursor {
   lease_owner?: string;
+  claim_token?: string;
   lease_expires_at?: string;
 }
 
@@ -74,6 +82,7 @@ export class MemoryConnectorRuntimeStore implements ConnectorRuntimeStore {
   async createInstallation(
     input: NewConnectorInstallation,
   ): Promise<ConnectorInstallation> {
+    if (this.installations.has(input.id)) throw new Error("Connector installation ID already exists");
     const installation: ConnectorInstallation = {
       ...input,
       config: { ...input.config },
@@ -185,6 +194,7 @@ export class MemoryConnectorRuntimeStore implements ConnectorRuntimeStore {
       cursor_version: current?.cursor_version ?? 1,
       updated_at: input.now,
       lease_owner: input.lease_owner,
+      claim_token: randomUUID(),
       lease_expires_at: new Date(
         new Date(input.now).getTime() + input.lease_duration_ms,
       ).toISOString(),
@@ -196,16 +206,43 @@ export class MemoryConnectorRuntimeStore implements ConnectorRuntimeStore {
   async releaseLease(input: ReleaseConnectorLease): Promise<boolean> {
     const key = cursorKey(input.installation_id, input.stream_key);
     const cursor = this.cursors.get(key);
-    if (!cursor || cursor.lease_owner !== input.lease_owner) {
+    if (!cursor || cursor.lease_owner !== input.lease_owner ||
+      cursor.claim_token !== input.claim_token) {
       return false;
     }
     this.cursors.set(key, {
       ...cursor,
       lease_owner: undefined,
+      claim_token: undefined,
       lease_expires_at: undefined,
       updated_at: input.now,
     });
     return true;
+  }
+
+  async renewLease(
+    input: RenewConnectorLease,
+  ): Promise<ConnectorLease | null> {
+    const key = cursorKey(input.installation_id, input.stream_key);
+    const cursor = this.cursors.get(key);
+    if (
+      !cursor ||
+      cursor.lease_owner !== input.lease_owner ||
+      cursor.claim_token !== input.claim_token ||
+      !cursor.lease_expires_at ||
+      cursor.lease_expires_at <= input.now
+    ) {
+      return null;
+    }
+    const renewed: StoredCursor = {
+      ...cursor,
+      lease_expires_at: new Date(
+        new Date(input.now).getTime() + input.lease_duration_ms,
+      ).toISOString(),
+      updated_at: input.now,
+    };
+    this.cursors.set(key, renewed);
+    return this.copyLease(renewed);
   }
 
   async resetCursor(
@@ -224,6 +261,7 @@ export class MemoryConnectorRuntimeStore implements ConnectorRuntimeStore {
       cursor: undefined,
       cursor_version: cursor.cursor_version + 1,
       lease_owner: undefined,
+      claim_token: undefined,
       lease_expires_at: undefined,
       updated_at: input.now,
     };
@@ -236,12 +274,23 @@ export class MemoryConnectorRuntimeStore implements ConnectorRuntimeStore {
   }
 
   async commitSyncPage(input: CommitSyncPage): Promise<CommitSyncPageResult> {
-    this.beginAttemptUnlocked(input.attempt);
-    const attempt = await this.settleAttempt(input.settle);
-    return { attempt, events: [] };
+    assertSyncPageAttemptBinding(input);
+    if (input.ingest !== undefined || (input.disposition_repairs?.length ?? 0) > 0 ||
+      (input.prefs?.length ?? 0) > 0) {
+      throw new Error("Standalone connector runtime cannot commit Authority data");
+    }
+    const newAttempt = structuredClone(input.attempt);
+    const settle = structuredClone(input.settle);
+    return this.withSettlementRollback(settle, newAttempt.id, () => {
+      this.beginAttemptUnlocked(newAttempt);
+      const attempt = this.settleAttemptWithinTurn(settle);
+      return { attempt, events: [] };
+    });
   }
 
   private beginAttemptUnlocked(input: NewIngestAttempt): IngestAttempt {
+    assertAttemptInstallationBinding(input, this.installations.get(input.connector_installation_id));
+    if (this.attempts.has(input.id)) throw new Error("Ingest attempt ID already exists");
     const attempt: IngestAttempt = {
       ...input,
       status: "running",
@@ -255,13 +304,45 @@ export class MemoryConnectorRuntimeStore implements ConnectorRuntimeStore {
   }
 
   async settleAttempt(input: SettleIngestAttempt): Promise<IngestAttempt> {
-    const attempt = this.attempts.get(input.attempt_id);
-    if (!attempt) {
-      throw new Error(`Ingest attempt not found: ${input.attempt_id}`);
-    }
+    const settle = structuredClone(input);
+    return this.withSettlementRollback(settle, undefined, () =>
+      this.settleAttemptWithinTurn(settle));
+  }
+
+  private withSettlementRollback<T>(
+    input: SettleIngestAttempt,
+    newAttemptId: string | undefined,
+    commit: () => T,
+  ): T {
+    const ids = new Set([input.attempt_id, ...(newAttemptId === undefined ? [] : [newAttemptId])]);
+    const attempts = [...ids].map((id) => [id, this.attempts.get(id)] as const);
     const key = cursorKey(input.installation_id, input.stream_key);
     const cursor = this.cursors.get(key);
-    if (cursor?.lease_owner !== input.lease_owner) {
+    const quarantineCount = this.quarantines.length;
+    try {
+      return commit();
+    } catch (error) {
+      for (const [id, attempt] of attempts) {
+        if (attempt === undefined) this.attempts.delete(id);
+        else this.attempts.set(id, attempt);
+      }
+      if (cursor === undefined) this.cursors.delete(key);
+      else this.cursors.set(key, cursor);
+      this.quarantines.length = quarantineCount;
+      throw error;
+    }
+  }
+
+  private settleAttemptWithinTurn(input: SettleIngestAttempt): IngestAttempt {
+    const attempt = this.attempts.get(input.attempt_id);
+    assertAttemptSettlementBinding(attempt, input);
+    assertAttemptInstallationBinding(attempt, this.installations.get(attempt.connector_installation_id));
+    const key = cursorKey(input.installation_id, input.stream_key);
+    const cursor = this.cursors.get(key);
+    if (cursor?.lease_owner !== input.lease_owner ||
+      cursor.claim_token !== input.claim_token ||
+      (cursor.lease_expires_at !== undefined &&
+        cursor.lease_expires_at <= input.finished_at)) {
       throw new Error("Connector lease is not held by the attempt owner");
     }
 
@@ -275,17 +356,16 @@ export class MemoryConnectorRuntimeStore implements ConnectorRuntimeStore {
       retryable_failure_count: input.retryable_failure_count,
       error_code: input.error_code,
     };
-    this.attempts.set(settled.id, settled);
-    this.quarantines.push(
-      ...input.quarantines.map((quarantine) => ({
+    const quarantines = input.quarantines.map((quarantine) => ({
         ...quarantine,
         safe_metadata: { ...quarantine.safe_metadata },
         attempt_id: input.attempt_id,
         connector_installation_id: input.installation_id,
         stream_key: input.stream_key,
-      })),
-    );
+      }));
 
+    this.attempts.set(settled.id, settled);
+    for (const quarantine of quarantines) this.quarantines.push(quarantine);
     this.cursors.set(key, {
       ...cursor,
       cursor:
@@ -298,6 +378,7 @@ export class MemoryConnectorRuntimeStore implements ConnectorRuntimeStore {
           : cursor.cursor_version,
       updated_at: input.finished_at,
       lease_owner: undefined,
+      claim_token: undefined,
       lease_expires_at: undefined,
     });
     return { ...settled };
@@ -943,6 +1024,7 @@ export class MemoryConnectorRuntimeStore implements ConnectorRuntimeStore {
     return {
       ...this.copyCursor(cursor),
       lease_owner: cursor.lease_owner!,
+      claim_token: cursor.claim_token!,
       lease_expires_at: cursor.lease_expires_at!,
     };
   }

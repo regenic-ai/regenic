@@ -45,6 +45,8 @@ import type {
   ConnectorImportView,
   ConnectorMarketView,
   ConnectorInstallJob,
+  CancellationJobView,
+  WorkIdentityDiagnosticView,
 } from "./types";
 import { activeLocale } from "../../shared/i18n.ts";
 import { throwKernelError } from "./kernel-request.ts";
@@ -1497,6 +1499,117 @@ export async function runWorkItem(id: string, expectedVersion: number): Promise<
   }
 }
 
+export async function fetchCancellationJobs(): Promise<CancellationJobView[]> {
+  const response = await fetch(`${origin()}/v1/me/cancellation-jobs`);
+  const body = (await response.json()) as
+    | CancellationJobView[]
+    | { error?: { message?: string } };
+  if (!response.ok || !Array.isArray(body)) {
+    throw new Error(
+      !Array.isArray(body) && body.error?.message
+        ? body.error.message
+        : `cancellation jobs ${response.status}`,
+    );
+  }
+  return body;
+}
+
+export async function fetchWorkIdentityDiagnostics(): Promise<WorkIdentityDiagnosticView[]> {
+  const response = await fetch(`${origin()}/v1/me/work-identity-diagnostics`);
+  const body = (await response.json()) as
+    | WorkIdentityDiagnosticView[]
+    | { error?: { message?: string } };
+  if (!response.ok || !Array.isArray(body)) {
+    throw new Error(
+      !Array.isArray(body) && body.error?.message
+        ? body.error.message
+        : `work identity diagnostics ${response.status}`,
+    );
+  }
+  return body;
+}
+
+export async function retryCancellationJob(
+  job: Pick<CancellationJobView, "id" | "attempts">,
+): Promise<CancellationJobView> {
+  const commandId = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID()
+    : `cancellation-retry-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const response = await fetch(
+    `${origin()}/v1/me/cancellation-jobs/${encodeURIComponent(job.id)}/retry`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        expected_attempts: job.attempts,
+        command_id: commandId,
+        issued_at: new Date().toISOString(),
+      }),
+    },
+  );
+  const body = (await response.json()) as
+    | CancellationJobView
+    | { error?: { message?: string } };
+  if (!response.ok || !("id" in body)) {
+    throw new Error(
+      "error" in body && body.error?.message
+        ? body.error.message
+        : `cancellation job retry ${response.status}`,
+    );
+  }
+  return body;
+}
+
+export async function retryWorkDelivery(
+  id: string,
+  expectedVersion: number,
+  delivery: { id: string; version: number; status: string; write_back: string; attempts: number },
+): Promise<void> {
+  const commandId = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID()
+    : `delivery-retry-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const response = await fetch(`${origin()}/v1/me/work-items/${id}/retry-delivery`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      expected_version: expectedVersion,
+      delivery,
+      command_id: commandId,
+      issued_at: new Date().toISOString(),
+    }),
+  });
+  if (!response.ok) {
+    const body = (await response.json()) as { error?: { message?: string } };
+    throw new Error(body.error?.message ?? `delivery retry ${response.status}`);
+  }
+}
+
+export async function reconcileWorkDelivery(
+  id: string,
+  resolution: "sent" | "not_sent",
+  expectedVersion: number,
+  delivery: { id: string; version: number; status: string; write_back: string; attempts: number },
+): Promise<void> {
+  const commandId = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID()
+    : `delivery-reconcile-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const response = await fetch(`${origin()}/v1/me/work-items/${id}/reconcile-delivery`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      resolution,
+      expected_version: expectedVersion,
+      delivery,
+      command_id: commandId,
+      issued_at: new Date().toISOString(),
+    }),
+  });
+  if (!response.ok) {
+    const body = (await response.json()) as { error?: { message?: string } };
+    throw new Error(body.error?.message ?? `delivery reconciliation ${response.status}`);
+  }
+}
+
 export async function fetchWorkRunReads(runId: string): Promise<AgentContextRead[]> {
   const response = await fetch(`${origin()}/v1/me/work-runs/${encodeURIComponent(runId)}/reads`);
   if (!response.ok) {
@@ -1523,6 +1636,31 @@ export async function dismissWorkItem(
   if (!response.ok) {
     const body = (await response.json()) as { error?: { message?: string } };
     throw new Error(body.error?.message ?? `work dismiss ${response.status}`);
+  }
+}
+
+export async function acknowledgeWorkResult(
+  id: string,
+  runId: string,
+  expectedVersion: number,
+  expectedRunVersion: number,
+  commandId: string,
+  issuedAt: string,
+): Promise<void> {
+  const response = await fetch(`${origin()}/v1/me/work-items/${encodeURIComponent(id)}/acknowledge`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      run_id: runId,
+      expected_version: expectedVersion,
+      expected_run_version: expectedRunVersion,
+      command_id: commandId,
+      issued_at: issuedAt,
+    }),
+  });
+  if (!response.ok) {
+    const body = (await response.json()) as { error?: { message?: string } };
+    throw new Error(body.error?.message ?? `work result acknowledgment ${response.status}`);
   }
 }
 
@@ -1950,14 +2088,22 @@ export async function triagePendingInbox(
   disposition: MessageDisposition,
   signal?: AbortSignal,
 ): Promise<void> {
+  const commandId = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID()
+    : `inbox-triage-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const response = await fetch(`${origin()}/v1/me/inbox/${encodeURIComponent(eventId)}/triage`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ disposition }),
+    body: JSON.stringify({
+      disposition,
+      command_id: commandId,
+      issued_at: new Date().toISOString(),
+    }),
     signal,
   });
   if (!response.ok) {
-    throw new Error(`inbox triage ${response.status}`);
+    const body = (await response.json()) as { error?: { message?: string } };
+    throw new Error(body.error?.message ?? `inbox triage ${response.status}`);
   }
 }
 

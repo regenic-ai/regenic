@@ -4,6 +4,7 @@ const {
   ChannelDriverRegistry,
   LocalExecutorPluginRegistry,
   MemoryExecutorRegistry,
+  MemoryWorkStore,
   createSessionTaskExecutor,
 } = require("@regenic/domain");
 const { PersonalExecutorService } = require("../dist/personal-executor.service");
@@ -24,6 +25,7 @@ function fixture({
     status: "enabled", config: pinned ? { installation_id: connector.id } : {},
   };
   const rows = [row];
+  let cancellationPrepared = false;
   let item = {
     id: "work", org_id: "org", recipe_id: "recipe", thread_id: "managed:thread",
     status: "running", current_run_id: "run",
@@ -45,9 +47,7 @@ function fixture({
       item = { ...item, status: "skipped", updated_at: now };
       return { outcome: "applied", item, run, deliveries: [] };
     },
-    putWorkItem: async (value) => { item = value; return value; },
     getActiveWorkRun: async () => run,
-    putWorkRun: async (value) => { run = value; return value; },
     listWorkRuns: async () => [run],
     getWorkDeliveryByItem: async () => null,
     getConversationPref: async () => ({ hidden: true }),
@@ -86,15 +86,17 @@ function fixture({
     ...(cancel ? {
       cancel: function (actualRun, actualContext) {
         assert.equal(this, plugin);
-        assert.equal(actualRun, run);
+        assert.deepEqual(actualRun, run);
+        if (cancellationPrepared) assert.ok(actualContext.signal instanceof AbortSignal);
         if (hostContext) {
           assert.equal(actualContext.org_id, "org");
           assert.equal(actualContext.installation_id, "connector");
         } else {
-          assert.equal(actualContext, ctx);
+          assert.equal(actualContext.org_id, ctx.org_id);
+          assert.equal(actualContext.env, ctx.env);
         }
         calls.push(`cancel:${actualRun.external_run_id}`);
-        return Promise.resolve();
+        return Promise.resolve({ status: "cancelled", external_run_id: actualRun.external_run_id });
       },
     } : {}),
   };
@@ -108,6 +110,8 @@ function fixture({
     inbox: { touchInboxDigest() {} },
     waits: { drop: (id) => calls.push(`drop:${id}`) },
     events: { workUpdated() {} },
+    cancellationOwner: "test-cancellation-worker",
+    maintenanceHold: false,
   });
   return {
     calls, ctx, drivers, mounts, work, executors, row, plugin, plugins,
@@ -115,6 +119,52 @@ function fixture({
     set connector(value) { connector = value; },
     get run() { return run; },
     auxiliary() { item.recipe_id = run.recipe_id = "system:test:executor"; },
+    async prepareCancellation() {
+      const authority = new MemoryWorkStore();
+      const now = new Date().toISOString();
+      const recipe = {
+        id: item.recipe_id, org_id: "org", name: "Test", match: { record_class: "task" },
+        trigger: { kind: "push" }, executor_type: run.executor_type, executor_config: {},
+        can_write_back: false, include_context: false, enabled: true, created_at: now, updated_at: now,
+      };
+      await authority.putRecipe(recipe);
+      const created = await authority.createWorkItem({
+        item: {
+          ...item, status: "open", current_run_id: undefined, unit_key: "unit",
+          record_class: "task", created_at: now, updated_at: now,
+        },
+        recipe,
+        expected_recipe: recipe,
+      });
+      assert.equal(created.outcome, "applied");
+      assert.equal(await authority.claimWorkRunStart({
+        expected_item: created.item,
+        expected_recipe: recipe,
+        run: { ...run, external_run_id: undefined, start_state: "pending", created_at: now, updated_at: now },
+      }), true);
+      const submitted = await authority.checkpointWorkRunStart({
+        expected_item: await authority.getWorkItem("org", item.id),
+        expected_run: await authority.getWorkRun("org", run.id),
+        kind: "submitted", external_run_id: run.external_run_id, now,
+      });
+      assert.equal(submitted.outcome, "applied");
+      item = submitted.item;
+      run = submitted.run;
+      for (const name of [
+        "getWorkItem", "getWorkRun", "dismissWorkItem", "getActiveWorkRun",
+        "claimCancellationJobs", "renewCancellationJob", "settleCancellationJob",
+        "commitCancellationJobObservation",
+      ]) {
+        store[name] = authority[name].bind(authority);
+      }
+      work.maintenanceHold = true;
+      cancellationPrepared = true;
+      return authority;
+    },
+    async drainCancellationJobs() {
+      work.maintenanceHold = false;
+      await work.drainCancellationJobs();
+    },
   };
 }
 
@@ -123,20 +173,25 @@ for (const managed of [true, false]) {
     for (const operation of ["dismiss", "auxiliary"]) {
       test(`${operation} reaches mounted ${managed ? "managed" : "legacy"} executor ${cancel ? "cancel" : "without a cancel hook"}`, async () => {
         const f = fixture({ managed, cancel });
+        if (operation === "auxiliary") f.auxiliary();
+        const authority = await f.prepareCancellation();
         await f.mounts.ensureMounted();
         const executor = f.executors.get("executor");
         assert.equal(typeof executor.cancel, cancel ? "function" : "undefined");
         if (operation === "auxiliary") {
-          f.auxiliary();
           await f.work.cancelAuxiliaryExecution("work");
         } else {
-          await f.work.dismissWorkItem("work", 0, `dismiss-${Date.now()}`, new Date().toISOString());
+          await f.work.dismissWorkItem("work", (await authority.getWorkItem("org", "work")).version, `dismiss-${Date.now()}`, new Date().toISOString());
         }
-        assert.equal(f.run.status, "running");
-        assert.deepEqual(f.calls, [
-          ...(operation === "auxiliary" ? ["drop:run"] : []),
-          ...(cancel ? ["cancel:owned-agent-run"] : []),
-        ]);
+        assert.deepEqual(f.calls, ["drop:run"]);
+        assert.equal((await authority.listCancellationJobs("org"))[0].status, "pending");
+        assert.equal((await authority.getWorkRun("org", "run")).status, "running");
+        await f.drainCancellationJobs();
+        const [job] = await authority.listCancellationJobs("org");
+        assert.equal(job.status, "succeeded");
+        assert.equal(job.outcome_code, cancel ? "observed_cancelled" : "unsupported");
+        assert.equal((await authority.getWorkRun("org", "run")).status, cancel ? "cancelled" : "running");
+        assert.deepEqual(f.calls, ["drop:run", ...(cancel ? ["cancel:owned-agent-run"] : [])]);
       });
     }
   }
@@ -145,14 +200,17 @@ for (const managed of [true, false]) {
 for (const operation of ["dismiss", "auxiliary"]) {
   test(`${operation} passes the real host-owned context binding through the mounted cancel hook`, async () => {
     const f = fixture({ hostContext: true });
+    if (operation === "auxiliary") f.auxiliary();
+    const authority = await f.prepareCancellation();
     await f.mounts.ensureMounted();
     if (operation === "auxiliary") {
-      f.auxiliary();
       await f.work.cancelAuxiliaryExecution("work");
     } else {
-      await f.work.dismissWorkItem("work", 0, `dismiss-${Date.now()}`, new Date().toISOString());
+      await f.work.dismissWorkItem("work", (await authority.getWorkItem("org", "work")).version, `dismiss-${Date.now()}`, new Date().toISOString());
     }
-    assert.equal(f.run.status, "running");
+    assert.equal((await authority.listCancellationJobs("org"))[0].status, "pending");
+    await f.drainCancellationJobs();
+    assert.equal((await authority.listCancellationJobs("org"))[0].status, "succeeded");
     assert.equal(f.calls.includes("cancel:owned-agent-run"), true);
     assert.equal(f.calls.includes("activate"), false);
   });
@@ -161,9 +219,15 @@ for (const operation of ["dismiss", "auxiliary"]) {
 test("auxiliary cancellation preserves local stop without forging exit when cancel throws synchronously", async (t) => {
   const f = fixture();
   f.auxiliary();
+  const authority = await f.prepareCancellation();
   f.plugin.cancel = function () {
     assert.equal(this, f.plugin);
+    f.calls.push("cancel:threw");
     throw new Error("cancel failed synchronously");
+  };
+  f.plugin.status = async (target) => {
+    f.calls.push("status:running");
+    return { status: "running", external_run_id: target.external_run_id };
   };
   await f.mounts.ensureMounted();
   const logged = t.mock.method(console, "error", () => {});
@@ -171,8 +235,13 @@ test("auxiliary cancellation preserves local stop without forging exit when canc
   const result = await f.work.cancelAuxiliaryExecution("work");
 
   assert.equal(result.work_item.status, "skipped");
-  assert.equal(f.run.status, "running");
-  assert.deepEqual(f.calls, ["drop:run"]);
+  assert.equal((await authority.listCancellationJobs("org"))[0].status, "pending");
+  await f.drainCancellationJobs();
+  const [job] = await authority.listCancellationJobs("org");
+  assert.equal(job.status, "failed");
+  assert.equal(job.last_error_code, "cancel_unconfirmed");
+  assert.equal((await authority.getWorkRun("org", "run")).status, "running");
+  assert.deepEqual(f.calls, ["drop:run", "cancel:threw", "status:running"]);
   assert.equal(logged.mock.callCount(), 1);
 });
 

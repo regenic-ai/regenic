@@ -4,6 +4,7 @@ const { createHash } = require("node:crypto");
 const {
   INGEST_SCHEMA_VERSION,
   CONTENT_PARTS_MEDIA_TYPE,
+  AuthorityConflictError,
   IngestionService,
   MemoryAuthorityStore,
   MemoryBlobStore,
@@ -52,6 +53,52 @@ function createHarness() {
   };
 }
 
+describe("MemoryBlobStore", () => {
+  it("enumerates visible objects with deterministic byte sizes", async () => {
+    const blobs = new MemoryBlobStore();
+    const legacy = Buffer.from("legacy");
+    const legacyHash = createHash("sha256").update(legacy).digest("hex");
+    const fenced = Buffer.from("fenced");
+    const fencedHash = createHash("sha256").update(fenced).digest("hex");
+    const deleted = Buffer.from("deleted");
+    const deletedHash = createHash("sha256").update(deleted).digest("hex");
+    await blobs.put(legacyHash, legacy, "text/plain");
+    await blobs.putFenced(fencedHash, fenced, "text/plain", 1);
+    await blobs.putFenced(deletedHash, deleted, "text/plain", 1);
+    await blobs.deleteFenced(deletedHash, 2);
+
+    const entries = [];
+    for await (const entry of blobs.enumerate()) entries.push(entry);
+    const expected = [
+      { hash: legacyHash, byte_size: legacy.byteLength },
+      { hash: fencedHash, byte_size: fenced.byteLength },
+    ].sort((left, right) => left.hash.localeCompare(right.hash));
+    assert.deepEqual(entries, expected);
+  });
+});
+
+describe("MemoryAuthorityStore Blob inventory", () => {
+  it("keeps inventory entries protected when the in-memory reference ledger is incomplete", async () => {
+    const authority = new MemoryAuthorityStore();
+    const bytes = Buffer.from("memory blob");
+    const hash = createHash("sha256").update(bytes).digest("hex");
+    await authority.reserveBlobWrites({
+      owner_id: "inventory-test",
+      lease_duration_ms: 60_000,
+      blobs: [{
+        content_hash: hash,
+        media_type: "text/plain",
+        byte_size: bytes.byteLength,
+      }],
+    });
+
+    const inventory = await authority.inspectBlobInventory([hash]);
+    assert.equal(inventory.get(hash).state, "protected");
+    assert.equal(inventory.get(hash).reference_count, 0);
+    assert.equal(inventory.get(hash).unreferenced_at, null);
+  });
+});
+
 async function seedLegacyEmptyAttachment(authorityStore, blobStore) {
   const empty = new Uint8Array();
   const emptyHash = createHash("sha256").update(empty).digest("hex");
@@ -85,6 +132,229 @@ async function seedLegacyEmptyAttachment(authorityStore, blobStore) {
 }
 
 describe("IngestionService", () => {
+  it("commits a content-free tombstone without an existing memory source head", async () => {
+    const authorityStore = new MemoryAuthorityStore();
+    const [event] = await authorityStore.commitIngest({
+      appends: [{
+        id: "missing-tombstone", org_id: "local-owner", source: "regenic",
+        external_id: "missing", operation: "tombstone",
+        occurred_at: "2026-08-08T00:00:00.000Z", expected_head_id: null,
+      }],
+      dispositions: [],
+    });
+    assert.equal(event.operation, "tombstone");
+    assert.equal(event.content_hash, undefined);
+    assert.equal(event.parent_event_id, undefined);
+    assert.equal((await authorityStore.findBySourceIdentity({
+      org_id: "local-owner", source: "regenic", external_id: "missing",
+    })).id, event.id);
+  });
+
+  it("uses the committed head after a mixed page flushes pending creates", async () => {
+    const { authorityStore, service } = createHarness();
+    const batch = createBatch();
+    const original = batch.records[0];
+    batch.records.push(
+      { ...original, operation: "revise", content: [{ role: "body", media_type: "text/plain", text: "Revised" }] },
+      { ...original, operation: "revise" },
+    );
+    const result = await service.ingest(batch);
+    assert.deepEqual(result.records.map((record) => record.status), ["accepted", "accepted", "accepted"]);
+    assert.equal(authorityStore.allEvents().length, 3);
+    const head = await authorityStore.findBySourceIdentity({
+      org_id: batch.org_id, source: original.source, external_id: original.external_id,
+    });
+    assert.equal(head.id, result.records[2].event_id);
+    assert.equal(head.parent_event_id, result.records[1].event_id);
+  });
+
+  it("fails the whole intake when a create loses a source-head race", async () => {
+    const { authorityStore, service } = createHarness();
+    const commit = authorityStore.commitConversationIntake.bind(authorityStore);
+    let injected = false;
+    authorityStore.commitConversationIntake = async (request) => {
+      if (!injected) {
+        injected = true;
+        const eventId = "concurrent-event";
+        await authorityStore.commitIngest({
+          appends: [{ ...request.ingest.appends[0], id: eventId }],
+          dispositions: [{ ...request.ingest.dispositions[0], event_id: eventId }],
+        });
+        throw new AuthorityConflictError();
+      }
+      return commit(request);
+    };
+    const batch = createBatch();
+    batch.records.push({ ...batch.records[0] });
+    await assert.rejects(service.ingest(batch), AuthorityConflictError);
+    assert.equal(authorityStore.allEvents().length, 1);
+    assert.equal(authorityStore.allEvents()[0].id, "concurrent-event");
+  });
+
+  it("does not partially commit a failed pending create or its duplicates", async () => {
+    const { authorityStore, service } = createHarness();
+    authorityStore.commitConversationIntake = async () => { throw new AuthorityConflictError(); };
+    const batch = createBatch();
+    batch.records.push({ ...batch.records[0] });
+    await assert.rejects(service.ingest(batch), AuthorityConflictError);
+    assert.equal(authorityStore.allEvents().length, 0);
+  });
+
+  it("rejects unbound ingest dispositions before mutating events or existing decisions", async () => {
+    const store = new MemoryAuthorityStore();
+    const now = "2026-08-08T00:00:00.000Z";
+    const existing = await store.append({
+      id: "original", org_id: "org", source: "synthetic", external_id: "old",
+      occurred_at: now, expected_head_id: null,
+    });
+    const initial = {
+      event_id: existing.id, org_id: "org", disposition: "outside_current_work",
+      layer: "L1_event", reason_codes: [], score: 1, decided_at: now,
+    };
+    await store.putDispositionIfAbsent(initial);
+    const original = await store.getDisposition(existing.id);
+    const append = {
+      id: "new", org_id: "org", source: "synthetic", external_id: "new",
+      occurred_at: now, expected_head_id: null,
+    };
+    const decision = { ...initial, event_id: "new", disposition: "current_work" };
+    for (const request of [
+      { appends: [append], dispositions: [{ ...decision, event_id: existing.id }] },
+      { appends: [append], dispositions: [{ ...decision, org_id: "other-org" }] },
+      { appends: [append], dispositions: [decision, decision] },
+      { appends: [append, append], dispositions: [decision] },
+    ]) {
+      await assert.rejects(store.commitIngest(request), /Ingest (dispositions|event IDs)/);
+      assert.deepEqual(await store.getDisposition(existing.id), original);
+      assert.equal(await store.findBySourceIdentity(append), null);
+    }
+    await assert.rejects(store.commitIngest({
+      appends: [append, { ...append, id: existing.id, external_id: "collision" }],
+      dispositions: [decision, { ...decision, event_id: existing.id }],
+    }), /Event ID already exists/);
+    assert.equal(await store.findBySourceIdentity(append), null);
+    assert.deepEqual(await store.getDisposition(existing.id), original);
+    const input = {
+      ...existing, id: "revision", parent_event_id: existing.id, expected_head_id: existing.id,
+      disposition: { ...decision, event_id: existing.id },
+    };
+    await assert.rejects(store.appendRevision(input), /Event disposition must match/);
+    await assert.rejects(store.markTombstone(input), /Event disposition must match/);
+    assert.equal((await store.findBySourceIdentity(existing)).id, existing.id);
+    assert.deepEqual(await store.getDisposition(existing.id), original);
+  });
+
+  it("allocates implicit memory event IDs without colliding with existing or later explicit IDs", async () => {
+    const store = new MemoryAuthorityStore();
+    const base = {
+      org_id: "org", source: "synthetic", occurred_at: "2026-08-08T00:00:00.000Z",
+      expected_head_id: null,
+    };
+    await store.append({ ...base, id: "event-1", external_id: "existing" });
+    const events = await store.commitIngest({
+      appends: [
+        { ...base, external_id: "implicit" },
+        { ...base, id: "event-2", external_id: "explicit" },
+      ],
+      dispositions: [],
+    });
+    assert.deepEqual(events.map((event) => event.id), ["event-3", "event-2"]);
+  });
+
+  it("unfolds current-head disposition changes and restores without overriding later human intent", async () => {
+    const store = new MemoryAuthorityStore();
+    const now = "2026-08-08T00:00:00.000Z";
+    for (const mode of ["transition", "restore", "human", "stale"]) {
+      const thread = `disposition-${mode}`;
+      const event = await store.append({
+        id: thread, org_id: "org", source: "synthetic", external_id: thread, thread_id: thread,
+        occurred_at: now, expected_head_id: null,
+      });
+      if (mode === "stale") {
+        await store.appendRevision({
+          ...event, id: "replacement-disposition", parent_event_id: event.id, expected_head_id: event.id,
+        });
+      }
+      const initial = {
+        event_id: event.id, org_id: "org", disposition: "outside_current_work",
+        layer: "L1_event", reason_codes: [], score: 1, decided_at: now,
+      };
+      if (mode !== "restore") await store.putDispositionIfAbsent(initial);
+      if (mode === "human") {
+        await store.setConversationVisibility({
+          org_id: "org", thread_id: thread, hidden: true, expected_version: 0, updated_at: now,
+        });
+      } else {
+        await store.setConversationPolicyHidden({
+          org_id: "org", thread_id: thread, expected_visibility_version: 0, updated_at: now,
+        });
+      }
+      const decision = { ...initial, disposition: "current_work" };
+      if (mode === "restore") {
+        assert.equal(await store.putDispositionIfAbsent(decision), true);
+        assert.equal(await store.putDispositionIfAbsent(decision), false);
+      } else {
+        const command = {
+          org_id: "org", event_id: event.id, action: "triage", disposition: "current_work",
+          command_id: `command-${mode}`, issued_at: now,
+        };
+        const input = { expected: await store.getDisposition(event.id), decision, command };
+        assert.equal((await store.transitionDisposition(input)).outcome, "applied");
+        if (mode === "transition") {
+          await store.setConversationVisibility({
+            org_id: "org", thread_id: thread, hidden: true, expected_version: 0, updated_at: now,
+          });
+        }
+        assert.equal((await store.transitionDisposition(input)).outcome, "replayed");
+      }
+      const pref = await store.getConversationPref("org", thread);
+      assert.equal(pref.hidden, mode !== "restore");
+      assert.equal(pref.hidden_reason, mode === "restore" ? null : mode === "stale" ? "policy" : "human");
+    }
+    assert.deepEqual(store.listCurrentWorkVisibilityEvents().map((event) => event.payload.cause),
+      ["current_work_disposition_changed", "current_work_disposition_restored"]);
+  });
+
+  it("atomically unfolds policy-hidden current work while preserving human hides and stale heads", async () => {
+    const store = new MemoryAuthorityStore();
+    const now = "2026-08-08T00:00:00.000Z";
+    for (const mode of ["policy", "human", "superseded"]) {
+      const thread = `thread-${mode}`;
+      const id = `event-${mode}`;
+      if (mode === "human") {
+        await store.setConversationVisibility({
+          org_id: "org", thread_id: thread, hidden: true, expected_version: 0, updated_at: now,
+        });
+      } else {
+        await store.setConversationPolicyHidden({
+          org_id: "org", thread_id: thread, expected_visibility_version: 0, updated_at: now,
+        });
+      }
+      const event = {
+        id, org_id: "org", source: "synthetic", external_id: id, thread_id: thread,
+        occurred_at: now, expected_head_id: null,
+      };
+      const decision = (eventId, disposition) => ({
+        event_id: eventId, org_id: "org", disposition, layer: "L1_event",
+        reason_codes: [], score: 1, decided_at: now,
+      });
+      await store.commitIngest({
+        appends: mode === "superseded"
+          ? [event, { ...event, id: "replacement", operation: "revise", parent_event_id: id, expected_head_id: id }]
+          : [event],
+        dispositions: mode === "superseded"
+          ? [decision(id, "current_work"), decision("replacement", "outside_current_work")]
+          : [decision(id, "current_work")],
+      });
+      const pref = await store.getConversationPref("org", thread);
+      assert.equal(pref.hidden, mode !== "policy");
+      assert.equal(pref.hidden_reason, mode === "policy" ? null : mode === "human" ? "human" : "policy");
+      assert.equal(pref.visibility_version, mode === "human" ? 1 : 0);
+    }
+    assert.deepEqual(store.listCurrentWorkVisibilityEvents().map((event) => event.payload.event_id),
+      ["event-policy"]);
+  });
+
   it("claims memory outbound attempts atomically and isolates receipt mutations", async () => {
     const store = new MemoryAuthorityStore();
     const input = {
@@ -200,6 +470,16 @@ describe("IngestionService", () => {
     assert.equal(blobStore.size, 1);
   });
 
+  it("does not fall back to a non-atomic write after an intake conflict", async () => {
+    const { authorityStore, service } = createHarness();
+    authorityStore.commitConversationIntake = async () => {
+      throw new AuthorityConflictError();
+    };
+    await assert.rejects(service.ingest(createBatch({ type: "task" })), AuthorityConflictError);
+    assert.equal(authorityStore.allEvents().length, 0);
+    assert.equal(authorityStore.listIngestionLifecycleEvents().length, 0);
+  });
+
   it("keeps Feishu thread replies on the parent chat identity", async () => {
     const { authorityStore, service } = createHarness();
     const batch = createBatch({
@@ -278,6 +558,69 @@ describe("IngestionService", () => {
     assert.equal(events.length, 2);
     assert.equal(events[1].operation, "revise");
     assert.equal(events[1].parent_event_id, events[0].id);
+  });
+
+  it("atomically records memory ingestion disposition changes for revisions and tombstones", async () => {
+    const { authorityStore, service } = createHarness();
+    const created = await service.ingest(createBatch({ type: "task" }));
+    const originalId = created.records[0].event_id;
+
+    const revised = await service.ingest(createBatch({
+      operation: "revise",
+      revision_id: "revision-current-work",
+      type: "text",
+      content: [{ role: "body", media_type: "text/plain", text: "ok" }],
+    }));
+    const revisedId = revised.records[0].event_id;
+    assert.equal((await authorityStore.getDisposition(revisedId)).disposition,
+      "outside_current_work");
+    const revisionAudit = authorityStore.listIngestionLifecycleEvents()
+      .find((event) => event.aggregate_id === revisedId);
+    assert.equal(revisionAudit.payload.previous.event_id, originalId);
+    assert.equal(revisionAudit.payload.previous.disposition, "current_work");
+
+    const tombstoned = await service.ingest(createBatch({
+      operation: "tombstone",
+      content: undefined,
+    }));
+    assert.equal((await authorityStore.getDisposition(tombstoned.records[0].event_id))
+      .disposition, "outside_current_work");
+    assert.equal(authorityStore.allEvents().at(-1).operation, "tombstone");
+  });
+
+  it("increments memory disposition versions only when disposition content changes", async () => {
+    const { authorityStore, service } = createHarness();
+    const created = await service.ingest(createBatch());
+    const eventId = created.records[0].event_id;
+    const initial = await authorityStore.getDisposition(eventId);
+    assert.equal(initial.version, 0);
+
+    assert.equal(await authorityStore.putDispositionIfAbsent(initial), false);
+    assert.equal((await authorityStore.getDisposition(eventId)).version, 0);
+
+    assert.equal(await authorityStore.putDispositionIfAbsent({
+      ...initial,
+      disposition: "pending",
+      decided_at: "2026-08-26T00:01:00.000Z",
+    }), false);
+    const changed = await authorityStore.transitionDisposition({
+      expected: initial,
+      decision: {
+        ...initial,
+        disposition: "pending",
+        decided_at: "2026-08-26T00:01:00.000Z",
+      },
+      command: {
+        org_id: initial.org_id,
+        event_id: initial.event_id,
+        action: "triage",
+        disposition: "pending",
+        command_id: "ingestion-test-triage",
+        issued_at: "2026-08-26T00:01:00.000Z",
+      },
+    });
+    assert.equal(changed.outcome, "applied");
+    assert.equal((await authorityStore.getDisposition(eventId)).version, 1);
   });
 
   it("quarantines a conflicting create without writing another Blob", async () => {
@@ -404,6 +747,10 @@ describe("IngestionService", () => {
     assert.equal(replay.records[0].status, "duplicate");
     assert.equal(authorityStore.allEvents().length, 3);
     assert.equal(blobStore.size, 1);
+    assert.equal((await authorityStore.getDisposition(events.at(-1).id)).disposition,
+      "outside_current_work");
+    assert.equal(authorityStore.listIngestionLifecycleEvents()
+      .some((event) => event.aggregate_id === events.at(-1).id), false);
   });
 
   it("accepts an attachment pointer without bytes", async () => {
@@ -683,6 +1030,204 @@ describe("IngestionService", () => {
       assert.equal(decision?.disposition, "current_work");
       assert.deepEqual(decision?.reason_codes, ["actionable"]);
     }
+  });
+
+  it("creates the matching work item in the atomic intake", async () => {
+    const { authorityStore, service } = createHarness();
+    const result = await service.ingest(createBatch({ type: "task" }));
+    const eventId = result.records[0].event_id;
+
+    assert.equal(result.records[0].status, "accepted");
+    assert.equal((await authorityStore.getDisposition(eventId)).disposition, "current_work");
+    assert.equal(
+      (await authorityStore.getWorkItemByThread("local-owner", "regenic:source-event-1"))
+        .head_event_id,
+      eventId,
+    );
+  });
+
+  it("rolls back event and disposition writes when a work observation conflicts", async () => {
+    const authorityStore = new MemoryAuthorityStore();
+    const now = "2026-08-08T00:00:00.000Z";
+    const eventId = "atomic-intake-event";
+    await assert.rejects(authorityStore.commitConversationIntake({
+      ingest: {
+        appends: [{
+          id: eventId,
+          org_id: "org",
+          source: "synthetic",
+          external_id: "atomic-intake",
+          thread_id: "thread",
+          content_hash: "a".repeat(64),
+          occurred_at: now,
+          expected_head_id: null,
+        }],
+        dispositions: [{
+          event_id: eventId,
+          org_id: "org",
+          disposition: "current_work",
+          layer: "L1_event",
+          reason_codes: [],
+          score: 1,
+          decided_at: now,
+        }],
+      },
+      work_observations: [{
+        expected_item: null,
+        item: {
+          id: "work-item",
+          org_id: "org",
+          thread_id: "wrong-thread",
+          unit_key: eventId,
+          head_event_id: eventId,
+          record_class: "task",
+          thread_facet: "task",
+          status: "open",
+          created_at: now,
+          updated_at: now,
+        },
+      }],
+      visibility: [],
+    }), AuthorityConflictError);
+
+    assert.equal(await authorityStore.findBySourceIdentity({
+      org_id: "org",
+      source: "synthetic",
+      external_id: "atomic-intake",
+    }), null);
+    assert.equal(await authorityStore.getDisposition(eventId), null);
+    assert.equal(await authorityStore.getWorkItemByThread("org", "wrong-thread"), null);
+  });
+
+  it("rolls back replay disposition repairs and visibility when a work observation conflicts", async () => {
+    const authorityStore = new MemoryAuthorityStore();
+    const now = "2026-08-08T00:00:00.000Z";
+    const eventId = "atomic-replay-repair";
+    const identity = {
+      org_id: "org",
+      source: "synthetic",
+      external_id: "atomic-replay-repair",
+    };
+    const event = await authorityStore.append({
+      id: eventId,
+      ...identity,
+      thread_id: "thread",
+      content_hash: "a".repeat(64),
+      occurred_at: now,
+      expected_head_id: null,
+    });
+    await authorityStore.setConversationPolicyVisibility({
+      org_id: "org",
+      thread_id: "thread",
+      hidden: true,
+      expected_visibility_version: 0,
+      updated_at: now,
+    });
+
+    await assert.rejects(authorityStore.commitConversationIntake({
+      ingest: { appends: [], dispositions: [] },
+      disposition_repairs: [{
+        identities: [identity],
+        decision: {
+          event_id: event.id,
+          org_id: "org",
+          disposition: "current_work",
+          layer: "L1_event",
+          reason_codes: [],
+          score: 1,
+          decided_at: now,
+        },
+      }],
+      work_observations: [{
+        expected_item: null,
+        item: {
+          id: "work-item",
+          org_id: "org",
+          thread_id: "wrong-thread",
+          unit_key: event.id,
+          head_event_id: event.id,
+          record_class: "task",
+          thread_facet: "task",
+          status: "open",
+          created_at: now,
+          updated_at: now,
+        },
+      }],
+      visibility: [],
+    }), AuthorityConflictError);
+
+    assert.equal(await authorityStore.getDisposition(event.id), null);
+    assert.equal(
+      (await authorityStore.getConversationPref("org", "thread")).hidden,
+      true,
+    );
+    assert.deepEqual(await authorityStore.listInbox("org"), []);
+  });
+
+  it("does not commit replay disposition repairs after an atomic sync-page conflict", async () => {
+    const { authorityStore, blobStore, service } = createHarness();
+    const batch = createBatch();
+    const record = batch.records[0];
+    const canonical = canonicalizeRecordContent(record);
+    await blobStore.put(canonical.hash, canonical.bytes, canonical.media_type);
+    const event = await authorityStore.append({
+      id: "sync-replay-repair",
+      org_id: batch.org_id,
+      source: record.source,
+      external_id: record.external_id,
+      thread_id: "regenic:source-event-1",
+      content_hash: canonical.hash,
+      content_media_type: canonical.media_type,
+      content_byte_size: canonical.bytes.byteLength,
+      occurred_at: record.occurred_at,
+      expected_head_id: null,
+    });
+    await authorityStore.setConversationPolicyVisibility({
+      org_id: batch.org_id,
+      thread_id: "regenic:source-event-1",
+      hidden: true,
+      expected_visibility_version: 0,
+      updated_at: "2026-08-08T00:00:00.000Z",
+    });
+    authorityStore.atomicSyncPage = true;
+    authorityStore.commitSyncPage = async () => {
+      throw new AuthorityConflictError();
+    };
+    let standaloneWrites = 0;
+    const commitIntake = authorityStore.commitConversationIntake.bind(authorityStore);
+    authorityStore.commitConversationIntake = async (request) => {
+      standaloneWrites += 1;
+      return commitIntake(request);
+    };
+
+    const result = await service.ingest(batch, {
+      attempt: {
+        id: "attempt-replay-repair",
+        org_id: batch.org_id,
+        connector_installation_id: "install-1",
+        stream_key: "personal",
+        delivery_id: batch.delivery_id,
+        started_at: "2026-08-08T00:00:00.000Z",
+      },
+      settle: {
+        attempt_id: "attempt-replay-repair",
+        installation_id: "install-1",
+        stream_key: "personal",
+        lease_owner: "worker-a",
+        finished_at: "2026-08-08T00:00:01.000Z",
+      },
+    }, authorityStore);
+
+    assert.equal(result.records[0].status, "retryable_failure");
+    assert.equal(await authorityStore.getDisposition(event.id), null);
+    assert.equal(
+      (await authorityStore.getConversationPref(
+        batch.org_id,
+        "regenic:source-event-1",
+      )).hidden,
+      true,
+    );
+    assert.equal(standaloneWrites, 0);
   });
 
   it("treats an echo in the same page as the local outbound", async () => {
@@ -1130,15 +1675,21 @@ describe("IngestionService", () => {
     assert.equal(second.records[0].status, "accepted");
   });
 
-  it("commits a create-only page without a second ingest write", async () => {
+  it("rejects sync-page ingestion without the same atomic runtime store", async () => {
     const { authorityStore, service } = createHarness();
-    let ingestWrites = 0;
-    const originalIngest = authorityStore.commitIngest.bind(authorityStore);
-    authorityStore.commitIngest = async (request) => {
-      ingestWrites += 1;
-      return originalIngest(request);
+    let intakeWrites = 0;
+    let pageWrites = 0;
+    const originalIntake = authorityStore.commitConversationIntake.bind(authorityStore);
+    authorityStore.commitConversationIntake = async (request) => {
+      intakeWrites += 1;
+      return originalIntake(request);
     };
-    const result = await service.ingest(createBatch(), {
+    const originalPage = authorityStore.commitSyncPage.bind(authorityStore);
+    authorityStore.commitSyncPage = async (request) => {
+      pageWrites += 1;
+      return originalPage(request);
+    };
+    await assert.rejects(service.ingest(createBatch(), {
       attempt: {
         id: "attempt-page",
         org_id: "local-owner",
@@ -1154,56 +1705,37 @@ describe("IngestionService", () => {
         lease_owner: "worker-a",
         finished_at: "2026-08-08T00:00:01.000Z",
       },
-    });
-    assert.equal(result.valid, true);
-    assert.equal(result.page_committed, true);
-    assert.equal(result.records[0].status, "accepted");
-    assert.equal(ingestWrites, 1);
-    assert.equal(authorityStore.allEvents().length, 1);
+    }), /same atomic Authority and runtime store/);
+    assert.equal(pageWrites, 0);
+    assert.equal(intakeWrites, 0);
+    assert.equal(authorityStore.allEvents().length, 0);
   });
 
-  it("unfolds a policy-hidden thread inside the page commit", async () => {
+  it("unfolds a policy-hidden thread through standalone Authority ingestion", async () => {
     const { authorityStore, service } = createHarness();
-    await authorityStore.putConversationPref({
+    await authorityStore.setConversationPolicyVisibility({
       org_id: "local-owner",
       thread_id: "regenic:source-event-1",
       hidden: true,
-      hidden_reason: "policy",
+      expected_visibility_version: 0,
       updated_at: "2026-08-08T00:00:00.000Z",
     });
-    let prefWrites = 0;
-    const originalPref = authorityStore.putConversationPref.bind(authorityStore);
-    authorityStore.putConversationPref = async (input) => {
-      prefWrites += 1;
-      return originalPref(input);
+    let pagePolicyWrites = 0;
+    const originalPage = authorityStore.commitSyncPage.bind(authorityStore);
+    authorityStore.commitSyncPage = async (request) => {
+      pagePolicyWrites += request.prefs.length;
+      return originalPage(request);
     };
-    const result = await service.ingest(createBatch(), {
-      attempt: {
-        id: "attempt-unfold",
-        org_id: "local-owner",
-        connector_installation_id: "install-1",
-        stream_key: "personal",
-        delivery_id: "delivery-1",
-        started_at: "2026-08-08T00:00:00.000Z",
-      },
-      settle: {
-        attempt_id: "attempt-unfold",
-        installation_id: "install-1",
-        stream_key: "personal",
-        lease_owner: "worker-a",
-        finished_at: "2026-08-08T00:00:01.000Z",
-      },
-    });
+    await service.ingest(createBatch());
     const pref = await authorityStore.getConversationPref(
       "local-owner",
       "regenic:source-event-1",
     );
-    assert.equal(result.page_committed, true);
-    assert.equal(prefWrites, 1);
+    assert.equal(pagePolicyWrites, 0);
     assert.equal(pref.hidden, false);
   });
 
-  it("does not treat a mixed revise page as atomically committed", async () => {
+  it("rejects a revised sync page without the same atomic runtime store", async () => {
     const { authorityStore, service } = createHarness();
     await service.ingest(createBatch());
     const revised = createBatch({
@@ -1216,7 +1748,7 @@ describe("IngestionService", () => {
         },
       ],
     });
-    const result = await service.ingest(revised, {
+    await assert.rejects(service.ingest(revised, {
       attempt: {
         id: "attempt-revise",
         org_id: "local-owner",
@@ -1232,9 +1764,15 @@ describe("IngestionService", () => {
         lease_owner: "worker-a",
         finished_at: "2026-08-08T00:00:03.000Z",
       },
-    });
-    assert.equal(result.valid, true);
-    assert.equal(result.page_committed, undefined);
-    assert.equal(result.records[0].status, "accepted");
+    }), /same atomic Authority and runtime store/);
+    assert.equal(authorityStore.allEvents().length, 1);
+    assert.equal(
+      (await authorityStore.findBySourceIdentity({
+        org_id: "local-owner",
+        source: revised.records[0].source,
+        external_id: revised.records[0].external_id,
+      })).operation,
+      "create",
+    );
   });
 });

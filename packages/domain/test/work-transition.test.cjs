@@ -6,6 +6,7 @@ const {
   prepareWorkItemCreation,
   prepareWorkItemCreationAbort,
   prepareWorkDismissal, enqueueWriteBack, prepareWorkObservation,
+  diagnoseWorkItemRunIdentity,
 } = require("../dist");
 
 const BEFORE = "2026-11-09T08:00:00.000Z";
@@ -48,6 +49,66 @@ function fixture() {
     now: NOW,
   };
 }
+
+describe("work item run identity diagnostics", () => {
+  it("reports missing pointers and only lists active same-recipe candidates", () => {
+    const { item, run } = fixture();
+    assert.deepEqual(diagnoseWorkItemRunIdentity(item, [run]), {
+      work_item_id: item.id,
+      thread_id: item.thread_id,
+      unit_key: item.unit_key,
+      item_status: "running",
+      reason: "missing_current_run",
+      candidate_run_ids: [run.id],
+    });
+    assert.equal(diagnoseWorkItemRunIdentity({ ...item, current_run_id: run.id }, [run]), null);
+    assert.deepEqual(
+      diagnoseWorkItemRunIdentity(item, [{
+        ...run,
+        recipe_id: "different-recipe",
+      }]).candidate_run_ids,
+      [],
+    );
+    assert.equal(diagnoseWorkItemRunIdentity({ ...item, status: "done" }, [run]), null);
+    assert.equal(diagnoseWorkItemRunIdentity({ ...item, status: "open" }, []), null);
+  });
+
+  it("reports invalid stored pointers without treating candidates as repaired identity", () => {
+    const { item, run } = fixture();
+    assert.equal(
+      diagnoseWorkItemRunIdentity(
+        { ...item, current_run_id: "missing-run" },
+        [run],
+      ).reason,
+      "current_run_not_found",
+    );
+    assert.equal(
+      diagnoseWorkItemRunIdentity(
+        { ...item, current_run_id: run.id },
+        [{ ...run, recipe_id: "different-recipe" }],
+      ).reason,
+      "current_run_recipe_mismatch",
+    );
+    assert.equal(
+      diagnoseWorkItemRunIdentity(
+        { ...item, current_run_id: run.id },
+        [{ ...run, work_item_id: "other-work" }],
+      ).reason,
+      "current_run_identity_mismatch",
+    );
+    assert.equal(
+      diagnoseWorkItemRunIdentity(
+        { ...item, current_run_id: run.id },
+        [{ ...run, status: "completed" }],
+      ).reason,
+      "current_run_not_active",
+    );
+    assert.deepEqual(
+      diagnoseWorkItemRunIdentity(item, [run, { ...run, id: "run-2" }]).candidate_run_ids,
+      ["run-1", "run-2"],
+    );
+  });
+});
 
 describe("work item creation transitions", () => {
   function creation() {
@@ -521,6 +582,37 @@ describe("work start checkpoint planning", () => {
 });
 
 describe("work observation transitions", () => {
+  it("keeps the executor configuration immutable for a run", () => {
+    const { run } = fixture();
+    run.executor_config = { prompt: "Original", limits: { retries: 2 } };
+    run.include_context = true;
+    assert.throws(() => assertWorkRunWrite({
+      ...run, executor_type: "other",
+    }, run), /execution snapshot are immutable/);
+    assert.throws(() => assertWorkRunWrite({
+      ...run, recipe_id: "other-recipe",
+    }, run), /execution snapshot are immutable/);
+    assert.doesNotThrow(() => assertWorkRunWrite({
+      ...run, executor_config: { limits: { retries: 2 }, prompt: "Original" },
+      updated_at: NOW,
+    }, run));
+    assert.throws(() => assertWorkRunWrite({
+      ...run, executor_config: { prompt: "Changed", limits: { retries: 2 } },
+    }, run), /immutable/);
+    assert.throws(() => assertWorkRunWrite({
+      ...run, executor_config: undefined,
+    }, run), /immutable/);
+    assert.throws(() => assertWorkRunWrite({
+      ...run, include_context: false,
+    }, run), /immutable/);
+    assert.throws(() => assertWorkRunWrite({
+      ...run, completion_policy_version: 1,
+    }, run), /immutable/);
+    assert.throws(() => assertWorkRunWrite(run, {
+      ...run, completion_policy_version: 1,
+    }), /immutable/);
+  });
+
   for (const status of ["completed", "failed", "cancelled"]) {
     it(`rejects a different state after ${status}, even through the pure planner`, () => {
       const input = fixture();
@@ -593,14 +685,14 @@ describe("work observation transitions", () => {
     };
     const facts = { item: f.item, run: f.run, delivery: null };
     assert.equal(prepareWorkObservation(input, facts).outcome, "applied");
-    for (const run of [
-      { ...f.run, external_run_id: undefined },
-      { ...f.run, external_run_id: "another-execution" },
-      { ...f.run, start_state: "pending" },
-      { ...f.run, start_state: "uncertain" },
+    for (const [run, reason] of [
+      [{ ...f.run, external_run_id: undefined }, "execution_identity_unknown"],
+      [{ ...f.run, external_run_id: "another-execution" }, "execution_identity_mismatch"],
+      [{ ...f.run, start_state: "pending" }, "execution_identity_unknown"],
+      [{ ...f.run, start_state: "uncertain" }, "execution_identity_unknown"],
     ]) {
       assert.deepEqual(prepareWorkObservation({ ...input, expected_run: run }, { ...facts, run }),
-        { outcome: "conflict", reason: "execution_identity_unknown" });
+        { outcome: "conflict", reason });
     }
     assert.deepEqual(prepareWorkObservation(input, { ...facts, item: { ...f.item, version: 1 } }),
       { outcome: "conflict", reason: "stale_observation" });
@@ -634,13 +726,13 @@ describe("work observation transitions", () => {
     const input = fixture();
     input.run.start_state = "submitted";
     input.run.result = { summary: "Previous result" };
-    input.handle = { status: "running", external_run_id: "external-2" };
+    input.handle = { status: "running", external_run_id: input.run.external_run_id };
     const plan = planWorkObservation(input);
-    assert.equal(plan.run.external_run_id, "external-2");
+    assert.equal(plan.run.external_run_id, input.run.external_run_id);
     assert.equal(plan.run.agent_thread_id, input.run.agent_thread_id);
     assert.deepEqual(plan.run.result, input.run.result);
     assert.equal(plan.run.start_state, undefined);
-    assert.equal(plan.changed, true);
+    assert.equal(plan.changed, false);
   });
 
   it("ignores timestamp-only changes and avoids rewriting an unchanged item", () => {
@@ -669,6 +761,8 @@ describe("work observation transitions", () => {
   ]) {
     it(`reports changed work for ${Object.keys(change)[0]} without changing item status`, () => {
       const input = fixture();
+      if (change.agent_thread_id) input.run.agent_thread_id = undefined;
+      if (change.external_run_id) input.run.external_run_id = undefined;
       input.handle = { status: "running", external_run_id: input.run.external_run_id, ...change };
       const plan = planWorkObservation(input);
       assert.equal(plan.changed, true);

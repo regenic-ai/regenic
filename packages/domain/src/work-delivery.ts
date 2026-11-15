@@ -20,6 +20,31 @@ export function assertWorkDeliveryWrite(
   run?: WorkRun | null,
   commandWrite = false,
 ): void {
+  if (delivery.run_id && !current && (
+    delivery.status !== "queued"
+    || delivery.write_back !== "pending"
+    || delivery.attempts !== 0
+    || delivery.last_error !== undefined
+    || delivery.next_retry_at !== undefined
+    || delivery.channel_receipt !== undefined
+    || delivery.lease_expires_at !== undefined
+    || delivery.lease_owner !== undefined
+    || delivery.claim_token !== undefined
+    || delivery.cancel_requested_at !== undefined
+  )) {
+    throw new Error("Run-backed delivery must be created in its initial queued state");
+  }
+  if (!commandWrite && current?.run_id && (
+    current.status !== delivery.status
+    || current.write_back !== delivery.write_back
+    || current.attempts !== delivery.attempts
+    || current.last_error !== delivery.last_error
+    || current.next_retry_at !== delivery.next_retry_at
+    || !isDeepStrictEqual(current.channel_receipt, delivery.channel_receipt)
+    || current.lease_expires_at !== delivery.lease_expires_at
+  )) {
+    throw new Error("Run-backed delivery lifecycle state must be changed through the atomic delivery command");
+  }
   if (!commandWrite && (current?.claim_token || delivery.claim_token || delivery.lease_owner
     || current?.cancel_requested_at || delivery.cancel_requested_at)) {
     throw new Error("Claimed delivery must be updated through the atomic delivery command");
@@ -33,12 +58,20 @@ export function assertWorkDeliveryWrite(
   if (current && (current.org_id !== delivery.org_id
     || current.work_item_id !== delivery.work_item_id
     || current.run_id !== delivery.run_id
-    || (current.run_id && canonicalContextJson({
-      target: current.target, payload: current.payload, idempotency_key: current.idempotency_key,
-    }) !== canonicalContextJson({
-      target: delivery.target, payload: delivery.payload, idempotency_key: delivery.idempotency_key,
-    })))) {
-    throw new Error("Delivery request identity, target and payload are immutable");
+    || (current.version ?? 0) !== (delivery.version ?? 0)
+    || (current.run_id && (
+      current.recipe_id !== delivery.recipe_id
+      || current.kind !== delivery.kind
+      || current.unit_key !== delivery.unit_key
+      || current.event_id !== delivery.event_id
+      || current.created_at !== delivery.created_at
+      || canonicalContextJson({
+        target: current.target, payload: current.payload, idempotency_key: current.idempotency_key,
+      }) !== canonicalContextJson({
+        target: delivery.target, payload: delivery.payload, idempotency_key: delivery.idempotency_key,
+      })
+    )))) {
+    throw new Error("Delivery snapshot is stale or request identity, target and payload are immutable");
   }
   if ((!delivery.run_id && delivery.target)
     || (delivery.run_id && (!delivery.payload || !delivery.idempotency_key?.trim()))) {
@@ -349,6 +382,23 @@ export function deliveryNeedsAttention(
   return delivery?.status === "dead" || delivery?.status === "uncertain" || delivery?.write_back === "failed";
 }
 
+export function sameWorkDeliveryRetryCommand(
+  saved: unknown,
+  command: Extract<WorkDeliveryCommand, { kind: "retry" | "reconcile" }>,
+): boolean {
+  if (!saved || typeof saved !== "object") return false;
+  const value = saved as Partial<Extract<WorkDeliveryCommand, { kind: "retry" | "reconcile" }>>;
+  return value.org_id === command.org_id &&
+    value.delivery_id === command.delivery_id &&
+    value.kind === command.kind &&
+    value.expected_item_version === command.expected_item_version &&
+    value.command_id === command.command_id &&
+    value.issued_at === command.issued_at &&
+    (command.kind !== "reconcile" ||
+      ("resolution" in value && value.resolution === command.resolution)) &&
+    isDeepStrictEqual(value.expected_delivery, command.expected_delivery);
+}
+
 export function planWorkDeliveryCommand(
   current: WorkDelivery | null,
   itemStatus: string | undefined,
@@ -360,6 +410,77 @@ export function planWorkDeliveryCommand(
     throw new Error("Delivery command identity mismatch");
   }
   const applied = (delivery: WorkDelivery): WorkDeliveryCommandResult => ({ outcome: "applied", delivery });
+  if (input.kind === "reconcile") {
+    if (
+      !input.command_id.trim() ||
+      input.command_id !== input.command_id.trim() ||
+      input.command_id.length > 128 ||
+      !Number.isSafeInteger(input.expected_delivery.version) ||
+      input.expected_delivery.version < 0 ||
+      !Number.isSafeInteger(input.expected_item_version) ||
+      input.expected_item_version < 0 ||
+      !Number.isFinite(Date.parse(input.issued_at))
+    ) {
+      throw new Error("Delivery reconciliation requires a valid identity and version");
+    }
+    if (
+      current.id !== input.expected_delivery.id ||
+      (current.version ?? 0) !== input.expected_delivery.version ||
+      current.status !== "uncertain" ||
+      input.expected_delivery.status !== "uncertain" ||
+      current.write_back !== input.expected_delivery.write_back ||
+      current.write_back !== "pending" ||
+      current.attempts !== input.expected_delivery.attempts ||
+      itemStatus === undefined ||
+      (itemStatus !== "done" && itemStatus !== "skipped") ||
+      current.channel_receipt?.accepted === true
+    ) {
+      return { outcome: "conflict", reason: "not_claimable" };
+    }
+    if (input.resolution === "sent") {
+      return applied(deliveryAcked(current, "sent", input.now));
+    }
+    if (input.resolution !== "not_sent") {
+      throw new Error("Unknown delivery reconciliation resolution");
+    }
+    return applied(itemStatus === "skipped" || current.cancel_requested_at
+      ? deliveryAcked(current, "skipped", input.now)
+      : {
+          ...current,
+          status: "queued",
+          write_back: "pending",
+          last_error: undefined,
+          next_retry_at: undefined,
+          lease_expires_at: undefined,
+          updated_at: input.now,
+        });
+  }
+  if (input.kind === "retry") {
+    if (
+      !input.command_id.trim() ||
+      input.command_id !== input.command_id.trim() ||
+      input.command_id.length > 128 ||
+      !Number.isSafeInteger(input.expected_delivery.version) ||
+      input.expected_delivery.version < 0 ||
+      !Number.isSafeInteger(input.expected_item_version) ||
+      input.expected_item_version < 0 ||
+      !Number.isFinite(Date.parse(input.issued_at))
+    ) {
+      throw new Error("Delivery retry command requires a valid identity and version");
+    }
+    if (
+      current.id !== input.expected_delivery.id ||
+      (current.version ?? 0) !== input.expected_delivery.version ||
+      current.status !== input.expected_delivery.status ||
+      current.write_back !== input.expected_delivery.write_back ||
+      current.attempts !== input.expected_delivery.attempts ||
+      itemStatus !== "done" ||
+      current.status === "uncertain" ||
+      (current.status !== "dead" && current.write_back !== "failed")) {
+      return { outcome: "conflict", reason: "not_claimable" };
+    }
+    return applied(deliveryRetryNow(current, input.now));
+  }
   if (input.kind === "expire") {
     return isDeliveryLeaseExpired(current, input.now)
       ? applied(deliverySendTimedOut(current, input.now))
@@ -441,6 +562,8 @@ export function deliveryFaceOf(
     return undefined;
   }
   return {
+    id: delivery.id,
+    version: delivery.version ?? 0,
     status: delivery.status,
     write_back: delivery.write_back,
     attempts: delivery.attempts,

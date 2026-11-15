@@ -5,6 +5,7 @@ import {
   hashContextArtifactInputs,
   threadProjectionGeneration,
   type BlobStore,
+  type FencedBlobStore,
   type ContextArtifact,
   type ContextArtifactStore,
   type ContextAuthorityReader,
@@ -17,6 +18,7 @@ import {
   type EvidenceReference,
   type ContextSourceEvent,
 } from "@regenic/domain";
+import { persistContextArtifact } from "./context-artifact-blob-writer";
 
 export interface ContextProjectionRun {
   projector_id: string;
@@ -32,7 +34,7 @@ export class ContextProjectionCoordinator implements ContextProjectionRunner {
     private readonly authority: ContextAuthorityReader,
     private readonly artifacts: ContextArtifactStore,
     private readonly projectors: ContextProjectorRegistry,
-    private readonly blobs?: BlobStore,
+    private readonly blobs?: FencedBlobStore,
     private readonly lexicalIndex?: ContextLexicalIndex,
   ) {}
 
@@ -156,14 +158,7 @@ export class ContextProjectionCoordinator implements ContextProjectionRunner {
           }
           continue;
         }
-        if (artifact.body_storage !== "artifact" && artifact.attrs !== undefined && artifact.body_hash) {
-          await this.blobs?.put(
-            artifact.body_hash,
-            Buffer.from(canonicalContextJson(artifact.attrs), "utf8"),
-            "application/vnd.regenic.context-artifact+json",
-          );
-        }
-        await this.artifacts.putArtifact(artifact);
+        await persistContextArtifact(artifact, this.artifacts, this.blobs);
         storedArtifacts += 1;
       }
       await this.artifacts.putCheckpoint({

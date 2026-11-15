@@ -1,4 +1,4 @@
-export const LATEST_SCHEMA_VERSION = 63;
+export const LATEST_SCHEMA_VERSION = 74;
 
 export const CUSTOMER_SERVICE_TASKS_SQL = `
   CREATE TABLE IF NOT EXISTS customer_service_tasks (
@@ -1242,5 +1242,257 @@ export const MIGRATIONS = [
         ON conversation_lifecycle_events (org_id, command_id)
         WHERE command_id IS NOT NULL;
     `,
+  },
+  {
+    version: 64,
+    sql: `
+      ALTER TABLE work_items ADD COLUMN acknowledged_run_id TEXT REFERENCES work_runs(id);
+    `,
+  },
+  {
+    version: 65,
+    sql: `
+      CREATE TABLE conversation_lifecycle_jobs (
+        id TEXT PRIMARY KEY,
+        org_id TEXT NOT NULL,
+        event_id TEXT NOT NULL,
+        job_type TEXT NOT NULL CHECK (job_type = 'cancel_execution'),
+        run_id TEXT NOT NULL,
+        schema_version INTEGER NOT NULL CHECK (schema_version >= 1),
+        status TEXT NOT NULL CHECK (status IN ('pending', 'running', 'succeeded', 'failed', 'dead')),
+        attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+        lease_owner TEXT,
+        claim_token TEXT,
+        lease_expires_at TEXT,
+        next_retry_at TEXT,
+        last_error_code TEXT,
+        last_error TEXT,
+        outcome_code TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        completed_at TEXT,
+        FOREIGN KEY (org_id, event_id) REFERENCES conversation_lifecycle_events(org_id, id),
+        FOREIGN KEY (org_id, run_id) REFERENCES work_runs(org_id, id),
+        UNIQUE (org_id, job_type, run_id)
+      );
+      CREATE INDEX conversation_lifecycle_jobs_pending_idx
+        ON conversation_lifecycle_jobs (created_at, id) WHERE status = 'pending';
+      CREATE INDEX conversation_lifecycle_jobs_failed_due_idx
+        ON conversation_lifecycle_jobs (next_retry_at, created_at, id) WHERE status = 'failed';
+      CREATE INDEX conversation_lifecycle_jobs_running_expired_idx
+        ON conversation_lifecycle_jobs (lease_expires_at, created_at, id) WHERE status = 'running';
+      CREATE INDEX conversation_lifecycle_jobs_org_idx
+        ON conversation_lifecycle_jobs (org_id, status, updated_at, id);
+    `,
+  },
+  {
+    version: 66,
+    sql: `
+      ALTER TABLE work_runs ADD COLUMN executor_config_json TEXT
+        CHECK (executor_config_json IS NULL OR json_valid(executor_config_json));
+      ALTER TABLE work_runs ADD COLUMN include_context INTEGER
+        CHECK (include_context IS NULL OR include_context IN (0, 1));
+    `,
+  },
+  {
+    version: 67,
+    sql: `
+      ALTER TABLE work_deliveries ADD COLUMN version INTEGER NOT NULL DEFAULT 0 CHECK (version >= 0);
+      ALTER TABLE message_dispositions ADD COLUMN version INTEGER NOT NULL DEFAULT 0 CHECK (version >= 0);
+    `,
+  },
+  {
+    version: 68,
+    sql: `
+      UPDATE thread_heads SET has_current_work = 0
+      WHERE has_current_work = 1 AND NOT EXISTS (
+        SELECT 1 FROM events e
+        JOIN message_dispositions d ON d.event_id = e.id AND d.org_id = e.org_id
+        WHERE e.org_id = thread_heads.org_id AND e.thread_id = thread_heads.thread_id
+          AND e.operation <> 'tombstone' AND d.disposition = 'current_work'
+          AND EXISTS (SELECT 1 FROM source_heads h WHERE h.current_event_id = e.id)
+      );
+    `,
+  },
+  {
+    version: 69,
+    sql: `
+      ALTER TABLE connector_cursors ADD COLUMN lease_claim_token TEXT;
+      UPDATE connector_cursors
+      SET lease_owner = NULL, lease_expires_at = NULL
+      WHERE lease_owner IS NOT NULL;
+    `,
+  },
+  {
+    version: 70,
+    sql: `
+      ALTER TABLE blobs ADD COLUMN state TEXT NOT NULL DEFAULT 'protected'
+        CHECK (state IN ('reserved', 'available', 'deleting', 'protected'));
+      ALTER TABLE blobs ADD COLUMN generation INTEGER NOT NULL DEFAULT 0 CHECK (generation >= 0);
+      ALTER TABLE blobs ADD COLUMN write_lease_owner TEXT;
+      ALTER TABLE blobs ADD COLUMN write_claim_token TEXT;
+      ALTER TABLE blobs ADD COLUMN write_lease_expires_at TEXT;
+      ALTER TABLE blobs ADD COLUMN unreferenced_at TEXT;
+      ALTER TABLE blobs ADD COLUMN gc_claim_token TEXT;
+      ALTER TABLE blobs ADD COLUMN gc_started_at TEXT;
+      CREATE INDEX blobs_gc_candidate_idx
+        ON blobs (state, unreferenced_at, content_hash);
+      CREATE TABLE blob_references (
+        owner_org_id TEXT NOT NULL,
+        owner_type TEXT NOT NULL CHECK (owner_type IN ('event', 'context_artifact')),
+        owner_id TEXT NOT NULL,
+        reference_kind TEXT NOT NULL
+          CHECK (reference_kind IN ('body', 'attachment', 'artifact_body', 'evidence')),
+        content_hash TEXT NOT NULL REFERENCES blobs(content_hash),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (owner_org_id, owner_type, owner_id, reference_kind, content_hash)
+      );
+      CREATE INDEX blob_references_hash_idx
+        ON blob_references (content_hash);
+      CREATE INDEX blob_references_owner_idx
+        ON blob_references (owner_org_id, owner_type, owner_id);
+    `,
+  },
+  {
+    version: 71,
+    sql: `
+      DROP INDEX blob_references_hash_idx;
+      DROP INDEX blob_references_owner_idx;
+      ALTER TABLE blob_references RENAME TO blob_references_v70;
+      CREATE TABLE blob_references (
+        owner_org_id TEXT NOT NULL,
+        owner_type TEXT NOT NULL
+          CHECK (owner_type IN ('event', 'context_artifact', 'outbound_attempt')),
+        owner_id TEXT NOT NULL,
+        reference_kind TEXT NOT NULL
+          CHECK (reference_kind IN ('body', 'attachment', 'artifact_body', 'evidence', 'reply_recovery')),
+        content_hash TEXT NOT NULL REFERENCES blobs(content_hash),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (owner_org_id, owner_type, owner_id, reference_kind, content_hash)
+      );
+      INSERT INTO blob_references
+        SELECT owner_org_id, owner_type, owner_id, reference_kind, content_hash, created_at
+        FROM blob_references_v70;
+      INSERT OR IGNORE INTO blobs (
+        content_hash, media_type, byte_size, created_at, state
+      )
+        SELECT DISTINCT recovery_hash, 'application/vnd.regenic.reply-recovery+json',
+          0, updated_at, 'protected'
+        FROM outbound_attempts WHERE recovery_hash IS NOT NULL;
+      UPDATE blobs SET state = 'protected', unreferenced_at = NULL,
+        gc_claim_token = NULL, gc_started_at = NULL
+      WHERE content_hash IN (
+        SELECT DISTINCT recovery_hash FROM outbound_attempts WHERE recovery_hash IS NOT NULL
+      );
+      INSERT OR IGNORE INTO blob_references (
+        owner_org_id, owner_type, owner_id, reference_kind, content_hash, created_at
+      )
+        SELECT org_id, 'outbound_attempt', client_request_id, 'reply_recovery',
+          recovery_hash, updated_at
+        FROM outbound_attempts WHERE recovery_hash IS NOT NULL;
+      DROP TABLE blob_references_v70;
+      CREATE INDEX blob_references_hash_idx
+        ON blob_references (content_hash);
+      CREATE INDEX blob_references_owner_idx
+        ON blob_references (owner_org_id, owner_type, owner_id);
+    `,
+  },
+  {
+    version: 72,
+    sql: `
+      UPDATE blobs SET state = 'protected', unreferenced_at = NULL,
+        gc_claim_token = NULL, gc_started_at = NULL
+      WHERE content_hash IN (
+        SELECT DISTINCT content_hash FROM events WHERE content_hash IS NOT NULL
+      );
+      INSERT OR IGNORE INTO blob_references (
+        owner_org_id, owner_type, owner_id, reference_kind, content_hash, created_at
+      )
+        SELECT org_id, 'event', id, 'body', content_hash, ingested_at
+        FROM events WHERE content_hash IS NOT NULL;
+    `,
+  },
+  {
+    version: 73,
+    sql: `
+      INSERT OR IGNORE INTO blobs (
+        content_hash, media_type, byte_size, created_at, state
+      )
+        SELECT DISTINCT content_hash, media_type, 0, recorded_at, 'protected'
+        FROM (
+          SELECT json_extract(payload_json, '$.body_hash') AS content_hash,
+            'application/vnd.regenic.context-artifact+json' AS media_type,
+            recorded_at, payload_json,
+            CASE WHEN json_extract(payload_json, '$.body_storage') IS NULL
+              OR json_extract(payload_json, '$.body_storage') <> 'artifact'
+              THEN 1 ELSE 0 END AS external_blob
+          FROM context_artifacts
+          UNION ALL
+          SELECT json_extract(reference.value, '$.content_hash') AS content_hash,
+            'application/octet-stream' AS media_type,
+            artifact.recorded_at, artifact.payload_json, 1 AS external_blob
+          FROM context_artifacts artifact,
+            json_each(
+              CASE WHEN json_valid(artifact.payload_json)
+                THEN artifact.payload_json ELSE '{}' END,
+              '$.input_refs'
+            ) reference
+        )
+        WHERE json_valid(payload_json)
+          AND external_blob = 1
+          AND content_hash IS NOT NULL
+          AND length(content_hash) = 64
+          AND content_hash NOT GLOB '*[^0-9a-f]*';
+      UPDATE blobs SET state = 'protected', unreferenced_at = NULL,
+        gc_claim_token = NULL, gc_started_at = NULL
+      WHERE content_hash IN (
+        SELECT json_extract(payload_json, '$.body_hash')
+        FROM context_artifacts
+        WHERE json_valid(payload_json)
+          AND (json_extract(payload_json, '$.body_storage') IS NULL
+            OR json_extract(payload_json, '$.body_storage') <> 'artifact')
+        UNION
+        SELECT json_extract(reference.value, '$.content_hash')
+        FROM context_artifacts artifact,
+          json_each(
+            CASE WHEN json_valid(artifact.payload_json)
+              THEN artifact.payload_json ELSE '{}' END,
+            '$.input_refs'
+          ) reference
+        WHERE json_valid(artifact.payload_json)
+      );
+      INSERT OR IGNORE INTO blob_references (
+        owner_org_id, owner_type, owner_id, reference_kind, content_hash, created_at
+      )
+        SELECT org_id, 'context_artifact', id, 'artifact_body',
+          json_extract(payload_json, '$.body_hash'), recorded_at
+        FROM context_artifacts
+        WHERE json_valid(payload_json)
+          AND json_extract(payload_json, '$.body_hash') IS NOT NULL
+          AND length(json_extract(payload_json, '$.body_hash')) = 64
+          AND json_extract(payload_json, '$.body_hash') NOT GLOB '*[^0-9a-f]*'
+          AND (json_extract(payload_json, '$.body_storage') IS NULL
+            OR json_extract(payload_json, '$.body_storage') <> 'artifact');
+      INSERT OR IGNORE INTO blob_references (
+        owner_org_id, owner_type, owner_id, reference_kind, content_hash, created_at
+      )
+        SELECT artifact.org_id, 'context_artifact', artifact.id, 'evidence',
+          json_extract(reference.value, '$.content_hash'), artifact.recorded_at
+        FROM context_artifacts artifact,
+          json_each(
+            CASE WHEN json_valid(artifact.payload_json)
+              THEN artifact.payload_json ELSE '{}' END,
+            '$.input_refs'
+          ) reference
+        WHERE json_valid(artifact.payload_json)
+          AND json_extract(reference.value, '$.content_hash') IS NOT NULL
+          AND length(json_extract(reference.value, '$.content_hash')) = 64
+          AND json_extract(reference.value, '$.content_hash') NOT GLOB '*[^0-9a-f]*';
+    `,
+  },
+  {
+    version: 74,
+    sql: `ALTER TABLE work_runs ADD COLUMN completion_policy_version INTEGER
+      CHECK (completion_policy_version IS NULL OR completion_policy_version = 1);`,
   },
 ] as const;

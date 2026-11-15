@@ -76,7 +76,8 @@ export function attentionForWork(
   ) {
     return "waiting_you";
   }
-  if (work.status === "done" && work.has_result && work.can_write_back === false) {
+  if (work.status === "done" && work.has_result && work.can_write_back === false
+    && work.auto_completed !== true) {
     return "needs_ack";
   }
   if (work.status === "running") {
