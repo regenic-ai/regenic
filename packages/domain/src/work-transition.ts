@@ -594,8 +594,8 @@ export function prepareWorkItemCreation(input: WorkItemCreation, facts: {
   if (answer && facts.search_answer_exists) return { outcome: "conflict", reason: "search_answer_exists" };
   const current = facts.recipe;
   const equivalent = current && sameJson(
-    { ...current, created_at: undefined, updated_at: undefined },
-    { ...recipe, created_at: undefined, updated_at: undefined },
+    { ...current, hide_on_success: current.hide_on_success ?? true, created_at: undefined, updated_at: undefined },
+    { ...recipe, hide_on_success: recipe.hide_on_success ?? true, created_at: undefined, updated_at: undefined },
   );
   if (!equivalent && !sameJson(current, expected)) return { outcome: "conflict", reason: "stale_recipe" };
   return structuredClone({

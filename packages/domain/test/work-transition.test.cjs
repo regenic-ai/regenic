@@ -155,10 +155,19 @@ describe("work item creation transitions", () => {
   });
   it("reuses equivalent configuration without changing timestamps, even for simultaneous creates", () => {
     const input = creation();
-    const current = { ...input.recipe, created_at: NOW, updated_at: NOW };
+    const current = { ...input.recipe, hide_on_success: true, created_at: NOW, updated_at: NOW };
     const result = prepareWorkItemCreation(input, { item_exists: false, recipe: current });
     assert.equal(result.outcome, "applied");
     assert.deepEqual(result.recipe, current);
+  });
+  it("does not adopt a concurrent recipe with a different success-hiding choice", () => {
+    for (const hide of [false, true]) {
+      const input = creation();
+      input.recipe.hide_on_success = hide;
+      const current = { ...input.recipe, hide_on_success: !hide };
+      assert.deepEqual(prepareWorkItemCreation(input, { item_exists: false, recipe: current }),
+        { outcome: "conflict", reason: "stale_recipe" });
+    }
   });
   function answerCreation() {
     const input = creation();

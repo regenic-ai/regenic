@@ -75,7 +75,7 @@ describe("local ingestion persistence", () => {
         `INSERT INTO blobs (content_hash, media_type, byte_size, created_at)
          VALUES (?, 'text/plain', 3, ?)`,
       ).run("e".repeat(64), "2026-08-24T00:00:00.000Z");
-      legacy.pragma("user_version = 73");
+      legacy.pragma("user_version = 71");
     } finally {
       legacy.close();
     }
@@ -409,6 +409,8 @@ describe("local ingestion persistence", () => {
     try {
       legacy.prepare("UPDATE thread_heads SET has_current_work = 1 WHERE thread_id = ?").run("stale-thread");
       legacy.exec("ALTER TABLE connector_cursors DROP COLUMN lease_claim_token;");
+      legacy.exec("ALTER TABLE work_runs DROP COLUMN hide_on_success;");
+      legacy.exec("ALTER TABLE work_runs DROP COLUMN completion_policy_version;");
       legacy.exec("DROP TABLE blob_references;");
       legacy.exec("DROP INDEX blobs_gc_candidate_idx;");
       for (const column of [
@@ -423,7 +425,7 @@ describe("local ingestion persistence", () => {
       ]) {
         legacy.exec(`ALTER TABLE blobs DROP COLUMN ${column};`);
       }
-      legacy.pragma("user_version = 71");
+      legacy.pragma("user_version = 69");
     } finally {
       legacy.close();
     }
@@ -736,7 +738,7 @@ describe("local ingestion persistence", () => {
         id, org_id, source, external_id, operation, content_hash, occurred_at, ingested_at
       ) VALUES (?, ?, ?, ?, 'create', ?, ?, ?)
     `).run("legacy-event", "local-owner", "synthetic", "legacy-event", hash, now, now);
-    legacy.pragma("user_version = 73");
+    legacy.pragma("user_version = 71");
     legacy.close();
 
     const store = new SqliteAuthorityStore(path);
@@ -809,7 +811,7 @@ describe("local ingestion persistence", () => {
         input_refs: [],
         recorded_at: now,
       }));
-    legacy.pragma("user_version = 76");
+    legacy.pragma("user_version = 74");
     legacy.close();
 
     const store = new SqliteAuthorityStore(path);
