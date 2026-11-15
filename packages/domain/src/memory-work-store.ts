@@ -284,12 +284,17 @@ export class MemoryWorkStore implements WorkStore, ExecutorStore {
     return this.currentWorkEvidence.has(eventId);
   }
 
+  protected hasWorkTriggerEvidence(item: WorkItem, _recipe?: Recipe): boolean {
+    return Boolean(item.head_event_id
+      && this.hasCurrentWorkEvidence(item.head_event_id, item.org_id, item.thread_id));
+  }
+
   protected restoreAcknowledgedTriggerForManualRetry(
     _input: WorkRunStartClaim,
     _item: WorkItem,
   ): void {}
 
-  protected hasAcknowledgmentTrigger(input: WorkAcknowledgment, _item: WorkItem | null): boolean {
+  protected hasAcknowledgmentTrigger(input: WorkAcknowledgment, _item: WorkItem | null, _run?: WorkRun | null): boolean {
     return this.currentWorkEvidence.has(input.trigger_event_id);
   }
 
@@ -347,8 +352,7 @@ export class MemoryWorkStore implements WorkStore, ExecutorStore {
         candidate.org_id === orgId && candidate.thread_id === input.item.thread_id
         && candidate.unit_key === input.item.unit_key && candidate.id !== input.item.id),
       trigger_is_current_work: Boolean(
-        input.item.head_event_id &&
-        this.hasCurrentWorkEvidence(input.item.head_event_id, orgId, input.item.thread_id),
+        this.hasWorkTriggerEvidence(input.item, this.recipes.get(input.item.recipe_id ?? "")),
       ),
     });
     if (result.outcome !== "applied") return result;
@@ -751,7 +755,7 @@ export class MemoryWorkStore implements WorkStore, ExecutorStore {
       item,
       run,
       delivery,
-      trigger_is_current_work: this.hasAcknowledgmentTrigger(input, item),
+      trigger_is_current_work: this.hasAcknowledgmentTrigger(input, item, run),
     });
     if (result.outcome !== "applied") {
       this.prepareAcknowledgmentConflictEffects(input)();
@@ -800,8 +804,7 @@ export class MemoryWorkStore implements WorkStore, ExecutorStore {
     const item = this.items.get(run.work_item_id);
     const recipe = this.recipes.get(run.recipe_id);
     const triggerIsCurrentWork = Boolean(
-      item?.head_event_id &&
-      this.hasCurrentWorkEvidence(item.head_event_id, run.org_id, item.thread_id),
+      item && this.hasWorkTriggerEvidence(item, recipe),
     );
     const visibilityVersion = item
       ? this.conversationVisibilityVersion(run.org_id, item.thread_id)

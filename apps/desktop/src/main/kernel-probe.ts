@@ -5,6 +5,20 @@ import type { KernelProbe } from "../shared/kernel-ready";
 
 const DEFAULT_PROBE_TIMEOUT_MS = 1_500;
 
+export async function probeKernelAuthority(
+  origin: string,
+  driver: "sqlite" | "postgres",
+): Promise<KernelProbe> {
+  try {
+    const body = await getJson<{ mode?: string; authority?: string; sqlite?: string; postgres?: string }>(
+      origin, "/health", DEFAULT_PROBE_TIMEOUT_MS,
+    );
+    return body.mode === "personal" && body.authority === `authority-${driver}` && body[driver] === "up"
+      ? "personal" : "other";
+  } catch {
+    return "none";
+  }
+}
 export async function probeKernelMode(
   origin: string,
   timeoutMs = DEFAULT_PROBE_TIMEOUT_MS,

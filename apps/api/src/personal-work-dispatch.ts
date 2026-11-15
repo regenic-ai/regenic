@@ -22,6 +22,7 @@ import {
   recipeWantsContext,
   recipeTextMatches,
   recipeTriggerOf,
+  isPushInboxDecision,
   shouldRetryFailedPush,
   taskInstructionOf,
   workSubjectFromEvent,
@@ -367,6 +368,14 @@ export class PersonalWorkDispatch {
   ): Promise<WorkRun | undefined> {
     const host = this.runtime.requireHost();
     if (
+      mode === "auto" &&
+      recipe.trigger.kind === "push" &&
+      item.record_class !== "task" &&
+      !(await this.canAutoStartMessage(item))
+    ) {
+      return undefined;
+    }
+    if (
       recipe.trigger.kind === "push" &&
       (recipe.match.text_contains || recipe.match.text_excludes) &&
       !recipeTextMatches(
@@ -543,6 +552,7 @@ export class PersonalWorkDispatch {
       start_state: "pending",
       write_back_required: writeBackRequired,
       trigger_kind: recipeTriggerOf(recipe).kind,
+      hide_on_success: recipe.hide_on_success !== false,
       ...(!isSystemRecipeId(recipe.id) && this.completionPolicyVersion?.() === 1
         ? { completion_policy_version: 1 as const } : {}),
       ...(writeBackTarget ? { write_back_target: writeBackTarget } : {}),
@@ -808,6 +818,19 @@ export class PersonalWorkDispatch {
       "execution_start_conflict", `Work start checkpoint rejected: ${result.reason}. Refresh the work item.`, 409,
     );
     return result;
+  }
+
+  private async canAutoStartMessage(item: WorkItem): Promise<boolean> {
+    if (!item.head_event_id) {
+      return false;
+    }
+    const authority = this.runtime.requireHost().get("authority");
+    const [decision, pref] = await Promise.all([
+      authority.getDisposition(item.head_event_id),
+      authority.getConversationPref(item.org_id, item.thread_id),
+    ]);
+    return Boolean(decision && isPushInboxDecision(decision) &&
+      (!pref?.hidden || pref.hidden_reason === "policy"));
   }
 
   private async hasStartCapacity(recipe: Recipe, exceptItemId: string): Promise<boolean> {

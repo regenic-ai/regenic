@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { fetchFollowUpPolicy, saveFollowUpPolicy } from "./api";
 import { useLocale } from "./LocaleContext";
+import { InfoTip } from "./InfoTip";
 import type { PersonalFollowUpPolicy } from "./types";
 
 export function FollowUpPolicySettings() {
@@ -36,10 +37,11 @@ export function FollowUpPolicySettings() {
   return (
     <section className="card" id="settings-follow-up">
       <div className="card-head">
-        <h2>{t("followUps.policy")}</h2>
+        <h2 className="settings-heading">{t("followUps.policy")}
+          <InfoTip label={t("followUps.policy")}>{t("followUps.policyLead")}</InfoTip>
+        </h2>
         {dirty ? <span className="chip syncing">{t("settings.unsaved")}</span> : null}
       </div>
-      <p className="muted">{t("followUps.policyLead")}</p>
       {policy ? (
         <form
           className="follow-ups-policy"

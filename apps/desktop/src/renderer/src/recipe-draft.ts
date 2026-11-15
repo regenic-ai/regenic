@@ -151,6 +151,7 @@ export interface RecipeDraft {
   config: Record<string, string>;
   can_write_back: boolean;
   write_back_thread_id: string;
+  hide_on_success: boolean;
   include_context: boolean;
   max_concurrent: string;
   enabled: boolean;
@@ -185,6 +186,7 @@ export function emptyDraft(executorType = ""): RecipeDraft {
     config: {},
     can_write_back: true,
     write_back_thread_id: "",
+    hide_on_success: false,
     include_context: true,
     max_concurrent: "",
     enabled: true,
@@ -329,6 +331,7 @@ export function draftFromRecipe(
     config: configForRecipeEdit(catalog, config),
     can_write_back: recipe.can_write_back,
     write_back_thread_id: recipe.write_back_thread_id ?? "",
+    hide_on_success: recipe.hide_on_success ?? true,
     include_context: recipe.include_context,
     max_concurrent:
       recipe.max_concurrent && recipe.max_concurrent > 0

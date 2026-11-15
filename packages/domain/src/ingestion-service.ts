@@ -72,6 +72,7 @@ import {
   shouldAcceptPushRecord,
 } from "./recipe-trigger";
 import { recipeTextMatches } from "./recipe-match";
+import { isPushInboxDecision } from "./inbox-query";
 import {
   openOrUpdateWorkItem,
   selectRecipeForSubject,
@@ -878,12 +879,13 @@ export class IngestionService {
   }> {
     const decisions = new Map(dispositions.map((decision) => [decision.event_id, decision]));
     const decidedItems = items.filter((item) => decisions.has(item.eventId));
-    const candidates = decidedItems.filter((item) =>
-      item.kind !== "tombstone" &&
-      item.kind !== "create_after_tombstone" &&
-      !(item.kind === "replay" && item.event.operation === "tombstone") &&
-      decisions.get(item.eventId)?.disposition === "current_work",
-    );
+    const candidates = decidedItems.filter((item) => {
+      const decision = decisions.get(item.eventId);
+      return item.kind !== "tombstone"
+        && item.kind !== "create_after_tombstone"
+        && !(item.kind === "replay" && item.event.operation === "tombstone")
+        && Boolean(decision && isPushInboxDecision(decision));
+    });
     const work_observations: WorkItemObservation[] = [];
     if (candidates.length > 0) {
       const orgId = candidates[0].identity.org_id;
@@ -928,6 +930,10 @@ export class IngestionService {
         });
         if (!subject) continue;
         const recipe = selectRecipeForSubject(recipes, subject);
+        if (decisions.get(planned.eventId)?.disposition === "pending"
+          && (subject.record_class !== "utterance" || !recipe || !recipeAllowsPushDispatch(recipe))) {
+          continue;
+        }
         if (await this.authorityStore.getWorkItemByUnitKey(orgId, threadId, planned.eventId)) {
           continue;
         }

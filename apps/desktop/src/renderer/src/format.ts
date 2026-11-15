@@ -152,17 +152,43 @@ export function attemptSummary(
     finished_at?: string;
     error_code?: string;
   } | null,
+  sourceMode: "poll" | "webhook" | "hybrid" = "poll",
 ): string {
   if (!attempt) {
+    if (sourceMode === "webhook") {
+      return t("connector.push.waiting");
+    }
+    if (sourceMode === "hybrid") {
+      return t("connector.hybrid.waiting");
+    }
     return t("sync.none");
   }
   const when = formatTime(attempt.finished_at ?? attempt.started_at);
   if (attempt.status === "running") {
+    if (sourceMode === "webhook") {
+      return t("connector.push.receivingWhen", { when });
+    }
     return t("sync.syncingWhen", { when });
   }
   if (attempt.status === "failed") {
+    if (sourceMode === "webhook") {
+      return t("connector.push.failedWhen", {
+        code: attempt.error_code ? ` · ${attempt.error_code}` : "",
+        when,
+      });
+    }
     return t("sync.failedWhen", {
       code: attempt.error_code ? ` · ${attempt.error_code}` : "",
+      when,
+    });
+  }
+  if (sourceMode === "webhook") {
+    const summaryKey =
+      attempt.accepted_count === 1
+        ? "connector.push.receivedOneWhen"
+        : "connector.push.receivedWhen";
+    return t(summaryKey, {
+      count: attempt.accepted_count,
       when,
     });
   }

@@ -1,4 +1,4 @@
-export const PG_SCHEMA_VERSION = 74;
+export const PG_SCHEMA_VERSION = 77;
 
 /** Applied when an existing postgres authority DB is already at a prior baseline. */
 export const PG_MIGRATIONS = [
@@ -575,10 +575,19 @@ ALTER TABLE recipes ADD COLUMN trigger_timezone TEXT;
   },
   {
     version: 56,
-    sql: "ALTER TABLE recipes ADD COLUMN write_back_thread_id TEXT;",
+    sql: `ALTER TABLE search_answers ADD COLUMN scope_json JSONB;`,
   },
   {
     version: 57,
+    sql: `ALTER TABLE recipes ADD COLUMN IF NOT EXISTS write_back_thread_id TEXT;`,
+  },
+  {
+    version: 58,
+    sql: `ALTER TABLE recipes ADD COLUMN IF NOT EXISTS hide_on_success BOOLEAN NOT NULL DEFAULT TRUE;`,
+
+  },
+  {
+    version: 59,
         sql: `
     ALTER TABLE work_items ADD COLUMN current_run_id TEXT REFERENCES work_runs(id) DEFERRABLE INITIALLY DEFERRED;
     ALTER TABLE work_items ADD COLUMN version INTEGER NOT NULL DEFAULT 0 CHECK (version >= 0);
@@ -597,7 +606,7 @@ WHERE status IN ('running', 'waiting_human')
 `,
   },
   {
-    version: 58,
+    version: 60,
     sql: `
 ALTER TABLE work_runs ADD COLUMN write_back_required BOOLEAN;
 ALTER TABLE work_runs ADD COLUMN trigger_kind TEXT CHECK (trigger_kind IN ('push', 'pull', 'manual'));
@@ -613,7 +622,7 @@ CREATE INDEX work_deliveries_item_idx ON work_deliveries (org_id, work_item_id, 
 `,
   },
   {
-    version: 59,
+    version: 61,
     sql: `
 ALTER TABLE work_deliveries ADD COLUMN lease_owner TEXT;
 ALTER TABLE work_deliveries ADD COLUMN claim_token TEXT;
@@ -621,19 +630,19 @@ ALTER TABLE work_deliveries ADD COLUMN cancel_requested_at TIMESTAMPTZ;
 `,
   },
   {
-    version: 60,
+    version: 62,
     sql: `
 ALTER TABLE conversation_prefs ADD COLUMN visibility_version INTEGER NOT NULL DEFAULT 0 CHECK (visibility_version >= 0);
 `,
   },
   {
-    version: 61,
+    version: 63,
     sql: `
 ALTER TABLE work_items ADD COLUMN visibility_intent_version INTEGER NOT NULL DEFAULT 0 CHECK (visibility_intent_version >= 0);
 `,
   },
   {
-    version: 62,
+    version: 64,
     sql: `
 CREATE TABLE conversation_lifecycle_events (
   id TEXT PRIMARY KEY,
@@ -670,7 +679,7 @@ CREATE INDEX conversation_lifecycle_events_command_idx
 `,
   },
   {
-    version: 63,
+    version: 65,
     sql: `
 CREATE UNIQUE INDEX conversation_lifecycle_events_command_unique_idx
   ON conversation_lifecycle_events (org_id, command_id)
@@ -678,11 +687,11 @@ CREATE UNIQUE INDEX conversation_lifecycle_events_command_unique_idx
 `,
   },
   {
-    version: 64,
+    version: 66,
     sql: `ALTER TABLE work_items ADD COLUMN acknowledged_run_id TEXT REFERENCES work_runs(id) DEFERRABLE INITIALLY DEFERRED;`,
   },
   {
-    version: 65,
+    version: 67,
     sql: `
 CREATE TABLE conversation_lifecycle_jobs (
   id TEXT PRIMARY KEY,
@@ -718,21 +727,21 @@ CREATE INDEX conversation_lifecycle_jobs_org_idx
 `,
   },
   {
-    version: 66,
+    version: 68,
     sql: `
       ALTER TABLE work_runs ADD COLUMN executor_config_json JSONB;
       ALTER TABLE work_runs ADD COLUMN include_context BOOLEAN;
     `,
   },
   {
-    version: 67,
+    version: 69,
     sql: `
 ALTER TABLE work_deliveries ADD COLUMN version INTEGER NOT NULL DEFAULT 0 CHECK (version >= 0);
 ALTER TABLE message_dispositions ADD COLUMN version INTEGER NOT NULL DEFAULT 0 CHECK (version >= 0);
 `,
   },
   {
-    version: 68,
+    version: 70,
     sql: `
 LOCK TABLE events, source_heads, message_dispositions, thread_heads IN SHARE ROW EXCLUSIVE MODE;
 UPDATE thread_heads SET has_current_work = FALSE
@@ -746,7 +755,7 @@ WHERE has_current_work = TRUE AND NOT EXISTS (
 `,
   },
   {
-    version: 69,
+    version: 71,
     sql: `
 LOCK TABLE connector_cursors IN ACCESS EXCLUSIVE MODE;
 ALTER TABLE connector_cursors ADD COLUMN lease_claim_token TEXT;
@@ -756,7 +765,7 @@ WHERE lease_owner IS NOT NULL;
 `,
   },
   {
-    version: 70,
+    version: 72,
     sql: `
 LOCK TABLE blobs IN ACCESS EXCLUSIVE MODE;
 ALTER TABLE blobs ADD COLUMN state TEXT NOT NULL DEFAULT 'protected'
@@ -787,7 +796,7 @@ CREATE INDEX blob_references_owner_idx
 `,
   },
   {
-    version: 71,
+    version: 73,
     sql: `
 LOCK TABLE blob_references, outbound_attempts, blobs IN ACCESS EXCLUSIVE MODE;
 ALTER TABLE blob_references DROP CONSTRAINT IF EXISTS blob_references_owner_type_check;
@@ -816,7 +825,7 @@ ON CONFLICT DO NOTHING;
 `,
   },
   {
-    version: 72,
+    version: 74,
     sql: `
 LOCK TABLE events, blob_references, blobs IN ACCESS EXCLUSIVE MODE;
 UPDATE blobs SET state = 'protected', unreferenced_at = NULL,
@@ -833,7 +842,7 @@ ON CONFLICT DO NOTHING;
 `,
   },
   {
-    version: 73,
+    version: 75,
     sql: `
 LOCK TABLE context_artifacts, blobs, blob_references IN ACCESS EXCLUSIVE MODE;
 INSERT INTO blobs (content_hash, media_type, byte_size, created_at, state)
@@ -897,9 +906,13 @@ ON CONFLICT DO NOTHING;
 `,
   },
   {
-    version: 74,
+    version: 76,
     sql: `ALTER TABLE work_runs ADD COLUMN completion_policy_version INTEGER
       CHECK (completion_policy_version IS NULL OR completion_policy_version = 1);`,
+  },
+  {
+    version: 77,
+    sql: `ALTER TABLE work_runs ADD COLUMN hide_on_success BOOLEAN;`,
   },
 ] as const;
 
@@ -1128,6 +1141,7 @@ CREATE TABLE recipes (
   executor_config_json JSONB NOT NULL,
   can_write_back BOOLEAN NOT NULL DEFAULT FALSE,
   write_back_thread_id TEXT,
+  hide_on_success BOOLEAN NOT NULL DEFAULT TRUE,
   include_context BOOLEAN NOT NULL DEFAULT FALSE,
   enabled BOOLEAN NOT NULL DEFAULT TRUE,
   trigger_kind TEXT NOT NULL DEFAULT 'push',
@@ -1172,6 +1186,7 @@ CREATE TABLE work_runs (
   include_context BOOLEAN,
   completion_policy_version INTEGER
     CHECK (completion_policy_version IS NULL OR completion_policy_version = 1),
+  hide_on_success BOOLEAN,
   external_run_id TEXT,
   agent_thread_id TEXT,
   status TEXT NOT NULL,
@@ -1199,6 +1214,7 @@ CREATE TABLE search_answers (
   work_item_id TEXT NOT NULL REFERENCES work_items(id),
   query TEXT NOT NULL,
   event_ids_json JSONB NOT NULL,
+  scope_json JSONB,
   outcome TEXT CHECK (outcome IN ('timed_out')),
   created_at TIMESTAMPTZ NOT NULL,
   updated_at TIMESTAMPTZ NOT NULL

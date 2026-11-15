@@ -1046,6 +1046,48 @@ describe("IngestionService", () => {
     );
   });
 
+  it("atomically admits explicitly matched automatic pending messages but fences human pending at start", async () => {
+    for (const humanPending of [false, true]) {
+      const { authorityStore, service } = createHarness();
+      const now = "2026-08-08T00:00:00.000Z";
+      const recipe = {
+        id: "pending-rule", org_id: "local-owner", name: "Pending rule", enabled: true,
+        match: { thread_id: "test-chat:room", text_contains: "review" },
+        trigger: { kind: "push", coalesce: false }, executor_type: "test",
+        include_context: false, can_write_back: false, created_at: now, updated_at: now,
+      };
+      await authorityStore.putRecipe(recipe);
+      const result = await service.ingest(createBatch(channelRecord({
+        channel: "test-chat", kind: "user", direction: "inbound", type: "message",
+        external_id: "room:pending", scope_id: "room", occurred_at: now,
+        actor_id: "person", text: "review",
+      })));
+      const eventId = result.records[0].event_id;
+      const item = await authorityStore.getWorkItemByThread("local-owner", "test-chat:room");
+      assert.equal(item.recipe_id, recipe.id);
+      const expected = await authorityStore.getDisposition(eventId);
+      assert.equal(expected.disposition, "pending");
+      if (humanPending) {
+        const transition = await authorityStore.transitionDisposition({
+          expected,
+          decision: { ...expected, reason_codes: [...expected.reason_codes, "human_triage"] },
+          command: { org_id: recipe.org_id, event_id: eventId, action: "triage",
+            disposition: "pending", command_id: "human-pending", issued_at: now },
+        });
+        assert.equal(transition.outcome, "applied");
+      }
+      assert.equal(await authorityStore.claimWorkRunStart({
+        expected_item: item, expected_recipe: await authorityStore.getRecipe(recipe.org_id, recipe.id),
+        require_current_work_trigger: true,
+        run: { id: "pending-run", org_id: recipe.org_id, work_item_id: item.id,
+          recipe_id: recipe.id, executor_type: recipe.executor_type,
+          status: "running", start_state: "pending", trigger_kind: "push",
+          write_back_required: false, created_at: now, updated_at: now },
+      }), !humanPending);
+      assert.equal((await authorityStore.getDisposition(eventId)).disposition, "pending");
+    }
+  });
+
   it("rolls back event and disposition writes when a work observation conflicts", async () => {
     const authorityStore = new MemoryAuthorityStore();
     const now = "2026-08-08T00:00:00.000Z";

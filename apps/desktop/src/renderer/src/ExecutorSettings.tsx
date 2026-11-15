@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import type { MessageKey } from "../../shared/i18n.ts";
 import { installationStatusLabel } from "./format";
 import { useLocale } from "./LocaleContext";
+import { InfoTip } from "./InfoTip";
 import type {
   EngineExecutorView,
   ExecutorKindCatalogItem,
@@ -45,16 +46,18 @@ export function ExecutorKind({
     <div className={`connector-kind${kind.installed ? " is-installed" : ""}`}>
       <div className="install">
         <div>
-          <strong>{title}</strong>
-          <div className="muted">{description}</div>
+          <span className="settings-label">
+            <strong>{title}</strong>
+            <InfoTip label={title}>
+              <p>{description}</p>
+              <p>{t("connector.credentials", { hint: credentialHint(kind.kind, t) })}</p>
+            </InfoTip>
+          </span>
           <div className="install-meta">
             <span className={`chip ${kind.installed ? "running" : ""}`.trim()}>
               {kind.installed
                 ? t("connector.installed", { count: kind.instance_count })
                 : t("connector.notInstalled")}
-            </span>
-            <span className="muted">
-              {t("connector.credentials", { hint: credentialHint(kind.kind, t) })}
             </span>
           </div>
         </div>
@@ -257,6 +260,7 @@ function ExecutorSettingsForm({
   onSubmit: (config: Record<string, string>) => void;
 }) {
   const { t } = useLocale();
+  const id = useId();
   const [values, setValues] = useState<Record<string, string>>(() => ({
     ...defaultValues(kind),
     ...initialValues,
@@ -277,16 +281,20 @@ function ExecutorSettingsForm({
     >
       {kind.fields.map((field) => {
         const copy = fieldCopy(kind.kind, field.key, t);
+        const fieldId = `${id}-${field.key}`;
+        const helpId = copy.hint ? `${fieldId}-hint` : undefined;
         return (
-          <label key={field.key} className="field">
-            <span>
-              {copy.label}
-              {field.required && !(optionalPin && field.key === "installation_id")
-                ? " *"
-                : ""}
+          <div key={field.key} className="field">
+            <span className="settings-label">
+              <label htmlFor={fieldId}>
+                {copy.label}
+                {field.required && !(optionalPin && field.key === "installation_id") ? " *" : ""}
+              </label>
+              {copy.hint ? <InfoTip label={copy.label} id={helpId}>{copy.hint}</InfoTip> : null}
             </span>
             {field.options ? (
               <select
+                id={fieldId} aria-describedby={helpId}
                 value={values[field.key] ?? ""}
                 onChange={(event) =>
                   setValues((current) => ({
@@ -304,6 +312,7 @@ function ExecutorSettingsForm({
               </select>
             ) : (
               <input
+                id={fieldId} aria-describedby={helpId}
                 value={values[field.key] ?? ""}
                 placeholder={copy.placeholder}
                 required={
@@ -317,8 +326,7 @@ function ExecutorSettingsForm({
                 }
               />
             )}
-            {copy.hint ? <span className="muted">{copy.hint}</span> : null}
-          </label>
+          </div>
         );
       })}
       <div className="install-actions">

@@ -9,7 +9,9 @@ import {
   searchHighlightRanges,
   searchMentionsFiles,
   searchMessageText,
-  type SearchTimeRange,
+  planContextSearchQuery,
+  type SearchAnswerFilters,
+  type SearchQueryPlan,
   searchSnippetPreview,
   searchWindowRequest,
   type SearchWindowTarget,
@@ -72,7 +74,8 @@ export function SearchPage({ onSettings, onOpenConversation }: {
   const [recent, setRecent] = useState<string[]>(loadRecent);
   const [result, setResult] = useState<PersonalExpandedSearchResult | null>(null);
   const [submitted, setSubmitted] = useState("");
-  const [submittedTimeRange, setSubmittedTimeRange] = useState<SearchTimeRange | null>(null);
+  const [submittedFilters, setSubmittedFilters] = useState<SearchAnswerFilters | null>(null);
+  const [submittedIntent, setSubmittedIntent] = useState<SearchQueryPlan["intent"]>("lookup");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [opening, setOpening] = useState<string | null>(null);
@@ -91,7 +94,8 @@ export function SearchPage({ onSettings, onOpenConversation }: {
       openPending.current?.abort(); openPending.current = null;
       morePending.current?.abort(); morePending.current = null;
       setBusy(false); setResult(null); setCards([]); setError(null);
-      setOpening(null); setLoadingMore(null); setElapsed(null); setSubmittedTimeRange(null);
+      setOpening(null); setLoadingMore(null); setElapsed(null); setSubmittedFilters(null);
+      setSubmittedIntent("lookup");
     };
     const unsubscribe = window.regenic?.onApiOriginChanged(reset);
     return () => {
@@ -115,7 +119,9 @@ export function SearchPage({ onSettings, onOpenConversation }: {
     setOpening(null); setLoadingMore(null); setElapsed(null);
     const started = performance.now();
     try {
-      const searchInput = contextSearchInput(text, filters.source, filters.thread, filters.limit, searchKind);
+      const now = new Date();
+      const plan = planContextSearchQuery(text, now);
+      const searchInput = contextSearchInput(text, filters.source, filters.thread, filters.limit, searchKind, now);
       const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(90_000)]);
       const next = await searchPersonalContext(searchInput, signal).catch((caught: unknown) => {
         if (caught instanceof KernelRequestError && caught.code === "context_changed" && !signal.aborted) {
@@ -126,13 +132,15 @@ export function SearchPage({ onSettings, onOpenConversation }: {
       if (!controller.signal.aborted && pending.current === controller) {
         setResult(next); setCards(next.conversations);
         const originalQuery = text.trim();
-        const timeRange = searchInput.filters?.occurred_after && searchInput.filters.occurred_before
+        const answerFilters = searchInput.filters?.occurred_after && searchInput.filters.occurred_before
           ? {
               occurred_after: searchInput.filters.occurred_after,
               occurred_before: searchInput.filters.occurred_before,
+              ...(searchInput.filters.sources ? { sources: searchInput.filters.sources } : {}),
+              ...(searchInput.filters.thread_ids ? { thread_ids: searchInput.filters.thread_ids } : {}),
             }
           : null;
-        setSubmitted(originalQuery); setSubmittedTimeRange(timeRange);
+        setSubmitted(originalQuery); setSubmittedFilters(answerFilters); setSubmittedIntent(plan.intent);
         if (searchInput.limit !== limit) setLimit(searchInput.limit);
         setElapsed(Math.round(performance.now() - started));
         const nextRecent = [originalQuery, ...recent.filter((entry) => entry !== originalQuery)].slice(0, RECENT_LIMIT);
@@ -333,9 +341,9 @@ export function SearchPage({ onSettings, onOpenConversation }: {
                   covered: result.coverage.covered_count, authorized: result.coverage.authorized_count,
                 })}</span>
               ) : null}
-              {submittedTimeRange ? <span className="muted">{t("search.timeRange", {
-                from: new Date(submittedTimeRange.occurred_after).toLocaleDateString(locale),
-                to: new Date(submittedTimeRange.occurred_before).toLocaleDateString(locale),
+              {submittedFilters ? <span className="muted">{t("search.timeRange", {
+                from: new Date(submittedFilters.occurred_after).toLocaleDateString(locale),
+                to: new Date(submittedFilters.occurred_before).toLocaleDateString(locale),
               })}</span> : null}
               {elapsed !== null ? <span className="muted">{t("search.elapsed", { seconds: searchElapsedSeconds(elapsed) })}</span> : null}
               <details className="search-trace">
@@ -344,8 +352,8 @@ export function SearchPage({ onSettings, onOpenConversation }: {
                   <dt>profile</dt><dd>{result.retrieval_profile}</dd>
                   <dt>generation</dt><dd>{result.generation ?? "—"}</dd>
                   <dt>read_epoch</dt><dd>{result.read_epoch}</dd>
-                  {submittedTimeRange ? <><dt>occurred_after</dt><dd>{submittedTimeRange.occurred_after}</dd>
-                    <dt>occurred_before</dt><dd>{submittedTimeRange.occurred_before}</dd></> : null}
+                  {submittedFilters ? <><dt>occurred_after</dt><dd>{submittedFilters.occurred_after}</dd>
+                    <dt>occurred_before</dt><dd>{submittedFilters.occurred_before}</dd></> : null}
                   {result.degradation_flags.length ? <><dt>flags</dt><dd>{result.degradation_flags.join(", ")}</dd></> : null}</dl>
                 {notices.info.length ? <ul>{notices.info.map((flag) => <li key={flag}>{flagText(flag)}</li>)}</ul> : null}
               </details>
@@ -384,7 +392,8 @@ export function SearchPage({ onSettings, onOpenConversation }: {
             ) : null}
             {cards.length ? (
               <SearchAnswerCard key={`${result.snapshot_id}:${submitted}`} query={submitted}
-                conversations={cards} timeRange={submittedTimeRange ?? undefined} onCite={cite} />
+                conversations={cards} intent={submittedIntent}
+                filters={submittedFilters ?? undefined} onCite={cite} />
             ) : null}
             <ol className="semantic-results">
               {result.items.map((hit) => <Fragment key={hit.event_id}>

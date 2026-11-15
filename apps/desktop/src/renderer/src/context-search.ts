@@ -5,8 +5,14 @@ export interface SearchTimeRange {
   occurred_before: string;
 }
 
+export interface SearchAnswerFilters extends SearchTimeRange {
+  sources?: string[];
+  thread_ids?: string[];
+}
+
 export interface SearchQueryPlan {
   query: string;
+  intent: "lookup" | "aggregate" | "list";
   time_range?: SearchTimeRange;
 }
 
@@ -16,14 +22,21 @@ const ENGLISH_RELATIVE_PERIOD =
   /\b(?:last|past)\s+(\d{1,3}|one|two)\s+(day|week|month)s?\b/i;
 const BROAD_COVERAGE_INTENT =
   /所有人|全员|统计|汇总|多少(?:条|个|人)|\b(?:all|total|count|summary)\b/i;
+const LIST_COVERAGE_INTENT =
+  /哪些|列出|清单|分别|逐个|\b(?:which|list)\b/i;
 
 /** Turns an explicit rolling-period phrase into an authorized search filter, not embedding noise. */
 export function planContextSearchQuery(query: string, now = new Date()): SearchQueryPlan {
   const trimmed = query.trim();
+  const intent = BROAD_COVERAGE_INTENT.test(trimmed)
+    ? "aggregate"
+    : LIST_COVERAGE_INTENT.test(trimmed)
+      ? "list"
+      : "lookup";
   const chinese = CHINESE_RELATIVE_PERIOD.exec(trimmed);
   const english = ENGLISH_RELATIVE_PERIOD.exec(trimmed);
   const match = chinese ?? english;
-  if (!match || !Number.isFinite(now.getTime())) return { query: trimmed };
+  if (!match || !Number.isFinite(now.getTime())) return { query: trimmed, intent };
   const amount = relativeAmount(match[1]);
   const unit = match[2].toLowerCase();
   const maximum = unit === "天" || unit === "day"
@@ -31,7 +44,7 @@ export function planContextSearchQuery(query: string, now = new Date()): SearchQ
     : unit === "周" || unit === "week"
       ? 104
       : 120;
-  if (amount < 1 || amount > maximum) return { query: trimmed };
+  if (amount < 1 || amount > maximum) return { query: trimmed, intent };
   const after = unit === "天" || unit === "day"
     ? new Date(now.getTime() - amount * 24 * 60 * 60 * 1000)
     : unit === "周" || unit === "week"
@@ -41,6 +54,7 @@ export function planContextSearchQuery(query: string, now = new Date()): SearchQ
     .replace(/\s+/g, " ").trim();
   return {
     query: semanticQuery || trimmed,
+    intent,
     time_range: {
       occurred_after: after.toISOString(),
       occurred_before: now.toISOString(),
@@ -57,7 +71,7 @@ export function contextSearchInput(
     throw new Error("search.invalid");
   }
   const plan = planContextSearchQuery(query, now);
-  const effectiveLimit = plan.time_range && BROAD_COVERAGE_INTENT.test(query)
+  const effectiveLimit = plan.time_range && plan.intent !== "lookup"
     ? Math.max(limit, 20)
     : limit;
   const filters = {

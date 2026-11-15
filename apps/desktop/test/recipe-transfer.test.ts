@@ -18,6 +18,7 @@ const sample: RecipeView = {
   executor_config: { prompt: "Triage", skill: "ops" },
   can_write_back: true,
   include_context: false,
+  hide_on_success: false,
   max_concurrent: 2,
   enabled: true,
   created_at: "2026-01-01T00:00:00.000Z",
@@ -77,6 +78,23 @@ describe("recipe transfer", () => {
     const parsed = parseRecipeBundle(stringifyRecipeBundle(buildRecipeBundle([recipe])));
     assert.equal(parsed.recipes[0]?.write_back_thread_id, "feishu:results");
     assert.equal(parsed.recipes[0]?.can_write_back, true);
+  });
+
+  it("round-trips the per-rule hide-on-success choice", () => {
+    for (const hide_on_success of [false, true]) {
+      const recipe = { ...sample, hide_on_success };
+      const [parsed] = parseRecipeBundle(
+        stringifyRecipeBundle(buildRecipeBundle([recipe])),
+      ).recipes;
+      assert.equal(parsed?.hide_on_success, hide_on_success);
+    }
+    const legacy = { ...recipeToTransferItem(sample) };
+    delete legacy.hide_on_success;
+    const parsed = parseRecipeBundle(JSON.stringify({
+      version: 1,
+      recipes: [legacy],
+    }));
+    assert.equal(parsed.recipes[0]?.hide_on_success, false);
   });
 
   it("preserves unavailable destination intent, including while keeping results local", () => {

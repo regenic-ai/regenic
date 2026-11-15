@@ -163,11 +163,6 @@
   line-height: 1.4;
 }
 
-.recipe-preview-note {
-  margin: 2px 0 0;
-  font-size: 12px;
-}
-
 .recipe-preview-conflict {
   margin: 4px 0 0;
   font-size: 12px;
@@ -834,8 +829,7 @@
 }
 
 .recipe-conditions-heading,
-.recipe-conditions-actions,
-.recipe-conditions-help {
+.recipe-conditions-actions {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
@@ -937,8 +931,7 @@
 }
 
 .recipe-condition-remove:focus-visible,
-.recipe-condition-test-toggle:focus-visible,
-.recipe-conditions-help summary:focus-visible {
+.recipe-condition-test-toggle:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
 }
@@ -956,28 +949,6 @@
 
 .recipe-condition-add .menu-select-pop {
   min-width: 190px;
-}
-
-.recipe-conditions-help {
-  align-items: baseline;
-  color: var(--muted);
-  font-size: 11px;
-  line-height: 1.5;
-}
-
-.recipe-conditions-help details {
-  flex: 1;
-  min-width: 100px;
-}
-
-.recipe-conditions-help summary {
-  width: max-content;
-  cursor: pointer;
-}
-
-.recipe-conditions-help p {
-  margin: 6px 0 0;
-  max-width: 46em;
 }
 
 .recipe-condition-test {

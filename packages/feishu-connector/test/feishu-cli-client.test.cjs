@@ -8,6 +8,7 @@ const {
   feishuChatOptionLabel,
   larkCliCatalogHint,
   larkCliUserReady,
+  parseChatMembers,
   parseChatPage,
   parseHistoryPage,
   parseUserNamePage,
@@ -15,6 +16,7 @@ const {
   probeLarkCli,
   probeLarkCliAuth,
   resetFeishuChatListCache,
+  resetFeishuChatMemberCache,
   resetFeishuChatInfoCache,
   resetFeishuUserNameCache,
   resetLarkCliProbeCache,
@@ -28,6 +30,7 @@ afterEach(() => {
   resetLarkCliSlot();
   resetLarkUserTokenCache();
   resetFeishuUserNameCache();
+  resetFeishuChatMemberCache();
   resetFeishuChatInfoCache();
 });
 
@@ -1027,6 +1030,87 @@ describe("LarkCliClient", () => {
     assert.equal(data.content, JSON.stringify({ text: "hello" }));
     assert.equal(data.uuid, "uuid-1");
     assert.equal(result.message_id, "om_sent");
+  });
+
+  it("lists chat members by open_id and keeps a second page", async () => {
+    const calls = [];
+    const client = new LarkCliClient({
+      command: "lark-cli",
+      async spawn(input) {
+        calls.push(input);
+        const params = JSON.parse(input.command[input.command.indexOf("--params") + 1]);
+        const page = params.page_token
+          ? { items: [{ member_id: "ou_2", name: "熊峰" }], has_more: false }
+          : {
+              items: [{ member_id: "ou_1", name: "Ada" }, { name: "no-id" }],
+              has_more: true,
+              page_token: "next",
+            };
+        return {
+          stdout: JSON.stringify({ ok: true, data: page }),
+          stderr: "",
+          exit_code: 0,
+        };
+      },
+    });
+    const members = await client.listChatMembers("oc_1");
+    assert.equal(members.complete, true);
+    assert.deepEqual(members.items, [
+      { id: "ou_1", name: "Ada" },
+      { id: "ou_2", name: "熊峰" },
+    ]);
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0].command.includes("/open-apis/im/v1/chats/oc_1/members"), true);
+    const again = await client.listChatMembers("oc_1");
+    assert.deepEqual(again, members);
+    assert.equal(calls.length, 2);
+    assert.deepEqual(
+      parseChatMembers({ data: { items: [{ member_id: "ou_9", name: "Bo" }], has_more: false } }).items,
+      [{ id: "ou_9", name: "Bo" }],
+    );
+  });
+
+  it("does not treat a truncated member list as complete", async () => {
+    const client = new LarkCliClient({
+      async spawn(input) {
+        const params = JSON.parse(input.command[input.command.indexOf("--params") + 1]);
+        const page = Number(params.page_token ?? "0");
+        return {
+          stdout: JSON.stringify({
+            ok: true,
+            data: {
+              items: [{ member_id: `ou_${page}`, name: `Member ${page}` }],
+              has_more: true,
+              page_token: String(page + 1),
+            },
+          }),
+          stderr: "",
+          exit_code: 0,
+        };
+      },
+    });
+    const truncated = await client.listChatMembers("oc_big");
+    assert.equal(truncated.complete, false);
+    assert.equal(truncated.items.length, 5);
+
+    const stuck = new LarkCliClient({
+      async spawn() {
+        return {
+          stdout: JSON.stringify({
+            ok: true,
+            data: {
+              items: [{ member_id: "ou_1", name: "Ada" }],
+              has_more: true,
+            },
+          }),
+          stderr: "",
+          exit_code: 0,
+        };
+      },
+    });
+    const unfinished = await stuck.listChatMembers("oc_stuck");
+    assert.equal(unfinished.complete, false);
+    assert.deepEqual(unfinished.items, [{ id: "ou_1", name: "Ada" }]);
   });
 
   it("uploads an image through im images create as the user", async () => {

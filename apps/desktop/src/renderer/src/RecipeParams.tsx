@@ -1,4 +1,6 @@
 import { MenuSelect } from "./MenuSelect";
+import { RecipeRow } from "./RecipeRow";
+import { useId } from "react";
 import type { ExecutorCatalogEntry } from "./types";
 
 const SHARED_INSTRUCTION_KEYS = new Set(["prompt", "instruction"]);
@@ -15,6 +17,7 @@ export function RecipeParams({
   fallbackTitle: string;
   onChange: (key: string, value: string) => void;
 }) {
+  const id = useId();
   const fields = catalog.fields.filter(
     (field) => !SHARED_INSTRUCTION_KEYS.has(field.key),
   );
@@ -26,39 +29,39 @@ export function RecipeParams({
       {fields.map((field) => {
         const kind = field.kind ?? (field.options?.length ? "select" : "text");
         const value = values[field.key] ?? field.default ?? "";
+        const descriptionId = field.hint ? `${id}-${field.key}-hint` : undefined;
         return (
-          <div key={field.key} className="recipe-row">
-            <span className="recipe-row-label">
-              {field.label}
-              {field.required ? " *" : ""}
-            </span>
-            <div className="recipe-row-body">
-              {kind === "textarea" ? (
-                <textarea
-                  value={value}
-                  placeholder={field.placeholder}
-                  required={field.required}
-                  rows={5}
-                  onChange={(event) => onChange(field.key, event.target.value)}
-                />
-              ) : kind === "select" ? (
-                <MenuSelect
-                  value={value}
-                  placeholder={field.placeholder}
-                  options={field.options ?? []}
-                  onChange={(next) => onChange(field.key, next)}
-                />
-              ) : (
-                <input
-                  value={value}
-                  placeholder={field.placeholder}
-                  required={field.required}
-                  onChange={(event) => onChange(field.key, event.target.value)}
-                />
-              )}
-              {field.hint ? <p className="recipe-hint">{field.hint}</p> : null}
-            </div>
-          </div>
+          <RecipeRow key={field.key} label={`${field.label}${field.required ? " *" : ""}`}
+            hint={field.hint} descriptionId={descriptionId}>
+            {kind === "textarea" ? (
+              <textarea
+                value={value}
+                aria-label={field.label}
+                aria-describedby={descriptionId}
+                placeholder={field.placeholder}
+                required={field.required}
+                rows={5}
+                onChange={(event) => onChange(field.key, event.target.value)}
+              />
+            ) : kind === "select" ? (
+              <MenuSelect
+                value={value}
+                ariaLabel={field.label}
+                placeholder={field.placeholder}
+                options={field.options ?? []}
+                onChange={(next) => onChange(field.key, next)}
+              />
+            ) : (
+              <input
+                value={value}
+                aria-label={field.label}
+                aria-describedby={descriptionId}
+                placeholder={field.placeholder}
+                required={field.required}
+                onChange={(event) => onChange(field.key, event.target.value)}
+              />
+            )}
+          </RecipeRow>
         );
       })}
     </>

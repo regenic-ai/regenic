@@ -24,6 +24,8 @@ import type {
 } from "@regenic/domain";
 import {
   conversationId,
+  isWorkTriggerDecision,
+  isFinishedWorkTriggerDecision,
   recipeTriggerOf,
   isRecipeTriggerKind,
   pullScheduleColumns,
@@ -197,8 +199,8 @@ async function writeRecipe(db: PgSql, recipe: Recipe, client?: PoolClient, inser
           can_write_back, include_context, enabled, trigger_kind,
           trigger_interval_ms, trigger_at_minute, trigger_weekdays, trigger_timezone,
           trigger_coalesce, max_concurrent, next_run_at, created_at, updated_at,
-          write_back_thread_id
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+          write_back_thread_id, hide_on_success
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
         ON CONFLICT (id) DO ${insertOnly ? "NOTHING" : `UPDATE SET
           name = EXCLUDED.name,
           match_json = EXCLUDED.match_json,
@@ -216,6 +218,7 @@ async function writeRecipe(db: PgSql, recipe: Recipe, client?: PoolClient, inser
           trigger_coalesce = EXCLUDED.trigger_coalesce,
           max_concurrent = EXCLUDED.max_concurrent,
           next_run_at = EXCLUDED.next_run_at,
+          hide_on_success = EXCLUDED.hide_on_success,
           updated_at = EXCLUDED.updated_at`}
       `,
       [
@@ -239,6 +242,7 @@ async function writeRecipe(db: PgSql, recipe: Recipe, client?: PoolClient, inser
         recipe.created_at,
         recipe.updated_at,
         recipe.write_back_thread_id ?? null,
+        recipe.hide_on_success !== false,
       ],
       client,
     );
@@ -405,9 +409,10 @@ async function putWorkItem(
             thread_id: string | null;
             operation: string;
             disposition: string | null;
+            reason_codes: unknown;
           }>(
             `SELECT e.id, e.org_id, e.source, e.external_id, e.thread_id,
-                    e.operation, d.disposition
+                    e.operation, d.disposition, d.reason_codes
              FROM events e
              JOIN message_dispositions d ON d.event_id = e.id
              WHERE e.id = $1 AND EXISTS (
@@ -417,11 +422,17 @@ async function putWorkItem(
             [input.item.head_event_id], client,
           )
         : null;
+      const triggerRecipe = trigger?.disposition === "pending" && input.item.recipe_id
+        ? await db.queryOne<RecipeRow>(
+          "SELECT * FROM recipes WHERE org_id = $1 AND id = $2 FOR SHARE",
+          [orgId, input.item.recipe_id], client,
+        ) : null;
       const triggerIsCurrentWork = Boolean(
         trigger &&
         trigger.org_id === orgId &&
         trigger.operation !== "tombstone" &&
-        trigger.disposition === "current_work" &&
+        isWorkTriggerDecision(trigger.disposition, asJson<string[]>(trigger.reason_codes),
+          input.item, triggerRecipe ? toRecipe(triggerRecipe) : null) &&
         (trigger.thread_id ?? conversationId(
           trigger.source,
           trigger.external_id,
@@ -520,10 +531,11 @@ export async function createWorkItem(db: PgSql, input: WorkItemCreation): Promis
       if (!savedRecipe) throw new Error("Created work recipe disappeared inside its transaction");
       const answer = result.search_answer;
       const savedAnswer = answer ? await db.queryOne<SearchAnswerRow>(`INSERT INTO search_answers (
-        id, org_id, work_item_id, query, event_ids_json, outcome, created_at, updated_at
-      ) VALUES ($1, $2, $3, $4, $5, NULL, $6, $7)
+        id, org_id, work_item_id, query, event_ids_json, scope_json, outcome, created_at, updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, $8)
       ON CONFLICT (id) DO NOTHING RETURNING *`, [
-        answer.id, answer.org_id, answer.work_item_id, answer.query, jsonb(answer.event_ids), answer.created_at, answer.updated_at,
+        answer.id, answer.org_id, answer.work_item_id, answer.query, jsonb(answer.event_ids),
+        answer.scope ? jsonb(answer.scope) : null, answer.created_at, answer.updated_at,
       ], client) : null;
       if (answer && !savedAnswer) throw new WorkItemCreationConflict("search_answer_exists");
       return {
@@ -667,8 +679,8 @@ async function putWorkRun(
           id, org_id, work_item_id, recipe_id, executor_type, external_run_id,
           agent_thread_id, status, start_state, result_json, created_at, updated_at, version,
           write_back_required, write_back_target_json, trigger_kind, executor_config_json,
-          include_context, completion_policy_version
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+          include_context, completion_policy_version, hide_on_success
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
         ON CONFLICT (id) DO UPDATE SET
           recipe_id = EXCLUDED.recipe_id,
           executor_type = EXCLUDED.executor_type,
@@ -689,6 +701,7 @@ async function putWorkRun(
           AND work_runs.executor_config_json IS NOT DISTINCT FROM EXCLUDED.executor_config_json
           AND work_runs.include_context IS NOT DISTINCT FROM EXCLUDED.include_context
           AND work_runs.completion_policy_version IS NOT DISTINCT FROM EXCLUDED.completion_policy_version
+          AND work_runs.hide_on_success IS NOT DISTINCT FROM EXCLUDED.hide_on_success
           AND (work_runs.status NOT IN ('completed', 'failed', 'cancelled')
             OR work_runs.status = EXCLUDED.status)
           AND (work_runs.status <> 'completed'
@@ -715,6 +728,7 @@ async function putWorkRun(
         jsonb(run.executor_config),
         run.include_context ?? null,
         run.completion_policy_version ?? null,
+        run.hide_on_success ?? null,
       ],
       client,
     );
@@ -1402,7 +1416,8 @@ export async function acknowledgeWorkResult(
       delivery: deliveryRow ? toWorkDelivery(deliveryRow) : null,
       trigger_is_current_work: Boolean(triggerRow && item
         && (triggerRow.thread_id ?? conversationId(triggerRow.source, triggerRow.external_id, input.trigger_event_id)) === item.thread_id
-        && triggerRow.disposition === "current_work"),
+        && isFinishedWorkTriggerDecision(triggerRow.disposition,
+          asJson<string[]>(triggerRow.reason_codes), item, runRow ? toWorkRun(runRow) : null)),
     });
     if (result.outcome !== "applied") return result;
     const reasonCodes = [...new Set([
@@ -1411,7 +1426,7 @@ export async function acknowledgeWorkResult(
     ])];
     await db.execute(`UPDATE message_dispositions SET disposition = 'outside_current_work',
       reason_codes = $1, decided_at = $2, version = version + 1
-      WHERE org_id = $3 AND event_id = $4 AND disposition = 'current_work'`,
+      WHERE org_id = $3 AND event_id = $4 AND disposition IN ('current_work', 'pending')`,
     [jsonb(reasonCodes), input.now, orgId, input.trigger_event_id], client);
     await refreshThreadHeadWithinTransaction(db, orgId, item!.thread_id, client);
     const savedRow = await db.queryOne<WorkItemRow>(`UPDATE work_items
@@ -1436,7 +1451,14 @@ export async function acknowledgeWorkResult(
     }>(`SELECT hidden, hidden_reason, visibility_version FROM conversation_prefs
       WHERE org_id = $1 AND thread_id = $2 FOR UPDATE`, [orgId, item!.thread_id], client);
     const visibilityVersion = asNumber(pref?.visibility_version ?? 0);
+    const recipeVisibility = item?.recipe_id
+      ? await db.queryOne<{ hide_on_success: boolean }>(
+        "SELECT hide_on_success FROM recipes WHERE org_id = $1 AND id = $2",
+        [orgId, item.recipe_id], client)
+      : undefined;
+    const hideOnSuccess = runRow?.hide_on_success ?? recipeVisibility?.hide_on_success ?? true;
     if (!remainingCurrentWork && !unfinishedWork && !unresolvedDelivery
+      && hideOnSuccess
       && visibilityVersion === (item!.visibility_intent_version ?? 0)
       && !(asBool(pref?.hidden) && pref?.hidden_reason !== "policy")) {
       const folded = await putConversationPrefOn(db, client, {
@@ -1603,9 +1625,10 @@ export async function claimWorkRunStart(db: PgSql, input: WorkRunStartClaim): Pr
           thread_id: string | null;
           operation: string;
           disposition: string;
+          reason_codes: unknown;
         }>(
           `SELECT e.id, e.org_id, e.source, e.external_id, e.thread_id,
-                  e.operation, d.disposition
+                  e.operation, d.disposition, d.reason_codes
            FROM events e
            JOIN message_dispositions d ON d.event_id = e.id
            WHERE e.id = $1 AND EXISTS (
@@ -1619,7 +1642,8 @@ export async function claimWorkRunStart(db: PgSql, input: WorkRunStartClaim): Pr
       trigger &&
       trigger.org_id === run.org_id &&
       trigger.operation !== "tombstone" &&
-      trigger.disposition === "current_work" &&
+      isWorkTriggerDecision(trigger.disposition, asJson<string[]>(trigger.reason_codes),
+        workItem, toRecipe(recipe)) &&
       (trigger.thread_id ?? conversationId(
         trigger.source,
         trigger.external_id,
@@ -1760,12 +1784,13 @@ export async function putSearchAnswer(
   const saved = await db.queryOne<SearchAnswerRow>(
     `
       INSERT INTO search_answers (
-        id, org_id, work_item_id, query, event_ids_json, outcome, created_at, updated_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        id, org_id, work_item_id, query, event_ids_json, scope_json, outcome, created_at, updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
       ON CONFLICT (id) DO UPDATE SET
         work_item_id = EXCLUDED.work_item_id,
         query = EXCLUDED.query,
         event_ids_json = EXCLUDED.event_ids_json,
+        scope_json = EXCLUDED.scope_json,
         outcome = EXCLUDED.outcome,
         updated_at = EXCLUDED.updated_at
       WHERE search_answers.org_id = EXCLUDED.org_id
@@ -1779,6 +1804,7 @@ export async function putSearchAnswer(
       record.work_item_id,
       record.query,
       jsonb(record.event_ids),
+      record.scope ? jsonb(record.scope) : null,
       record.outcome ?? null,
       record.created_at,
       record.updated_at,
@@ -2128,6 +2154,7 @@ interface RecipeRow {
   can_write_back: unknown;
   write_back_thread_id: string | null;
   include_context: unknown;
+  hide_on_success: unknown;
   enabled: unknown;
   trigger_kind: string | null;
   trigger_interval_ms: number | null;
@@ -2204,6 +2231,7 @@ interface WorkRunRow {
   executor_config_json: unknown;
   include_context: boolean | null;
   completion_policy_version: WorkRun["completion_policy_version"] | null;
+  hide_on_success: boolean | null;
   created_at: unknown;
   updated_at: unknown;
 }
@@ -2214,6 +2242,7 @@ interface SearchAnswerRow {
   work_item_id: string;
   query: string;
   event_ids_json: unknown;
+  scope_json: unknown;
   outcome: SearchAnswerRecord["outcome"] | null;
   created_at: unknown;
   updated_at: unknown;
@@ -2259,6 +2288,7 @@ function toRecipe(row: RecipeRow): Recipe {
       ? { write_back_thread_id: row.write_back_thread_id }
       : {}),
     include_context: asBool(row.include_context),
+    hide_on_success: asBool(row.hide_on_success),
     enabled: asBool(row.enabled),
     ...(row.max_concurrent && row.max_concurrent > 0
       ? { max_concurrent: row.max_concurrent }
@@ -2312,6 +2342,7 @@ function toWorkRun(row: WorkRunRow): WorkRun {
       : {}),
     ...(row.include_context !== null ? { include_context: asBool(row.include_context) } : {}),
     ...(row.completion_policy_version !== null ? { completion_policy_version: row.completion_policy_version } : {}),
+    ...(row.hide_on_success !== null ? { hide_on_success: asBool(row.hide_on_success) } : {}),
     created_at: toIso(row.created_at),
     updated_at: toIso(row.updated_at),
   };
@@ -2324,6 +2355,9 @@ function toSearchAnswer(row: SearchAnswerRow): SearchAnswerRecord {
     work_item_id: row.work_item_id,
     query: row.query,
     event_ids: asJson<string[]>(row.event_ids_json),
+    ...(row.scope_json
+      ? { scope: asJson<NonNullable<SearchAnswerRecord["scope"]>>(row.scope_json) }
+      : {}),
     ...(row.outcome ? { outcome: row.outcome } : {}),
     created_at: toIso(row.created_at),
     updated_at: toIso(row.updated_at),

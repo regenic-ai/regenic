@@ -1,4 +1,13 @@
 import { contextBridge, ipcRenderer } from "electron";
+import type {
+  DatabaseSettingsInput, DatabaseSettingsResult, DatabaseSettingsView,
+} from "../shared/database-settings";
+
+async function invokeDatabase<T>(channel: string, input?: unknown): Promise<T> {
+  const result: DatabaseSettingsResult<T> = await ipcRenderer.invoke(channel, input);
+  if (!result.ok) throw new Error(result.error);
+  return result.value;
+}
 
 function readApiOrigin(): string {
   const flag = process.argv.find((arg) => arg.startsWith("--regenic-api="));
@@ -9,6 +18,11 @@ contextBridge.exposeInMainWorld("regenic", {
   apiOrigin: readApiOrigin(),
   getApiOrigin: () => ipcRenderer.invoke("regenic:get-api-origin"),
   getKernelSettings: () => ipcRenderer.invoke("regenic:get-kernel-settings"),
+  getDatabaseSettings: () => invokeDatabase<DatabaseSettingsView>("regenic:get-database-settings"),
+  testDatabaseSettings: (connectionString?: string) =>
+    invokeDatabase<void>("regenic:test-database-settings", connectionString),
+  setDatabaseSettings: (input: DatabaseSettingsInput) =>
+    invokeDatabase<DatabaseSettingsView>("regenic:set-database-settings", input),
   getSemanticRuntime: () => ipcRenderer.invoke("regenic:get-semantic-runtime"),
   setSemanticVisual: (enabled: boolean) => ipcRenderer.invoke("regenic:semantic-visual", enabled),
   semanticAction: (action: "install" | "start" | "stop", visualEnabled?: boolean, launchSettings?: import("../shared/semantic-runtime").SemanticLaunchSettings) =>

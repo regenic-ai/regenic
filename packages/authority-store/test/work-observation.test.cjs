@@ -369,7 +369,7 @@ async function fixture(t, driver, runFields = {}, bindExecution = true, options 
 }
 
 for (const driver of drivers.filter((entry) => entry.name.startsWith("sqlite"))) {
-  it(`${driver.name} upgrades schema 73 without automatically completing an existing run`, async (t) => {
+  it(`${driver.name} upgrades schema 75 without automatically completing an existing run`, async (t) => {
     const f = await fixture(t, driver, { write_back_required: false, trigger_kind: "push" });
     const item = await f.store.getWorkItem(ORG, f.item.id);
     const run = await f.store.getWorkRun(ORG, f.run.id);
@@ -379,8 +379,8 @@ for (const driver of drivers.filter((entry) => entry.name.startsWith("sqlite")))
       try {
         assert.equal(db.prepare("SELECT completion_policy_version FROM work_runs WHERE id = ?")
           .get(run.id).completion_policy_version, null);
-        db.exec("ALTER TABLE work_runs DROP COLUMN completion_policy_version");
-        db.pragma("user_version = 73");
+        db.exec("ALTER TABLE work_runs DROP COLUMN completion_policy_version; ALTER TABLE work_runs DROP COLUMN hide_on_success");
+        db.pragma("user_version = 75");
       } finally { db.close(); }
     });
     assert.deepEqual(await f.store.getWorkItem(ORG, item.id), item);
@@ -388,7 +388,7 @@ for (const driver of drivers.filter((entry) => entry.name.startsWith("sqlite")))
     assert.deepEqual(await f.store.getDisposition(item.head_event_id), disposition);
     const inspect = new Database(f.path, { readonly: true });
     try {
-      assert.equal(inspect.pragma("user_version", { simple: true }), 74);
+      assert.equal(inspect.pragma("user_version", { simple: true }), 77);
       assert.equal(inspect.prepare("SELECT completion_policy_version FROM work_runs WHERE id = ?")
         .get(run.id).completion_policy_version, null);
       assert.deepEqual(inspect.pragma("foreign_key_check"), []);
@@ -412,6 +412,29 @@ for (const driver of drivers.filter((entry) => entry.name.startsWith("sqlite")))
 
   describe(`${driver.name} automatic completion policy`, () => {
     const policy = { completion_policy_version: 1, write_back_required: false, trigger_kind: "push" };
+
+    for (const hideOnSuccess of [false, true]) {
+      it(`freezes hide_on_success=${hideOnSuccess} independently of successful completion`, async (t) => {
+        const f = await fixture(t, driver, { ...policy, hide_on_success: hideOnSuccess });
+        const recipe = await f.store.getRecipe(ORG, f.recipe.id);
+        await f.store.putRecipe({ ...recipe, hide_on_success: !hideOnSuccess });
+        await f.reopen();
+        assert.equal((await f.store.getWorkRun(ORG, f.run.id)).hide_on_success, hideOnSuccess);
+        assert.equal((await f.store.commitWorkObservation(f.input)).outcome, "applied");
+        assert.equal((await f.store.getDisposition(f.item.head_event_id)).disposition, "outside_current_work");
+        assert.equal((await f.store.getWorkItem(ORG, f.item.id)).acknowledged_run_id, undefined);
+        assert.equal((await f.store.getConversationPref(ORG, f.item.thread_id))?.hidden ?? false, hideOnSuccess);
+        await f.reopen();
+        const item = await f.store.getWorkItem(ORG, f.item.id);
+        const run = await f.store.getWorkRun(ORG, f.run.id);
+        assert.equal((await f.store.acknowledgeWorkResult({
+          expected_item: item, run_id: run.id, trigger_event_id: item.head_event_id,
+          expected_version: item.version, expected_run_version: run.version,
+          command_id: "ack-frozen-visibility-result", issued_at: LATER, now: LATER,
+        })).outcome, "applied");
+        assert.equal((await f.store.getConversationPref(ORG, f.item.thread_id))?.hidden ?? false, hideOnSuccess);
+      });
+    }
 
     it("atomically closes successful work without human acknowledgment and reopens for new work", async (t) => {
       const f = await fixture(t, driver, policy);
@@ -5712,7 +5735,7 @@ it("fences competing rule selections across independent SQLite writer workers", 
   assert.equal((await second.listWorkRuns(ORG, item.id)).length, 2);
 });
 
-it("migrates the v57 delivery table without changing request identities or inventing snapshots", async (t) => {
+it("migrates the v59 delivery table without changing request identities or inventing snapshots", async (t) => {
   const root = join(process.cwd(), `.test-work-ledger-migration-${randomUUID()}`);
   await mkdir(root, { recursive: true });
   const path = join(root, "authority.db");
@@ -5725,7 +5748,7 @@ it("migrates the v57 delivery table without changing request identities or inven
   db.function("conversation_id", (source, externalId, fallbackId) =>
     conversationId(source, externalId, fallbackId));
   db.pragma("foreign_keys = ON");
-  for (const migration of MIGRATIONS.filter((migration) => migration.version <= 57)) {
+  for (const migration of MIGRATIONS.filter((migration) => migration.version <= 59)) {
     db.exec(migration.sql);
   }
   db.prepare(`INSERT INTO work_items (
@@ -5741,7 +5764,7 @@ it("migrates the v57 delivery table without changing request identities or inven
     '{"summary":"Original result"}', 'original-key', '{"accepted":true,"rpc_id":"original-receipt"}', ?, ?)`)
     .run(ORG, NOW, NOW);
   const before = db.prepare("SELECT * FROM work_deliveries").get();
-  db.pragma("user_version = 57");
+  db.pragma("user_version = 59");
   db.close();
   store = new SqliteAuthorityStore(path);
   const inspect = new Database(path, { readonly: true });

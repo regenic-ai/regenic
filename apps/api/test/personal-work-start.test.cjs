@@ -329,6 +329,23 @@ async function observeRun(authority, item, run, status, result) {
 }
 
 describe("durable executor start", () => {
+  it("reserves SQLite policy v1 with the rule's frozen keep-visible preference", async (t) => {
+    const f = await fixture(t, undefined, { withTrigger: true });
+    t.mock.method(f.runtime, "getOptions", () => ({ database: f.path }));
+    await f.ports.authority.putRecipe({ ...f.recipe, hide_on_success: false });
+    const service = f.service();
+    t.mock.method(service.channel, "evidenceText", f.channel.evidenceText);
+    t.mock.method(service.channel, "contextFor", f.channel.contextFor);
+    t.mock.method(service.waits, "attach", () => {});
+    const started = await submitRun(service, f.item.id, f.item.version ?? 0);
+    const run = await f.ports.authority.getWorkRun(ORG, started.run.id);
+    assert.equal(run.completion_policy_version, 1);
+    assert.equal(run.hide_on_success, false);
+    await f.ports.authority.putRecipe({ ...f.recipe, hide_on_success: true });
+    f.reopen();
+    assert.equal((await f.ports.authority.getWorkRun(ORG, run.id)).hide_on_success, false);
+  });
+
   it("publishes dismissal lifecycle effects only after the authority commit", async (t) => {
     const f = await fixture(t);
     const updated = [];

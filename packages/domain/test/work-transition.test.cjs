@@ -608,6 +608,9 @@ describe("work observation transitions", () => {
     assert.throws(() => assertWorkRunWrite({
       ...run, completion_policy_version: 1,
     }, run), /immutable/);
+    assert.throws(() => assertWorkRunWrite({
+      ...run, hide_on_success: false,
+    }, run), /immutable/);
     assert.throws(() => assertWorkRunWrite(run, {
       ...run, completion_policy_version: 1,
     }), /immutable/);

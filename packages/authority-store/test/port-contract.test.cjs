@@ -976,6 +976,91 @@ for (const driver of drivers) {
       assert.equal(saved.recipe.name, "Current edit");
     });
 
+    it("pages push candidates by event identity, including auto pending but not human exclusions", async () => {
+      const { store, orgId } = await openBoundStore();
+      const at = "2026-08-30T00:00:00.000Z";
+      const variants = [
+        ["current_work", [], "room"],
+        ["pending", ["needs_review"], "room"],
+        ["pending", ["policy_default_personal_attention"], "folded"],
+        ["pending", ["needs_review", "human_triage"], "room"],
+        ["outside_current_work", [], "room"],
+        ["current_work", [TASK_INBOX_REASON], "room"],
+        ["current_work", [], "hidden"],
+      ];
+      for (const [i, [disposition, reason_codes, target]] of variants.entries()) {
+        const event = await store.append({
+          id: `candidate-${i}`, org_id: orgId, source: "synthetic",
+          external_id: `${target}:${i}`, thread_id: `synthetic:${target}`,
+          actor_id: "person", required_scope_ids: [], content_hash: HASH_A,
+          content_media_type: "text/plain", content_byte_size: 1,
+          occurred_at: at, expected_head_id: null,
+        });
+        await store.putDispositionIfAbsent({
+          event_id: event.id, org_id: orgId, disposition, reason_codes,
+          layer: "L1_event", score: 1, decided_at: at,
+        });
+      }
+      await store.setConversationVisibility({
+        org_id: orgId, thread_id: "synthetic:hidden", hidden: true,
+        expected_version: 0, command_id: "hide-push-candidate", issued_at: at, updated_at: at,
+      });
+      await store.setConversationPolicyVisibility({
+        org_id: orgId, thread_id: "synthetic:folded", hidden: true,
+        expected_visibility_version: 0, updated_at: at,
+      });
+      const query = { tasks: false, needs_work: true, push_candidates: true, limit: 2 };
+      const recent = await store.listInbox(orgId, query);
+      assert.deepEqual(recent.map((row) => row.event.id), ["candidate-1", "candidate-2"]);
+      const older = await store.listInbox(orgId, {
+        ...query, before: at, before_id: recent[0].event.id,
+      });
+      assert.deepEqual(older.map((row) => row.event.id), ["candidate-0"]);
+      assert.deepEqual((await store.listInbox(orgId, { tasks: false })).map((row) => row.event.id),
+        ["candidate-0"]);
+      assert.deepEqual(await store.listInbox(orgId, {
+        ...query, thread_ids: ["synthetic:hidden"],
+      }), []);
+      await store.putRecipe({
+        id: "push-candidate-rule", org_id: orgId, name: "Handle candidate",
+        match: { record_class: "utterance" }, trigger: { kind: "manual" },
+        executor_type: "test", executor_config: {}, can_write_back: false,
+        include_context: false, enabled: true, created_at: at, updated_at: at,
+      });
+      const handled = await createTestWorkItem(store, {
+        id: "handled", org_id: orgId, thread_id: "synthetic:room",
+        recipe_id: "push-candidate-rule",
+        unit_key: "candidate-1", head_event_id: "candidate-1",
+        record_class: "utterance", thread_facet: "chat", status: "open",
+        created_at: at, updated_at: at,
+      });
+      const decision = await store.getDisposition("candidate-1");
+      await store.transitionDisposition({
+        expected: decision, decision: { ...decision, disposition: "current_work" },
+        command: { org_id: orgId, event_id: "candidate-1", action: "triage",
+          disposition: "current_work", command_id: "accept-handled-candidate", issued_at: at },
+      });
+      assert.equal(await store.claimWorkRunStart({
+        expected_item: handled.item,
+        run: { id: "handled-run", org_id: orgId, work_item_id: handled.item.id,
+          recipe_id: "push-candidate-rule", executor_type: "test", status: "running",
+          start_state: "pending", created_at: at, updated_at: at },
+      }), true);
+      const submitted = await store.checkpointWorkRunStart({
+        expected_item: await store.getWorkItem(orgId, handled.item.id),
+        expected_run: await store.getWorkRun(orgId, "handled-run"),
+        kind: "submitted", external_run_id: "external-handled", now: at,
+      });
+      assert.equal(submitted.outcome, "applied");
+      assert.equal((await store.commitWorkObservation({
+        expected_item: submitted.item, expected_run: submitted.run,
+        handle: { status: "completed", external_run_id: "external-handled", result: { summary: "Handled" } },
+        can_write_back: false, trigger_kind: "manual", now: at,
+      })).outcome, "applied");
+      assert.deepEqual((await store.listInbox(orgId, query)).map((row) => row.event.id),
+        ["candidate-0", "candidate-2"]);
+    });
+
     it("restores shared-body artifacts through lifecycle transitions and preview reads", async () => {
       const { store, orgId } = await openBoundStore();
       const reference = {
@@ -1549,6 +1634,15 @@ for (const driver of drivers) {
         work_item_id: itemId,
         query: "Who was selected?",
         event_ids: ["event-1", "event-2"],
+        scope: {
+          intent: "aggregate",
+          complete: true,
+          total_count: 2,
+          included_count: 2,
+          omitted_count: 0,
+          occurred_after: "2026-08-01T00:00:00.000Z",
+          occurred_before: "2026-08-24T00:00:00.000Z",
+        },
         created_at: now,
         updated_at: now,
       };

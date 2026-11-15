@@ -24,6 +24,8 @@ import type {
 } from "@regenic/domain";
 import {
   conversationId,
+  isWorkTriggerDecision,
+  isFinishedWorkTriggerDecision,
   recipeTriggerOf,
   isRecipeTriggerKind,
   pullScheduleColumns,
@@ -178,8 +180,8 @@ function writeRecipe(db: Database.Database, recipe: Recipe, insertOnly = false):
             can_write_back, include_context, enabled, trigger_kind,
             trigger_interval_ms, trigger_at_minute, trigger_weekdays, trigger_timezone,
             trigger_coalesce, max_concurrent, next_run_at, created_at, updated_at,
-            write_back_thread_id
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            write_back_thread_id, hide_on_success
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(id) DO ${insertOnly ? "NOTHING" : `UPDATE SET
             name = excluded.name,
             match_json = excluded.match_json,
@@ -197,6 +199,7 @@ function writeRecipe(db: Database.Database, recipe: Recipe, insertOnly = false):
             trigger_coalesce = excluded.trigger_coalesce,
             max_concurrent = excluded.max_concurrent,
             next_run_at = excluded.next_run_at,
+            hide_on_success = excluded.hide_on_success,
             updated_at = excluded.updated_at`}
         `,
       )
@@ -221,6 +224,7 @@ function writeRecipe(db: Database.Database, recipe: Recipe, insertOnly = false):
         recipe.created_at,
         recipe.updated_at,
         recipe.write_back_thread_id ?? null,
+        recipe.hide_on_success === false ? 0 : 1,
       );
     return result.changes > 0;
   }
@@ -306,9 +310,10 @@ export async function createWorkItem(db: Database.Database, input: WorkItemCreat
     if (!savedRecipe || !savedItem) throw new Error("Created work disappeared inside its transaction");
     const answer = result.search_answer;
     const savedAnswer = answer ? db.prepare(`INSERT INTO search_answers (
-      id, org_id, work_item_id, query, event_ids_json, outcome, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?) RETURNING *`).get(
+      id, org_id, work_item_id, query, event_ids_json, scope_json, outcome, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?) RETURNING *`).get(
       answer.id, answer.org_id, answer.work_item_id, answer.query, JSON.stringify(answer.event_ids),
+      answer.scope ? JSON.stringify(answer.scope) : null,
       answer.created_at, answer.updated_at,
     ) as SearchAnswerRow | undefined : undefined;
     if (answer && !savedAnswer) throw new Error("Created search answer disappeared inside its transaction");
@@ -345,7 +350,7 @@ export function observeWorkItemUnlocked(
     .get(orgId, input.item.thread_id, input.item.unit_key, input.item.id));
   const trigger = input.item.head_event_id
     ? db.prepare(`SELECT e.id, e.org_id, e.source, e.external_id, e.thread_id,
-        e.operation, d.disposition
+        e.operation, d.disposition, d.reason_codes_json
         FROM events e LEFT JOIN message_dispositions d ON d.event_id = e.id
         WHERE e.id = ? AND EXISTS (
           SELECT 1 FROM source_heads h WHERE h.current_event_id = e.id
@@ -358,13 +363,20 @@ export function observeWorkItemUnlocked(
           thread_id: string | null;
           operation: string;
           disposition: string | null;
+          reason_codes_json: string;
         } | undefined
+    : undefined;
+  const triggerRecipe = trigger?.disposition === "pending" && input.item.recipe_id
+    ? db.prepare("SELECT * FROM recipes WHERE org_id = ? AND id = ?")
+      .get(orgId, input.item.recipe_id) as RecipeRow | undefined
     : undefined;
   const triggerIsCurrentWork = Boolean(
     trigger &&
     trigger.org_id === orgId &&
     trigger.operation !== "tombstone" &&
-    trigger.disposition === "current_work" &&
+    isWorkTriggerDecision(trigger.disposition,
+      trigger.reason_codes_json ? JSON.parse(trigger.reason_codes_json) : [],
+      input.item, triggerRecipe ? toRecipe(triggerRecipe) : null) &&
     (trigger.thread_id ?? conversationId(
       trigger.source,
       trigger.external_id,
@@ -652,8 +664,8 @@ function writeWorkRun(db: Database.Database, run: WorkRun, advanceVersion = fals
             id, org_id, work_item_id, recipe_id, executor_type, external_run_id,
             agent_thread_id, status, start_state, result_json, created_at, updated_at, version,
             write_back_required, write_back_target_json, trigger_kind, executor_config_json,
-            include_context, completion_policy_version
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            include_context, completion_policy_version, hide_on_success
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(id) DO UPDATE SET
             recipe_id = excluded.recipe_id,
             executor_type = excluded.executor_type,
@@ -674,6 +686,7 @@ function writeWorkRun(db: Database.Database, run: WorkRun, advanceVersion = fals
             AND work_runs.executor_config_json IS excluded.executor_config_json
             AND work_runs.include_context IS excluded.include_context
             AND work_runs.completion_policy_version IS excluded.completion_policy_version
+            AND work_runs.hide_on_success IS excluded.hide_on_success
           RETURNING *
         `,
       )
@@ -697,6 +710,7 @@ function writeWorkRun(db: Database.Database, run: WorkRun, advanceVersion = fals
         run.executor_config ? canonicalContextJson(run.executor_config) : null,
         run.include_context === undefined ? null : Number(run.include_context),
         run.completion_policy_version ?? null,
+        run.hide_on_success === undefined ? null : Number(run.hide_on_success),
       ) as WorkRunRow | undefined;
     if (!row) throw new Error("Work run identity and write-back snapshot are immutable");
     return toWorkRun(row);
@@ -844,16 +858,17 @@ function finishSuccessfulWorkWithinTransaction(
   const dedupeKey = JSON.stringify(["source_event", item.head_event_id, "work_completed", run.id, 1]);
   if (db.prepare("SELECT 1 FROM conversation_lifecycle_events WHERE org_id = ? AND dedupe_key = ?")
     .get(orgId, dedupeKey)) return;
-  const trigger = db.prepare(`SELECT d.version, d.reason_codes_json FROM message_dispositions d
+  const trigger = db.prepare(`SELECT d.version, d.disposition, d.reason_codes_json FROM message_dispositions d
     JOIN events e ON e.id = d.event_id AND e.org_id = d.org_id
-    WHERE d.org_id = ? AND d.event_id = ? AND d.disposition = 'current_work'
+    WHERE d.org_id = ? AND d.event_id = ?
       AND e.operation <> 'tombstone'
       AND COALESCE(e.thread_id, conversation_id(e.source, e.external_id, e.id)) = ?
       AND EXISTS (SELECT 1 FROM source_heads h WHERE h.org_id = e.org_id AND h.current_event_id = e.id)`)
     .get(orgId, item.head_event_id, item.thread_id) as {
-      version: number; reason_codes_json: string;
+      version: number; disposition: string; reason_codes_json: string;
     } | undefined;
-  if (!trigger) return;
+  if (!trigger || !isFinishedWorkTriggerDecision(trigger.disposition,
+    JSON.parse(trigger.reason_codes_json), item, run)) return;
   const reasonCodes = [...new Set([
     ...JSON.parse(trigger.reason_codes_json) as string[], "work_completed",
   ])];
@@ -873,7 +888,9 @@ function finishSuccessfulWorkWithinTransaction(
       JSON.stringify({ work_item_id: item.id, run_id: run.id, completion_policy_version: 1,
         disposition_version: trigger.version + 1,
         disposition: "outside_current_work", reason: "work_completed" }), now, now);
-  foldWorkThreadWithinTransaction(db, orgId, item.thread_id, item.visibility_intent_version ?? 0, now);
+  if (run.hide_on_success !== false) {
+    foldWorkThreadWithinTransaction(db, orgId, item.thread_id, item.visibility_intent_version ?? 0, now);
+  }
 }
 
 export async function claimCancellationJobs(
@@ -1025,7 +1042,8 @@ export async function acknowledgeWorkResult(
       delivery: deliveryRow ? toWorkDelivery(deliveryRow) : null,
       trigger_is_current_work: Boolean(triggerRow && item
         && (triggerRow.thread_id ?? conversationId(triggerRow.source, triggerRow.external_id, input.trigger_event_id)) === item.thread_id
-        && triggerRow.disposition === "current_work"),
+        && isFinishedWorkTriggerDecision(triggerRow.disposition,
+          JSON.parse(triggerRow.reason_codes_json), item, runRow ? toWorkRun(runRow) : null)),
       trigger_is_completed_work: Boolean(triggerRow && item
         && (triggerRow.thread_id ?? conversationId(triggerRow.source, triggerRow.external_id, input.trigger_event_id)) === item.thread_id
         && triggerRow.disposition === "outside_current_work"
@@ -1040,7 +1058,7 @@ export async function acknowledgeWorkResult(
     ])];
     const dispositionChanged = db.prepare(`UPDATE message_dispositions SET disposition = 'outside_current_work',
       reason_codes_json = ?, decided_at = ?, version = version + 1
-      WHERE org_id = ? AND event_id = ? AND disposition = 'current_work'`)
+      WHERE org_id = ? AND event_id = ? AND disposition IN ('current_work', 'pending')`)
       .run(JSON.stringify(reasonCodes), input.now, orgId, input.trigger_event_id).changes > 0;
     refreshThreadHeadWithinTransaction(db, orgId, item!.thread_id);
     const savedRow = db.prepare(`UPDATE work_items SET acknowledged_run_id = ?, version = ?, updated_at = ?
@@ -1060,7 +1078,13 @@ export async function acknowledgeWorkResult(
         hidden: number; hidden_reason: string | null; visibility_version: number;
       } | undefined;
     const visibilityVersion = pref?.visibility_version ?? 0;
+    const recipeVisibility = item?.recipe_id
+      ? db.prepare("SELECT hide_on_success FROM recipes WHERE org_id = ? AND id = ?")
+        .get(orgId, item.recipe_id) as { hide_on_success: number } | undefined
+      : undefined;
+    const hideOnSuccess = (runRow?.hide_on_success ?? recipeVisibility?.hide_on_success ?? 1) === 1;
     if (savedItem.status === "done" && dispositionChanged
+      && hideOnSuccess
       && !remainingCurrentWork && !unfinishedWork && !unresolvedDelivery
       && visibilityVersion === (item!.visibility_intent_version ?? 0)
       && !(pref?.hidden === 1 && pref.hidden_reason !== "policy")) {
@@ -1189,7 +1213,7 @@ export async function claimWorkRunStart(db: Database.Database, input: WorkRunSta
     const workItem = toWorkItem(item);
     const trigger = input.require_current_work_trigger && workItem.head_event_id
       ? db.prepare(`SELECT e.id, e.org_id, e.source, e.external_id, e.thread_id,
-          e.operation, d.disposition
+          e.operation, d.disposition, d.reason_codes_json
           FROM events e JOIN message_dispositions d ON d.event_id = e.id
           WHERE e.id = ? AND EXISTS (
             SELECT 1 FROM source_heads h WHERE h.current_event_id = e.id
@@ -1202,13 +1226,19 @@ export async function claimWorkRunStart(db: Database.Database, input: WorkRunSta
             thread_id: string | null;
             operation: string;
             disposition: string;
+            reason_codes_json: string;
           } | undefined
+      : undefined;
+    const triggerRecipe = trigger?.disposition === "pending"
+      ? db.prepare("SELECT * FROM recipes WHERE org_id = ? AND id = ?")
+        .get(run.org_id, run.recipe_id) as RecipeRow | undefined
       : undefined;
     const triggerIsCurrentWork = Boolean(
       trigger &&
       trigger.org_id === run.org_id &&
       trigger.operation !== "tombstone" &&
-      trigger.disposition === "current_work" &&
+      isWorkTriggerDecision(trigger.disposition, JSON.parse(trigger.reason_codes_json),
+        workItem, triggerRecipe ? toRecipe(triggerRecipe) : null) &&
       (trigger.thread_id ?? conversationId(
         trigger.source,
         trigger.external_id,
@@ -1334,12 +1364,13 @@ export async function putSearchAnswer(
 ): Promise<SearchAnswerRecord> {
   const saved = db.prepare(`
     INSERT INTO search_answers (
-      id, org_id, work_item_id, query, event_ids_json, outcome, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      id, org_id, work_item_id, query, event_ids_json, scope_json, outcome, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       work_item_id = excluded.work_item_id,
       query = excluded.query,
       event_ids_json = excluded.event_ids_json,
+      scope_json = excluded.scope_json,
       outcome = excluded.outcome,
       updated_at = excluded.updated_at
     WHERE search_answers.org_id = excluded.org_id
@@ -1352,6 +1383,7 @@ export async function putSearchAnswer(
     record.work_item_id,
     record.query,
     JSON.stringify(record.event_ids),
+    record.scope ? JSON.stringify(record.scope) : null,
     record.outcome ?? null,
     record.created_at,
     record.updated_at,
@@ -1668,6 +1700,7 @@ interface RecipeRow {
   can_write_back: number;
   write_back_thread_id: string | null;
   include_context: number;
+  hide_on_success: number;
   enabled: number;
   trigger_kind: string | null;
   trigger_interval_ms: number | null;
@@ -1744,6 +1777,7 @@ interface WorkRunRow {
   executor_config_json: string | null;
   include_context: number | null;
   completion_policy_version: WorkRun["completion_policy_version"] | null;
+  hide_on_success: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -1754,6 +1788,7 @@ interface SearchAnswerRow {
   work_item_id: string;
   query: string;
   event_ids_json: string;
+  scope_json: string | null;
   outcome: SearchAnswerRecord["outcome"] | null;
   created_at: string;
   updated_at: string;
@@ -1797,6 +1832,7 @@ function toRecipe(row: RecipeRow): Recipe {
       ? { write_back_thread_id: row.write_back_thread_id }
       : {}),
     include_context: row.include_context === 1,
+    hide_on_success: row.hide_on_success === 1,
     enabled: row.enabled === 1,
     ...(row.max_concurrent && row.max_concurrent > 0
       ? { max_concurrent: row.max_concurrent }
@@ -1850,6 +1886,7 @@ function toWorkRun(row: WorkRunRow): WorkRun {
       : {}),
     ...(row.include_context !== null ? { include_context: row.include_context === 1 } : {}),
     ...(row.completion_policy_version !== null ? { completion_policy_version: row.completion_policy_version } : {}),
+    ...(row.hide_on_success !== null ? { hide_on_success: row.hide_on_success === 1 } : {}),
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -1862,6 +1899,9 @@ function toSearchAnswer(row: SearchAnswerRow): SearchAnswerRecord {
     work_item_id: row.work_item_id,
     query: row.query,
     event_ids: JSON.parse(row.event_ids_json) as string[],
+    ...(row.scope_json
+      ? { scope: JSON.parse(row.scope_json) as SearchAnswerRecord["scope"] }
+      : {}),
     ...(row.outcome ? { outcome: row.outcome } : {}),
     created_at: row.created_at,
     updated_at: row.updated_at,

@@ -1,4 +1,5 @@
 import type { SyncLane } from "@regenic/domain";
+import type { PersonalSyncSettings } from "./personal-sync-settings";
 
 export const CATCH_UP_STREAMS_PER_TICK = 1;
 /** How many background latest polls this host runs at once. */
@@ -173,6 +174,7 @@ export function syncExecutionBudget(input: {
   lane: SyncLane;
   pages: number;
   catchUpPages?: number;
+  settings?: PersonalSyncSettings;
 }): { pages: number; concurrency: number } {
   const pages =
     input.lane === "history" || input.lane === "media"
@@ -181,20 +183,21 @@ export function syncExecutionBudget(input: {
   if (input.lane === "media") {
     return {
       pages,
-      concurrency: input.humanIdle ? IDLE_MEDIA_CONCURRENCY : BUSY_MEDIA_CONCURRENCY,
+      concurrency: input.settings?.media_concurrency ??
+        (input.humanIdle ? IDLE_MEDIA_CONCURRENCY : BUSY_MEDIA_CONCURRENCY),
     };
   }
   if (input.lane === "history") {
-    return { pages, concurrency: IDLE_HISTORY_STREAM_CONCURRENCY };
+    return { pages, concurrency: input.settings?.history_concurrency ?? IDLE_HISTORY_STREAM_CONCURRENCY };
   }
   // Live/interactive must stay responsive while the human is present; only
   // catalog pays the busy catch-up tax.
   if (input.lane === "live" || input.lane === "interactive") {
     return {
       pages,
-      concurrency: input.humanIdle
+      concurrency: input.settings?.live_concurrency ?? (input.humanIdle
         ? IDLE_LIVE_STREAM_CONCURRENCY
-        : LIVE_STREAM_CONCURRENCY,
+        : LIVE_STREAM_CONCURRENCY),
     };
   }
   const concurrency = input.humanIdle

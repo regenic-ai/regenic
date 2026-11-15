@@ -176,9 +176,9 @@ async function startPersonalApiProcess(t, database, blobRoot, {
 }
 
 describe("personal /v1/me", { concurrency: 1 }, () => {
-  for (const [autoComplete, resolution] of [false, true].flatMap((policy) =>
-    ["retry", "sent", "not_sent"].map((resolution) => [policy, resolution]))) {
-    it(`keeps required write-back visible until delivery succeeds (${resolution}, ${autoComplete ? "automatic-v1" : "legacy acknowledgment"})`, async (t) => {
+  for (const [autoComplete, resolution, hideOnSuccess] of [[false, true], [true, true], [true, false]].flatMap(([policy, hide]) =>
+    ["retry", "sent", "not_sent"].map((resolution) => [policy, resolution, hide]))) {
+    it(`keeps required write-back visible until delivery succeeds (${resolution}, ${autoComplete ? "automatic-v1" : "legacy acknowledgment"}${hideOnSuccess ? "" : ", keep-visible"})`, async (t) => {
       const root = await createRoot();
       const database = join(root, "authority.db");
       const blobRoot = join(root, "blobs");
@@ -252,6 +252,7 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
         match: { thread_id: threadId }, trigger: { kind: "manual" },
         executor_type: "test", executor_config: {}, include_context: false,
         can_write_back: true, write_back_thread_id: destinationId,
+        hide_on_success: hideOnSuccess,
         enabled: false, created_at: now, updated_at: now,
       };
       await authority.putRecipe(recipe);
@@ -269,6 +270,7 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
           installation_id: "required-result-sender", source, target: "results",
         },
         trigger_kind: "manual", created_at: now, updated_at: now,
+        hide_on_success: hideOnSuccess,
         ...(autoComplete ? { completion_policy_version: 1 } : {}),
       };
       assert.equal(await authority.claimWorkRunStart({
@@ -353,15 +355,20 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
       const recovered = await post(recoveryPath, recoveryCommand);
       assert.equal(recovered.status, 201, await recovered.clone().text());
       row = autoComplete
-        ? (await inbox("hidden")).find((entry) => entry.thread_id === threadId)
+        ? (await inbox(hideOnSuccess ? "hidden" : "shown")).find((entry) => entry.thread_id === threadId)
         : await assertVisible("acked", "sent");
       assert.ok(row);
       if (autoComplete) {
         assert.equal(row.work.auto_completed, true);
         assert.equal(row.work.acknowledged_run_id, undefined);
         assert.equal((await authority.getDisposition(eventId)).disposition, "outside_current_work");
-        assert.equal((await authority.getConversationPref("local-owner", threadId)).hidden_reason, "policy");
-        assert.equal((await inbox()).some((entry) => entry.thread_id === threadId), false);
+        assert.equal((await authority.getConversationPref("local-owner", threadId))?.hidden ?? false, hideOnSuccess);
+        assert.equal((await inbox()).some((entry) => entry.thread_id === threadId), !hideOnSuccess);
+        const headsResponse = await fetch(`${origin}/v1/me/inbox?heads=true&split=true&list=${hideOnSuccess ? "hidden" : "shown"}`);
+        assert.equal(headsResponse.status, 200);
+        const heads = await headsResponse.json();
+        assert.ok([...heads.pinned, ...heads.live, ...heads.active_work]
+          .some((entry) => entry.thread_id === threadId));
       }
       const sent = await authority.getWorkDelivery("local-owner", delivery.id);
       assert.equal(sent.run_id, run.id);
@@ -380,11 +387,11 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
       const response = await acknowledge(row, "ack-required-result");
       assert.equal(response.status, 201, await response.clone().text());
       assert.equal((await response.json()).work_item.acknowledged_run_id, run.id);
-      assert.equal((await inbox()).some((entry) => entry.thread_id === threadId), false);
-      assert.equal((await inbox("hidden")).some((entry) => entry.thread_id === threadId), true);
+      assert.equal((await inbox()).some((entry) => entry.thread_id === threadId), !hideOnSuccess);
+      assert.equal((await inbox("hidden")).some((entry) => entry.thread_id === threadId), hideOnSuccess);
       const pref = await authority.getConversationPref("local-owner", threadId);
-      assert.equal(pref.hidden, true);
-      assert.equal(pref.hidden_reason, "policy");
+      assert.equal(pref?.hidden ?? false, hideOnSuccess);
+      if (hideOnSuccess) assert.equal(pref.hidden_reason, "policy");
       assert.equal((await authority.getDisposition(eventId)).disposition, "outside_current_work");
       assert.equal((await authority.getConversationPref("local-owner", destinationId))?.hidden ?? false, false);
       assert.equal((await acknowledge(row, "ack-required-result")).status, 201);

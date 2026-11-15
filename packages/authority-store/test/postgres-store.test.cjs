@@ -602,7 +602,7 @@ describePg("postgres authority store", () => {
     try {
       await client.query("BEGIN");
       await client.query("UPDATE thread_heads SET has_current_work = TRUE WHERE org_id = $1", [orgId]);
-      await client.query(PG_MIGRATIONS.find((migration) => migration.version === 68).sql);
+      await client.query(PG_MIGRATIONS.find((migration) => migration.version === 70).sql);
       await writer.query("BEGIN");
       await writer.query("SET LOCAL lock_timeout = '100ms'");
       await assert.rejects(

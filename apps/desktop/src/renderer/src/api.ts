@@ -17,6 +17,8 @@ import type {
   MessageDisposition,
   MessageReceipt,
   PersonalDispatchPolicy,
+  PersonalSyncSettings,
+  PersonalSyncSettingsView,
   PersonalEngineView,
   PersonalFollowUpPolicy,
   PersonalFollowUpView,
@@ -1416,6 +1418,7 @@ export async function saveRecipe(
     executor_config?: Record<string, string>;
     can_write_back: boolean;
     write_back_thread_id?: string | null;
+    hide_on_success: boolean;
     include_context: boolean;
     max_concurrent?: number | null;
     enabled: boolean;
@@ -1777,7 +1780,13 @@ export async function startSearchAnswer(
     query: string;
     conversations: Array<{ thread_id: string; event_ids: string[] }>;
     executor_type?: string;
-    filters?: { occurred_after: string; occurred_before: string };
+    filters?: {
+      occurred_after: string;
+      occurred_before: string;
+      sources?: string[];
+      thread_ids?: string[];
+    };
+    intent?: "lookup" | "aggregate" | "list";
   },
   signal?: AbortSignal,
 ): Promise<PersonalSearchAnswer> {
@@ -2054,6 +2063,24 @@ export async function fetchDispatchPolicy(): Promise<PersonalDispatchPolicy> {
     throw new Error(`dispatch policy ${response.status}`);
   }
   return response.json() as Promise<PersonalDispatchPolicy>;
+}
+
+export async function fetchSyncSettings(): Promise<PersonalSyncSettingsView> {
+  const response = await fetch(`${origin()}/v1/me/sync-settings`);
+  if (!response.ok) throw new Error(`sync settings ${response.status}`);
+  return response.json() as Promise<PersonalSyncSettingsView>;
+}
+
+export async function saveSyncSettings(
+  settings: PersonalSyncSettings | null,
+): Promise<PersonalSyncSettingsView> {
+  const response = await fetch(`${origin()}/v1/me/sync-settings`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ settings }),
+  });
+  if (!response.ok) throw new Error(`sync settings ${response.status}`);
+  return response.json() as Promise<PersonalSyncSettingsView>;
 }
 
 export async function saveDispatchPolicy(

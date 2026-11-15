@@ -51,6 +51,17 @@ export interface FeishuDownloadedFile {
   filename?: string;
 }
 
+export interface FeishuChatMember {
+  id: string;
+  name: string;
+}
+
+export interface FeishuChatMemberList {
+  items: FeishuChatMember[];
+  /** False when later pages were not read. Those lists must not resolve `@名字`. */
+  complete: boolean;
+}
+
 export interface FeishuSendMessageInput {
   chat_id: string;
   msg_type: string;
@@ -123,6 +134,7 @@ export interface FeishuImClient {
     uuid?: string;
   }): Promise<{ message_id: string }>;
   sendMessage?(input: FeishuSendMessageInput): Promise<{ message_id: string }>;
+  listChatMembers?(chatId: string): Promise<FeishuChatMemberList>;
   uploadImage?(input: FeishuUploadFile): Promise<{ image_key: string }>;
   uploadFile?(input: FeishuUploadFile): Promise<{ file_key: string }>;
   downloadResource?(input: FeishuDownloadResource): Promise<FeishuDownloadedFile>;
@@ -684,6 +696,60 @@ export class LarkCliClient implements FeishuImClient {
       throw new FeishuApiError("lark-cli send did not return message_id");
     }
     return { message_id: messageId };
+  }
+
+  async listChatMembers(chatId: string): Promise<FeishuChatMemberList> {
+    const id = chatId.trim();
+    if (!id) {
+      return { items: [], complete: true };
+    }
+    const now = Date.now();
+    const cached = chatMemberCache.get(id);
+    if (cached && now - cached.at < CHAT_MEMBER_TTL_MS) {
+      return cached.list;
+    }
+    const inflight = chatMemberInflight.get(id);
+    if (inflight) {
+      return inflight;
+    }
+    const job = this.fetchChatMembers(id)
+      .then((list) => {
+        chatMemberCache.set(id, { list, at: Date.now() });
+        return list;
+      })
+      .finally(() => {
+        if (chatMemberInflight.get(id) === job) {
+          chatMemberInflight.delete(id);
+        }
+      });
+    chatMemberInflight.set(id, job);
+    return job;
+  }
+
+  private async fetchChatMembers(chatId: string): Promise<FeishuChatMemberList> {
+    const items: FeishuChatMember[] = [];
+    let pageToken: string | undefined;
+    for (let page = 0; page < 5; page += 1) {
+      const payload = await this.request({
+        method: "GET",
+        path: `/open-apis/im/v1/chats/${encodeURIComponent(chatId)}/members`,
+        params: {
+          member_id_type: "open_id",
+          page_size: 100,
+          ...(pageToken ? { page_token: pageToken } : {}),
+        },
+      });
+      const parsed = parseChatMembers(payload);
+      items.push(...parsed.items);
+      if (!parsed.has_more) {
+        return { items, complete: true };
+      }
+      if (!parsed.page_token) {
+        return { items, complete: false };
+      }
+      pageToken = parsed.page_token;
+    }
+    return { items, complete: false };
   }
 
   async uploadImage(input: FeishuUploadFile): Promise<{ image_key: string }> {
@@ -1378,7 +1444,10 @@ const USER_NAME_TTL_MS = 10 * 60 * 1000;
 const CHAT_INFO_TTL_MS = 10 * 60 * 1000;
 const CHAT_LIST_TTL_MS = 5 * 60_000;
 const RECENT_CHAT_LIST_TTL_MS = 2 * 60_000;
+const CHAT_MEMBER_TTL_MS = 2 * 60_000;
 const userNameCache = new Map<string, { name: string; at: number }>();
+const chatMemberCache = new Map<string, { list: FeishuChatMemberList; at: number }>();
+const chatMemberInflight = new Map<string, Promise<FeishuChatMemberList>>();
 const userNameInflight = new Map<string, Promise<Map<string, string>>>();
 const chatInfoCache = new Map<string, { chat: FeishuChat | null; at: number }>();
 const chatListCache = new Map<string, { at: number; chats: FeishuChat[] }>();
@@ -1387,6 +1456,11 @@ const chatListInflight = new Map<string, Promise<FeishuChat[]>>();
 export function resetFeishuUserNameCache(): void {
   userNameCache.clear();
   userNameInflight.clear();
+}
+
+export function resetFeishuChatMemberCache(): void {
+  chatMemberCache.clear();
+  chatMemberInflight.clear();
 }
 
 export function resetFeishuChatInfoCache(): void {
@@ -1465,6 +1539,40 @@ function normalizeChatTypes(types?: FeishuChatMode[]): FeishuChatMode[] {
     return ["group", "p2p"];
   }
   return (["group", "p2p"] as const).filter((type) => selected.has(type));
+}
+
+export function parseChatMembers(value: unknown): {
+  items: FeishuChatMember[];
+  has_more: boolean;
+  page_token?: string;
+} {
+  const root = isObject(value) && isObject(value.data) ? value.data : value;
+  if (!isObject(root)) {
+    throw new FeishuApiError("Feishu chat members response is invalid");
+  }
+  const items = Array.isArray(root.items)
+    ? root.items.flatMap((item) => parseChatMember(item))
+    : [];
+  return {
+    items,
+    has_more: root.has_more === true,
+    page_token: stringValue(root.page_token),
+  };
+}
+
+function parseChatMember(value: unknown): FeishuChatMember[] {
+  if (!isObject(value)) {
+    return [];
+  }
+  const id =
+    stringValue(value.member_id) ??
+    stringValue(value.open_id) ??
+    stringValue(value.user_id);
+  const name = stringValue(value.name);
+  if (!id || !name) {
+    return [];
+  }
+  return [{ id, name }];
 }
 
 export function parseHistoryPage(value: unknown): FeishuHistoryPage {

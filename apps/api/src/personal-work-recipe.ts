@@ -25,6 +25,7 @@ export interface RecipeInput {
   executor_config?: Record<string, JsonValue>;
   can_write_back?: boolean;
   write_back_thread_id?: string | null;
+  hide_on_success?: boolean;
   include_context?: boolean;
   max_concurrent?: number | null;
   enabled?: boolean;
@@ -80,6 +81,16 @@ export function normalizeRecipe(
       400,
     );
   }
+  if (
+    input.hide_on_success !== undefined &&
+    typeof input.hide_on_success !== "boolean"
+  ) {
+    throw new PersonalConnectorError(
+      "invalid_config",
+      "hide_on_success must be a boolean",
+      400,
+    );
+  }
   const writeBackThreadId =
     input.write_back_thread_id === undefined
       ? existing?.write_back_thread_id
@@ -94,6 +105,10 @@ export function normalizeRecipe(
     executor_config: input.executor_config ?? existing?.executor_config ?? {},
     can_write_back: input.can_write_back ?? existing?.can_write_back ?? pull,
     ...(writeBackThreadId ? { write_back_thread_id: writeBackThreadId } : {}),
+    hide_on_success:
+      input.hide_on_success ??
+      existing?.hide_on_success ??
+      Boolean(existing),
     include_context: input.include_context ?? existing?.include_context ?? pull,
     enabled: input.enabled ?? existing?.enabled ?? true,
     ...(max_concurrent ? { max_concurrent } : {}),

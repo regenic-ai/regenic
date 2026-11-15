@@ -14,6 +14,7 @@ export interface RecipeTransferItem {
   executor_config: Record<string, string>;
   can_write_back: boolean;
   write_back_thread_id?: string;
+  hide_on_success: boolean;
   include_context: boolean;
   max_concurrent?: number | null;
   enabled: boolean;
@@ -40,6 +41,7 @@ export function recipeToTransferItem(recipe: RecipeView): RecipeTransferItem {
     executor_config: config,
     can_write_back: recipe.can_write_back,
     ...(recipe.write_back_thread_id ? { write_back_thread_id: recipe.write_back_thread_id } : {}),
+    hide_on_success: recipe.hide_on_success ?? true,
     include_context: recipe.include_context,
     max_concurrent: recipe.max_concurrent ?? null,
     enabled: recipe.enabled,
@@ -190,6 +192,7 @@ function parseTransferItem(value: unknown): RecipeTransferItem | null {
     ...(typeof value.write_back_thread_id === "string"
       ? { write_back_thread_id: value.write_back_thread_id.trim() }
       : {}),
+    hide_on_success: value.hide_on_success === true,
     include_context: value.include_context === true,
     max_concurrent: max,
     enabled: value.enabled !== false,

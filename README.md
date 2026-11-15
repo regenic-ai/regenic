@@ -3,7 +3,7 @@
 **Bring work messages together. Search, organize, and process them your way.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Node.js Version](https://img.shields.io/badge/node-%3E%3D20-blue.svg)](https://nodejs.org/)
+[![Node.js Version](https://img.shields.io/badge/node-22.14%2B%20%7C%2024%2B-blue.svg)](https://nodejs.org/)
 [![pnpm](https://img.shields.io/badge/pnpm-9-blue.svg)](https://pnpm.io)
 
 [English](README.md) · [简体中文](README.zh-CN.md)
@@ -50,7 +50,7 @@ See the [product overview](docs/en/PRODUCT.md) and [roadmap](docs/en/ROADMAP.md)
 
 ## Quick start
 
-Requires **Node.js 20+** and **pnpm 9**. Run from source:
+Requires **Node.js 22.14+ (22.x) or 24+** and **pnpm 9**. Run from source:
 
 ```bash
 git clone https://github.com/regenic-ai/regenic.git

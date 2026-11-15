@@ -7,6 +7,11 @@ const {
   FeishuChatPollConnector,
   extractFeishuMedia,
   extractFeishuText,
+  applyFeishuPlainMentions,
+  feishuMentionNameIndex,
+  feishuMentionText,
+  feishuOutgoingBody,
+  feishuPlainMentionNames,
   feishuConversationKind,
   lastFeishuInbound,
   nextFeishuCursor,
@@ -1439,6 +1444,190 @@ describe("FeishuChatEgress", () => {
       rpc_id: "om_text",
       channel_message_ids: ["om_text", "om_image"],
     });
+  });
+
+  it("sends an <at> tag as a Feishu post mention", async () => {
+    const uploads = [];
+    const messages = [];
+    const texts = [];
+    const egress = new FeishuChatEgress(recordingClient(uploads, messages, texts), {
+      installation_id: "feishu-1",
+      chat_id: "oc_1",
+    });
+    const text = [
+      "<at user_id=\u201cou_fe497f2d8fa7522ce42f78109618ecbc\u201d>\u718a\u5cf0</at>",
+      "Sans | Software and AI",
+      "https://instagram.com/npmisans",
+      "\u8fbe\u4eba\u8fd9\u8fb9\u5df2\u786e\u8ba4\u63a5\u53d7\u5f53\u524d\u7684\u5408\u4f5c\u5185\u5bb9\uff0c\u672c\u6b21\u5408\u4f5c\u62a5\u4ef7\u4e3a 500 \u7f8e\u5143\u3002\u8bf7\u95ee\u60a8\u8fd9\u8fb9\u662f\u5426\u5e0c\u671b\u7ee7\u7eed\u63a8\u8fdb\uff1f",
+    ].join("\n");
+    await egress.send({
+      installation_id: "feishu-1",
+      content: [{ role: "body", media_type: "text/plain", text }],
+    });
+    assert.equal(texts.length, 0);
+    assert.equal(messages.length, 1);
+    assert.equal(messages[0].msg_type, "post");
+    assert.equal(messages[0].chat_id, "oc_1");
+    const paragraphs = messages[0].content.zh_cn.content;
+    assert.deepEqual(paragraphs[0], [{
+      tag: "at",
+      user_id: "ou_fe497f2d8fa7522ce42f78109618ecbc",
+      user_name: "\u718a\u5cf0",
+    }]);
+    assert.deepEqual(paragraphs[1], [{ tag: "text", text: "Sans | Software and AI" }]);
+    assert.equal(
+      extractFeishuText("post", JSON.stringify(messages[0].content)),
+      "@\u718a\u5cf0\nSans | Software and AI\nhttps://instagram.com/npmisans\n\u8fbe\u4eba\u8fd9\u8fb9\u5df2\u786e\u8ba4\u63a5\u53d7\u5f53\u524d\u7684\u5408\u4f5c\u5185\u5bb9\uff0c\u672c\u6b21\u5408\u4f5c\u62a5\u4ef7\u4e3a 500 \u7f8e\u5143\u3002\u8bf7\u95ee\u60a8\u8fd9\u8fb9\u662f\u5426\u5e0c\u671b\u7ee7\u7eed\u63a8\u8fdb\uff1f",
+    );
+  });
+
+  it("keeps a plain @name as text and falls back when post is unavailable", async () => {
+    assert.equal(feishuOutgoingBody("hello @\u718a\u5cf0").msg_type, "text");
+    const inline = feishuOutgoingBody('please <at user_id="ou_2">\u718a\u5cf0</at> look <at user_id="all"></at>');
+    assert.equal(inline.msg_type, "post");
+    assert.deepEqual(inline.content.zh_cn.content, [[
+      { tag: "text", text: "please " },
+      { tag: "at", user_id: "ou_2", user_name: "\u718a\u5cf0" },
+      { tag: "text", text: " look " },
+      { tag: "at", user_id: "all", user_name: "\u6240\u6709\u4eba" },
+    ]]);
+    assert.equal(
+      feishuMentionText('<at user_id="not an id">\u718a\u5cf0</at>'),
+      '<at user_id="not an id">\u718a\u5cf0</at>',
+    );
+    const calls = [];
+    const egress = new FeishuChatEgress(
+      {
+        async sendText(input) {
+          calls.push(input);
+          return { message_id: "om_text" };
+        },
+      },
+      { installation_id: "feishu-1", chat_id: "oc_1" },
+    );
+    await egress.send({
+      installation_id: "feishu-1",
+      content: [{
+        role: "body",
+        media_type: "text/plain",
+        text: '<at user_id="ou_2">@_user_1</at> \u770b\u4e00\u4e0b',
+      }],
+    });
+    assert.equal(calls[0].text, '<at user_id="ou_2"></at> \u770b\u4e00\u4e0b');
+  });
+
+  it("mentions a chat member when the copied @name is unique", async () => {
+    const messages = [];
+    const lookups = [];
+    const egress = new FeishuChatEgress(
+      {
+        async sendMessage(input) {
+          messages.push(input);
+          return { message_id: "om_post" };
+        },
+        async listChatMembers(chatId) {
+          lookups.push(chatId);
+          return {
+            complete: true,
+            items: [
+              { id: "ou_fe497f2d8fa7522ce42f78109618ecbc", name: "\u718a\u5cf0" },
+              { id: "ou_other", name: "Ada" },
+            ],
+          };
+        },
+      },
+      { installation_id: "feishu-1", chat_id: "oc_1" },
+    );
+    await egress.send({
+      installation_id: "feishu-1",
+      content: [{
+        role: "body",
+        media_type: "text/plain",
+        text: "@\u718a\u5cf0\nSans | Software and AI\n\u8bf7\u95ee\u662f\u5426\u7ee7\u7eed\uff1f",
+      }],
+    });
+    assert.deepEqual(lookups, ["oc_1"]);
+    assert.equal(messages[0].msg_type, "post");
+    assert.deepEqual(messages[0].content.zh_cn.content[0], [{
+      tag: "at",
+      user_id: "ou_fe497f2d8fa7522ce42f78109618ecbc",
+      user_name: "\u718a\u5cf0",
+    }]);
+    assert.deepEqual(messages[0].content.zh_cn.content[1], [
+      { tag: "text", text: "Sans | Software and AI" },
+    ]);
+  });
+
+  it("leaves a shared name and a failed member lookup as plain text", async () => {
+    const shared = feishuMentionNameIndex([
+      { id: "ou_a", name: "\u718a\u5cf0" },
+      { id: "ou_b", name: "\u718a\u5cf0" },
+    ]);
+    assert.equal(shared.has("\u718a\u5cf0"), false);
+    assert.equal(
+      applyFeishuPlainMentions("\u8bf7@\u718a\u5cf0\uff0c\u770b\u4e00\u4e0b user@host.com @\u6240\u6709\u4eba @all @everyone", shared),
+      "\u8bf7@\u718a\u5cf0\uff0c\u770b\u4e00\u4e0b user@host.com <at user_id=\"all\">\u6240\u6709\u4eba</at> @all @everyone",
+    );
+    const spaced = feishuMentionNameIndex([
+      { id: "ou_short", name: "John" },
+      { id: "ou_long", name: "John Smith" },
+    ]);
+    assert.equal(
+      applyFeishuPlainMentions("@John Smith\uff0chi @John", spaced),
+      "<at user_id=\"ou_long\">John Smith</at>\uff0chi <at user_id=\"ou_short\">John</at>",
+    );
+    assert.equal(
+      applyFeishuPlainMentions("@JohnSmith", feishuMentionNameIndex([{ id: "ou_short", name: "John" }])),
+      "@JohnSmith",
+    );
+    assert.deepEqual(feishuPlainMentionNames("@\u718a\u5cf0 @\u6240\u6709\u4eba <at user_id=\"ou_1\">Ada</at>"), ["\u718a\u5cf0"]);
+    const texts = [];
+    const egress = new FeishuChatEgress(
+      {
+        async sendText(input) {
+          texts.push(input);
+          return { message_id: "om_text" };
+        },
+        async sendMessage(input) {
+          texts.push(input);
+          return { message_id: "om_post" };
+        },
+        async listChatMembers() {
+          throw new Error("members unavailable");
+        },
+      },
+      { installation_id: "feishu-1", chat_id: "oc_1" },
+    );
+    await egress.send({
+      installation_id: "feishu-1",
+      content: [{ role: "body", media_type: "text/plain", text: "@\u718a\u5cf0 \u7ee7\u7eed" }],
+    });
+    assert.equal(texts[0].text, "@\u718a\u5cf0 \u7ee7\u7eed");
+    const incomplete = [];
+    const partial = new FeishuChatEgress(
+      {
+        async sendText(input) {
+          incomplete.push(input);
+          return { message_id: "om_text" };
+        },
+        async sendMessage(input) {
+          incomplete.push(input);
+          return { message_id: "om_post" };
+        },
+        async listChatMembers() {
+          return {
+            complete: false,
+            items: [{ id: "ou_fe497f2d8fa7522ce42f78109618ecbc", name: "\u718a\u5cf0" }],
+          };
+        },
+      },
+      { installation_id: "feishu-1", chat_id: "oc_1" },
+    );
+    await partial.send({
+      installation_id: "feishu-1",
+      content: [{ role: "body", media_type: "text/plain", text: "@\u718a\u5cf0 \u7ee7\u7eed" }],
+    });
+    assert.equal(incomplete[0].text, "@\u718a\u5cf0 \u7ee7\u7eed");
   });
 
   it("rejects an attachment without bytes instead of sending text only", async () => {

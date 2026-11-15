@@ -10,7 +10,7 @@ Run commands from the repository root. This guide covers connector setup, local 
 
 ### Requirements
 
-- Node.js 20+
+- Node.js 22.14+ (22.x) or 24+ with Node-API 10+
 - [pnpm](https://pnpm.io)
 
 Feishu and DSH each need their own tool installed first. See [Add Feishu or DSH](#add-feishu-or-dsh).
@@ -29,6 +29,18 @@ pnpm dev:desktop
 In the app: **Engine** → **DSH** / **Feishu** → **Install**.
 
 Install and sign in to that tool first, then click Install. Feishu needs `lark-cli` signed in. DSH needs `dsh web` running. Steps are under [Add Feishu or DSH](#add-feishu-or-dsh).
+
+#### Choose a database
+
+In **Settings → Database**, SQLite remains the default: it stores data on this computer and needs no server. To use PostgreSQL, provide the connection URL for a dedicated database you manage, then **Test connection** and **Apply**. Connection tests stop after 10 seconds, regardless of timeout parameters in the URL. The PostgreSQL user needs permission to initialize and update Regenic's schema. Use `sslmode=require` when your server requires TLS.
+
+Settings descriptions are available from the info icons: hover, focus with the keyboard, or tap. Errors, operation results, and switching confirmations stay visible.
+
+Rule editors and connector/executor configuration forms use the same help pattern. Schedule summaries, matching previews, unavailable controls, and sending warnings stay visible.
+
+Applying a change requires confirmation and restarts the local engine. It does **not** migrate or delete conversations, settings, or attachments: switching back reconnects to the original database. An empty target starts fresh. If the new engine cannot start, Regenic attempts to restore the previous selection. An unavailable semantic runtime does not prevent SQLite from starting; its error remains available in semantic settings.
+
+PostgreSQL credentials are encrypted with the operating system's secure storage, not returned to the UI. Attachments remain local in a database-specific directory, so back up both PostgreSQL and the local data folder. Semantic indexing currently requires SQLite; its preferences are retained for switching back. Change the local data folder while using SQLite. Custom engines manage their database on the server rather than through this selector.
 
 ### Quick Start (for an AI assistant)
 

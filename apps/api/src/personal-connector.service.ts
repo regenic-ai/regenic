@@ -1,6 +1,7 @@
-import { Inject, Injectable, OnModuleDestroy } from "@nestjs/common";
+import { Inject, Injectable, OnApplicationBootstrap, OnModuleDestroy } from "@nestjs/common";
 import {
   ChannelDriverRegistry,
+  DueWorkClaimLimiter,
   type CopyLocale,
   isSyncSoftMiss,
   asConnectorHost,
@@ -67,6 +68,13 @@ import {
   runCatalogTick,
   runDueWorkPlane,
 } from "./personal-connector-due-work";
+import {
+  defaultSyncSettings,
+  SYNC_SETTINGS_PREF_KEY,
+  SYNC_SETTINGS_RANGES,
+  validateSyncSettings,
+  type PersonalSyncSettings,
+} from "./personal-sync-settings";
 
 export { PersonalConnectorError } from "./personal-errors";
 export { wrapDriverError } from "./personal-connector-poll";
@@ -80,7 +88,7 @@ export type {
 const START_PULL_DELAY_MS = 1_000;
 
 @Injectable()
-export class PersonalConnectorService implements OnModuleDestroy {
+export class PersonalConnectorService implements OnModuleDestroy, OnApplicationBootstrap {
   private readonly state: ConnectorState;
   private readonly streamLocks = new Map<string, Promise<void>>();
   private readonly streamIdleUntil = new Map<string, number>();
@@ -97,6 +105,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
   private catalogTicking = false;
   private backgroundStarted = false;
   private maintenanceHold = false;
+  private syncSettingsAccess: Promise<void> = Promise.resolve();
 
   constructor(
     @Inject(PersonalRuntimeService)
@@ -121,6 +130,7 @@ export class PersonalConnectorService implements OnModuleDestroy {
       requireInstallation: (store, installationId) => this.requireInstallation(store, installationId),
       installSecrets: () => this.installSecrets(),
       catchUp: (installationId) => catchUp(this.state, installationId),
+      refreshSyncSettings: async () => { await this.getSyncSettings(); },
     });
     drivers.installationLifecycle.setHost(() => asConnectorHost(runtime.requireHost()));
     runtime.beforeDispose(async () => {
@@ -142,6 +152,73 @@ export class PersonalConnectorService implements OnModuleDestroy {
 
   private connectorState(): ConnectorState {
     return this.state;
+  }
+
+  async onApplicationBootstrap(): Promise<void> {
+    if (this.runtime.isReady()) {
+      await this.getSyncSettings();
+    }
+  }
+
+  getSyncSettings() {
+    return this.accessSyncSettings(() => this.readSyncSettings());
+  }
+
+  private async readSyncSettings() {
+    const value = await this.runtime.requireHost().get("authority").getUiPref(
+      this.runtime.orgId(), SYNC_SETTINGS_PREF_KEY,
+    );
+    let settings: PersonalSyncSettings | undefined;
+    if (value && value !== "null") {
+      try {
+        settings = validateSyncSettings(JSON.parse(value));
+      } catch {
+        throw new PersonalConnectorError("invalid_config", "Stored sync settings are invalid", 409);
+      }
+    }
+    this.applySyncSettings(settings);
+    return {
+      settings: settings ?? defaultSyncSettings(),
+      defaults: defaultSyncSettings(),
+      ranges: SYNC_SETTINGS_RANGES,
+      customized: settings !== undefined,
+    };
+  }
+
+  putSyncSettings(input: unknown) {
+    return this.accessSyncSettings(() => this.writeSyncSettings(input));
+  }
+
+  private async writeSyncSettings(input: unknown) {
+    const settings = input === null ? undefined : validateSyncSettings(input);
+    await this.runtime.requireHost().get("authority").putUiPref(
+      this.runtime.orgId(), SYNC_SETTINGS_PREF_KEY,
+      JSON.stringify(settings ?? null), new Date().toISOString(),
+    );
+    this.applySyncSettings(settings);
+    return {
+      settings: settings ?? defaultSyncSettings(),
+      defaults: defaultSyncSettings(),
+      ranges: SYNC_SETTINGS_RANGES,
+      customized: settings !== undefined,
+    };
+  }
+
+  private accessSyncSettings<T>(work: () => Promise<T>): Promise<T> {
+    const operation = this.syncSettingsAccess.then(work);
+    this.syncSettingsAccess = operation.then(() => undefined, () => undefined);
+    return operation;
+  }
+
+  private applySyncSettings(settings: PersonalSyncSettings | undefined): void {
+    if (JSON.stringify(this.state.syncSettings) === JSON.stringify(settings)) return;
+    this.state.syncSettings = settings;
+    this.state.quota.configure(settings
+      ? { tokens: settings.quota_tokens, window_ms: settings.quota_window_ms }
+      : undefined);
+    const next = settings ?? defaultSyncSettings();
+    this.state.dueWorkLimiters.steady = new DueWorkClaimLimiter(1, 128, next.steady_claim_limit);
+    this.state.dueWorkLimiters.bootstrap = new DueWorkClaimLimiter(1, 128, next.bootstrap_claim_limit);
   }
 
   startAfterListen(): void {

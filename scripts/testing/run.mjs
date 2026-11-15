@@ -33,6 +33,7 @@ try {
     command(["--filter", "@regenic/desktop", "test"]);
     command(["--filter", "@regenic/desktop", "build"]);
     command(["--filter", "@regenic/desktop", "test:semantic:electron"]);
+    command(["--filter", "@regenic/desktop", "test:database-settings:electron"]);
   } else {
     command(["--filter", "@regenic/api...", "build"]);
     const iterations = lane === "soak" ? Number(process.env.REGENIC_SOAK_ITERATIONS ?? 10) : 1;

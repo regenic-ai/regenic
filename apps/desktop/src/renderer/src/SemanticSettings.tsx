@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { fetchSemanticIndexStatus, indexSemanticOnce, retrySemanticJobs } from "./api";
 import { useLocale } from "./LocaleContext";
+import { InfoTip } from "./InfoTip";
 import { isMessageKey } from "../../shared/messages";
 import type { SemanticAction, SemanticRuntimeView, SemanticStage } from "../../shared/semantic-runtime";
 import { DEFAULT_SEMANTIC_LAUNCH_SETTINGS, type SemanticLaunchSettings } from "../../shared/semantic-runtime";
@@ -310,37 +311,44 @@ export function SemanticSettings() {
   return (
     <section className="card semantic-settings">
       <div className="card-head">
-        <h2>{t("semantic.title")}</h2>
+        <h2 className="settings-heading">{t("semantic.title")}
+          <InfoTip label={t("semantic.title")}>{t("semantic.lead")}</InfoTip>
+        </h2>
         <span className={`chip ${tone}`} role="status">
           <span className="dot" />{statusLabel}
         </span>
       </div>
-      <p className="muted">{t("semantic.lead")}</p>
 
       {runtime?.canManage || visualApplying ? (
         <div className="semantic-setup">
           <section className="semantic-config-section" aria-labelledby="semantic-content-heading">
             <div className="semantic-section-head">
-              <h3 id="semantic-content-heading">{t("semantic.content.title")}</h3>
-              <p className="muted">{t("semantic.content.hint")}</p>
+              <h3 id="semantic-content-heading" className="settings-heading">{t("semantic.content.title")}
+                <InfoTip label={t("semantic.content.title")}>{t("semantic.content.hint")}</InfoTip>
+              </h3>
             </div>
             <div className="semantic-consent-list">
-              <label className="semantic-consent">
-                <input type="checkbox" checked disabled />
-                <span className="semantic-consent-copy">
-                  <strong>{t("semantic.content.text")}</strong>
-                  <span className="muted">{t("semantic.content.textHint")}</span>
-                </span>
-              </label>
-              <label className="semantic-consent">
-                <input type="checkbox" checked={visualDraft ?? Boolean(runtime?.visualEnabled)}
-                  disabled={disabled || !runtime?.canManage}
-                  onChange={(event) => setVisualDraft(event.target.checked)} />
-                <span className="semantic-consent-copy">
-                  <strong>{t("semantic.content.visual")}</strong>
-                  <span className="muted">{t("semantic.content.visualHint")}</span>
-                </span>
-              </label>
+              <div className="semantic-consent-row">
+                <label className="semantic-consent">
+                  <input type="checkbox" checked disabled aria-describedby="semantic-text-help" />
+                  <span className="semantic-consent-copy">
+                    <strong>{t("semantic.content.text")}</strong>
+                  </span>
+                </label>
+                <InfoTip label={t("semantic.content.text")} id="semantic-text-help">{t("semantic.content.textHint")}</InfoTip>
+              </div>
+              <div className="semantic-consent-row">
+                <label className="semantic-consent">
+                  <input type="checkbox" checked={visualDraft ?? Boolean(runtime?.visualEnabled)}
+                    aria-describedby="semantic-visual-help"
+                    disabled={disabled || !runtime?.canManage}
+                    onChange={(event) => setVisualDraft(event.target.checked)} />
+                  <span className="semantic-consent-copy">
+                    <strong>{t("semantic.content.visual")}</strong>
+                  </span>
+                </label>
+                <InfoTip label={t("semantic.content.visual")} id="semantic-visual-help">{t("semantic.content.visualHint")}</InfoTip>
+              </div>
               <label className="semantic-consent is-unavailable">
                 <input type="checkbox" checked={false} disabled />
                 <span className="semantic-consent-copy">
@@ -364,8 +372,12 @@ export function SemanticSettings() {
 
           <section className="semantic-config-section" aria-labelledby="semantic-launch-heading">
             <div className="semantic-section-head">
-              <h3 id="semantic-launch-heading">{t("semantic.launch.title")}</h3>
-              <p className="muted">{t("semantic.launch.hint")}</p>
+              <h3 id="semantic-launch-heading" className="settings-heading">{t("semantic.launch.title")}
+                <InfoTip label={t("semantic.launch.title")}>
+                  <p>{t("semantic.launch.hint")}</p>
+                  <p>{t("semantic.launch.compatibility")}</p>
+                </InfoTip>
+              </h3>
             </div>
             <div className="semantic-recommendation">
               <span>{t("semantic.launch.recommendationLabel")}</span>
@@ -378,8 +390,14 @@ export function SemanticSettings() {
               {detectedHardwareLabel ? <span>{detectedHardwareLabel}</span> : null}
             </div>
             <div className="semantic-launch-grid">
-              <label className="field semantic-launch-field">{t("semantic.launch.device")}
-                <select aria-describedby="semantic-device-hint"
+              <div className="field semantic-launch-field">
+                <span className="settings-label">
+                  <label htmlFor="semantic-device">{t("semantic.launch.device")}</label>
+                  <InfoTip label={t("semantic.launch.device")} id="semantic-device-hint">
+                    {t(`semantic.launch.deviceHint.${launchSettings.device}`)}
+                  </InfoTip>
+                </span>
+                <select id="semantic-device" aria-describedby="semantic-device-hint"
                   value={launchSettings.device} disabled={disabled || !runtime?.canManage}
                   onChange={(event) => setLaunchDraft({ ...launchSettings, device: event.target.value as SemanticLaunchSettings["device"] })}>
                   <option value="recommended">{t("semantic.launch.recommendedDevice", {
@@ -393,10 +411,15 @@ export function SemanticSettings() {
                       {runtime?.cudaDeviceName ? `${runtime.cudaDeviceName} (CUDA)` : t("semantic.launch.cuda")}
                     </option> : null}
                 </select>
-                <span id="semantic-device-hint" className="semantic-field-hint">{t(`semantic.launch.deviceHint.${launchSettings.device}`)}</span>
-              </label>
-              <label className="field semantic-launch-field">{t("semantic.launch.precision")}
-                <select aria-describedby="semantic-precision-hint"
+              </div>
+              <div className="field semantic-launch-field">
+                <span className="settings-label">
+                  <label htmlFor="semantic-precision">{t("semantic.launch.precision")}</label>
+                  <InfoTip label={t("semantic.launch.precision")} id="semantic-precision-hint">
+                    {t("semantic.launch.precisionHint")}
+                  </InfoTip>
+                </span>
+                <select id="semantic-precision" aria-describedby="semantic-precision-hint"
                   value={launchSettings.precision} disabled={disabled || !runtime?.canManage}
                   onChange={(event) => setLaunchDraft({ ...launchSettings, precision: event.target.value as SemanticLaunchSettings["precision"] })}>
                   <option value="recommended">{t("semantic.launch.recommendedPrecision", {
@@ -405,11 +428,16 @@ export function SemanticSettings() {
                   <option value="bfloat16">BF16</option>
                   <option value="float32">FP32</option>
                 </select>
-                <span id="semantic-precision-hint" className="semantic-field-hint">{t("semantic.launch.precisionHint")}</span>
-              </label>
-              <label className="field semantic-launch-field">{t("semantic.launch.threads")}
+              </div>
+              <div className="field semantic-launch-field">
+                <span className="settings-label">
+                  <label htmlFor="semantic-threads">{t("semantic.launch.threads")}</label>
+                  <InfoTip label={t("semantic.launch.threads")} id="semantic-threads-hint">
+                    {t("semantic.launch.threadsHint")}
+                  </InfoTip>
+                </span>
                 <span className="semantic-thread-control">
-                  <input type="range" aria-describedby="semantic-threads-hint"
+                  <input id="semantic-threads" type="range" aria-describedby="semantic-threads-hint"
                     min={1} max={runtime?.maxThreads ?? 1} step={1}
                     value={launchSettings.threads === "recommended"
                       ? runtime?.recommendedSettings?.threads ?? 1
@@ -420,10 +448,15 @@ export function SemanticSettings() {
                     ? runtime?.recommendedSettings?.threads ?? 1
                     : launchSettings.threads}</output>
                 </span>
-                <span id="semantic-threads-hint" className="semantic-field-hint">{t("semantic.launch.threadsHint")}</span>
-              </label>
-              <label className="field semantic-launch-field">{t("semantic.launch.priority")}
-                <select aria-describedby="semantic-priority-hint"
+              </div>
+              <div className="field semantic-launch-field">
+                <span className="settings-label">
+                  <label htmlFor="semantic-priority">{t("semantic.launch.priority")}</label>
+                  <InfoTip label={t("semantic.launch.priority")} id="semantic-priority-hint">
+                    {t("semantic.launch.priorityHint")}
+                  </InfoTip>
+                </span>
+                <select id="semantic-priority" aria-describedby="semantic-priority-hint"
                   value={launchSettings.priority} disabled={disabled || !runtime?.canManage}
                   onChange={(event) => setLaunchDraft({ ...launchSettings, priority: event.target.value as SemanticLaunchSettings["priority"] })}>
                   <option value="recommended">{t("semantic.launch.recommendedPriority", {
@@ -432,11 +465,9 @@ export function SemanticSettings() {
                   <option value="normal">{t("semantic.launch.normal")}</option>
                   <option value="background">{t("semantic.launch.background")}</option>
                 </select>
-                <span id="semantic-priority-hint" className="semantic-field-hint">{t("semantic.launch.priorityHint")}</span>
-              </label>
+              </div>
             </div>
             <div className="semantic-launch-footer">
-              <p className="muted semantic-note">{t("semantic.launch.compatibility")}</p>
               {launchDirty || (launchDraft === null &&
                 JSON.stringify(launchSettings) !== JSON.stringify(DEFAULT_SEMANTIC_LAUNCH_SETTINGS)) ? (
                 <button type="button" className="ghost" disabled={disabled}
@@ -516,7 +547,9 @@ export function SemanticSettings() {
             <div className="semantic-actions">{installButton(true)}</div>
           </div>
         )
-      ) : <p className="muted semantic-note">{t("semantic.localOnly")}</p>}
+      ) : <p className="muted semantic-note">{t(
+        runtime?.managementHint === "sqlite_only" ? "semantic.sqliteOnly" : "semantic.localOnly",
+      )}</p>}
 
       {index?.configured ? (
         <div className="semantic-index">

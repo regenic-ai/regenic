@@ -52,7 +52,7 @@ import type {
 } from "./ingestion";
 import { MemoryWorkStore } from "./memory-work-store";
 import { type WorkRunStartClaim, type WorkStore } from "./work";
-import type { WorkItem } from "./work";
+import type { Recipe, WorkItem, WorkRun } from "./work";
 import type { WorkAcknowledgment } from "./work-transition";
 import {
   assertBlobInventoryPageQuery,
@@ -76,6 +76,9 @@ import {
 import {
   eventThreadId,
   headsScanQuery,
+  isPushInboxDecision,
+  isWorkTriggerDecision,
+  isFinishedWorkTriggerDecision,
   matchesEventQuery,
   selectInboxItems,
   summarizeInboxItems,
@@ -356,6 +359,16 @@ export class MemoryAuthorityStore
       && this.dispositions.get(event.id)?.disposition === "current_work");
   }
 
+  protected override hasWorkTriggerEvidence(item: WorkItem, recipe?: Recipe): boolean {
+    const decision = item.head_event_id ? this.dispositions.get(item.head_event_id) : undefined;
+    return Boolean(decision
+      && (super.hasWorkTriggerEvidence(item, recipe) || decision.disposition === "pending")
+      && isWorkTriggerDecision(decision.disposition, decision.reason_codes, item, recipe)
+      && [...this.currentBySource.values()].some((event) =>
+        event.id === item.head_event_id && event.org_id === item.org_id
+        && eventThreadId(event) === item.thread_id && event.operation !== "tombstone"));
+  }
+
   protected override restoreAcknowledgedTriggerForManualRetry(
     input: WorkRunStartClaim,
     item: WorkItem,
@@ -395,13 +408,15 @@ export class MemoryAuthorityStore
     });
   }
 
-  protected override hasAcknowledgmentTrigger(input: WorkAcknowledgment, item: WorkItem | null): boolean {
+  protected override hasAcknowledgmentTrigger(input: WorkAcknowledgment, item: WorkItem | null, run?: WorkRun | null): boolean {
     const event = this.events.find((candidate) =>
       candidate.id === input.trigger_event_id && candidate.org_id === input.expected_item.org_id);
     const decision = this.dispositions.get(input.trigger_event_id);
-    return super.hasAcknowledgmentTrigger(input, item) && !!item && !!event
+    return !!item && !!event
       && eventThreadId(event) === item.thread_id
-      && decision?.org_id === item.org_id && decision.disposition === "current_work";
+      && decision?.org_id === item.org_id
+      && (super.hasAcknowledgmentTrigger(input, item, run) || decision.disposition === "pending")
+      && isFinishedWorkTriggerDecision(decision.disposition, decision.reason_codes, item, run ?? null);
   }
 
   protected override hasExternalAcknowledgmentConflict(orgId: string, commandId: string): boolean {
@@ -935,7 +950,11 @@ export class MemoryAuthorityStore
       normalizeInboxListView(query?.list) === "hidden";
     const items = useDecided
       ? await this.decidedInbox(orgId, headsScanQuery(query) ?? query)
-      : this.currentWorkInbox(orgId, query?.disposition ?? "current_work");
+      : this.currentWorkInbox(
+          orgId,
+          query?.disposition ?? "current_work",
+          query?.push_candidates,
+        );
     return selectInboxItems(items, query).sort((left, right) => {
       const byTime = left.event.occurred_at.localeCompare(right.event.occurred_at);
       if (byTime !== 0) {
@@ -977,11 +996,18 @@ export class MemoryAuthorityStore
   private currentWorkInbox(
     orgId: string,
     disposition: "current_work" | "pending" = "current_work",
+    pushCandidates = false,
   ): InboxItem[] {
-    const hidden = this.hiddenThreadIds(orgId);
+    const hidden = this.hiddenThreadIds(orgId, pushCandidates);
     return [...this.currentBySource.values()].flatMap((event) => {
       const decision = this.dispositions.get(event.id);
-      if (event.org_id !== orgId || decision?.disposition !== disposition) {
+      if (!decision || event.org_id !== orgId) {
+        return [];
+      }
+      const eligible = pushCandidates && disposition === "current_work"
+        ? isPushInboxDecision(decision)
+        : decision.disposition === disposition;
+      if (!eligible) {
         return [];
       }
       if (disposition === "current_work" && event.operation === "tombstone") {
@@ -1046,10 +1072,11 @@ export class MemoryAuthorityStore
     });
   }
 
-  private hiddenThreadIds(orgId: string): Set<string> {
+  private hiddenThreadIds(orgId: string, humanOnly = false): Set<string> {
     return new Set(
       [...this.prefs.values()]
-        .filter((pref) => pref.org_id === orgId && pref.hidden)
+        .filter((pref) => pref.org_id === orgId && pref.hidden &&
+          (!humanOnly || pref.hidden_reason !== "policy"))
         .map((pref) => pref.thread_id),
     );
   }

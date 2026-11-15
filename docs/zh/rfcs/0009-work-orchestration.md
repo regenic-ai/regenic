@@ -275,7 +275,7 @@ interface ExecutorCatalogEntry {
 
 ## 10. 列表
 
-显不显示是列表表面（`conversation_prefs.hidden`），不由 tombstone / `work_acked` / 工单状态推导。默认列表是桌上的活且未折叠；`list=hidden` 看被折叠的会话。人折叠后新活也不自动回来；策略折叠（工单结束、稍后处理、tombstone 离桌）在新的 `current_work` 到来时回到显示列表。桌面过滤栏写入 `ui_prefs.inbox_list`。
+显不显示是列表表面（`conversation_prefs.hidden`），不由 tombstone / `work_acked` / 工单状态推导。默认列表是桌上的活且未折叠；`list=hidden` 看被折叠的会话。人折叠后新活也不自动回来。规则仅在成功完成且对应 Recipe 打开 `hide_on_success` 时自动收拢来源和助手会话（新规则默认关闭）；失败、运行中、待人工处理时保持显示。用户主动 dismiss/ack，以及 tombstone 离桌仍可按策略收拢；策略折叠会在新的 `current_work` 到来时回到显示列表。桌面过滤栏写入 `ui_prefs.inbox_list`。
 
 排序可切换，选择写入 `ui_prefs.inbox_sort`：
 

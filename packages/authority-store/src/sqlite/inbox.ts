@@ -347,7 +347,7 @@ export async function summarizeInbox(db: Database.Database, orgId: string): Prom
           SELECT COUNT(*) AS count
           FROM thread_heads th
           WHERE th.org_id = ?
-            AND th.has_current_work = 1
+            AND (th.has_current_work = 1 OR ${completedVisibleWorkSql("th.face_event_id", "th.org_id")})
             AND NOT EXISTS (
               SELECT 1 FROM conversation_prefs p
               WHERE p.org_id = th.org_id
@@ -860,7 +860,7 @@ function inboxSql(db: Database.Database, orgId: string, query?: InboxQuery): { s
           FROM thread_heads th
           JOIN events e ON e.id = th.face_event_id
           JOIN message_dispositions d ON d.event_id = e.id
-          WHERE th.has_current_work = 1
+          WHERE (th.has_current_work = 1 OR ${completedVisibleWorkSql("e.id", "e.org_id")})
             AND ${visible.clauses.join(" AND ")}
           ${page.whereSql}
           ${page.orderSql}
@@ -880,7 +880,8 @@ function inboxSql(db: Database.Database, orgId: string, query?: InboxQuery): { s
           SELECT e2.thread_id
           FROM message_dispositions d2
           JOIN events e2 ON e2.id = d2.event_id
-          WHERE d2.org_id = ? AND d2.disposition = 'current_work'
+          WHERE d2.org_id = ? AND (d2.disposition = 'current_work'
+            OR ${completedVisibleWorkSql("e2.id", "e2.org_id")})
             AND e2.operation <> 'tombstone'
             AND ${isCurrentHeadSql("e2", "h2")}
         )`);
@@ -928,13 +929,13 @@ function inboxSql(db: Database.Database, orgId: string, query?: InboxQuery): { s
       query,
       query?.disposition ?? "current_work",
     );
-    if (!scoped) {
-      clauses.push(notHiddenSql("e"));
+    if (!scoped || query?.push_candidates) {
+      clauses.push(notHiddenSql("e", query?.push_candidates));
       params.push(orgId);
     }
-    if (query?.tasks) {
+    if (query?.tasks !== undefined) {
       clauses.push(
-        `EXISTS (SELECT 1 FROM json_each(d.reason_codes_json) WHERE value = ?)`,
+        `${query.tasks ? "" : "NOT "}EXISTS (SELECT 1 FROM json_each(d.reason_codes_json) WHERE value = ?)`,
       );
       params.push(TASK_INBOX_REASON);
     }
@@ -982,12 +983,34 @@ function hiddenHeadsSql(db: Database.Database, orgId: string, query?: InboxQuery
     };
   }
 
+function completedVisibleWorkSql(eventId: string, orgId: string): string {
+  return `EXISTS (
+    SELECT 1 FROM work_items completed
+    JOIN work_runs completed_run ON completed_run.id = completed.current_run_id
+      AND completed_run.org_id = completed.org_id AND completed_run.work_item_id = completed.id
+    JOIN message_dispositions completed_decision ON completed_decision.event_id = completed.head_event_id
+      AND completed_decision.org_id = completed.org_id
+    WHERE completed.org_id = ${orgId} AND completed.head_event_id = ${eventId}
+      AND completed.status = 'done' AND completed_run.status = 'completed'
+      AND completed_run.completion_policy_version = 1 AND completed_run.hide_on_success = 0
+      AND completed_decision.disposition = 'outside_current_work'
+      AND EXISTS (SELECT 1 FROM json_each(completed_decision.reason_codes_json) WHERE value = 'work_completed')
+  )`;
+}
+
 function inboxClauses(db: Database.Database, orgId: string, query: InboxQuery | undefined, disposition: "current_work" | "pending" | "any", tables: { event?: string; disposition?: string } = {}): { clauses: string[]; params: unknown[] } {
     const event = tables.event ?? "e";
     const decision = tables.disposition ?? "d";
     const clauses = [`${event}.org_id = ?`];
     const params: unknown[] = [orgId];
-    if (disposition !== "any") {
+    if (disposition === "current_work" && query?.push_candidates) {
+      clauses.push(`(${decision}.disposition = 'current_work' OR (
+        ${decision}.disposition = 'pending'
+        AND NOT EXISTS (
+          SELECT 1 FROM json_each(${decision}.reason_codes_json) WHERE value = 'human_triage'
+        )
+      ))`);
+    } else if (disposition !== "any") {
       clauses.push(`${decision}.disposition = ?`);
       params.push(disposition);
       if (disposition === "current_work") {
@@ -1159,8 +1182,10 @@ function hiddenThreadIdSql(orgId: string): { sql: string; params: unknown[] } {
   };
 }
 
-function notHiddenSql(event = "e"): string {
-  return `${event}.thread_id NOT IN (SELECT p.thread_id FROM conversation_prefs p WHERE p.org_id = ? AND p.hidden = 1)`;
+function notHiddenSql(event = "e", allowPolicyFold = false): string {
+  return `${event}.thread_id NOT IN (SELECT p.thread_id FROM conversation_prefs p WHERE p.org_id = ? AND p.hidden = 1${
+    allowPolicyFold ? " AND COALESCE(p.hidden_reason, 'human') <> 'policy'" : ""
+  })`;
 }
 
 function inboxScoped(query?: InboxQuery): boolean {

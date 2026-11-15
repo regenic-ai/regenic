@@ -12,14 +12,17 @@
     "test": "node --experimental-strip-types --test test/*.test.ts",
     "test:recipe-layout:electron": "node scripts/recipe-layout-electron-smoke.cjs",
     "test:semantic:electron": "node scripts/semantic-electron-smoke.cjs",
-    "test:connector-form:electron": "node scripts/connector-form-electron-smoke.cjs"
+    "test:connector-form:electron": "node scripts/connector-form-electron-smoke.cjs",
+    "test:database-settings:electron": "node scripts/database-settings-electron-smoke.cjs"
   },
   "dependencies": {
-    "@regenic/connector-contract": "workspace:*"
+    "@regenic/connector-contract": "workspace:*",
+    "pg": "^8.13.1"
   },
   "devDependencies": {
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
+    "@types/pg": "^8.11.10",
     "@vitejs/plugin-react": "^4.5.2",
     "electron": "^37.2.6",
     "electron-vite": "^4.0.0",

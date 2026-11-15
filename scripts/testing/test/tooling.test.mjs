@@ -4,7 +4,7 @@ import { mkdirSync, writeFileSync, readFileSync, realpathSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
-import { isolatedEnvironment, removeRoot, temporaryRoot } from "../lib.mjs";
+import { isolatedEnvironment, removeRoot, requireRuntime, temporaryRoot } from "../lib.mjs";
 import { auditSummary } from "../report.mjs";
 import compatibilityEvidence from "../compatibility-evidence.cjs";
 
@@ -15,6 +15,23 @@ const {
   assertRuntimeOverride,
   parseAuditResult,
 } = compatibilityEvidence;
+
+test("testing runtime rejects unsupported native-addon ABIs before opening SQLite", () => {
+  for (const versions of [
+    { node: "20.20.0", napi: "9" },
+    { node: "22.12.0", napi: "9" },
+    { node: "22.13.1", napi: "9" },
+    { node: "23.0.0", napi: "9" },
+    { node: "22.14.0", napi: "9" },
+    { node: "24.12.0", napi: undefined },
+  ]) {
+    assert.throws(() => requireRuntime(versions), /Node 22\.14\+.*Node-API 10/);
+  }
+  for (const node of ["22.14.0", "22.23.2", "24.0.0", "24.12.0", "26.13.0"]) {
+    assert.doesNotThrow(() => requireRuntime({ node, napi: "10" }));
+  }
+  assert.doesNotThrow(() => requireRuntime({ node: "26.13.0", napi: "11" }));
+});
 
 test("candidate tarball lookup validates the exact npm v3 top-level package entry", (t) => {
   const root = temporaryRoot("lock-entry");

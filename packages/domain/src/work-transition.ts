@@ -41,6 +41,7 @@ export function assertWorkRunSnapshot(run: WorkRun, current?: WorkRun): void {
     || current.include_context !== run.include_context
     || current.trigger_kind !== run.trigger_kind
     || current.completion_policy_version !== run.completion_policy_version
+    || current.hide_on_success !== run.hide_on_success
     || !sameJson(current.executor_config, run.executor_config)
     || !sameJson(current.write_back_target, run.write_back_target)
   )) {

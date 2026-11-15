@@ -1,12 +1,14 @@
 import {
   deleteRecipe,
   fetchExecutors,
+  fetchInboxHeads,
   fetchRecipes,
   saveRecipe,
   tryRecipe,
 } from "./api";
 import { useLocale } from "./LocaleContext";
 import { MenuSelect } from "./MenuSelect";
+import { loadRecipeConversations } from "./recipe-conversations";
 import {
   MatchPreview,
   MoreOptions,
@@ -76,11 +78,11 @@ import type {
   RecipeSourceOption,
   RecipeView,
 } from "./types";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 export function RecipesPage({
   sources,
-  conversations = [],
+  conversations: initialConversations = [],
   seed,
   onSeedConsumed,
   onBound,
@@ -96,6 +98,16 @@ export function RecipesPage({
   onOpenThread?: (threadId: string) => void;
 }) {
   const { t, locale } = useLocale();
+  const [discoveredConversations, setDiscoveredConversations] = useState<RecipeConversationOption[]>([]);
+  const conversations = useMemo(() => {
+    const byId = new Map(initialConversations.map((item) => [item.id, item]));
+    for (const item of discoveredConversations) byId.set(item.id, item);
+    return [...byId.values()];
+  }, [initialConversations, discoveredConversations]);
+  const loadConversations = useCallback(async (signal: AbortSignal) => {
+    const next = await loadRecipeConversations(fetchInboxHeads, signal);
+    if (!signal.aborted) setDiscoveredConversations(next);
+  }, [locale]);
   const formRef = useRef<HTMLElement>(null);
   const [recipes, setRecipes] = useState<RecipeView[]>([]);
   const [executors, setExecutors] = useState<ExecutorCatalogEntry[]>([]);
@@ -221,10 +233,10 @@ export function RecipesPage({
         match: draftMatch(draft),
         draftId: draft.id,
         triggerKind: draft.trigger_kind,
-        conversations,
+        conversations: initialConversations,
         recipes,
       }),
-    [conversations, draft, recipes],
+    [initialConversations, draft, recipes],
   );
   const priorityGroup = useMemo(() => {
     const match = draftMatch(draft);
@@ -249,8 +261,8 @@ export function RecipesPage({
     if (bound) {
       return [{ id: bound, label: draft.thread_title || bound }];
     }
-    return matchingConversations(match, conversations, draft.trigger_kind) ?? [];
-  }, [draft, conversations]);
+    return matchingConversations(match, initialConversations, draft.trigger_kind) ?? [];
+  }, [draft, initialConversations]);
   const tryThreadId = tryChoices.some((item) => item.id === trySample)
     ? trySample
     : (tryChoices[0]?.id ?? null);
@@ -263,6 +275,7 @@ export function RecipesPage({
     executor_config: next.config,
     can_write_back: next.can_write_back,
     write_back_thread_id: next.write_back_thread_id || null,
+    hide_on_success: next.hide_on_success,
     include_context: next.include_context,
     max_concurrent:
       next.trigger_kind === "pull" ? null : parseMaxConcurrent(next.max_concurrent),
@@ -380,6 +393,7 @@ export function RecipesPage({
           executor_config: item.executor_config,
           can_write_back: item.can_write_back,
           write_back_thread_id: item.write_back_thread_id ?? null,
+          hide_on_success: item.hide_on_success,
           include_context: item.include_context,
           max_concurrent: item.max_concurrent ?? null,
           enabled: item.enabled,
@@ -439,6 +453,7 @@ export function RecipesPage({
           executor_type: recipe.executor_type,
           executor_config: recipe.executor_config,
           can_write_back: recipe.can_write_back,
+          hide_on_success: recipe.hide_on_success ?? true,
           include_context: recipe.include_context,
           max_concurrent: recipe.max_concurrent ?? null,
           enabled: !recipe.enabled,
@@ -750,7 +765,7 @@ export function RecipesPage({
                   <h3>{t("recipes.triggerLegend")}</h3>
                 </header>
                 <div className="recipe-rows">
-                <RecipeRow label={t("recipes.triggerRow")}>
+                <RecipeRow label={t("recipes.triggerRow")} hint={triggerHint(draft.trigger_kind, t)}>
                   <div className="seg">
                     {triggerChoices(t).map((choice) => (
                       <button
@@ -767,7 +782,6 @@ export function RecipesPage({
                       </button>
                     ))}
                   </div>
-                  <p className="recipe-hint">{triggerHint(draft.trigger_kind, t)}</p>
                 </RecipeRow>
                 {draft.trigger_kind !== "pull" ? (
                 <RecipeRow label={t("recipes.watchLegend")}>
@@ -832,42 +846,33 @@ export function RecipesPage({
 
                 {draft.scope === "thread" || draft.trigger_kind === "pull" ? (
                   <RecipeRow label={t("recipes.conversation")}>
-                    {conversationOptions.length === 0 && !draft.thread_id ? (
-                      <div className="recipe-gate">
-                        <p className="field-empty">{t("recipes.noConversation")}</p>
-                        <p className="recipe-hint">{t("recipes.noConversationHint")}</p>
-                        {onBound ? (
-                          <button type="button" className="ghost" onClick={onBound}>
-                            {t("recipes.goInbox")}
-                          </button>
-                        ) : null}
-                      </div>
-                    ) : (
-                      <MenuSelect
-                        value={draft.thread_id}
-                        placeholder={t("recipes.chooseConversation")}
-                        searchable={conversationOptions.length > 6}
-                        options={conversationOptions}
-                        onChange={(thread_id) => {
-                          const picked = conversationOptions.find(
-                            (item) => item.id === thread_id,
-                          );
-                          setDraft((current) =>
-                            withSuggestedName({
-                              ...current,
-                              thread_id,
-                              thread_title: picked?.label ?? thread_id,
-                              source: picked?.source ?? current.source,
-                            }),
-                          );
-                        }}
-                      />
-                    )}
+                    <MenuSelect
+                      value={draft.thread_id}
+                      valueLabel={draft.thread_title || draft.thread_id || undefined}
+                      placeholder={t("recipes.chooseConversation")}
+                      ariaLabel={t("recipes.conversation")}
+                      searchable
+                      onLoad={loadConversations}
+                      options={conversationOptions}
+                      onChange={(thread_id) => {
+                        const picked = conversationOptions.find(
+                          (item) => item.id === thread_id,
+                        );
+                        setDraft((current) =>
+                          withSuggestedName({
+                            ...current,
+                            thread_id,
+                            thread_title: picked?.label ?? thread_id,
+                            source: picked?.source ?? current.source,
+                          }),
+                        );
+                      }}
+                    />
                   </RecipeRow>
                 ) : null}
 
                 {draft.trigger_kind === "pull" ? (
-                  <RecipeRow label={t("recipes.interval")}>
+                  <RecipeRow label={t("recipes.interval")} hint={t("recipes.scheduleInstructionsHint")}>
                     <ScheduleField
                       draft={draft}
                       t={t}
@@ -875,7 +880,6 @@ export function RecipesPage({
                         setDraft((current) => ({ ...current, ...patch }))
                       }
                     />
-                    <p className="recipe-hint">{t("recipes.scheduleInstructionsHint")}</p>
                   </RecipeRow>
                 ) : null}
 
@@ -898,7 +902,7 @@ export function RecipesPage({
                   <h3>{t("recipes.then")}</h3>
                 </header>
                 <div className="recipe-rows">
-                <RecipeRow label={t("recipes.runWith")}>
+                <RecipeRow label={t("recipes.runWith")} hint={catalog?.description}>
                   {executors.length === 1 ? (
                     <p className="recipe-chip">{executors[0].label}</p>
                   ) : (
@@ -922,12 +926,11 @@ export function RecipesPage({
                       }
                     />
                   )}
-                  {catalog?.description ? (
-                    <p className="recipe-hint">{catalog.description}</p>
-                  ) : null}
                 </RecipeRow>
-                <RecipeRow label={t("recipes.instruction")}>
+                <RecipeRow label={t("recipes.instruction")} hint={t("recipes.instructionHint")}
+                  descriptionId="recipe-instruction-hint">
                   <textarea
+                    aria-label={t("recipes.instruction")} aria-describedby="recipe-instruction-hint"
                     value={taskInstruction}
                     placeholder={t("recipes.instructionPlaceholder")}
                     required={taskInstructionRequired}
@@ -943,7 +946,6 @@ export function RecipesPage({
                       })
                     }
                   />
-                  <p className="recipe-hint">{t("recipes.instructionHint")}</p>
                 </RecipeRow>
                 {catalog?.fields.length ? (
                   <RecipeParams
@@ -958,12 +960,14 @@ export function RecipesPage({
                     }
                   />
                 ) : null}
-                <RecipeRow label={t("recipes.includeContextCheck")}>
+                <RecipeRow label={t("recipes.includeContextCheck")} descriptionId="recipe-context-hint"
+                  hint={t(draft.trigger_kind === "pull" ? "recipes.includeContextHintPull" : "recipes.includeContextHint")}>
                   {draft.trigger_kind === "pull" ? (
-                    <p className="recipe-hint">{t("recipes.includeContextHintPull")}</p>
+                    <p className="recipe-chip">{t("recipes.contextIncluded")}</p>
                   ) : (
                     <>
                       <SwitchRow
+                        label={t("recipes.includeContextCheck")} descriptionId="recipe-context-hint"
                         checked={draft.include_context}
                         onChange={(include_context) =>
                           setDraft((current) => ({ ...current, include_context }))
@@ -971,7 +975,6 @@ export function RecipesPage({
                       >
                         {""}
                       </SwitchRow>
-                      <p className="recipe-hint">{t("recipes.includeContextHint")}</p>
                     </>
                   )}
                 </RecipeRow>
@@ -1023,6 +1026,7 @@ export function RecipesPage({
                         : t("recipes.writeBackNoTargets")}
                       placeholder={t("recipes.searchConversation")}
                       searchable
+                      onLoad={loadConversations}
                       ariaLabel={t("recipes.writeBackTo")}
                       onChange={(write_back_thread_id) =>
                         setDraft((current) => ({ ...current, write_back_thread_id }))
@@ -1048,6 +1052,7 @@ export function RecipesPage({
                 ) : null}
                 <RecipeRow label={t("recipes.enabledCheck")}>
                   <SwitchRow
+                    label={t("recipes.enabledCheck")}
                     checked={draft.enabled}
                     onChange={(enabled) => setDraft((current) => ({ ...current, enabled }))}
                   >

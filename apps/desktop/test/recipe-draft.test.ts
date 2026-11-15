@@ -33,12 +33,24 @@ const rule: RecipeView = {
   executor_config: {},
   can_write_back: false,
   include_context: false,
+  hide_on_success: false,
   enabled: true,
   created_at: "",
   updated_at: "",
 };
 
 describe("recipe draft", () => {
+  it("does not add task or unit-kind restrictions to a new conversation push rule", () => {
+    const conversations = [{ id: "chat:room", label: "Room", source: "chat", can_send: true }];
+    const draft = starterDraft("chat", emptyDraft(), [{ id: "chat", label: "Chat" }], conversations);
+    assert.deepEqual(draftMatch({ ...draft, text_contains: "[给客户]" }), {
+      thread_id: "chat:room", text_contains: "[给客户]",
+    });
+    assert.equal(canAutoStart(draftMatch(draft), draft), true);
+    const channel = starterDraft("channel", emptyDraft(), [{ id: "chat", label: "Chat" }], conversations);
+    assert.deepEqual(draftMatch(channel), { source: "chat", record_class: "task" });
+  });
+
   it("preserves filters through editing and scope changes, and clears blank fields", () => {
     const saved = { ...rule, match: { ...rule.match, text_contains: " approve ", text_excludes: "draft" } };
     const draft = draftFromRecipe(saved);
@@ -58,6 +70,15 @@ describe("recipe draft", () => {
       assert.equal(starterDraft(kind, emptyDraft(), [], []).include_context, true);
     }
     assert.equal(draftFromRecipe(rule).include_context, false);
+  });
+
+  it("defaults new rules to keeping conversations visible and preserves legacy rule behavior", () => {
+    assert.equal(emptyDraft().hide_on_success, false);
+    assert.equal(draftFromRecipe(rule).hide_on_success, false);
+    assert.equal(draftFromRecipe({ ...rule, hide_on_success: true }).hide_on_success, true);
+    const legacy = { ...rule };
+    delete legacy.hide_on_success;
+    assert.equal(draftFromRecipe(legacy).hide_on_success, true);
   });
 
   it("keeps inactive conditions through trigger switching, save/edit and list summaries", () => {

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchConnectorPairingCode, fetchCatalogFieldOptions, fetchConnectorCredentials, importConnectorFile } from "./api";
 import { ConnectorFormFields } from "./ConnectorFormFields";
+import { InfoTip } from "./InfoTip";
 import {
   importConnectorFiles,
   connectorImportSummary,
@@ -50,7 +51,7 @@ export function ConnectorKind({
   onInstall,
   onSync,
   onRetryQuarantines,
-  onToggle,
+  onEnable,
   onUpdate,
   onRefresh,
   onUninstall,
@@ -69,7 +70,7 @@ export function ConnectorKind({
   onInstall: (config: ConnectorFormValues) => void;
   onSync: (id: string, mode: SyncRunMode) => void;
   onRetryQuarantines: (id: string) => void;
-  onToggle: (installation: EngineInstallationView) => void;
+  onEnable: (installation: EngineInstallationView) => void;
   onUpdate: (
     installation: EngineInstallationView,
     config: ConnectorFormValues,
@@ -87,26 +88,26 @@ export function ConnectorKind({
     >
       <div className="install">
         <div>
-          <strong>{kind.title}</strong>
-          <div className="muted">{kind.description}</div>
+          <span className="settings-label">
+            <strong>{kind.title}</strong>
+            {kind.description || kind.credential_hint || kind.import_files ? (
+              <InfoTip label={kind.title}>
+                {kind.description ? <p>{kind.description}</p> : null}
+                {kind.credential_hint ? <p>{t("connector.credentials", { hint: kind.credential_hint })}</p> : null}
+                {kind.import_files ? <p>{kind.import_files.description ?? kind.import_files.title}</p> : null}
+              </InfoTip>
+            ) : null}
+          </span>
           <div className="install-meta">
             <span className={`chip ${kind.installed ? "running" : ""}`.trim()}>
               {kind.installed
                 ? t("connector.installed", { count: kind.instance_count })
                 : t("connector.notInstalled")}
             </span>
-            <span className="muted">
-              {t("connector.credentials", { hint: kind.credential_hint })}
-            </span>
           </div>
           <PrerequisiteList
             items={visiblePrerequisites(kind, defaultFieldValues(kind))}
           />
-          {kind.import_files ? (
-            <p className="muted">
-              {kind.import_files.description ?? kind.import_files.title}
-            </p>
-          ) : null}
         </div>
         <div className="install-actions">
           {!kind.singleton || !kind.installed ? (
@@ -168,7 +169,7 @@ export function ConnectorKind({
           }
           onSync={(mode) => onSync(installation.id, mode)}
           onRetryQuarantines={() => onRetryQuarantines(installation.id)}
-          onToggle={() => onToggle(installation)}
+          onEnable={() => onEnable(installation)}
           onSave={(config) => {
             void onUpdate(installation, config).then((saved) => {
               if (saved) {
@@ -668,7 +669,7 @@ function ConnectorRow({
   onEdit,
   onSync,
   onRetryQuarantines,
-  onToggle,
+  onEnable,
   onSave,
   onUninstall,
   onPairingCode,
@@ -683,7 +684,7 @@ function ConnectorRow({
   onEdit: () => void;
   onSync: (mode: SyncRunMode) => void;
   onRetryQuarantines: () => void;
-  onToggle: () => void;
+  onEnable: () => void;
   onSave: (config: ConnectorFormValues) => void;
   onUninstall: () => void;
   onPairingCode?: (id: string, code: string) => void;
@@ -699,6 +700,11 @@ function ConnectorRow({
   const syncUnavailableHint = installation.status === "enabled" && !installation.syncable
     ? kind.sync_unavailable_hint
     : undefined;
+  const activeSourceMode =
+    installation.status === "enabled" ? installation.source_mode : "poll";
+  const attemptSourceMode = installation.last_attempt
+    ? installation.source_mode
+    : activeSourceMode;
   return (
     <div id={id} className="install-block">
       <div className="install install-instance">
@@ -710,11 +716,28 @@ function ConnectorRow({
             <span className={`chip ${statusChip}`.trim()}>
               {installationStatusLabel(installation.status)}
             </span>
+            {activeSourceMode === "webhook" || activeSourceMode === "hybrid" ? (
+              <span className="connector-mode-chip">
+                {t(
+                  activeSourceMode === "webhook"
+                    ? "connector.mode.push"
+                    : "connector.mode.hybrid",
+                )}
+              </span>
+            ) : null}
             {installation.detail ? (
               <span className="muted">{installation.detail}</span>
             ) : null}
           </div>
-          <div className="muted">{attemptSummary(installation.last_attempt)}</div>
+          <div className={activeSourceMode === "webhook" ? "connector-activity" : "muted"}>
+            {attemptSummary(installation.last_attempt, attemptSourceMode)}
+          </div>
+          {!installation.last_attempt && activeSourceMode === "webhook" ? (
+            <p className="muted connector-next">{t("connector.push.waitingHint")}</p>
+          ) : null}
+          {!installation.last_attempt && activeSourceMode === "hybrid" ? (
+            <p className="muted connector-next">{t("connector.hybrid.waitingHint")}</p>
+          ) : null}
           {syncUnavailableHint ? (
             <p className="muted connector-next">{syncUnavailableHint}</p>
           ) : null}
@@ -764,11 +787,11 @@ function ConnectorRow({
               {t("sync.retryQuarantine")}
             </button>
           ) : null}
-          <button type="button" className="ghost" disabled={busy} onClick={onToggle}>
-            {installation.status === "disabled"
-              ? t("connector.enable")
-              : t("connector.disable")}
-          </button>
+          {installation.status === "disabled" ? (
+            <button type="button" className="ghost" disabled={busy} onClick={onEnable}>
+              {t("connector.enable")}
+            </button>
+          ) : null}
           {kind.fields.length > 0 ? (
             <button type="button" className="ghost" disabled={busy} onClick={onEdit}>
               {t("connector.editSync")}

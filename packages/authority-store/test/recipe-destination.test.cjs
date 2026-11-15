@@ -20,7 +20,7 @@ function recipe(overrides = {}) {
     id: "rule", org_id: ORG, name: "Handle work",
     match: { record_class: "task" }, trigger: { kind: "push" },
     executor_type: "test", executor_config: { prompt: "Handle the task." },
-    can_write_back: true, include_context: false, enabled: true,
+    can_write_back: true, hide_on_success: false, include_context: false, enabled: true,
     created_at: NOW, updated_at: NOW, ...overrides,
   };
 }
@@ -81,6 +81,7 @@ for (const driver of drivers) {
           const saved = await store.getRecipe(ORG, "rule");
           assert.equal(saved.write_back_thread_id, destination);
           assert.equal(saved.can_write_back, can_write_back);
+          assert.equal(saved.hide_on_success, false);
           assert.equal((await store.listRecipes(ORG))[0].write_back_thread_id, destination);
           await store.putRecipe({ ...saved, name: "Renamed" });
           assert.equal((await store.getRecipe(ORG, "rule")).write_back_thread_id, destination);
@@ -96,12 +97,51 @@ for (const driver of drivers) {
 }
 
 describe("recipe destination migrations", () => {
+  it("upgrades shipped SQLite schema 58 without losing its hide setting or active run", async (t) => {
+    const root = await mkdtemp(join(tmpdir(), "regenic-shipped-schema-"));
+    const path = join(root, "authority.db");
+    let store;
+    t.after(async () => {
+      try { await store?.close(); }
+      finally { await rm(root, { recursive: true, force: true }); }
+    });
+    const db = new Database(path);
+    try {
+      db.function("conversation_id", (source, externalId, fallbackId) =>
+        conversationId(source, externalId, fallbackId));
+      for (const migration of MIGRATIONS.filter(({ version }) => version <= 58)) db.exec(migration.sql);
+      db.prepare(`INSERT INTO recipes (
+        id, org_id, name, match_json, executor_type, executor_config_json,
+        can_write_back, hide_on_success, created_at, updated_at
+      ) VALUES ('shipped-rule', ?, 'Keep visible', '{}', 'test', '{}', 0, 0, ?, ?)`).run(ORG, NOW, NOW);
+      db.prepare(`INSERT INTO work_items (
+        id, org_id, thread_id, unit_key, record_class, thread_facet, status, recipe_id, created_at, updated_at
+      ) VALUES ('shipped-work', ?, 'source:shipped', 'unit', 'task', 'ticket', 'running', 'shipped-rule', ?, ?)`)
+        .run(ORG, NOW, NOW);
+      db.prepare(`INSERT INTO work_runs (
+        id, org_id, work_item_id, recipe_id, executor_type, status, start_state, external_run_id, created_at, updated_at
+      ) VALUES ('shipped-run', ?, 'shipped-work', 'shipped-rule', 'test', 'running', 'submitted', 'external-shipped', ?, ?)`)
+        .run(ORG, NOW, NOW);
+      db.pragma("user_version = 58");
+    } finally { db.close(); }
+    store = new SqliteAuthorityStore(path);
+    assert.equal(store.schemaVersion, LATEST_SCHEMA_VERSION);
+    assert.equal((await store.getRecipe(ORG, "shipped-rule")).hide_on_success, false);
+    assert.equal((await store.getWorkItem(ORG, "shipped-work")).current_run_id, "shipped-run");
+    const run = await store.getWorkRun(ORG, "shipped-run");
+    assert.equal(run.external_run_id, "external-shipped");
+    assert.equal(run.start_state, "submitted");
+    assert.equal(run.completion_policy_version, undefined);
+    assert.equal(run.hide_on_success, undefined);
+    assert.deepEqual(await store.listWorkDeliveries(ORG), []);
+  });
+
   it("adds the same nullable column to both schemas without backfilling guessed targets", () => {
     assert.ok(LATEST_SCHEMA_VERSION >= 56);
     assert.ok(PG_SCHEMA_VERSION >= 56);
     const sql = "ALTER TABLE recipes ADD COLUMN write_back_thread_id TEXT;";
-    assert.equal(MIGRATIONS.find(({ version }) => version === 56).sql, sql);
-    assert.equal(PG_MIGRATIONS.find(({ version }) => version === 56).sql, sql);
+    assert.match(MIGRATIONS.find(({ version }) => version === 57).sql, /ADD COLUMN write_back_thread_id TEXT/);
+    assert.match(PG_MIGRATIONS.find(({ version }) => version === 57).sql, /ADD COLUMN IF NOT EXISTS write_back_thread_id TEXT/);
     assert.match(PG_BASELINE_SQL, /write_back_thread_id TEXT/);
   });
 

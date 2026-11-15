@@ -10,8 +10,8 @@ describe("PostgreSQL projection migration", () => {
     assert.match(PG_BASELINE_SQL, /reference_kind IN \('body', 'attachment', 'artifact_body', 'evidence', 'reply_recovery'\)/);
   });
 
-  it("applies the blob reference migration after schema version 69", async () => {
-    let version = 69;
+  it("applies the blob reference migration after schema version 71", async () => {
+    let version = 71;
     const statements = [];
     const client = {
       async query(sql, params) {
@@ -36,7 +36,7 @@ describe("PostgreSQL projection migration", () => {
   });
 
   it("serializes concurrent startup before reading the schema version", async () => {
-    let version = 67;
+    let version = 69;
     let held = false;
     let unblock;
     let updates = 0;
@@ -73,7 +73,7 @@ describe("PostgreSQL projection migration", () => {
       const client = {
         async query(sql) {
           queries.push(sql.trim());
-          if (sql.includes("SELECT COALESCE(MAX(version)")) return { rows: [{ version: 67 }] };
+          if (sql.includes("SELECT COALESCE(MAX(version)")) return { rows: [{ version: 69 }] };
           if (fail === "migration lock" && sql.includes("regenic-authority-migration")) throw error;
           if (fail === "lock" && sql.startsWith("LOCK TABLE")) throw error;
           if (fail === "update" && sql.startsWith("UPDATE thread_heads")) throw error;

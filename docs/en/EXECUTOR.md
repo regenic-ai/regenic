@@ -287,6 +287,23 @@ Recipe has `can_write_back`. The kernel matches the first result line
 exactly to a live prompt option. Aliases come from
 `ChannelDriver.writeBackLabels`, not a host list.
 
+Recipes may set `write_back_thread_id` to a different conversation; omitting it
+uses the triggering WorkItem's conversation. On recipe updates, omit this field
+to retain the destination, or send `null` to return to the original conversation.
+SQLite and PostgreSQL persist it as a nullable column (schema version 57),
+including across API restarts. Upgrades preserve existing destination values;
+preferences that older versions never wrote to storage must be selected and saved
+again. Delivery reads the saved recipe, not the editor's last selection.
+
+The rule editor's trigger and result-destination pickers search displayed titles
+and conversation IDs across all kernel-visible conversations, including hidden
+ones. Opening a picker loads every cursor page of both shown and hidden lists via
+`GET /v1/me/inbox?heads=1&split=1`; it does not use message full-text search, sync
+additional source-side conversations, or unhide them. Search input is debounced,
+closing cancels loading, and failures can be retried without losing the selection.
+Result destinations still require `can_send: true`. Current-work coverage previews
+and unbound trial samples retain their existing scope.
+
 Humans may `POST /v1/me/work-items/:id/dismiss` to drop a job from
 current work. Dismiss is not `exited` and does not write back. The
 abandoned inferior is `cancelled`. A later status tick must not resurrect

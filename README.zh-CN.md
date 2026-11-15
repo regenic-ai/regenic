@@ -3,7 +3,7 @@
 **连接不同渠道的工作消息，自由组织、检索和处理。**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Node.js Version](https://img.shields.io/badge/node-%3E%3D20-blue.svg)](https://nodejs.org/)
+[![Node.js Version](https://img.shields.io/badge/node-22.14%2B%20%7C%2024%2B-blue.svg)](https://nodejs.org/)
 [![pnpm](https://img.shields.io/badge/pnpm-9-blue.svg)](https://pnpm.io)
 
 [English](README.md) · [简体中文](README.zh-CN.md)
@@ -50,7 +50,7 @@
 
 ## 快速开始
 
-需要 **Node.js 20+** 和 **pnpm 9**。从源码启动：
+需要 **Node.js 22.14+（22.x）或 24+** 和 **pnpm 9**。从源码启动：
 
 ```bash
 git clone https://github.com/regenic-ai/regenic.git

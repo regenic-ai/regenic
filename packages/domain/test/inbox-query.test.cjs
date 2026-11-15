@@ -12,6 +12,8 @@ const {
   summarizeInboxItems,
   takeRecentInboxItems,
   threadExternalIdLike,
+  MemoryAuthorityStore,
+  isPushInboxDecision,
 } = require("../dist");
 
 describe("inbox digest parse", () => {
@@ -78,6 +80,46 @@ describe("inbox digest parse", () => {
 });
 
 describe("inbox query helpers", () => {
+  it("uses the same push eligibility for memory event scans, including policy folds and human holds", async () => {
+    const store = new MemoryAuthorityStore();
+    const at = "2026-08-23T00:00:00.000Z";
+    const variants = [
+      ["current_work", [], "room"],
+      ["pending", ["needs_review"], "room"],
+      ["pending", ["policy_default_personal_attention"], "folded"],
+      ["pending", ["needs_review", "human_triage"], "room"],
+      ["outside_current_work", [], "room"],
+      ["current_work", ["task"], "room"],
+      ["current_work", [], "hidden"],
+    ];
+    for (const [i, [disposition, reason_codes, target]] of variants.entries()) {
+      const event = await store.append({
+        id: `e${i}`, org_id: "org", source: "chat", external_id: `${target}:${i}`,
+        thread_id: `chat:${target}`, occurred_at: at, actor_id: "person",
+        required_scope_ids: [], content_hash: "a".repeat(64),
+        content_media_type: "text/plain", content_byte_size: 1, expected_head_id: null,
+      });
+      const decision = {
+        event_id: event.id, org_id: "org", disposition, reason_codes,
+        layer: "L1_event", score: 1, decided_at: at,
+      };
+      await store.putDisposition(decision);
+      assert.equal(isPushInboxDecision(decision), [0, 1, 2, 5, 6].includes(i));
+    }
+    for (const [target, hidden_reason] of [["folded", "policy"], ["hidden", "human"]]) {
+      await store.putConversationPref({
+        org_id: "org", thread_id: `chat:${target}`, hidden: true, hidden_reason, updated_at: at,
+      });
+    }
+    const query = { tasks: false, push_candidates: true, limit: 2 };
+    const recent = await store.listInbox("org", query);
+    assert.deepEqual(recent.map((row) => row.event.id), ["e1", "e2"]);
+    assert.deepEqual((await store.listInbox("org", {
+      ...query, before: at, before_id: "e1",
+    })).map((row) => row.event.id), ["e0"]);
+    assert.deepEqual((await store.listInbox("org", { tasks: false })).map((row) => row.event.id), ["e0"]);
+  });
+
   it("counts current work by conversation, not every event", () => {
     const items = [
       {

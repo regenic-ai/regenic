@@ -28,6 +28,43 @@ async function rendererSmoke() {
   const more = () => evaluate(`document.querySelector(".check-options > button").click()`);
   try {
     await window.loadURL(process.env.REGENIC_SMOKE_URL);
+    window.webContents.focus();
+    await waitFor('Boolean(document.querySelector("#connector-installation-enabled"))');
+    assert.equal(await evaluate('Boolean(document.querySelector("[role=tooltip]"))'), false);
+    await evaluate('document.querySelector("button[aria-label=\'About Limit\']").focus()');
+    await waitFor('document.querySelector("[role=tooltip]")?.textContent.includes("between zero and one")');
+    const clicksBeforeHelp = await evaluate("window.__dialogClicks ?? 0");
+    await evaluate('document.querySelector("[role=tooltip]").click()');
+    assert.equal(await evaluate("window.__dialogClicks ?? 0"), clicksBeforeHelp,
+      "Reading a tooltip must not click the containing dialog backdrop");
+    assert.equal(await evaluate(`(() => {
+      const input = document.querySelector('#fixture input[type="number"]');
+      return document.getElementById(input.getAttribute("aria-describedby")).textContent.includes("between zero and one");
+    })()`), true, "Field descriptions must remain available to assistive technology");
+    await evaluate(`(() => {
+      const input = document.querySelector('#fixture input[type="number"]');
+      input.focus();
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+    })()`);
+    await waitFor('!document.querySelector("[role=tooltip]")');
+    assert.equal(await evaluate("window.__dialogEscapes ?? 0"), 0,
+      "Escape must dismiss help before reaching the dialog");
+    assert.equal(await evaluate("window.__formSubmits"), 0, "Reading help must not submit configuration");
+    assert.equal(await evaluate(`Array.from(document.querySelectorAll(".connector-kind button"))
+      .some(button => button.textContent.trim() === "Disable")`), false,
+    "Connector rows must not expose a disable action");
+    for (const status of ["enabled", "disabled", "needs_attention"]) {
+      assert.equal(await evaluate(`Array.from(document.querySelectorAll("#connector-installation-${status} button"))
+        .some(button => button.textContent.trim() === "Uninstall")`), true,
+      "Every installation must keep its uninstall action");
+    }
+    await evaluate(`Array.from(document.querySelectorAll("#connector-installation-disabled button"))
+      .find(button => button.textContent.trim() === "Enable").click()`);
+    assert.equal(await evaluate('window.__enabledInstallation'), "disabled",
+      "Previously disabled installations must remain recoverable");
+    await evaluate(`Array.from(document.querySelectorAll("#connector-installation-enabled button"))
+      .find(button => button.textContent.trim() === "Uninstall").click()`);
+    assert.equal(await evaluate('window.__uninstalledInstallation'), "enabled");
     await waitFor('document.querySelector(".check-list")?.textContent.includes("a-first")');
     await more();
     await waitFor('document.querySelector(".check-list").textContent.includes("a-second")');
@@ -142,6 +179,8 @@ async function launchSmoke() {
     import React, { useCallback, useState } from "react";
     import { createRoot } from "react-dom/client";
     import { ConnectorFormFields } from "/src/ConnectorFormFields";
+    import { ConnectorKind } from "/src/ConnectorSettings";
+    import "/src/styles.css";
     window.__requests = [];
     window.__optionUpdates = [];
     window.__formSubmits = 0;
@@ -175,7 +214,10 @@ async function launchSmoke() {
         if (key === "ids") setOptions(current =>
           [...new Map([...current, ...page].map(option => [option.value, option])).values()]);
       }, []);
-      return <form id="fixture" onSubmit={event => {
+      return <div role="dialog" aria-modal="true" aria-label="Connector form fixture"
+        onClick={() => { window.__dialogClicks = (window.__dialogClicks ?? 0) + 1; }}
+        onKeyDown={event => { if (event.key === "Escape") window.__dialogEscapes = (window.__dialogEscapes ?? 0) + 1; }}>
+        <form id="fixture" onSubmit={event => {
         event.preventDefault(); window.__formSubmits = (window.__formSubmits ?? 0) + 1;
       }}>
         <button id="dependency" type="button" onClick={() => setValues(current => ({ ...current, mode: "b" }))}>
@@ -184,16 +226,34 @@ async function launchSmoke() {
         <ConnectorFormFields connectorType="fixture" fields={[
           { key: "ids", label: "IDs", type: "string_array", required: true, dynamic_options: true,
             options_depends_on: ["mode"], options },
-          { key: "limit", label: "Limit", type: "number", required: true, min: 0, max: 1 },
+          { key: "limit", label: "Limit", type: "number", required: true, min: 0, max: 1,
+            description: "Set a value between zero and one." },
           { key: "tags", label: "Tags", type: "string_array", required: false, allow_custom: true,
             options: [{ value: "known", label: "Known" }] },
           { key: "remote", label: "Remote", type: "string", required: false, allow_custom: true, dynamic_options: true }
         ]} values={values} credentials={{}} busy={false} loading={false} optionsEnabled={true}
           onChange={(key, value) => setValues(current => ({ ...current, [key]: value }))}
           onOptions={remember} />
-      </form>;
+      </form></div>;
     }
-    createRoot(document.getElementById("root")).render(<React.StrictMode><Fixture /></React.StrictMode>);
+    const kind = {
+      connector_type: "actions-fixture", title: "Fixture", description: "", credential_hint: "",
+      installed: true, instance_count: 3, setup_ready: true, singleton: true,
+      fields: [], prerequisites: [], setup_steps: [], docs: []
+    };
+    const installations = ["enabled", "disabled", "needs_attention"].map(status => ({
+      id: status, connector_type: kind.connector_type, status, label: status, detail: null,
+      syncable: false, can_reply: false, can_create: false, last_attempt: null
+    }));
+    createRoot(document.getElementById("root")).render(<React.StrictMode>
+      <Fixture />
+      <ConnectorKind kind={kind} installations={installations} busyId={null} syncingAll={false}
+        installing={false} pendingUninstall={false} onOpenInstall={() => {}} onCloseInstall={() => {}}
+        onInstall={() => {}} onSync={() => {}} onRetryQuarantines={() => {}}
+        onEnable={installation => { window.__enabledInstallation = installation.id; }}
+        onUpdate={async () => true}
+        onUninstall={installation => { window.__uninstalledInstallation = installation.id; }} />
+    </React.StrictMode>);
   `;
   const server = await createServer({
     configFile: false,

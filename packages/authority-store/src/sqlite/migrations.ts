@@ -1,4 +1,7 @@
-export const LATEST_SCHEMA_VERSION = 74;
+export const LATEST_SCHEMA_VERSION = 77;
+
+export const RECIPE_DESTINATION_COLUMN_SQL =
+  "ALTER TABLE recipes ADD COLUMN write_back_thread_id TEXT";
 
 export const CUSTOMER_SERVICE_TASKS_SQL = `
   CREATE TABLE IF NOT EXISTS customer_service_tasks (
@@ -1156,10 +1159,21 @@ export const MIGRATIONS = [
   },
   {
     version: 56,
-    sql: "ALTER TABLE recipes ADD COLUMN write_back_thread_id TEXT;",
+    sql: `ALTER TABLE search_answers ADD COLUMN scope_json TEXT
+      CHECK (scope_json IS NULL OR json_valid(scope_json));`,
   },
   {
     version: 57,
+    sql: RECIPE_DESTINATION_COLUMN_SQL,
+  },
+  {
+    version: 58,
+    sql: `ALTER TABLE recipes ADD COLUMN hide_on_success INTEGER NOT NULL DEFAULT 1
+      CHECK (hide_on_success IN (0, 1));`,
+
+  },
+  {
+    version: 59,
     sql: `
       ALTER TABLE work_items ADD COLUMN current_run_id TEXT REFERENCES work_runs(id);
       ALTER TABLE work_items ADD COLUMN version INTEGER NOT NULL DEFAULT 0 CHECK (version >= 0);
@@ -1177,9 +1191,9 @@ export const MIGRATIONS = [
         );
     `,
   },
-  { version: 58, sql: RUN_DELIVERY_LEDGER_SQL },
+  { version: 60, sql: RUN_DELIVERY_LEDGER_SQL },
   {
-    version: 59,
+    version: 61,
     sql: `
       ALTER TABLE work_deliveries ADD COLUMN lease_owner TEXT;
       ALTER TABLE work_deliveries ADD COLUMN claim_token TEXT;
@@ -1187,19 +1201,19 @@ export const MIGRATIONS = [
     `,
   },
   {
-    version: 60,
+    version: 62,
     sql: `
       ALTER TABLE conversation_prefs ADD COLUMN visibility_version INTEGER NOT NULL DEFAULT 0 CHECK (visibility_version >= 0);
     `,
   },
   {
-    version: 61,
+    version: 63,
     sql: `
       ALTER TABLE work_items ADD COLUMN visibility_intent_version INTEGER NOT NULL DEFAULT 0 CHECK (visibility_intent_version >= 0);
     `,
   },
   {
-    version: 62,
+    version: 64,
     sql: `
       CREATE TABLE conversation_lifecycle_events (
         id TEXT PRIMARY KEY,
@@ -1236,7 +1250,7 @@ export const MIGRATIONS = [
     `,
   },
   {
-    version: 63,
+    version: 65,
     sql: `
       CREATE UNIQUE INDEX conversation_lifecycle_events_command_unique_idx
         ON conversation_lifecycle_events (org_id, command_id)
@@ -1244,13 +1258,13 @@ export const MIGRATIONS = [
     `,
   },
   {
-    version: 64,
+    version: 66,
     sql: `
       ALTER TABLE work_items ADD COLUMN acknowledged_run_id TEXT REFERENCES work_runs(id);
     `,
   },
   {
-    version: 65,
+    version: 67,
     sql: `
       CREATE TABLE conversation_lifecycle_jobs (
         id TEXT PRIMARY KEY,
@@ -1286,7 +1300,7 @@ export const MIGRATIONS = [
     `,
   },
   {
-    version: 66,
+    version: 68,
     sql: `
       ALTER TABLE work_runs ADD COLUMN executor_config_json TEXT
         CHECK (executor_config_json IS NULL OR json_valid(executor_config_json));
@@ -1295,14 +1309,14 @@ export const MIGRATIONS = [
     `,
   },
   {
-    version: 67,
+    version: 69,
     sql: `
       ALTER TABLE work_deliveries ADD COLUMN version INTEGER NOT NULL DEFAULT 0 CHECK (version >= 0);
       ALTER TABLE message_dispositions ADD COLUMN version INTEGER NOT NULL DEFAULT 0 CHECK (version >= 0);
     `,
   },
   {
-    version: 68,
+    version: 70,
     sql: `
       UPDATE thread_heads SET has_current_work = 0
       WHERE has_current_work = 1 AND NOT EXISTS (
@@ -1315,7 +1329,7 @@ export const MIGRATIONS = [
     `,
   },
   {
-    version: 69,
+    version: 71,
     sql: `
       ALTER TABLE connector_cursors ADD COLUMN lease_claim_token TEXT;
       UPDATE connector_cursors
@@ -1324,7 +1338,7 @@ export const MIGRATIONS = [
     `,
   },
   {
-    version: 70,
+    version: 72,
     sql: `
       ALTER TABLE blobs ADD COLUMN state TEXT NOT NULL DEFAULT 'protected'
         CHECK (state IN ('reserved', 'available', 'deleting', 'protected'));
@@ -1354,7 +1368,7 @@ export const MIGRATIONS = [
     `,
   },
   {
-    version: 71,
+    version: 73,
     sql: `
       DROP INDEX blob_references_hash_idx;
       DROP INDEX blob_references_owner_idx;
@@ -1398,7 +1412,7 @@ export const MIGRATIONS = [
     `,
   },
   {
-    version: 72,
+    version: 74,
     sql: `
       UPDATE blobs SET state = 'protected', unreferenced_at = NULL,
         gc_claim_token = NULL, gc_started_at = NULL
@@ -1413,7 +1427,7 @@ export const MIGRATIONS = [
     `,
   },
   {
-    version: 73,
+    version: 75,
     sql: `
       INSERT OR IGNORE INTO blobs (
         content_hash, media_type, byte_size, created_at, state
@@ -1491,8 +1505,12 @@ export const MIGRATIONS = [
     `,
   },
   {
-    version: 74,
+    version: 76,
     sql: `ALTER TABLE work_runs ADD COLUMN completion_policy_version INTEGER
       CHECK (completion_policy_version IS NULL OR completion_policy_version = 1);`,
+  },
+  {
+    version: 77,
+    sql: `ALTER TABLE work_runs ADD COLUMN hide_on_success INTEGER CHECK (hide_on_success IS NULL OR hide_on_success IN (0, 1));`,
   },
 ] as const;

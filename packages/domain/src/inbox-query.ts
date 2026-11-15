@@ -7,9 +7,50 @@ import type {
 } from "./ingestion";
 import { normalizeInboxListView } from "./list-surface";
 import { conversationId } from "./message-contract";
+import { recipeAllowsPushDispatch } from "./recipe-trigger";
+import type { Recipe, WorkItem, WorkRun } from "./work";
 
 /** Arrangement reason that marks a task row. Connectors do not interpret it. */
 export const TASK_INBOX_REASON = "task";
+
+export function isPushInboxDecision(decision: InboxItem["decision"]): boolean {
+  return decision.disposition === "current_work" ||
+    (decision.disposition === "pending" && !decision.reason_codes.includes("human_triage"));
+}
+
+function isAutomaticPendingWorkDecision(
+  disposition: string | null,
+  reasonCodes: readonly string[],
+  item: Pick<WorkItem, "record_class" | "recipe_id">,
+): boolean {
+  return disposition === "pending" && !reasonCodes.includes("human_triage")
+    && item.record_class === "utterance" && Boolean(item.recipe_id);
+}
+
+export function isWorkTriggerDecision(
+  disposition: string | null,
+  reasonCodes: readonly string[],
+  item: Pick<WorkItem, "org_id" | "record_class" | "recipe_id">,
+  recipe?: Recipe | null,
+): boolean {
+  return disposition === "current_work"
+    || (isAutomaticPendingWorkDecision(disposition, reasonCodes, item)
+      && Boolean(recipe && recipe.org_id === item.org_id && recipe.id === item.recipe_id
+        && recipeAllowsPushDispatch(recipe)));
+}
+
+export function isFinishedWorkTriggerDecision(
+  disposition: string | null,
+  reasonCodes: readonly string[],
+  item: WorkItem,
+  run: WorkRun | null,
+): boolean {
+  return disposition === "current_work"
+    || (isAutomaticPendingWorkDecision(disposition, reasonCodes, item)
+      && Boolean(run && run.org_id === item.org_id && run.work_item_id === item.id
+        && run.id === item.current_run_id && run.recipe_id === item.recipe_id
+        && run.trigger_kind === "push"));
+}
 
 export function isTaskInboxItem(item: {
   decision: { reason_codes: readonly string[] };
@@ -440,8 +481,8 @@ export function selectInboxItems(
       );
     }
   }
-  if (query?.tasks) {
-    selected = selected.filter((item) => isTaskInboxItem(item));
+  if (query?.tasks !== undefined) {
+    selected = selected.filter((item) => isTaskInboxItem(item) === query.tasks);
   }
   return takeRecentInboxItems(selected, query);
 }

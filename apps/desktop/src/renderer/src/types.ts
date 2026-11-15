@@ -2,6 +2,25 @@ import type { DriverCatalogField, DriverCatalogFieldWhen, ConnectorCatalogFieldO
 
 export type NavId = "inbox" | "search" | "follow-ups" | "recipes" | "engine" | "settings";
 
+export interface PersonalSyncSettings {
+  quota_tokens: number;
+  quota_window_ms: number;
+  installation_concurrency: number;
+  live_concurrency: number;
+  history_concurrency: number;
+  media_concurrency: number;
+  steady_claim_limit: number;
+  bootstrap_claim_limit: number;
+  first_seed_limit: number;
+}
+
+export interface PersonalSyncSettingsView {
+  settings: PersonalSyncSettings;
+  defaults: PersonalSyncSettings;
+  ranges: Record<keyof PersonalSyncSettings, [number, number]>;
+  customized: boolean;
+}
+
 export interface CustomerServiceTaskView {
   id: string;
   status: string;
@@ -122,6 +141,7 @@ export interface KernelSettingsView {
   activeOrigin: string;
   hasSavedPersonalApiKey?: boolean;
   locale: Locale;
+  databaseDriver?: "sqlite" | "postgres";
   dataDirectory: DataDirectoryView;
   sourceRetention?: SourceRetentionView;
 }
@@ -421,6 +441,8 @@ export interface RecipeView {
   executor_config: Record<string, string>;
   can_write_back: boolean;
   write_back_thread_id?: string;
+  /** Optional for compatibility with older API responses. */
+  hide_on_success?: boolean;
   include_context: boolean;
   max_concurrent?: number;
   enabled: boolean;
@@ -666,6 +688,18 @@ export interface PersonalSearchAnswer {
   agent_thread_id?: string;
   answer?: string;
   citations?: Array<{ ref: number; event_id: string }>;
+  scope?: {
+    intent: "lookup" | "aggregate" | "list";
+    complete: boolean;
+    total_count: number | null;
+    included_count: number;
+    omitted_count: number | null;
+    incomplete_reason?: string;
+  };
+  progress?: {
+    completed_batches: number;
+    total_batches: number;
+  };
 }
 
 export interface PersonalExpandedSearchResult extends PersonalContextSearchResult {
@@ -812,6 +846,7 @@ export interface EngineInstallationView {
   can_pair?: boolean;
   channel?: string;
   channel_label?: string;
+  source_mode?: "poll" | "webhook" | "hybrid";
   last_attempt: IngestAttempt | null;
   pairing_code?: string;
   sync?: SyncProgressView;

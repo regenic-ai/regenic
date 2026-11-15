@@ -152,17 +152,23 @@
 | `connector_sync_work` | UNIQUE `(installation_id, stream_key, lane, generation)`；状态、优先权、租约等 | 执行器同步资源；其 run_id 指同步运行，不是 WorkRun |
 | `context_projection_outbox` | 消息 event_id 唯一；状态、租约、重试等 | 消息上下文投影；不复用作生命周期队列 |
 
-当前 `work_runs.work_item_id` 和 `work_deliveries.work_item_id` 引用 WorkItem；`head_event_id` 引用消息 Event。对话通过 `(org_id, thread_id)` 逻辑关联，没有独立 Conversation 表。自 SQLite／PostgreSQL schema 56 起，Recipe 固定回写目标已覆盖保存、读取及两种数据库映射，既有导入导出继续保留该字段。Schema 57 增加 WorkItem 的 `current_run_id` 与 WorkItem／WorkRun 行版本；历史行从版本 0 起。只有活跃工单恰好只有一条同租户运行，且该运行仍活跃、规则归属一致时才恢复运行指针；其余保留 NULL，不按时间或最新运行猜测。设置页现可查看当前活跃工单的身份异常及可能匹配的 Run ID；该入口只读、不自动修复或推断历史关联。Item 与 Run 分别读取，诊断可能与并发生命周期转换短暂不一致，须刷新核实后再采取其他操作。
+当前 schema 为 77。合并主干后保留已发布的 56（搜索 scope）、57（Recipe 固定回写目标）、58（Recipe 隐藏开关）；本 PR 尚未发布的迁移从 59 起重排，历史验收记录中的旧编号不代表已发布数据库需要改号。
 
-Schema 58 增加运行级投递义务、安装／目标快照与触发类型，以及按 Run 保留的投递账本；Delivery 使用 `(org_id, run_id)` 复合 FK 关联同租户 Run，原子写端口同时校验所属工单与目标。新运行在调用外部执行器前持久化这些字段，历史值保持 NULL。历史投递原 ID、正文、幂等键与回执原样迁移，不猜测 Run／目标；NULL run_id 的历史记录保留每工单最多一条的限制，不能换 ID 覆盖。此阶段仍保留旧运行／投递兼容收尾，不代表历史未知授权核对及最终发送协议已启用。
+当前 `work_runs.work_item_id` 和 `work_deliveries.work_item_id` 引用 WorkItem；`head_event_id` 引用消息 Event。对话通过 `(org_id, thread_id)` 逻辑关联，没有独立 Conversation 表。自 SQLite／PostgreSQL schema 57 起，Recipe 固定回写目标已覆盖保存、读取及两种数据库映射，既有导入导出继续保留该字段。Schema 59 增加 WorkItem 的 `current_run_id` 与 WorkItem／WorkRun 行版本；历史行从版本 0 起。只有活跃工单恰好只有一条同租户运行，且该运行仍活跃、规则归属一致时才恢复运行指针；其余保留 NULL，不按时间或最新运行猜测。设置页现可查看当前活跃工单的身份异常及可能匹配的 Run ID；该入口只读、不自动修复或推断历史关联。Item 与 Run 分别读取，诊断可能与并发生命周期转换短暂不一致，须刷新核实后再采取其他操作。
 
-Schema 59 增加 `lease_owner / claim_token / cancel_requested_at`；已有请求与回执不改写，不为旧 worker 伪造 token。投递 worker 通过 `transitionWorkDelivery()` 原子认领／续租／结算／记录回执／恢复过期租约／请求停止投递。SQLite 使用 immediate 事务与单次写 RPC；PostgreSQL 按 Item、Delivery 顺序锁行；内存同步准备并提交。新认领分配新的 token，正常结算及续租同时匹配 ID、owner、token 与有效租约；已认领记录不能通过普通 put 接口覆盖或清掉 token。
+Schema 60 增加运行级投递义务、安装／目标快照与触发类型，以及按 Run 保留的投递账本；Delivery 使用 `(org_id, run_id)` 复合 FK 关联同租户 Run，原子写端口同时校验所属工单与目标。新运行在调用外部执行器前持久化这些字段，历史值保持 NULL。历史投递原 ID、正文、幂等键与回执原样迁移，不猜测 Run／目标；NULL run_id 的历史记录保留每工单最多一条的限制，不能换 ID 覆盖。此阶段仍保留旧运行／投递兼容收尾，不代表历史未知授权核对及最终发送协议已启用。
 
-Schema 61 为 WorkItem 增加 `visibility_intent_version`。执行预留读取来源对话当前 `conversation_prefs.visibility_version`，并在预留事务内核对后写入 WorkItem；SQLite immediate 事务与 PostgreSQL 共用对话偏好 advisory lock，偏好在读取与预留间变化时拒绝启动。结束后的兼容策略折叠用同一锁实现期望版本 CAS，仅在 WorkItem 捕获版本仍等于当前对话版本时作用于来源对话；策略折叠不会递增人工版本。执行器内部对话继续独立处理。历史 WorkItem 从版本 0 起，偏好或版本不确定时保守不折叠。本切片不意味着对话级写协议已覆盖采集、观察、投递和所有其他写入口。
+Schema 61 增加 `lease_owner / claim_token / cancel_requested_at`；已有请求与回执不改写，不为旧 worker 伪造 token。投递 worker 通过 `transitionWorkDelivery()` 原子认领／续租／结算／记录回执／恢复过期租约／请求停止投递。SQLite 使用 immediate 事务与单次写 RPC；PostgreSQL 按 Item、Delivery 顺序锁行；内存同步准备并提交。新认领分配新的 token，正常结算及续租同时匹配 ID、owner、token 与有效租约；已认领记录不能通过普通 put 接口覆盖或清掉 token。
 
-Schema 62 建立 `conversation_lifecycle_events`，Schema 63 为每组织的非空 command_id 增加唯一约束，Schema 64 增加 `work_items.acknowledged_run_id`。人工显示／隐藏、普通工单忽略、手动启动、失败投递重试及不确定投递核对携带 `command_id` 与 `issued_at`；业务状态与事件同事务提交。相同命令 ID 与相同参数重放不会重复应用状态转换、取消远端、启动执行器或再次触发发送；相同 ID 参数不同返回冲突。手动启动以 `work_run_transitioned` 事件记录预留的 Run 身份，投递重试／核对以 `delivery_transitioned` 记录原 Delivery 身份及命令结果；重放只读取原命令结果，不触发外部副作用。API 拒绝超过 90 天或未来超过 5 分钟的命令。运行观察提交会同事务审计实际 Run 状态转换，并在创建结果投递时记录 `delivery_created`；投递认领、可靠回执、发送结算、失败、不确定及停止请求也由转换端口同事务记录 `delivery_claimed / delivery_transitioned`，审计不包含 claim token、回执原文或结果正文。指定结果确认已接入：命令须匹配 WorkItem 与 Run 版本及精确触发事件，且只允许当前 completed Run、done 工单及有冻结回写义务时已确认 sent 的 Delivery；同事务记录 Run ID、把该触发事件从 `current_work` 移出并写入 `work_acknowledged / current_work_changed`。仅当线程没有其他当前工作、未完成／未确认工单或未闭合投递，且人工可见性版本未变化时才策略隐藏，并同事务写 `visibility_changed`；人工隐藏／重新显示优先。相同命令重放幂等，新 Run 预留时清除旧确认。消息收尾与确认已原子化，但其他接纳消息、观察、投递等所有写入尚未统一迁移到对话级写协议，不能据此宣称全生命周期写入已整体原子化。
+Schema 63 为 WorkItem 增加 `visibility_intent_version`。执行预留读取来源对话当前 `conversation_prefs.visibility_version`，并在预留事务内核对后写入 WorkItem；SQLite immediate 事务与 PostgreSQL 共用对话偏好 advisory lock，偏好在读取与预留间变化时拒绝启动。结束后的兼容策略折叠用同一锁实现期望版本 CAS，仅在 WorkItem 捕获版本仍等于当前对话版本时作用于来源对话；策略折叠不会递增人工版本。执行器内部对话继续独立处理。历史 WorkItem 从版本 0 起，偏好或版本不确定时保守不折叠。本切片不意味着对话级写协议已覆盖采集、观察、投递和所有其他写入口。
 
-Schema 74 增加可空的 `work_runs.completion_policy_version`，当前合法值只有 `1`。SQLite 单实例 API／Electron 的新用户 Run 在预留时冻结为 `1`；历史 Run 保持 NULL，不扫描旧完成记录、不合成用户确认、不更改历史发送授权。系统后台工作不设置该版本；PostgreSQL 仅同步字段迁移与读写映射，运行时仍不启用版本 `1`。版本 `1` 的当前 completed Run，在冻结义务明确为无需写回或本次 Delivery 已 `acked + sent` 后，才在观察／投递结算的同一事务将精确当前来源触发移出 `current_work`、更新列表头、记录审计并尝试折叠；人工意图变化或其他待办仍阻止折叠。自动收尾不写 `acknowledged_run_id`，该字段只记录实际用户确认；已自动收尾的结果不再提示确认。每个 Run 的收尾审计使用稳定去重键，重复观察及投递命令重放不会再次处置用户重新纳入工作的旧触发。
+Schema 64 建立 `conversation_lifecycle_events`，Schema 65 为每组织的非空 command_id 增加唯一约束，Schema 66 增加 `work_items.acknowledged_run_id`。人工显示／隐藏、普通工单忽略、手动启动、失败投递重试及不确定投递核对携带 `command_id` 与 `issued_at`；业务状态与事件同事务提交。相同命令 ID 与相同参数重放不会重复应用状态转换、取消远端、启动执行器或再次触发发送；相同 ID 参数不同返回冲突。手动启动以 `work_run_transitioned` 事件记录预留的 Run 身份，投递重试／核对以 `delivery_transitioned` 记录原 Delivery 身份及命令结果；重放只读取原命令结果，不触发外部副作用。API 拒绝超过 90 天或未来超过 5 分钟的命令。运行观察提交会同事务审计实际 Run 状态转换，并在创建结果投递时记录 `delivery_created`；投递认领、可靠回执、发送结算、失败、不确定及停止请求也由转换端口同事务记录 `delivery_claimed / delivery_transitioned`，审计不包含 claim token、回执原文或结果正文。指定结果确认已接入：命令须匹配 WorkItem 与 Run 版本及精确触发事件，且只允许当前 completed Run、done 工单及有冻结回写义务时已确认 sent 的 Delivery；同事务记录 Run ID、把该触发事件从 `current_work` 移出并写入 `work_acknowledged / current_work_changed`。仅当线程没有其他当前工作、未完成／未确认工单或未闭合投递，且人工可见性版本未变化时才策略隐藏，并同事务写 `visibility_changed`；人工隐藏／重新显示优先。相同命令重放幂等，新 Run 预留时清除旧确认。消息收尾与确认已原子化，但其他接纳消息、观察、投递等所有写入尚未统一迁移到对话级写协议，不能据此宣称全生命周期写入已整体原子化。
+
+Schema 76 增加可空的 `work_runs.completion_policy_version`，当前合法值只有 `1`。SQLite 单实例 API／Electron 的新用户 Run 在预留时冻结为 `1`；历史 Run 保持 NULL，不扫描旧完成记录、不合成用户确认、不更改历史发送授权。系统后台工作不设置该版本；PostgreSQL 仅同步字段迁移与读写映射，运行时仍不启用版本 `1`。版本 `1` 的当前 completed Run，在冻结义务明确为无需写回或本次 Delivery 已 `acked + sent` 后，才在观察／投递结算的同一事务将精确当前来源触发移出 `current_work`、更新列表头、记录审计并尝试折叠；人工意图变化或其他待办仍阻止折叠。自动收尾不写 `acknowledged_run_id`，该字段只记录实际用户确认；已自动收尾的结果不再提示确认。每个 Run 的收尾审计使用稳定去重键，重复观察及投递命令重放不会再次处置用户重新纳入工作的旧触发。
+
+Schema 77 增加可空的 `work_runs.hide_on_success`，在每次 Run 预留时冻结规则隐藏开关。`false` 不阻止成功自动收尾：仍退出当前工作、变为 quiet、不要求结果确认，但完成结果必须可从 Showing 列表找到；阅读／确认不能绕过该冻结值再次隐藏。规则执行中修改开关不影响当前 Run。历史 NULL 不回填，实际结果确认时回退 Recipe 设置，再回退旧默认 true；新建规则默认 false。
+
+显式规则命中的自动 `pending` 普通消息保留主干的自动执行能力。接纳与消息提交同事务完成，启动时仍要求同租户、特定来源、启用的 push 规则及原子快照校验；采集和启动不会把其分类伪造为 `current_work`。人工 pending／排除、人工隐藏及 outbound／assistant／system 回声不能因此执行。成功收尾依据精确当前 Run 的冻结 push 身份，将原自动 pending 来源转为 `outside_current_work`，再按冻结隐藏开关处理；不恢复后台 `reconcileInbox` 扫描或旧 raw writer。
 
 ## 6. 最终表结构变更
 
@@ -179,13 +185,16 @@ Schema 74 增加可空的 `work_runs.completion_policy_version`，当前合法�
 | `work_runs` | `write_back_required` | 可空 BOOLEAN；新运行必填；NULL 只表示历史未知，不能解释为 false |
 | `work_runs` | `write_back_target_json` | 可空 JSON；要求投递的新运行必填，保存规范化 installation／source／target 身份，无凭据 |
 | `work_runs` | `trigger_kind` | 可空 TEXT，`push / pull / manual`；新运行冻结触发类型，保证 Recipe 被删除后仍能记录投递来源；历史 NULL 不猜填 |
+| `work_runs` | `completion_policy_version` | 可空 INTEGER；新用户 SQLite Run 冻结为 1，历史及尚未启用的运行时保留 NULL |
+| `work_runs` | `hide_on_success` | 可空 BOOLEAN；新 Run 冻结规则值，NULL 仅用于历史兼容 |
 | `work_deliveries` | `version` | 非负整数，NOT NULL DEFAULT 0；行 CAS，不作为投递身份 |
 | `work_deliveries` | `run_id` | 可空，历史未知保留 NULL；新执行结果投递必填 |
 | `work_deliveries` | `target_json` | 可空 JSON；新投递必填，从 Run 快照复制，不跟随 Recipe 后续编辑 |
 | `work_deliveries` | `lease_owner, claim_token` | 可空 TEXT；每次认领生成新 token |
 | `work_deliveries` | `cancel_requested_at` | 可空 timestamp；停止新发送／重试，不代表已经撤销在途请求 |
 | `message_dispositions` | `version` | 非负整数，NOT NULL DEFAULT 0；实际编排字段变化递增，不按重复扫描递增 |
-| `recipes` | `write_back_thread_id` | 可空 TEXT；沿用既有对话身份格式，已在 schema 56 实现；历史行保留 NULL，不猜填目标 |
+| `recipes` | `write_back_thread_id` | 可空 TEXT；沿用既有对话身份格式，已在 schema 57 实现；历史行保留 NULL，不猜填目标 |
+| `recipes` | `hide_on_success` | BOOLEAN；schema 58 保留旧默认 true，新建规则默认 false；只影响后续 Run 的隐藏快照 |
 
 `current_run_id / acknowledged_run_id` 必须属于同一个 org 和 WorkItem。新关联采用同租户物理 FK：相关业务表增加 UNIQUE `(org_id, id)`，配合复合 FK；WorkItem 与 Run 循环关联通过可空指针及一个事务中的插入／更新建立。所属工单一致性还必须由原子端口校验。
 
@@ -466,7 +475,11 @@ Blob 回收有独立启用门槛：先新增引用表和对象状态字段，再
 
 当前启用范围：**SQLite 单实例 API／Electron 的新用户 Run 已切换到自动完成策略 v1**，不是所有存储／部署拓扑整体切换。历史 Run 继续走既有确认收尾；PostgreSQL、独立 worker／多副本发布和 Blob GC 不在本次启用范围。以下按日期保留的历史验收记录不覆盖这一最新范围说明。
 
-### 本轮自动完成策略 v1 验收
+### 主干兼容与隐藏开关主流程验收
+
+保留主干已发布 schema 56–58，并新增 Run 隐藏快照；普通消息回归改用原子接纳、启动与观察端口，不恢复旧扫描器或 raw writer。真实 Electron `--skip-crash` 已通过来源搜索定位、四条自动折叠结果、关闭隐藏后的 Showing 可发现性，以及同 profile 正常全进程重启；原 Run／来源 disposition／投递账本保持不变，不重跑或重发。该结论仍不覆盖 PostgreSQL 实库、实际外部执行器／渠道、部署或默认完整 crash 验收；Blob GC 关闭。
+
+### 合并主干前的自动完成策略 v1 验收
 
 SQLite 单实例 API／Electron 为新用户 Run 冻结 `completion_policy_version = 1`；历史 NULL 保留确认收尾，系统 Recipe 与 PostgreSQL 不启用。当前 Run 成功且冻结投递义务满足后，在同一 Authority 事务移出精确 `current_work`、记录审计并按可见性围栏折叠，不伪造 `acknowledged_run_id`。钩子仅在真正进入 completed 或投递真正进入 acked + sent 时执行；重复终态观察不重新处置用户重新纳入的旧触发。
 

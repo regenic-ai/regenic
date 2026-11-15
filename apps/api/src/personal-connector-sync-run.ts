@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import {
-  connectorSyncTimeoutMs,
   type ConnectorRuntimeStore,
   type IngestQuarantine,
   firstSeedHeadFromEnv,
@@ -21,14 +20,15 @@ import {
 
 import type { ConnectorDueWorkState as ConnectorState } from "./personal-connector-state";
 import type { StartSyncRunInput } from "./personal-connector-types";
+import type { PersonalSyncSettings } from "./personal-sync-settings";
 import {
   safeErrorCode,
-  LEASE_MS,
   DEFAULT_MAX_PAGES,
 } from "./personal-connector-poll";
 import {
   recordClaimedWorkLag,
   dueWorkClaimLimitFor,
+  dueWorkClaimLeaseMs,
 } from "./personal-connector-rhythm";
 import {
   discoverCatalogDueWork,
@@ -211,16 +211,26 @@ export async function retryQuarantines(
 }
 
 async function executeDurableSyncRun(state: ConnectorState, runId: string): Promise<void> {
+  await state.refreshSyncSettings();
+  const settings = state.syncSettings;
   const store = state.runtime.requireHost().get("authority");
   const run = await store.getSyncRun(runId, state.runtime.orgId());
   if (!run || (run.status !== "queued" && run.status !== "running")) {
     return;
   }
   const owner = `personal-sync-worker:${randomUUID()}`;
+  const plane = syncRunWorkPlane(run.mode);
+  const claimCap = settings
+    ? settings[plane === "steady" ? "steady_claim_limit" : "bootstrap_claim_limit"]
+    : dueWorkClaimLimitFor(state.dueWorkLimiters, plane);
   const [work] = await store.claimSyncWork({
     owner,
     now: new Date().toISOString(),
-    lease_ms: Math.max(LEASE_MS, connectorSyncTimeoutMs() * 2),
+    lease_ms: dueWorkClaimLeaseMs(
+      // The durable run covers catalog discovery and up to two stream claims.
+      2 * claimCap + 1,
+      settings,
+    ),
     limit: 1,
     work_id: syncRunWorkId(run.id),
   });
@@ -228,7 +238,7 @@ async function executeDurableSyncRun(state: ConnectorState, runId: string): Prom
     return;
   }
   try {
-    const result = await executeSyncRunDueWork(state, store, run);
+    const result = await executeSyncRunDueWork(state, store, run, settings);
     const latest = await store.getSyncRun(run.id, run.org_id);
     if (latest?.status === "paused") {
       await store.settleSyncWork({
@@ -287,6 +297,7 @@ async function executeSyncRunDueWork(
   state: ConnectorState,
   store: ConnectorRuntimeStore,
   run: SyncRun,
+  settings: PersonalSyncSettings | undefined,
 ): Promise<{ accepted_count: number }> {
   const plane = syncRunWorkPlane(run.mode);
   const lanes = syncRunWorkLanes(run.mode);
@@ -315,7 +326,7 @@ async function executeSyncRunDueWork(
     members: catalog.members,
     preferredThreadId: preferredThreadId(),
     streamKeys: run.options.stream_keys,
-    limit: firstSeedHeadFromEnv(),
+    limit: settings?.first_seed_limit ?? firstSeedHeadFromEnv(),
   });
   if (wakeKeys.length > 0) {
     await store.wakeUnassignedSyncWork({
@@ -328,15 +339,17 @@ async function executeSyncRunDueWork(
   if (!latest || (latest.status !== "queued" && latest.status !== "running")) {
     return { accepted_count: 0 };
   }
-  const leaseMs = Math.max(LEASE_MS, connectorSyncTimeoutMs() * 2);
-  const limit = Math.min(
-    MAX_DUE_WORK_CLAIM_LIMIT,
-    Math.max(
-      dueWorkClaimLimitFor(state.dueWorkLimiters, plane),
-      wakeKeys.length + 1,
-      firstSeedHeadFromEnv() + 2,
-    ),
-  );
+  const limit = settings
+    ? dueWorkClaimLimitFor(state.dueWorkLimiters, plane, settings)
+    : Math.min(
+        MAX_DUE_WORK_CLAIM_LIMIT,
+        Math.max(
+          dueWorkClaimLimitFor(state.dueWorkLimiters, plane),
+          wakeKeys.length + 1,
+          firstSeedHeadFromEnv() + 2,
+        ),
+      );
+  const leaseMs = dueWorkClaimLeaseMs(limit, settings);
   const claim = async (): Promise<SyncWorkRecord[]> =>
     store.claimSyncWork({
       owner: state.dueWorkOwner,
@@ -355,6 +368,7 @@ async function executeSyncRunDueWork(
       plane,
       allowHistory,
       syncRunId: run.id,
+      execution: { settings },
     });
     accepted += executed.accepted_count;
     if (claimed.some((item) => item.lane === "catalog")) {
@@ -366,6 +380,7 @@ async function executeSyncRunDueWork(
             plane,
             allowHistory,
             syncRunId: run.id,
+            execution: { settings },
           })
         ).accepted_count;
       }

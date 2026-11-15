@@ -68,14 +68,14 @@ describe("local ingestion persistence", () => {
     legacy.function("conversation_id", (source, externalId, fallbackId) =>
       conversationId(source, externalId, fallbackId));
     try {
-      for (const migration of MIGRATIONS.filter(({ version }) => version <= 69)) {
+      for (const migration of MIGRATIONS.filter(({ version }) => version <= 71)) {
         legacy.exec(migration.sql);
       }
       legacy.prepare(
         `INSERT INTO blobs (content_hash, media_type, byte_size, created_at)
          VALUES (?, 'text/plain', 3, ?)`,
       ).run("e".repeat(64), "2026-08-24T00:00:00.000Z");
-      legacy.pragma("user_version = 69");
+      legacy.pragma("user_version = 73");
     } finally {
       legacy.close();
     }
@@ -370,7 +370,7 @@ describe("local ingestion persistence", () => {
     }
   });
 
-  it("repairs stale current-work thread projections when upgrading version 67", async () => {
+  it("repairs stale current-work thread projections when upgrading version 69", async () => {
     const root = await createRoot();
     const path = join(root, "authority.db");
     const { authorityStore: store } = await createHarness(root);
@@ -423,7 +423,7 @@ describe("local ingestion persistence", () => {
       ]) {
         legacy.exec(`ALTER TABLE blobs DROP COLUMN ${column};`);
       }
-      legacy.pragma("user_version = 67");
+      legacy.pragma("user_version = 71");
     } finally {
       legacy.close();
     }
@@ -662,13 +662,13 @@ describe("local ingestion persistence", () => {
     }
   });
 
-  it("protects and references an existing recovery Blob during schema 71", async () => {
+  it("protects and references an existing recovery Blob during schema 73", async () => {
     const root = await createRoot();
     const path = join(root, "authority.db");
     const legacy = new Database(path);
     legacy.function("conversation_id", (source, externalId, fallbackId) =>
       conversationId(source, externalId, fallbackId));
-    for (const migration of MIGRATIONS.filter((migration) => migration.version <= 70)) {
+    for (const migration of MIGRATIONS.filter((migration) => migration.version <= 72)) {
       legacy.exec(migration.sql);
       legacy.pragma(`user_version = ${migration.version}`);
     }
@@ -716,13 +716,13 @@ describe("local ingestion persistence", () => {
     }
   });
 
-  it("backfills and protects historical Event body references during schema 72", async () => {
+  it("backfills and protects historical Event body references during schema 74", async () => {
     const root = await createRoot();
     const path = join(root, "authority.db");
     const legacy = new Database(path);
     legacy.function("conversation_id", (source, externalId, fallbackId) =>
       conversationId(source, externalId, fallbackId));
-    for (const migration of MIGRATIONS.filter(({ version }) => version <= 69)) {
+    for (const migration of MIGRATIONS.filter(({ version }) => version <= 71)) {
       legacy.exec(migration.sql);
     }
     const hash = "b".repeat(64);
@@ -736,7 +736,7 @@ describe("local ingestion persistence", () => {
         id, org_id, source, external_id, operation, content_hash, occurred_at, ingested_at
       ) VALUES (?, ?, ?, ?, 'create', ?, ?, ?)
     `).run("legacy-event", "local-owner", "synthetic", "legacy-event", hash, now, now);
-    legacy.pragma("user_version = 69");
+    legacy.pragma("user_version = 73");
     legacy.close();
 
     const store = new SqliteAuthorityStore(path);
@@ -768,13 +768,13 @@ describe("local ingestion persistence", () => {
     }
   });
 
-  it("backfills legacy ContextArtifact body and evidence references during schema 73", async () => {
+  it("backfills legacy ContextArtifact body and evidence references during schema 75", async () => {
     const root = await createRoot();
     const path = join(root, "authority.db");
     const legacy = new Database(path);
     legacy.function("conversation_id", (source, externalId, fallbackId) =>
       conversationId(source, externalId, fallbackId));
-    for (const migration of MIGRATIONS.filter(({ version }) => version <= 72)) {
+    for (const migration of MIGRATIONS.filter(({ version }) => version <= 74)) {
       legacy.exec(migration.sql);
     }
     const bodyHash = "c".repeat(64);
@@ -809,7 +809,7 @@ describe("local ingestion persistence", () => {
         input_refs: [],
         recorded_at: now,
       }));
-    legacy.pragma("user_version = 72");
+    legacy.pragma("user_version = 76");
     legacy.close();
 
     const store = new SqliteAuthorityStore(path);

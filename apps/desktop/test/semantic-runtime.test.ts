@@ -135,6 +135,7 @@ test("search turns explicit rolling periods into filters and removes them from s
     planContextSearchQuery("统计下所有人近30天的研发任务完成情况", now),
     {
       query: "统计下所有人 研发任务完成情况",
+      intent: "aggregate",
       time_range: {
         occurred_after: "2026-10-09T03:04:05.000Z",
         occurred_before: "2026-11-08T03:04:05.000Z",
@@ -153,6 +154,8 @@ test("search turns explicit rolling periods into filters and removes them from s
     planContextSearchQuery("past two weeks release count", now).time_range?.occurred_after,
     "2026-10-25T03:04:05.000Z",
   );
+  assert.equal(planContextSearchQuery("列出近一个月发布的视频", now).intent, "list");
+  assert.equal(planContextSearchQuery("hollyland 最近在跟谁对接", now).intent, "lookup");
   assert.equal(
     planContextSearchQuery("最近一个月", new Date("2026-03-31T12:00:00.000Z"))
       .time_range?.occurred_after,

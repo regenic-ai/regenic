@@ -76,7 +76,7 @@ async function ingest(operation, text) {
   } finally { authority.close(); }
 }
 
-async function seedLifecycleWork(executorType, statuses = ["completed", "failed"], senderId, completionPolicyVersion) {
+async function seedLifecycleWork(executorType, statuses = ["completed", "failed"], senderId, completionPolicyVersion, hideOnSuccess) {
   const authority = new SqliteAuthorityStore(database);
   const fixtures = [];
   try {
@@ -104,6 +104,7 @@ async function seedLifecycleWork(executorType, statuses = ["completed", "failed"
         match: { record_class: "task" }, trigger: { kind: "push" },
         executor_type: executorType, executor_config: {}, include_context: false,
         can_write_back: writeBack, enabled: false, created_at: now, updated_at: now,
+        hide_on_success: hideOnSuccess ?? true,
       });
       const bound = await authority.observeWorkItem({
         expected_item: observed, item: { ...observed, recipe_id: recipeId, updated_at: now },
@@ -114,6 +115,7 @@ async function seedLifecycleWork(executorType, statuses = ["completed", "failed"
         recipe_id: recipeId, executor_type: executorType, status: "running",
         start_state: "pending", write_back_required: writeBack, trigger_kind: "push",
         ...(completionPolicyVersion === 1 ? { completion_policy_version: 1 } : {}),
+        ...(hideOnSuccess !== undefined ? { hide_on_success: hideOnSuccess } : {}),
         ...(writeBack ? { write_back_target: {
           installation_id: senderId, source: "lifecycle-smoke", target: `${status}-results`,
         } } : {}),
@@ -788,18 +790,18 @@ process.on("SIGTERM",() => server.close(() => process.exit(0)));
       await waitFor(() => evaluate('Array.from(document.querySelectorAll(".semantic-settings button")).some(button => button.textContent === "Save settings and start")'), "combined permission startup");
       await evaluate(`(() => {
         const choose = (labelText, value) => {
-          const label = Array.from(document.querySelectorAll("label.field")).find(item => item.textContent.includes(labelText));
-          const select = label?.querySelector("select");
-          if (!select || !Array.from(select.options).some(option => option.value === value && !option.disabled)) {
+          const label = Array.from(document.querySelectorAll("label")).find(item => item.textContent.includes(labelText));
+          const select = label?.control;
+          if (!select || select.tagName !== "SELECT" || !Array.from(select.options).some(option => option.value === value && !option.disabled)) {
             throw new Error("Missing model parameter option: " + labelText + "=" + value);
           }
           Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value").set.call(select, value);
           select.dispatchEvent(new Event("change", { bubbles: true }));
         };
         const setRange = (labelText, value) => {
-          const label = Array.from(document.querySelectorAll("label.field")).find(item => item.textContent.includes(labelText));
-          const input = label?.querySelector('input[type="range"]');
-          if (!input || Number(value) < Number(input.min) || Number(value) > Number(input.max)) {
+          const label = Array.from(document.querySelectorAll("label")).find(item => item.textContent.includes(labelText));
+          const input = label?.control;
+          if (!input || input.type !== "range" || Number(value) < Number(input.min) || Number(value) > Number(input.max)) {
             throw new Error("Missing model parameter range: " + labelText + "=" + value);
           }
           Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(input, value);
@@ -835,6 +837,12 @@ process.on("SIGTERM",() => server.close(() => process.exit(0)));
       console.log("PASS: combined startup applies selected permission and all launch parameters; running opt-out reloads text-only inference (synthetic managed model)");
     }
     await checkLifecycleWork(lifecycleWork);
+    await click('nav button[aria-label="Inbox"]');
+    await waitFor(() => evaluate('Boolean(document.querySelector(".list-views button:nth-child(2)"))'),
+      "reviewed-result list preference before reload");
+    await click(".list-views button:nth-child(2)");
+    await waitFor(async () => (await api("/v1/me/prefs")).inbox_list === "hidden",
+      "reviewed-result hidden preference saved before reload");
     await reloadRenderer();
     await click('nav button[aria-label="Inbox"]');
     await waitFor(() => evaluate('Boolean(document.querySelector(".list-views button:nth-child(2)"))'),
@@ -1077,6 +1085,38 @@ process.on("SIGTERM",() => server.close(() => process.exit(0)));
       console.log(`PASS: Electron required write-back ${resolution} settles the original delivery and automatically folds without human result acknowledgment`);
     }
     console.log("PASS: real Electron delivery retry and sent/not-sent reconciliation automatically fold only the source; completed results remain available on the hidden list");
+    executionStates.set("lifecycle-smoke:keep_visible", { status: "running" });
+    const [kept] = await seedLifecycleWork(installedExecutor.id, ["keep_visible"], undefined, 1, false);
+    await click(".list-views button:nth-child(1)");
+    await waitFor(async () => (await api("/v1/me/prefs")).inbox_list === "shown",
+      "keep-visible shown-list preference saved");
+    await reloadRenderer();
+    await click('nav button[aria-label="Inbox"]');
+    const keptRow = `[...document.querySelectorAll(".item")].find(row => row.textContent.includes(${JSON.stringify(kept.marker)}))`;
+    await waitFor(() => evaluate(`Boolean(${keptRow})`), "keep-visible running task");
+    await evaluate(`${keptRow}.click()`);
+    await waitFor(async () => {
+      const authority = new SqliteAuthorityStore(database, { readonly: true });
+      try {
+        return (await authority.getConversationPref("smoke-owner", kept.event.thread_id))
+          ?.last_read_external_id === kept.event.external_id;
+      } finally { authority.close(); }
+    }, "keep-visible source read before completion");
+    executionStates.set(kept.run.external_run_id, {
+      status: "completed", result: { summary: `${kept.marker}: completed without hiding.` },
+    });
+    await waitFor(async () => (await api(`/v1/me/inbox/${kept.event.id}`)).work?.auto_completed === true,
+      "keep-visible automatic completion");
+    const keptSource = await api(`/v1/me/inbox/${kept.event.id}`);
+    assert.equal(keptSource.hidden, false);
+    assert.equal(keptSource.attention, "quiet");
+    await waitFor(() => evaluate(`Boolean(${keptRow}) && !document.querySelector(${JSON.stringify(acknowledgeButton)})`),
+      "completed result stays on shown list without a confirmation action");
+    automaticallyCompleted.push({ event: kept.event, marker: kept.marker, runId: kept.run.id, hidden: false });
+    console.log("PASS: hide-on-success opt-out automatically completes but stays quiet and available on the shown list");
+    await click(".list-views button:nth-child(2)");
+    await waitFor(async () => (await api("/v1/me/prefs")).inbox_list === "hidden",
+      "hidden-list preference saved before clean restart");
     const requestsBeforeRestart = deliveryRequests.length;
     const executionsBeforeRestart = manualRetryRequests.length;
     const beforeRestart = new SqliteAuthorityStore(database, { readonly: true });
@@ -1111,7 +1151,7 @@ process.on("SIGTERM",() => server.close(() => process.exit(0)));
     await click(".list-views button:nth-child(2)");
     for (const fixture of automaticallyCompleted) {
       const source = await api(`/v1/me/inbox/${fixture.event.id}`);
-      assert.equal(source.hidden, true);
+      assert.equal(source.hidden, fixture.hidden ?? true);
       assert.equal(source.work.run_id, fixture.runId);
       assert.equal(source.work.auto_completed, true);
       if (source.work.acknowledged_run_id !== undefined) {
@@ -1125,6 +1165,7 @@ process.on("SIGTERM",() => server.close(() => process.exit(0)));
         assert.deepEqual(await restored.getWorkDeliveryByItem("smoke-owner", fixture.run.work_item_id), fixture.delivery);
       } finally { restored.close(); }
       assert.equal(source.attention, "quiet");
+      await click(`.list-views button:nth-child(${fixture.hidden === false ? 1 : 2})`);
       const row = `[...document.querySelectorAll(".item")].find(row => row.textContent.includes(${JSON.stringify(fixture.marker)}))`;
       await waitFor(() => evaluate(`Boolean(${row})`), `${fixture.marker} restored on hidden list`);
       await evaluate(`${row}.click()`);

@@ -277,7 +277,7 @@ Suspend maps to Thread Surface prompts. Answers use `POST /v1/me/conversations/p
 
 ## 10. List
 
-Shown vs hidden is a list-surface pref (`conversation_prefs.hidden`), not derived from tombstone / `work_acked` / WorkItem status. The default list is current work that is not hidden. `list=hidden` is the folded pile. A human fold stays put when new work arrives. A policy fold (finished or dismissed job, or a tombstone that leaves the thread off the desk) comes back when new `current_work` is accepted. The desktop filter writes `ui_prefs.inbox_list`.
+Shown vs hidden is a list-surface pref (`conversation_prefs.hidden`), not derived from tombstone / `work_acked` / WorkItem status. The default list is current work that is not hidden. `list=hidden` is the folded pile. A human fold stays put when new work arrives. A rule folds its source and executor conversations only when the run succeeds and that Recipe's `hide_on_success` is enabled (off for new rules); failed, running, and waiting-human work stays visible. Explicit dismiss/ack and a tombstone that leaves the thread off the desk may still fold by policy, and a policy fold comes back when new `current_work` is accepted. The desktop filter writes `ui_prefs.inbox_list`.
 
 Sort (`ui_prefs.inbox_sort`):
 

@@ -76,6 +76,8 @@ export interface WorkRun {
   trigger_kind?: "push" | "pull" | "manual";
   /** Kernel-owned completion policy frozen at reservation; absent for legacy attempts. */
   completion_policy_version?: 1;
+  /** Frozen rule preference; completion and visibility remain separate decisions. */
+  hide_on_success?: boolean;
   created_at: string;
   updated_at: string;
 }

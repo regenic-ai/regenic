@@ -76,4 +76,21 @@ describe("installation quota", () => {
       assert.equal(book.tryConsume("a"), true);
     });
   });
+
+  it("applies an explicit user quota without refilling on unchanged settings and restores hints", () => {
+    const book = new InstallationQuotaBook({ tokens: 2, window_ms: 60_000 }, () => 1_000);
+    const hint = { tokens: 1, window_ms: 60_000 };
+    assert.equal(book.tryConsume("a", hint), true);
+    assert.equal(book.tryConsume("a", hint), false);
+    book.configure({ tokens: 3, window_ms: 60_000 });
+    for (let count = 0; count < 3; count++) assert.equal(book.tryConsume("a", hint), true);
+    book.configure({ tokens: 3, window_ms: 60_000 });
+    assert.equal(book.tryConsume("a", hint), false);
+    assert.equal(book.tryConsume("b", hint), true);
+    book.configure({ tokens: 0, window_ms: 60_000 });
+    for (let count = 0; count < 10; count++) assert.equal(book.tryConsume("a", hint), true);
+    book.configure();
+    assert.equal(book.tryConsume("a", hint), true);
+    assert.equal(book.tryConsume("a", hint), false);
+  });
 });

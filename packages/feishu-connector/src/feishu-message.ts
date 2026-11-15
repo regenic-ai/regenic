@@ -450,6 +450,280 @@ function isMentionPlaceholder(value: string): boolean {
   return /^_user_\d+$/i.test(value) || /^_all$/i.test(value);
 }
 
+export type FeishuPostNode =
+  | { tag: "text"; text: string }
+  | { tag: "at"; user_id: string; user_name?: string };
+
+export type FeishuOutgoingBody =
+  | { msg_type: "text"; content: { text: string } }
+  | { msg_type: "post"; content: { zh_cn: { content: FeishuPostNode[][] } } };
+
+const FEISHU_AT_TAG =
+  /<at\s+user_id\s*=\s*(?:"([^"]*)"|'([^']*)'|“([^”]*)”|＂([^＂]*)＂)\s*>([\s\S]*?)<\/at>/gi;
+
+/**
+ * Feishu only notifies an @ when the wire is a text `<at>` tag or a post `at`
+ * node. A plain `@name` is ordinary text. Mentions become post nodes here so
+ * the kernel still sends one body string.
+ */
+export function feishuOutgoingBody(text: string): FeishuOutgoingBody {
+  const nodes = splitFeishuMentions(text);
+  if (!nodes.some((node) => node.tag === "at")) {
+    return { msg_type: "text", content: { text } };
+  }
+  return {
+    msg_type: "post",
+    content: { zh_cn: { content: feishuPostParagraphs(nodes) } },
+  };
+}
+
+const PLAIN_MENTION = /(^|[^\w@])@([^\s@<]+)/;
+const TRAILING_MENTION_PUNCT = /[，。,.!！?？:：;；、)）\]]+$/u;
+const MENTION_BOUNDARY = /[\s，。,.!！?？:：;；、)）\]]/u;
+
+/**
+ * Turns a copied `@名字` into `<at>` when that name belongs to exactly one
+ * chat member. The longest member name wins, so `@John Smith` does not mention
+ * a different person named John. Only `@所有人` and the Feishu placeholder
+ * `@_all` mention everyone. Unmatched text, emails, and existing `<at>` tags
+ * stay as they are.
+ */
+export function applyFeishuPlainMentions(
+  text: string,
+  names: ReadonlyMap<string, string>,
+): string {
+  const ordered = [...names.keys()].filter((name) => name.length > 0)
+    .sort((left, right) => right.length - left.length);
+  return rewriteOutsideAtTags(text, (part) => replacePlainMentions(part, ordered, names));
+}
+
+function replacePlainMentions(
+  part: string,
+  ordered: readonly string[],
+  names: ReadonlyMap<string, string>,
+): string {
+  let out = "";
+  for (let index = 0; index < part.length; index += 1) {
+    if (part[index] !== "@") {
+      out += part[index];
+      continue;
+    }
+    const prefix = index === 0 ? "" : part[index - 1];
+    if (prefix && isMentionPrefixBlocked(prefix)) {
+      out += "@";
+      continue;
+    }
+    const rest = part.slice(index + 1);
+    const everyone = everyoneTokenLength(rest);
+    if (everyone) {
+      out += `<at user_id="all">所有人</at>`;
+      index += everyone;
+      continue;
+    }
+    const name = ordered.find((candidate) =>
+      rest.startsWith(candidate) && isMentionBoundary(rest[candidate.length]),
+    );
+    const userId = name ? names.get(name) : undefined;
+    if (!name || !userId) {
+      out += "@";
+      continue;
+    }
+    out += `<at user_id="${userId}">${name}</at>`;
+    index += name.length;
+  }
+  return out;
+}
+
+/** Names still written as `@名字`, excluding `@所有人` and text already inside `<at>`. */
+export function feishuPlainMentionNames(text: string): string[] {
+  const found = new Set<string>();
+  rewriteOutsideAtTags(text, (part) => {
+    const pattern = new RegExp(PLAIN_MENTION.source, "g");
+    let match = pattern.exec(part);
+    while (match) {
+      const prefix = match[1] ?? "";
+      const raw = match[2] ?? "";
+      if (prefix !== "." && prefix !== "．" && prefix !== "-" && prefix !== "_") {
+        const token = raw.replace(TRAILING_MENTION_PUNCT, "");
+        if (
+          token &&
+          !token.includes(".") &&
+          !token.includes("/") &&
+          !token.includes(":") &&
+          !everyoneMentionId(token)
+        ) {
+          found.add(token);
+        }
+      }
+      match = pattern.exec(part);
+    }
+    return part;
+  });
+  return [...found];
+}
+
+/** Drops blank ids and names shared by more than one member. */
+export function feishuMentionNameIndex(
+  members: readonly { id?: string; name?: string }[],
+): Map<string, string> {
+  const counts = new Map<string, number>();
+  for (const member of members) {
+    const name = member.name?.trim() ?? "";
+    const id = mentionUserId(member.id);
+    if (!name || !id || id === "all") {
+      continue;
+    }
+    counts.set(name, (counts.get(name) ?? 0) + 1);
+  }
+  const index = new Map<string, string>();
+  for (const member of members) {
+    const name = member.name?.trim() ?? "";
+    const id = mentionUserId(member.id);
+    if (name && id && id !== "all" && counts.get(name) === 1) {
+      index.set(name, id);
+    }
+  }
+  return index;
+}
+
+function rewriteOutsideAtTags(
+  text: string,
+  rewrite: (part: string) => string,
+): string {
+  const pattern = new RegExp(FEISHU_AT_TAG.source, "gi");
+  let out = "";
+  let last = 0;
+  let match = pattern.exec(text);
+  while (match) {
+    out += rewrite(text.slice(last, match.index));
+    out += match[0];
+    last = match.index + match[0].length;
+    match = pattern.exec(text);
+  }
+  return out + rewrite(text.slice(last));
+}
+
+function everyoneMentionId(name: string): string | undefined {
+  if (name === "所有人" || name.toLowerCase() === "_all") {
+    return "all";
+  }
+  return undefined;
+}
+
+function everyoneTokenLength(rest: string): number | undefined {
+  if (rest.startsWith("所有人") && isMentionBoundary(rest["所有人".length])) {
+    return "所有人".length;
+  }
+  if (rest.slice(0, 4).toLowerCase() === "_all" && isMentionBoundary(rest[4])) {
+    return 4;
+  }
+  return undefined;
+}
+
+function isMentionPrefixBlocked(prefix: string): boolean {
+  return prefix === "." || prefix === "．" || prefix === "-" || prefix === "_" || /[\w@]/.test(prefix);
+}
+
+function isMentionBoundary(char: string | undefined): boolean {
+  return char === undefined || MENTION_BOUNDARY.test(char);
+}
+
+/** Official text-message @ syntax, used when the client cannot send post. */
+export function feishuMentionText(text: string): string {
+  const nodes = splitFeishuMentions(text);
+  if (!nodes.some((node) => node.tag === "at")) {
+    return text;
+  }
+  return nodes
+    .map((node) => {
+      if (node.tag === "text") {
+        return node.text;
+      }
+      return `<at user_id="${node.user_id}">${node.user_name ?? ""}</at>`;
+    })
+    .join("");
+}
+
+function splitFeishuMentions(text: string): FeishuPostNode[] {
+  const nodes: FeishuPostNode[] = [];
+  const pattern = new RegExp(FEISHU_AT_TAG.source, "gi");
+  let last = 0;
+  let match = pattern.exec(text);
+  while (match) {
+    if (match.index > last) {
+      pushFeishuText(nodes, text.slice(last, match.index));
+    }
+    const userId = mentionUserId(match[1] ?? match[2] ?? match[3] ?? match[4]);
+    if (!userId) {
+      pushFeishuText(nodes, match[0]);
+    } else {
+      const userName = mentionUserName(match[5] ?? "", userId);
+      nodes.push({
+        tag: "at",
+        user_id: userId,
+        ...(userName ? { user_name: userName } : {}),
+      });
+    }
+    last = match.index + match[0].length;
+    match = pattern.exec(text);
+  }
+  if (last < text.length) {
+    pushFeishuText(nodes, text.slice(last));
+  }
+  return nodes;
+}
+
+function feishuPostParagraphs(nodes: readonly FeishuPostNode[]): FeishuPostNode[][] {
+  const lines: FeishuPostNode[][] = [[]];
+  for (const node of nodes) {
+    if (node.tag === "at") {
+      lines[lines.length - 1].push(node);
+      continue;
+    }
+    const parts = node.text.split("\n");
+    parts.forEach((part, index) => {
+      if (index > 0) {
+        lines.push([]);
+      }
+      if (part) {
+        lines[lines.length - 1].push({ tag: "text", text: part });
+      }
+    });
+  }
+  const paragraphs = lines.filter((line) => line.length > 0);
+  return paragraphs.length > 0 ? paragraphs : [[{ tag: "text", text: "" }]];
+}
+
+function pushFeishuText(nodes: FeishuPostNode[], text: string): void {
+  if (!text) {
+    return;
+  }
+  const last = nodes[nodes.length - 1];
+  if (last?.tag === "text") {
+    last.text += text;
+    return;
+  }
+  nodes.push({ tag: "text", text });
+}
+
+function mentionUserId(raw: string | undefined): string | undefined {
+  const value = raw?.trim() ?? "";
+  if (!value) {
+    return undefined;
+  }
+  if (isEveryoneId(value)) {
+    return "all";
+  }
+  return /^[A-Za-z0-9:_-]{1,128}$/.test(value) ? value : undefined;
+}
+
+function mentionUserName(label: string, userId: string): string | undefined {
+  if (userId === "all") {
+    return cleanMentionName(label) ?? "所有人";
+  }
+  return cleanMentionName(label);
+}
+
 function mediaKeyRefs(value: unknown, fallback: "image" | "file"): FeishuMediaRef[] {
   if (!isObject(value)) {
     return [];
