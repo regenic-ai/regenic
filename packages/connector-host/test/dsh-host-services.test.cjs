@@ -321,11 +321,20 @@ function memoryAuthority() {
       if (prop === "then") {
         return undefined;
       }
+      if (prop === "atomicSyncPage") {
+        return true;
+      }
       if (prop === "commitSyncPage") {
         return async (input) => {
-          const committed = await events.commitSyncPage(input);
-          await runtime.commitSyncPage(input);
-          return committed;
+          const authorityResult = await events.commitSyncPage(input);
+          const runtimeResult = await runtime.commitSyncPage({
+            attempt: input.attempt,
+            settle: input.settle,
+          });
+          return {
+            attempt: runtimeResult.attempt,
+            events: authorityResult.events,
+          };
         };
       }
       const runtimeValue = runtime[prop];

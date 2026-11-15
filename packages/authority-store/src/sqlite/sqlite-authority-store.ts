@@ -16,8 +16,14 @@ import type {
   EventListQuery,
   ContextAuthorityRead,
   ContextAuthorityReadQuery,
+  BlobReservation,
+  BlobInventoryRecord,
+  BlobInventoryPage,
+  BlobInventoryPageQuery,
+  ReserveBlobWritesInput,
   ContextArtifact,
   ContextArtifactQuery,
+  ContextArtifactEvidenceReferenceBackfill,
   ContextArtifactIndex,
   ContextArtifactState,
   ContextArtifactDecision,
@@ -61,21 +67,53 @@ import type {
   InboxSummary,
   ConversationPref,
   ConversationPrefPatch,
+  ConversationVisibilityUpdate,
+  ConversationVisibilityUpdateResult,
   StoreFootprint,
   StoreClearResult,
   Recipe,
+  CancellationJob,
+  ClaimCancellationJobs,
+  CommitCancellationJobObservation,
+  CommitCancellationJobObservationResult,
+  RetryCancellationJob,
+  RetryCancellationJobResult,
+  RenewCancellationJob,
+  SettleCancellationJob,
   WorkItem,
   WorkRun,
   WorkRunStartClaim,
+  WorkRunStartCommand,
+  WorkRunStartReplay,
+  WorkRunStartCheckpoint,
+  WorkRunStartCheckpointResult,
+  WorkRunStartFailure,
+  WorkRunStartFailureResult,
+  WorkDismissal,
+  WorkDismissalResult,
+  WorkAcknowledgment,
+  WorkAcknowledgmentResult,
+  WorkItemCreation,
+  WorkItemCreationResult,
+  WorkItemObservation,
+  WorkItemObservationResult,
+  WorkItemCreationAbort,
+  WorkItemCreationAbortResult,
+  WorkDeliveryCommand,
+  WorkDeliveryCommandResult,
+  CommitWorkObservation,
+  CommitWorkObservationResult,
   WorkDelivery,
   SearchAnswerRecord,
   DailyDigestPolicy,
   ExecutorInstallation,
   BlobRecord,
+  EventAttachmentReferenceBackfill,
   NewEvent,
   NewOutboundAttempt,
   RepointContentInput,
   IngestCommitRequest,
+  ConversationIntakeCommit,
   EventRevision,
   TombstoneEvent,
   NewConnectorInstallation,
@@ -84,6 +122,7 @@ import type {
   SetConnectorInstallationConfig,
   ConnectorLease,
   ReleaseConnectorLease,
+  RenewConnectorLease,
   ResetConnectorCursor,
   ConnectorStreamCursor,
   NewIngestAttempt,
@@ -122,6 +161,7 @@ import {
   dirname,
 } from "node:path";
 import {
+  AuthorityConflictError,
   conversationId,
   validateStandardVersion,
   canonicalContextJson,
@@ -149,6 +189,11 @@ import {
   commitIngestUnlocked,
   findBlob,
   findBlobs,
+  inspectBlobInventory,
+  listBlobInventoryPage,
+  backfillEventAttachmentReferences,
+  reserveBlobWrites,
+  releaseBlobReservations,
   findBySourceIdentity,
   getEvent,
   getOutboundAttempt,
@@ -168,6 +213,7 @@ import {
   getSnapshot,
   listSnapshotIndex,
   listArtifacts,
+  backfillArtifactEvidenceReferences,
   listArtifactIndexes,
   putArtifact,
   rebuildArtifactPreviews,
@@ -269,11 +315,33 @@ import {
   listConversationPrefs,
   listInbox,
   putConversationPref,
-  putDisposition,
+  setConversationVisibility,
+  setConversationPolicyHidden,
+  setConversationPolicyVisibility,
+  setConversationPolicyVisibilityUnlocked,
+  putDispositionIfAbsent,
+  transitionDisposition,
   summarizeInbox,
 } from "./inbox";
 import {
   claimWorkRunStart,
+  getWorkRunStartReplay,
+  checkpointWorkRunStart,
+  recordWorkRunStartFailure,
+  dismissWorkItem,
+  acknowledgeWorkResult,
+  createWorkItem,
+  observeWorkItem,
+  observeWorkItemUnlocked,
+  abortWorkItemCreation,
+  transitionWorkDelivery,
+  commitWorkObservation,
+  claimCancellationJobs,
+  renewCancellationJob,
+  settleCancellationJob,
+  commitCancellationJobObservation,
+  listCancellationJobs,
+  retryCancellationJob,
   deleteSearchAnswer,
   deleteExecutorInstallation,
   deleteRecipe,
@@ -289,6 +357,8 @@ import {
   getWorkRun,
   listExecutorInstallations,
   listRecipes,
+  advanceRecipePullSchedule,
+  putRecipeIfUnchanged,
   listDueWorkDeliveries,
   listHiddenExecutorThreadIds,
   listWorkDeliveries,
@@ -297,9 +367,6 @@ import {
   putExecutorInstallation,
   putRecipe,
   putSearchAnswer,
-  putWorkDelivery,
-  putWorkItem,
-  putWorkRun,
 } from "./work";
 import {
   acquireLease,
@@ -308,6 +375,7 @@ import {
   claimSyncWork,
   commandSyncRun,
   commitSyncPageUnlocked,
+  repairDispositionUnlocked,
   createInstallation,
   createSyncRun,
   deleteInstallation,
@@ -332,6 +400,7 @@ import {
   listUnassignedSyncWorkIdentities,
   pruneIngestAttempts,
   putSyncState,
+  renewLease,
   releaseLease,
   renewSyncWork,
   resetCursor,
@@ -383,6 +452,7 @@ export class SqliteAuthorityStore
       , DailyDigestPolicyStore
 {
 
+  readonly atomicSyncPage = true;
   private readonly database: Database.Database;
 
   readonly readonly: boolean;
@@ -467,6 +537,13 @@ export class SqliteAuthorityStore
     return listEvents(this.database, orgId, query);
   }
 
+  async backfillEventAttachmentReferences(
+    input: EventAttachmentReferenceBackfill,
+  ): Promise<void> {
+    this.assertWritable();
+    backfillEventAttachmentReferences(this.database, input);
+  }
+
   async openContextRead(orgId: string, query?: ContextAuthorityReadQuery): Promise<ContextAuthorityRead> {
     return openContextRead(this.database, orgId, query);
   }
@@ -478,9 +555,12 @@ export class SqliteAuthorityStore
     return openContextReadForThread(this.database, orgId, threadId);
   }
 
-  async putArtifact(artifact: ContextArtifact): Promise<ContextArtifact> {
+  async putArtifact(
+    artifact: ContextArtifact,
+    blobReservations?: readonly BlobReservation[],
+  ): Promise<ContextArtifact> {
     this.assertWritable();
-    return putArtifact(this.database, artifact);
+    return putArtifact(this.database, artifact, blobReservations);
   }
 
   async getArtifact(orgId: string, id: string): Promise<ContextArtifact | null> {
@@ -489,6 +569,13 @@ export class SqliteAuthorityStore
 
   async listArtifacts(query: ContextArtifactQuery): Promise<ContextArtifact[]> {
     return listArtifacts(this.database, query);
+  }
+
+  async backfillArtifactEvidenceReferences(
+    input: ContextArtifactEvidenceReferenceBackfill,
+  ): Promise<void> {
+    this.assertWritable();
+    backfillArtifactEvidenceReferences(this.database, input);
   }
 
   async listArtifactIndexes(query: ContextArtifactQuery): Promise<ContextArtifactIndex[]> {
@@ -923,9 +1010,16 @@ export class SqliteAuthorityStore
     return countStandardUsage(this.database, input);
   }
 
-  async putDisposition(decision: ArrangementDecision): Promise<void> {
+  async putDispositionIfAbsent(decision: ArrangementDecision): Promise<boolean> {
     this.assertWritable();
-    return putDisposition(this.database, decision);
+    return putDispositionIfAbsent(this.database, decision);
+  }
+
+  async transitionDisposition(
+    input: import("@regenic/domain").InboxDispositionTransition,
+  ): Promise<import("@regenic/domain").InboxDispositionTransitionResult> {
+    this.assertWritable();
+    return transitionDisposition(this.database, input);
   }
 
   async getDisposition(eventId: string): Promise<ArrangementDecision | null> {
@@ -958,6 +1052,27 @@ export class SqliteAuthorityStore
     return putConversationPref(this.database, input);
   }
 
+  async setConversationVisibility(
+    input: ConversationVisibilityUpdate,
+  ): Promise<ConversationVisibilityUpdateResult> {
+    this.assertWritable();
+    return setConversationVisibility(this.database, input);
+  }
+
+  async setConversationPolicyHidden(
+    input: import("@regenic/domain").ConversationPolicyFold,
+  ): Promise<import("@regenic/domain").ConversationPolicyFoldResult> {
+    this.assertWritable();
+    return setConversationPolicyHidden(this.database, input);
+  }
+
+  async setConversationPolicyVisibility(
+    input: import("@regenic/domain").ConversationPolicyVisibility,
+  ): Promise<import("@regenic/domain").ConversationPolicyFoldResult> {
+    this.assertWritable();
+    return setConversationPolicyVisibility(this.database, input);
+  }
+
   async summarizeStore(orgId: string): Promise<StoreFootprint> {
     return this.storeFootprint(orgId);
   }
@@ -970,6 +1085,8 @@ export class SqliteAuthorityStore
     const transaction = this.database.transaction(() => {
       this.database.pragma("defer_foreign_keys = ON");
       const before = this.storeFootprint(orgId);
+      this.database.prepare(`DELETE FROM blob_references WHERE owner_org_id = ?`).run(orgId);
+      this.database.prepare(`DELETE FROM conversation_lifecycle_jobs WHERE org_id = ?`).run(orgId);
       this.database.prepare(`DELETE FROM work_deliveries WHERE org_id = ?`).run(orgId);
       this.database.prepare(`DELETE FROM work_runs WHERE org_id = ?`).run(orgId);
       this.database.prepare(`DELETE FROM search_answers WHERE org_id = ?`).run(orgId);
@@ -992,6 +1109,9 @@ export class SqliteAuthorityStore
         .run(orgId);
       this.database
         .prepare(`DELETE FROM conversation_prefs WHERE org_id = ?`)
+        .run(orgId);
+      this.database
+        .prepare(`DELETE FROM conversation_lifecycle_events WHERE org_id = ?`)
         .run(orgId);
       this.database
         .prepare(
@@ -1018,13 +1138,14 @@ export class SqliteAuthorityStore
       this.database
         .prepare(
           `
-            DELETE FROM blobs
-            WHERE content_hash NOT IN (
-              SELECT content_hash FROM events WHERE content_hash IS NOT NULL
+            UPDATE blobs SET unreferenced_at = COALESCE(unreferenced_at, ?)
+            WHERE NOT EXISTS (
+                SELECT 1 FROM blob_references r
+                WHERE r.content_hash = blobs.content_hash
             )
           `,
         )
-        .run();
+        .run(now);
       this.database
         .prepare(
           `
@@ -1181,6 +1302,20 @@ export class SqliteAuthorityStore
     return putRecipe(this.database, recipe);
   }
 
+  async putRecipeIfUnchanged(
+    input: import("@regenic/domain").RecipeWrite,
+  ): Promise<import("@regenic/domain").RecipeWriteResult> {
+    this.assertWritable();
+    return putRecipeIfUnchanged(this.database, input);
+  }
+
+  async advanceRecipePullSchedule(
+    input: import("@regenic/domain").RecipePullScheduleAdvance,
+  ): Promise<boolean> {
+    this.assertWritable();
+    return advanceRecipePullSchedule(this.database, input);
+  }
+
   async deleteRecipe(orgId: string, id: string): Promise<boolean> {
     this.assertWritable();
     return deleteRecipe(this.database, orgId, id);
@@ -1209,11 +1344,6 @@ export class SqliteAuthorityStore
     return getWorkItemByUnitKey(this.database, orgId, threadId, unitKey);
   }
 
-  async putWorkItem(item: WorkItem): Promise<WorkItem> {
-    this.assertWritable();
-    return putWorkItem(this.database, item);
-  }
-
   async listWorkRuns(orgId: string, workItemId?: string): Promise<WorkRun[]> {
     return listWorkRuns(this.database, orgId, workItemId);
   }
@@ -1233,14 +1363,88 @@ export class SqliteAuthorityStore
     return listHiddenExecutorThreadIds(this.database, orgId);
   }
 
-  async putWorkRun(run: WorkRun): Promise<WorkRun> {
+  async getWorkRunStartReplay(command: WorkRunStartCommand): Promise<WorkRunStartReplay> {
+    return getWorkRunStartReplay(this.database, command);
+  }
+
+  async claimCancellationJobs(input: ClaimCancellationJobs): Promise<CancellationJob[]> {
     this.assertWritable();
-    return putWorkRun(this.database, run);
+    return claimCancellationJobs(this.database, input);
+  }
+
+  async renewCancellationJob(input: RenewCancellationJob): Promise<boolean> {
+    this.assertWritable();
+    return renewCancellationJob(this.database, input);
+  }
+
+  async settleCancellationJob(input: SettleCancellationJob): Promise<boolean> {
+    this.assertWritable();
+    return settleCancellationJob(this.database, input);
+  }
+
+  async commitCancellationJobObservation(
+    input: CommitCancellationJobObservation,
+  ): Promise<CommitCancellationJobObservationResult> {
+    this.assertWritable();
+    return commitCancellationJobObservation(this.database, input);
+  }
+
+  async listCancellationJobs(
+    orgId: string,
+    limit?: number,
+    statuses?: CancellationJob["status"][],
+  ): Promise<CancellationJob[]> {
+    return listCancellationJobs(this.database, orgId, limit, statuses);
+  }
+
+  async retryCancellationJob(input: RetryCancellationJob): Promise<RetryCancellationJobResult> {
+    this.assertWritable();
+    return retryCancellationJob(this.database, input);
   }
 
   async claimWorkRunStart(input: WorkRunStartClaim): Promise<boolean> {
     this.assertWritable();
     return claimWorkRunStart(this.database, input);
+  }
+
+  async checkpointWorkRunStart(input: WorkRunStartCheckpoint): Promise<WorkRunStartCheckpointResult> {
+    this.assertWritable();
+    return checkpointWorkRunStart(this.database, input);
+  }
+
+  async recordWorkRunStartFailure(input: WorkRunStartFailure): Promise<WorkRunStartFailureResult> {
+    this.assertWritable();
+    return recordWorkRunStartFailure(this.database, input);
+  }
+
+  async dismissWorkItem(input: WorkDismissal): Promise<WorkDismissalResult> {
+    this.assertWritable();
+    return dismissWorkItem(this.database, input);
+  }
+
+  async acknowledgeWorkResult(input: WorkAcknowledgment): Promise<WorkAcknowledgmentResult> {
+    this.assertWritable();
+    return acknowledgeWorkResult(this.database, input);
+  }
+
+  async createWorkItem(input: WorkItemCreation): Promise<WorkItemCreationResult> {
+    this.assertWritable();
+    return createWorkItem(this.database, input);
+  }
+
+  async observeWorkItem(input: WorkItemObservation): Promise<WorkItemObservationResult> {
+    this.assertWritable();
+    return observeWorkItem(this.database, input);
+  }
+
+  async abortWorkItemCreation(input: WorkItemCreationAbort): Promise<WorkItemCreationAbortResult> {
+    this.assertWritable();
+    return abortWorkItemCreation(this.database, input);
+  }
+
+  async commitWorkObservation(input: CommitWorkObservation): Promise<CommitWorkObservationResult> {
+    this.assertWritable();
+    return commitWorkObservation(this.database, input);
   }
 
   async getSearchAnswer(
@@ -1281,9 +1485,9 @@ export class SqliteAuthorityStore
     return getWorkDeliveryByItem(this.database, orgId, workItemId);
   }
 
-  async putWorkDelivery(delivery: WorkDelivery): Promise<WorkDelivery> {
+  async transitionWorkDelivery(input: WorkDeliveryCommand): Promise<WorkDeliveryCommandResult> {
     this.assertWritable();
-    return putWorkDelivery(this.database, delivery);
+    return transitionWorkDelivery(this.database, input);
   }
 
   async getUiPref(orgId: string, key: string): Promise<string | null> {
@@ -1343,6 +1547,26 @@ export class SqliteAuthorityStore
     return findBlobs(this.database, contentHashes);
   }
 
+  async inspectBlobInventory(
+    contentHashes: readonly string[],
+  ): Promise<Map<string, BlobInventoryRecord>> {
+    return inspectBlobInventory(this.database, contentHashes);
+  }
+
+  async listBlobInventoryPage(query: BlobInventoryPageQuery): Promise<BlobInventoryPage> {
+    return listBlobInventoryPage(this.database, query);
+  }
+
+  async reserveBlobWrites(input: ReserveBlobWritesInput): Promise<BlobReservation[]> {
+    this.assertWritable();
+    return reserveBlobWrites(this.database, input);
+  }
+
+  async releaseBlobReservations(reservations: readonly BlobReservation[]): Promise<void> {
+    this.assertWritable();
+    releaseBlobReservations(this.database, reservations);
+  }
+
   async append(input: NewEvent): Promise<EventRecord> {
     this.assertWritable();
     return append(this.database, input);
@@ -1366,6 +1590,24 @@ export class SqliteAuthorityStore
     return this.database
       .transaction(() => commitIngestUnlocked(this.database, request))
       .immediate();
+  }
+
+  async commitConversationIntake(request: ConversationIntakeCommit): Promise<EventRecord[]> {
+    this.assertWritable();
+    return this.database.transaction(() => {
+      for (const repair of request.disposition_repairs ?? []) {
+        repairDispositionUnlocked(this.database, repair);
+      }
+      const events = commitIngestUnlocked(this.database, request.ingest);
+      for (const observation of request.work_observations) {
+        const result = observeWorkItemUnlocked(this.database, observation);
+        if (result.outcome === "conflict") throw new AuthorityConflictError();
+      }
+      for (const visibility of request.visibility) {
+        setConversationPolicyVisibilityUnlocked(this.database, visibility);
+      }
+      return events;
+    }).immediate();
   }
 
   async appendRevision(input: EventRevision): Promise<EventRecord> {
@@ -1427,6 +1669,11 @@ export class SqliteAuthorityStore
   async releaseLease(input: ReleaseConnectorLease): Promise<boolean> {
     this.assertWritable();
     return releaseLease(this.database, input);
+  }
+
+  async renewLease(input: RenewConnectorLease): Promise<ConnectorLease | null> {
+    this.assertWritable();
+    return renewLease(this.database, input);
   }
 
   async resetCursor(
@@ -1662,7 +1909,7 @@ export class SqliteAuthorityStore
   }
 
   private migrate(): void {
-    const currentVersion = this.database.pragma("user_version", {
+    let currentVersion = this.database.pragma("user_version", {
       simple: true,
     }) as number;
     if (currentVersion > LATEST_SCHEMA_VERSION) {
@@ -1671,7 +1918,7 @@ export class SqliteAuthorityStore
       );
     }
     if (this.rebasePreMergeSyncSchema(currentVersion)) {
-      return;
+      currentVersion = this.database.pragma("user_version", { simple: true }) as number;
     }
 
     for (const migration of MIGRATIONS) {
@@ -1687,6 +1934,10 @@ export class SqliteAuthorityStore
         }
         if (migration.version === 54) {
           this.applyRecipeClockColumns();
+        } else if (migration.version === 56) {
+          if (!this.columnExists("search_answers", "scope_json")) {
+            this.database.exec(migration.sql);
+          }
         } else if (migration.version === 57) {
           this.applyRecipeDestinationColumn();
         } else {
@@ -1796,7 +2047,8 @@ export class SqliteAuthorityStore
         CREATE UNIQUE INDEX IF NOT EXISTS search_answers_work_item_idx
           ON search_answers (org_id, work_item_id);
       `);
-      this.database.pragma(`user_version = ${LATEST_SCHEMA_VERSION}`);
+      // This repair reconstructs v55; newer migrations still run through the normal path.
+      this.database.pragma("user_version = 55");
     });
     repair.immediate();
     return true;

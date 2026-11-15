@@ -1,4 +1,5 @@
 const assert = require("node:assert/strict");
+const { createHash } = require("node:crypto");
 const { createServer } = require("node:http");
 const { access } = require("node:fs/promises");
 const { mkdir, mkdtemp, readFile, rm, writeFile } = require("node:fs/promises");
@@ -7,10 +8,20 @@ const { join } = require("node:path");
 const { afterEach, describe, it } = require("node:test");
 const { SqliteAuthorityStore } = require("@regenic/authority-store/sqlite");
 const { FsBlobStore } = require("@regenic/blob-store");
-const { INGEST_SCHEMA_VERSION, IngestionService, channelRecord } = require("@regenic/domain");
+const {
+  CONTENT_PARTS_MEDIA_TYPE,
+  INGEST_SCHEMA_VERSION,
+  IngestionService,
+  channelRecord,
+  conversationId,
+  hashCanonicalContext,
+  hashContextArtifactInputs,
+} = require("@regenic/domain");
 const { runLocalCli } = require("../dist/main");
+const { resolveBlobMaintenanceBackend } = require("../dist/host");
 
 const roots = [];
+let generatedId = 0;
 const now = () => "2026-08-13T00:00:00.000Z";
 
 afterEach(async () => {
@@ -46,12 +57,30 @@ async function run(args, options = {}) {
   let output = "";
   await runLocalCli(args, {
     now,
-    createId: () => "generated-id",
+    createId: () => `generated-id-${++generatedId}`,
     stdout: { write(chunk) { output += chunk; return true; } },
     ...options,
   });
   return JSON.parse(output);
 }
+
+it("resolves PostgreSQL Blob maintenance from explicit authority environment settings", () => {
+  const url = "postgres://operator:example@db.example/authority";
+  assert.deepEqual(resolveBlobMaintenanceBackend({
+    blobRoot: "/srv/regenic/blobs",
+    env: { REGENIC_AUTHORITY_DRIVER: "postgres", DATABASE_URL: url },
+    readOnly: true,
+  }), {
+    driver: "postgres",
+    url,
+    blobRoot: "/srv/regenic/blobs",
+  });
+  assert.throws(() => resolveBlobMaintenanceBackend({
+    blobRoot: "/srv/regenic/blobs",
+    env: { REGENIC_AUTHORITY_DRIVER: "postgres" },
+    readOnly: true,
+  }), /DATABASE_URL must be explicitly set/);
+});
 
 it("reads Standard health without a Blob root or lexical sidecar", async () => {
   const root = await createRoot();
@@ -66,6 +95,230 @@ it("reads Standard health without a Blob root or lexical sidecar", async () => {
     "--observed-at", "2027-12-31T00:00:00.000Z",
   ]), { candidates: [], next_after: null });
   await assert.rejects(access(`${database}.lexical.db`));
+});
+
+it("reports Blob inventory without mutating objects or treating it as collectible", async () => {
+  const root = await createRoot();
+  const database = join(root, "authority.db");
+  const blobRoot = join(root, "blobs");
+  const blobStore = new FsBlobStore(blobRoot);
+  const orphanBytes = Buffer.from("orphan blob");
+  const referencedBytes = Buffer.from("referenced blob");
+  const missingBytes = Buffer.from("missing physical blob");
+  const orphanHash = createHash("sha256").update(orphanBytes).digest("hex");
+  const referencedHash = createHash("sha256").update(referencedBytes).digest("hex");
+  const missingHash = createHash("sha256").update(missingBytes).digest("hex");
+  await blobStore.put(orphanHash, orphanBytes, "text/plain");
+  await blobStore.put(referencedHash, referencedBytes, "text/plain");
+
+  const authority = new SqliteAuthorityStore(database);
+  await authority.append({
+    org_id: "local-owner",
+    source: "synthetic-chat",
+    external_id: "blob-inventory-event",
+    content_hash: referencedHash,
+    content_media_type: "text/plain",
+    content_byte_size: referencedBytes.byteLength,
+    occurred_at: now(),
+    expected_head_id: null,
+  });
+  await authority.append({
+    org_id: "local-owner",
+    source: "synthetic-chat",
+    external_id: "blob-inventory-missing-object-event",
+    content_hash: missingHash,
+    content_media_type: "text/plain",
+    content_byte_size: missingBytes.byteLength,
+    occurred_at: now(),
+    expected_head_id: null,
+  });
+  authority.close();
+
+  const firstPage = await run([
+    "blob-gc-dry-run",
+    "--database", database,
+    "--blob-root", blobRoot,
+    "--limit", "1",
+  ]);
+  assert.equal(firstPage.read_only, true);
+  assert.equal(firstPage.deletion_performed, false);
+  assert.equal(firstPage.collection_enabled, false);
+  assert.equal(firstPage.reference_audit, "incomplete");
+  assert.equal(firstPage.retention_policy, "not_evaluated");
+  assert.equal(firstPage.entries.length, 1);
+  assert.ok(firstPage.next_after_hash);
+  const secondPage = await run([
+    "blob-gc-dry-run",
+    "--database", database,
+    "--blob-root", blobRoot,
+    "--limit", "1",
+    "--after-hash", firstPage.next_after_hash,
+    "--after-authority-hash", firstPage.next_after_authority_hash,
+  ]);
+  assert.equal(secondPage.entries.length, 1);
+  assert.equal(secondPage.next_after_hash, null);
+  assert.equal(secondPage.next_after_authority_hash, null);
+  assert.equal(await blobStore.exists(orphanHash), true);
+  assert.equal(await blobStore.exists(referencedHash), true);
+
+  const entries = new Map([...firstPage.entries, ...secondPage.entries].map((entry) => [entry.hash, entry]));
+  assert.deepEqual(entries.get(orphanHash).skip_reasons, [
+    "historical_reference_audit_incomplete",
+    "retention_policy_not_evaluated",
+    "authority_record_missing",
+  ]);
+  assert.equal(entries.get(referencedHash).authority.reference_count, 1);
+  assert.ok(entries.get(referencedHash).skip_reasons.includes("authority_references_present"));
+  assert.ok(entries.get(referencedHash).skip_reasons.includes("authority_state_protected"));
+  const authorityEntries = new Map(
+    [...firstPage.authority_entries, ...secondPage.authority_entries]
+      .map((entry) => [entry.hash, entry]),
+  );
+  assert.equal(authorityEntries.get(referencedHash).object_present, true);
+  assert.equal(authorityEntries.get(missingHash).object_present, false);
+  assert.equal(authorityEntries.get(missingHash).authority.reference_count, 1);
+
+  const readonlyAuthority = new SqliteAuthorityStore(database, { readonly: true });
+  const after = await readonlyAuthority.inspectBlobInventory([referencedHash]);
+  readonlyAuthority.close();
+  assert.equal(after.get(referencedHash).reference_count, 1);
+  assert.equal(after.get(referencedHash).state, "protected");
+});
+
+it("backfills historical Event attachment references from verified content-part Blobs", async () => {
+  const root = await createRoot();
+  const database = join(root, "authority.db");
+  const blobRoot = join(root, "blobs");
+  const blobStore = new FsBlobStore(blobRoot);
+  const attachmentBytes = Buffer.from("historical attachment");
+  const attachmentHash = createHash("sha256").update(attachmentBytes).digest("hex");
+  const eventBytes = Buffer.from(JSON.stringify([{
+    role: "attachment",
+    media_type: "text/plain",
+    content_hash: attachmentHash,
+    source_filename: "attachment.txt",
+  }]));
+  const eventHash = createHash("sha256").update(eventBytes).digest("hex");
+  await blobStore.put(attachmentHash, attachmentBytes, "text/plain");
+  await blobStore.put(eventHash, eventBytes, CONTENT_PARTS_MEDIA_TYPE);
+
+  const authority = new SqliteAuthorityStore(database);
+  await authority.append({
+    id: "event-a",
+    org_id: "local-owner",
+    source: "synthetic-chat",
+    external_id: "historical-attachment-event",
+    content_hash: eventHash,
+    content_media_type: CONTENT_PARTS_MEDIA_TYPE,
+    content_byte_size: eventBytes.byteLength,
+    occurred_at: now(),
+    expected_head_id: null,
+  });
+  const secondBody = Buffer.from("historical plain-text Event");
+  const secondHash = createHash("sha256").update(secondBody).digest("hex");
+  await authority.append({
+    id: "event-b",
+    org_id: "local-owner",
+    source: "synthetic-chat",
+    external_id: "historical-plain-event",
+    content_hash: secondHash,
+    content_media_type: "text/plain",
+    content_byte_size: secondBody.byteLength,
+    occurred_at: now(),
+    expected_head_id: null,
+  });
+  authority.close();
+
+  const result = await run([
+    "blob-reference-backfill",
+    "--database", database,
+    "--blob-root", blobRoot,
+    "--org", "local-owner",
+    "--limit", "1",
+  ]);
+  assert.equal(result.read_only, false);
+  assert.equal(result.deletion_performed, false);
+  assert.equal(result.events_with_attachments, 1);
+  assert.equal(result.attachment_references, 1);
+  assert.equal(result.blocked, null);
+  assert.equal(result.next_cursor.id, "event-a");
+  const secondPage = await run([
+    "blob-reference-backfill",
+    "--database", database,
+    "--blob-root", blobRoot,
+    "--org", "local-owner",
+    "--limit", "1",
+    "--after-ingested-at", result.next_cursor.ingested_at,
+    "--after-id", result.next_cursor.id,
+  ]);
+  assert.equal(secondPage.scanned, 1);
+  assert.equal(secondPage.next_cursor, null);
+
+  await run([
+    "blob-reference-backfill",
+    "--database", database,
+    "--blob-root", blobRoot,
+    "--org", "local-owner",
+    "--limit", "1",
+  ]);
+  const reopened = new SqliteAuthorityStore(database, { readonly: true });
+  const inventory = await reopened.inspectBlobInventory([attachmentHash]);
+  reopened.close();
+  assert.equal(inventory.get(attachmentHash).reference_count, 1);
+  assert.equal(inventory.get(attachmentHash).state, "protected");
+  assert.equal(await blobStore.exists(attachmentHash), true);
+});
+
+it("backfills shared ContextArtifact evidence references through the local CLI", async () => {
+  const root = await createRoot();
+  const database = join(root, "authority.db");
+  const blobRoot = join(root, "blobs");
+  const evidenceHash = createHash("sha256").update("artifact evidence").digest("hex");
+  const inputRefs = [{
+    event_id: "event-1",
+    source: "synthetic-chat",
+    external_id: "message-1",
+    operation: "create",
+    occurred_at: now(),
+    content_hash: evidenceHash,
+  }];
+  const attrs = { schema_version: "1.0", thread_id: "thread-1", message_count: 0, messages: [] };
+  const artifact = {
+    id: "shared-artifact",
+    org_id: "local-owner",
+    kind: "thread_summary",
+    schema_version: "1.0",
+    algorithm_version: "thread-summary-deterministic-v2",
+    generation: "generation-1",
+    input_refs: inputRefs,
+    input_hash: hashContextArtifactInputs({ input_refs: inputRefs }),
+    body_hash: hashCanonicalContext(attrs),
+    body_storage: "artifact",
+    status: "proposed",
+    required_scope_ids: [],
+    recorded_at: now(),
+    attrs,
+  };
+  const authority = new SqliteAuthorityStore(database);
+  await authority.putArtifact(artifact);
+  authority.close();
+
+  const result = await run([
+    "context-artifact-reference-backfill",
+    "--database", database,
+    "--blob-root", blobRoot,
+    "--org", "local-owner",
+    "--limit", "1",
+  ]);
+  assert.equal(result.scanned, 1);
+  assert.equal(result.evidence_references, 1);
+  assert.equal(result.blocked, null);
+  assert.equal(result.next_cursor, null);
+  const reopened = new SqliteAuthorityStore(database, { readonly: true });
+  const inventory = await reopened.inspectBlobInventory([evidenceHash]);
+  reopened.close();
+  assert.equal(inventory.get(evidenceHash).reference_count, 1);
+  assert.equal(inventory.get(evidenceHash).state, "protected");
 });
 
 describe("regenic-local", () => {
@@ -923,7 +1176,7 @@ describe("regenic-local", () => {
       "--transport", "cli", "--mailbox", "dsh-main", "--id", "dsh-1",
     ]);
     const store = new SqliteAuthorityStore(database);
-    await store.acquireLease({
+    const lease = await store.acquireLease({
       installation_id: "dsh-1", stream_key: "channel:C123", lease_owner: "worker-a",
       now: now(), lease_duration_ms: 30_000,
     });
@@ -933,7 +1186,8 @@ describe("regenic-local", () => {
     });
     await store.settleAttempt({
       attempt_id: "attempt-1", installation_id: "dsh-1", stream_key: "channel:C123",
-      lease_owner: "worker-a", finished_at: now(), accepted_count: 0, duplicate_count: 0,
+      lease_owner: "worker-a", claim_token: lease.claim_token, finished_at: now(),
+      accepted_count: 0, duplicate_count: 0,
       quarantined_count: 1, retryable_failure_count: 0, quarantines: [{
         id: "quarantine-1", record_external_id: "C123:bad", reason_code: "content_unavailable",
         safe_metadata: { source_kind: "message" }, created_at: now(),
@@ -1060,12 +1314,14 @@ describe("regenic-local", () => {
     ]);
     assert.equal(folded.hidden, true);
     assert.equal(folded.hidden_reason, "human");
+    assert.equal(folded.visibility_version, 1);
     const unfolded = await run([
       "inbox-unfold", "--database", database, "--org", "local-owner",
       "--event", inbox[0].event.id,
     ]);
     assert.equal(unfolded.hidden, false);
     assert.equal(unfolded.hidden_reason, null);
+    assert.equal(unfolded.visibility_version, 2);
     const pinned = await run([
       "inbox-pin", "--database", database, "--org", "local-owner",
       "--event", inbox[0].event.id,
@@ -1367,6 +1623,173 @@ describe("regenic-local", () => {
       }
     }
   });
+});
+
+it("acknowledges a completed inbox work item with its read cursor", async () => {
+  const root = await createRoot();
+  const database = join(root, "authority.db");
+  const blobRoot = join(root, "blobs");
+  const file = join(root, "messages.jsonl");
+  const mapping = join(root, "mapping.json");
+  await writeFile(file, '{"id":"ask-1","timestamp":"2026-08-12T23:00:00.000Z","body":"Please confirm the release."}\n');
+  await writeFile(mapping, JSON.stringify({
+    mapping: { external_id: "id", occurred_at: "timestamp", text: "body" },
+    defaults: { actor_id: "local-owner", scope_id: "personal", type: "text" },
+  }));
+  await run([
+    "import-file", "--database", database, "--blob-root", blobRoot,
+    "--file", file, "--mapping", mapping, "--format", "jsonl",
+    "--org", "local-owner", "--source", "fixture-jsonl",
+  ]);
+  const inbox = await run(["inbox", "--database", database, "--org", "local-owner"]);
+  const event = inbox[0].event;
+  const threadId = conversationId(event.source, event.external_id, event.id);
+  const withoutWork = await run([
+    "inbox-ack", "--database", database, "--org", "local-owner", "--event", event.id,
+  ]);
+  assert.equal(withoutWork.last_read_external_id, "ask-1");
+  const authority = new SqliteAuthorityStore(database);
+  const recipeInput = {
+    id: "inbox-ack-recipe",
+    org_id: "local-owner",
+    name: "Inbox acknowledgment fixture",
+    match: { record_class: "task" },
+    trigger: { kind: "push" },
+    executor_type: "test",
+    executor_config: {},
+    can_write_back: false,
+    include_context: false,
+    enabled: true,
+    created_at: now(),
+    updated_at: now(),
+  };
+  await authority.putRecipe(recipeInput);
+  const recipe = await authority.getRecipe("local-owner", recipeInput.id);
+  const ingestion = new IngestionService(new FsBlobStore(blobRoot), authority);
+  const noRunIngested = await ingestion.ingest({
+    schema_version: INGEST_SCHEMA_VERSION,
+    connector_id: "native-local",
+    org_id: "local-owner",
+    delivery_id: "inbox-ack-no-run",
+    received_at: now(),
+    records: [channelRecord({
+      channel: "fixture",
+      kind: "user",
+      direction: "inbound",
+      external_id: "ask-no-run",
+      occurred_at: "2026-08-12T23:01:00.000Z",
+      actor_id: "peer",
+      scope_id: "personal",
+      text: "Please review this item.",
+    })],
+  });
+  const noRunEventId = noRunIngested.records[0].event_id;
+  const noRunEvent = await authority.getEvent("local-owner", noRunEventId);
+  const noRunThreadId = conversationId(noRunEvent.source, noRunEvent.external_id, noRunEvent.id);
+  const noRunCreated = await authority.createWorkItem({
+    item: {
+      id: "inbox-ack-no-run-work",
+      org_id: "local-owner",
+      thread_id: noRunThreadId,
+      unit_key: noRunEvent.id,
+      head_event_id: noRunEvent.id,
+      record_class: "task",
+      thread_facet: "ticket",
+      status: "open",
+      recipe_id: recipe.id,
+      created_at: now(),
+      updated_at: now(),
+    },
+    recipe,
+    expected_recipe: recipe,
+  });
+  assert.equal(noRunCreated.outcome, "applied");
+  const dismissed = await authority.dismissWorkItem({
+    expected_item: noRunCreated.item,
+    now: now(),
+  });
+  assert.equal(dismissed.outcome, "applied");
+  assert.equal(dismissed.item.status, "skipped");
+  assert.equal(dismissed.item.current_run_id ?? null, null);
+  const noRunAck = await run([
+    "inbox-ack", "--database", database, "--org", "local-owner", "--event", noRunEvent.id,
+  ]);
+  assert.equal(noRunAck.last_read_external_id, noRunEvent.external_id);
+  assert.equal(
+    (await authority.getWorkItem("local-owner", "inbox-ack-no-run-work")).acknowledged_run_id ?? null,
+    null,
+  );
+  const created = await authority.createWorkItem({
+    item: {
+      id: "inbox-ack-work",
+      org_id: "local-owner",
+      thread_id: threadId,
+      unit_key: event.id,
+      head_event_id: event.id,
+      record_class: "task",
+      thread_facet: "ticket",
+      status: "open",
+      recipe_id: recipe.id,
+      created_at: now(),
+      updated_at: now(),
+    },
+    recipe,
+    expected_recipe: recipe,
+  });
+  assert.equal(created.outcome, "applied");
+  const withActiveWork = await run([
+    "inbox-ack", "--database", database, "--org", "local-owner", "--event", event.id,
+  ]);
+  assert.equal(withActiveWork.last_read_external_id, "ask-1");
+  assert.equal((await authority.getWorkItem("local-owner", "inbox-ack-work")).status, "open");
+  const workRun = {
+    id: "inbox-ack-run",
+    org_id: "local-owner",
+    work_item_id: "inbox-ack-work",
+    recipe_id: recipe.id,
+    executor_type: "test",
+    status: "running",
+    start_state: "pending",
+    created_at: now(),
+    updated_at: now(),
+  };
+  assert.equal(await authority.claimWorkRunStart({ run: workRun }), true);
+  const submitted = await authority.checkpointWorkRunStart({
+    expected_item: await authority.getWorkItem("local-owner", workRun.work_item_id),
+    expected_run: await authority.getWorkRun("local-owner", workRun.id),
+    kind: "submitted",
+    external_run_id: "inbox-ack-external-run",
+    now: now(),
+  });
+  assert.equal(submitted.outcome, "applied");
+  const observed = await authority.commitWorkObservation({
+    expected_item: submitted.item,
+    expected_run: submitted.run,
+    handle: {
+      external_run_id: "inbox-ack-external-run",
+      status: "completed",
+      result: { summary: "Handled" },
+    },
+    can_write_back: false,
+    trigger_kind: "push",
+    now: now(),
+  });
+  assert.equal(observed.outcome, "applied");
+  await authority.close();
+
+  const acknowledged = await run([
+    "inbox-ack", "--database", database, "--org", "local-owner", "--event", event.id,
+  ]);
+  assert.equal(acknowledged.last_read_external_id, "ask-1");
+  assert.equal(acknowledged.hidden_reason, "policy");
+  const verification = new SqliteAuthorityStore(database);
+  try {
+    const item = await verification.getWorkItem("local-owner", "inbox-ack-work");
+    assert.equal(item.acknowledged_run_id, "inbox-ack-run");
+    assert.equal((await verification.getDisposition(event.id)).disposition, "outside_current_work");
+  } finally {
+    await verification.close();
+  }
 });
 
 it("stores a personal follow-up policy through the local CLI", async () => {

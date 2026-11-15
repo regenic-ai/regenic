@@ -1,5 +1,5 @@
 import { Inject, Injectable, OnModuleDestroy, forwardRef } from "@nestjs/common";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   ChannelDriverRegistry,
   resolveExecutorCatalog,
@@ -10,12 +10,13 @@ import {
   DEFAULT_PERSONAL_DISPATCH_POLICY,
   DEFAULT_PERSONAL_FOLLOW_UP_POLICY,
   DEFAULT_LOCAL_EXECUTOR_ID,
-  cancelWorkRun,
-  deliveryAbandoned,
+  diagnoseWorkItemRunIdentity,
   hiddenExecutorThreadIds,
   isActiveWorkStatus,
   ACTIVE_WORK_STATUSES,
   isDeadLetter,
+  isWorkDeliveryStatus,
+  isWorkWriteBackState,
   normalizeInboxListView,
   normalizeInboxSort,
   normalizeUnitKind,
@@ -30,16 +31,29 @@ import {
   taskInstructionOf,
   workRunNeedsStartConfirmation,
   type ConversationThread,
+  type ConversationPref,
+  type ConversationReadCursorPatch,
+  type CancellationJob,
+  type RetryCancellationJobResult,
+  type ExecutorRunHandle,
   type InboxListView,
   type InboxSortMode,
   type PersonalDispatchPolicy,
   type PersonalFollowUpPolicy,
   type PromptAnswer,
   type Recipe,
+  type SearchAnswerRecord,
+  type WorkItemCreation,
+  type WorkItemCreationAbortResult,
   type ThreadPrompt,
   type WorkItem,
+  type WorkItemIdentityDiagnostic,
   type WorkRun,
+  type WorkRunStartCommand,
   type WorkRunStatus,
+  type WorkDeliveryRetrySnapshot,
+  type WorkDeliveryCommand,
+  type WorkStore,
 } from "@regenic/domain";
 import { resolveInboxBodies } from "./inbox-body";
 import { PersonalConnectorError, storeBusyError } from "./personal-errors";
@@ -55,15 +69,12 @@ import { PersonalWorkFlush } from "./personal-work-flush";
 import { normalizeRecipe, type RecipeInput } from "./personal-work-recipe";
 import {
   delay,
-  forceDisposition,
   isWorkTickShutdown,
 } from "./personal-work-support";
 import { PersonalWorkWait } from "./personal-work-wait";
-import {
-  foldFinishedWorkThreads,
-  PersonalWorkSupervise,
-} from "./personal-work-supervise";
+import { PersonalWorkSupervise } from "./personal-work-supervise";
 import { PersonalEventsService } from "./personal-events.service";
+import { releaseFinishedAgentThread } from "./personal-work-lifecycle";
 import { PersonalAgentContextAccessService } from "./personal-agent-context-access.service";
 import {
   isSearchAnswerRecipeId,
@@ -77,6 +88,11 @@ export type { RecipeInput } from "./personal-work-recipe";
 export type { WorkInboxFace } from "./personal-work-faces";
 
 const WORK_TICK_MS = 3_000;
+const CANCELLATION_LEASE_MS = 30_000;
+const CANCELLATION_HEARTBEAT_MS = 10_000;
+const CANCELLATION_CALL_TIMEOUT_MS = 20_000;
+const CANCELLATION_RETRY_MS = [5_000, 30_000, 2 * 60_000, 10 * 60_000] as const;
+const CANCELLATION_BATCH_SIZE = 5;
 export { PERSONAL_DISPATCH_POLICY_PREF_KEY } from "@regenic/domain";
 export const PERSONAL_FOLLOW_UP_POLICY_PREF_KEY = "personal_follow_up_policy_v1";
 
@@ -97,6 +113,7 @@ export interface AuxiliaryExecutionInput {
 export interface PreparedAuxiliaryExecution {
   work_item: WorkItem;
   recipe: Recipe;
+  search_answer?: SearchAnswerRecord;
 }
 
 export interface WorkRunView {
@@ -117,12 +134,26 @@ export interface RecipeView extends Recipe {
   recent_runs?: RecipeLastRun[];
 }
 
+export interface CancellationJobView {
+  id: string;
+  run_id: string;
+  status: CancellationJob["status"];
+  attempts: number;
+  last_error_code?: string;
+  last_error?: string;
+  updated_at: string;
+}
+
+export type WorkIdentityDiagnosticView = WorkItemIdentityDiagnostic;
+
 @Injectable()
 export class PersonalWorkService implements OnModuleDestroy {
   private timer: ReturnType<typeof setInterval> | undefined;
   private dispatching = false;
   private supervising = false;
   private flushing = false;
+  private cancelling = false;
+  private readonly cancellationOwner = `lifecycle-cancel:${randomUUID()}`;
   private backgroundStarted = false;
   private maintenanceHold = false;
   private readonly channel: PersonalWorkChannel;
@@ -159,8 +190,14 @@ export class PersonalWorkService implements OnModuleDestroy {
       this.supervise,
       this.waits,
       contextAccess,
+      (workItemId) => this.publishCommittedWorkUpdate(workItemId),
+      () => runtime.getOptions()?.database ? 1 : undefined,
     );
-    this.flush = new PersonalWorkFlush(runtime, this.channel);
+    this.flush = new PersonalWorkFlush(
+      runtime,
+      this.channel,
+      (workItemId) => this.publishCommittedWorkUpdate(workItemId),
+    );
   }
 
   startAfterListen(): void {
@@ -325,7 +362,6 @@ export class PersonalWorkService implements OnModuleDestroy {
         return;
       }
       await this.dispatch.fillOpenSlots();
-      await this.dispatch.reconcileInbox();
       await this.dispatch.dispatchPullRecipes();
     } catch (error) {
       if (!isWorkTickShutdown(error)) {
@@ -347,13 +383,246 @@ export class PersonalWorkService implements OnModuleDestroy {
         return;
       }
       await this.supervise.refreshRuns();
+      await this.drainCancellationJobs();
       await this.expireSearchAnswers();
     } catch (error) {
       if (!isWorkTickShutdown(error)) {
         console.error("personal work supervise failed", error);
       }
+
     } finally {
       this.supervising = false;
+    }
+  }
+
+  private async drainCancellationJobs(): Promise<void> {
+    if (this.cancelling || this.maintenanceHold || !this.runtime.isReady()) return;
+    this.cancelling = true;
+    try {
+      const authority = this.runtime.requireHost().get("authority");
+      const orgId = this.runtime.orgId();
+      const jobs = await authority.claimCancellationJobs({
+        org_id: orgId,
+        owner: this.cancellationOwner,
+        now: new Date().toISOString(),
+        lease_ms: CANCELLATION_LEASE_MS,
+        limit: CANCELLATION_BATCH_SIZE,
+      });
+      const results = await Promise.allSettled(
+        jobs.map((job) => this.processCancellationJob(job)),
+      );
+      const failures = results.flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : [],
+      );
+      if (failures.length > 0) {
+        throw new AggregateError(failures, "Cancellation job batch failed");
+      }
+    } finally {
+      this.cancelling = false;
+    }
+  }
+
+  async listCancellationJobFailures(): Promise<CancellationJobView[]> {
+    const jobs = await this.runtime.requireHost().get("authority")
+      .listCancellationJobs(this.runtime.orgId(), 100, ["failed", "dead"]);
+    return jobs
+      .filter((job) => job.status === "failed" || job.status === "dead")
+      .map((job) => ({
+        id: job.id,
+        run_id: job.run_id,
+        status: job.status as "failed" | "dead",
+        attempts: job.attempts,
+        ...(job.last_error_code ? { last_error_code: job.last_error_code } : {}),
+        ...(job.last_error ? { last_error: job.last_error } : {}),
+        updated_at: job.updated_at,
+      }));
+  }
+
+  async listWorkIdentityDiagnostics(): Promise<WorkIdentityDiagnosticView[]> {
+    const orgId = this.runtime.orgId();
+    const authority = this.runtime.requireHost().get("authority");
+    const items = await authority.listWorkItems(orgId, { statuses: ["running", "waiting_human"] });
+    const diagnostics: WorkIdentityDiagnosticView[] = [];
+    for (let offset = 0; offset < items.length; offset += 8) {
+      const batch = await Promise.all(items.slice(offset, offset + 8).map(async (item) => {
+        const [runs, referencedRun] = await Promise.all([
+          authority.listWorkRuns(orgId, item.id),
+          item.current_run_id
+            ? authority.getWorkRun(orgId, item.current_run_id)
+            : Promise.resolve(null),
+        ]);
+        return diagnoseWorkItemRunIdentity(item, runs, referencedRun ?? undefined);
+      }));
+      diagnostics.push(...batch.filter((item): item is WorkIdentityDiagnosticView => item !== null));
+    }
+    return diagnostics;
+  }
+
+  async retryCancellationJob(
+    id: string,
+    expectedAttempts: unknown,
+    commandId: unknown,
+    issuedAt: unknown,
+  ): Promise<CancellationJobView> {
+    if (typeof expectedAttempts !== "number" || !Number.isSafeInteger(expectedAttempts)
+      || expectedAttempts < 0 || typeof commandId !== "string"
+      || commandId.trim().length < 1 || commandId !== commandId.trim()
+      || commandId.length > 128 || typeof issuedAt !== "string"
+      || !Number.isFinite(Date.parse(issuedAt))
+      || Date.parse(issuedAt) < Date.now() - 90 * 24 * 60 * 60 * 1000
+      || Date.parse(issuedAt) > Date.now() + 5 * 60 * 1000) {
+      throw new PersonalConnectorError(
+        "invalid_command",
+        "A valid command_id and issued_at are required. Refresh and try again.",
+        400,
+      );
+    }
+    const authority = this.runtime.requireHost().get("authority");
+    const result = await authority.retryCancellationJob({
+      org_id: this.runtime.orgId(),
+      id,
+      expected_attempts: expectedAttempts,
+      command_id: commandId,
+      issued_at: issuedAt,
+    });
+    if (result.outcome === "not_found") {
+      throw new PersonalConnectorError("not_found", "Cancellation job not found", 404);
+    }
+    if (result.outcome === "conflict") {
+      throw new PersonalConnectorError(
+        "cancellation_job_retry_conflict",
+        "This cancellation job can no longer be retried. Refresh the list.",
+        409,
+      );
+    }
+    void this.drainCancellationJobs().catch((error) =>
+      console.error("manual cancellation job retry failed", error));
+    return this.toCancellationJobView(result);
+  }
+
+  private toCancellationJobView(
+    result: Extract<RetryCancellationJobResult, { job: CancellationJob }>,
+  ): CancellationJobView {
+    const job = result.job;
+    return {
+      id: job.id,
+      run_id: job.run_id,
+      status: job.status,
+      attempts: job.attempts,
+      ...(job.last_error_code ? { last_error_code: job.last_error_code } : {}),
+      ...(job.last_error ? { last_error: job.last_error } : {}),
+      updated_at: job.updated_at,
+    };
+  }
+
+  private async processCancellationJob(job: CancellationJob): Promise<void> {
+    const host = this.runtime.requireHost();
+    const authority = host.get("authority");
+    const lease = {
+      org_id: job.org_id,
+      id: job.id,
+      owner: this.cancellationOwner,
+      claim_token: job.claim_token ?? "",
+    };
+    if (!lease.claim_token) {
+      console.error("lifecycle cancellation job has no claim token", { job_id: job.id });
+      return;
+    }
+    try {
+      await withCancellationJobLease(
+        authority,
+        lease,
+        () => this.executeCancellationJob(job, lease),
+      );
+    } catch (error) {
+      if (error instanceof CancellationJobLeaseLostError) return;
+      const now = new Date().toISOString();
+      const code = cancellationErrorCode(error);
+      const retryMs = CANCELLATION_RETRY_MS[Math.min(Math.max(job.attempts - 1, 0), CANCELLATION_RETRY_MS.length - 1)];
+      const settled = await authority.settleCancellationJob({
+        kind: "failed",
+        ...lease,
+        now,
+        next_retry_at: new Date(Date.parse(now) + retryMs).toISOString(),
+        error_code: code,
+        error: code,
+      });
+      if (!settled) {
+        console.warn("lifecycle cancellation job lease lost before failure settlement", { job_id: job.id });
+      } else {
+        console.error("lifecycle cancellation job failed", { job_id: job.id, run_id: job.run_id, code });
+      }
+    }
+  }
+
+  private async executeCancellationJob(
+    job: CancellationJob,
+    lease: { org_id: string; id: string; owner: string; claim_token: string },
+  ): Promise<void> {
+    const host = this.runtime.requireHost();
+    const authority = host.get("authority");
+    const run = await authority.getWorkRun(job.org_id, job.run_id);
+    if (!run) throw new Error("cancel_run_missing");
+    if (run.status !== "running" && run.status !== "waiting_human") {
+      const now = new Date().toISOString();
+      const settled = await authority.settleCancellationJob({
+        kind: "succeeded", ...lease, now, outcome_code: "already_finished",
+      });
+      if (!settled) throw new CancellationJobLeaseLostError();
+      return;
+    }
+    const item = await authority.getWorkItem(job.org_id, run.work_item_id);
+    if (!item || item.status !== "skipped" || item.current_run_id !== run.id) {
+      throw new Error("cancel_work_identity_changed");
+    }
+    const executor = host.get("executors").get(run.executor_type);
+    if (!executor) throw new Error("cancel_executor_unavailable");
+    if (!executor.cancel) {
+      const now = new Date().toISOString();
+      const settled = await authority.settleCancellationJob({
+        kind: "succeeded", ...lease, now, outcome_code: "unsupported",
+      });
+      if (!settled) throw new CancellationJobLeaseLostError();
+      return;
+    }
+    if (!run.external_run_id && !run.agent_thread_id) {
+      throw new Error("cancel_execution_identity_unknown");
+    }
+    const controller = new AbortController();
+    const ctx = { ...this.channel.contextFor(executor), signal: controller.signal };
+    let cancelHandle: ExecutorRunHandle | void = undefined;
+    try {
+      cancelHandle = await callWithCancellationTimeout(
+        () => executor.cancel!(run, ctx),
+        controller,
+      );
+    } catch {
+      // The cancellation response may be lost after the executor accepted it; verify status before retrying.
+    }
+    let terminal = cancelHandle && isTerminalRunStatus(cancelHandle.status)
+      ? cancelHandle
+      : undefined;
+    if (!terminal) {
+      const statusController = new AbortController();
+      const statusContext = { ...this.channel.contextFor(executor), signal: statusController.signal };
+      const status = await callWithCancellationTimeout(
+        () => executor.status(run, statusContext),
+        statusController,
+      );
+      if (!isTerminalRunStatus(status.status)) throw new Error("cancel_unconfirmed");
+      terminal = status;
+    }
+    const now = new Date().toISOString();
+    const committed = await authority.commitCancellationJobObservation({
+      ...lease,
+      expected_run: run,
+      handle: terminal,
+      now,
+    });
+    if (committed.outcome === "conflict") throw new CancellationJobLeaseLostError();
+    if (committed.outcome === "applied") {
+      this.events.workUpdated(item.id);
+      this.inbox.touchInboxDigest();
     }
   }
 
@@ -389,18 +658,9 @@ export class PersonalWorkService implements OnModuleDestroy {
         ) {
           continue;
         }
-        const cancelled = await this.cancelAuxiliaryExecution(item.id, {
-          emit: false,
+        await this.cancelAuxiliaryItem(item, {
+          timeout: { record, now: new Date(now).toISOString() },
         });
-        if (cancelled.run?.status !== "cancelled") {
-          continue;
-        }
-        await authority.putSearchAnswer({
-          ...record,
-          outcome: "timed_out",
-          updated_at: new Date(now).toISOString(),
-        });
-        this.events.workUpdated(item.id);
       } catch (error) {
         if (!isWorkTickShutdown(error)) {
           console.error("search answer timeout failed", {
@@ -469,6 +729,8 @@ export class PersonalWorkService implements OnModuleDestroy {
    */
   async prepareAuxiliaryExecution(
     input: Omit<AuxiliaryExecutionInput, "evidence_text">,
+    searchAnswer?: SearchAnswerRecord,
+    searchAnswerTransition?: WorkItemCreation["search_answer_transition"],
   ): Promise<PreparedAuxiliaryExecution> {
     await this.executors.ensureMounted();
     const host = this.runtime.requireHost();
@@ -488,6 +750,7 @@ export class PersonalWorkService implements OnModuleDestroy {
     }
     const now = new Date().toISOString();
     const recipeId = systemRecipeId(input.purpose, executorType);
+    const expectedRecipe = await host.get("authority").getRecipe(orgId, recipeId);
     const recipe: Recipe = {
       id: recipeId,
       org_id: orgId,
@@ -503,10 +766,9 @@ export class PersonalWorkService implements OnModuleDestroy {
         ? {}
         : { max_concurrent: input.max_concurrent }),
       enabled: true,
-      created_at: now,
+      created_at: expectedRecipe?.created_at ?? now,
       updated_at: now,
     };
-    await host.get("authority").putRecipe(recipe);
     const item: WorkItem = {
       id: input.id,
       org_id: orgId,
@@ -519,7 +781,31 @@ export class PersonalWorkService implements OnModuleDestroy {
       created_at: now,
       updated_at: now,
     };
-    await host.get("authority").putWorkItem(item);
+    const created = await host.get("authority").createWorkItem({
+      item, recipe, expected_recipe: expectedRecipe,
+      ...(searchAnswer ? { search_answer: searchAnswer } : {}),
+      ...(searchAnswerTransition ? { search_answer_transition: searchAnswerTransition } : {}),
+    });
+    if (created.outcome !== "applied") throw new PersonalConnectorError(
+      "execution_prepare_conflict", `Auxiliary preparation rejected: ${created.reason}. Refresh the execution.`, 409,
+    );
+    return {
+      work_item: created.item, recipe: created.recipe,
+      ...(created.search_answer ? { search_answer: created.search_answer } : {}),
+    };
+  }
+
+  async prepareExistingAuxiliaryExecution(workItemId: string): Promise<PreparedAuxiliaryExecution> {
+    await this.executors.ensureMounted();
+    const authority = this.runtime.requireHost().get("authority");
+    const orgId = this.runtime.orgId();
+    const item = await authority.getWorkItem(orgId, workItemId);
+    const recipe = item?.recipe_id ? await authority.getRecipe(orgId, item.recipe_id) : null;
+    if (!item || !recipe || !isSystemRecipeId(recipe.id) || item.status !== "open" || item.current_run_id) {
+      throw new PersonalConnectorError(
+        "execution_prepare_conflict", "Auxiliary preparation changed. Refresh the execution.", 409,
+      );
+    }
     return { work_item: item, recipe };
   }
 
@@ -528,53 +814,35 @@ export class PersonalWorkService implements OnModuleDestroy {
     evidenceText: string,
   ): Promise<{ work_item: WorkItem; run: WorkRun }> {
     const host = this.runtime.requireHost();
-    let run: WorkRun | undefined;
-    try {
-      run = await this.dispatch.startItem(
-        prepared.work_item,
-        prepared.recipe,
-        evidenceText,
-        "auxiliary",
-      );
-    } catch (error) {
-      // A submitted/uncertain start is still durable and must remain recoverable.
-      const durable = (await host.get("authority").listWorkRuns(
-        prepared.work_item.org_id,
-        prepared.work_item.id,
-      ))[0];
-      if (durable && recoverableAuxiliaryStart(durable)) {
-        run = durable;
-      } else {
-        if (!durable || durable.status !== "failed") {
-          await host.get("authority").putWorkItem({
-            ...prepared.work_item,
-            status: "failed",
-            updated_at: new Date().toISOString(),
-          });
-        }
-        throw error;
-      }
-    }
+    const run = await this.dispatch.startItem(
+      prepared.work_item,
+      prepared.recipe,
+      evidenceText,
+      "auxiliary",
+    );
     if (!run) {
-      await host.get("authority").putWorkItem({
-        ...prepared.work_item,
-        status: "skipped",
-        updated_at: new Date().toISOString(),
-      });
       throw new PersonalConnectorError(
         "execution_start_conflict",
         "No executor slot is available",
         429,
       );
     }
-    return {
-      work_item:
-        (await host.get("authority").getWorkItem(
-          prepared.work_item.org_id,
-          prepared.work_item.id,
-        )) ?? prepared.work_item,
-      run,
-    };
+    const item = await host.get("authority").getWorkItem(
+      prepared.work_item.org_id, prepared.work_item.id,
+    );
+    if (!item || item.current_run_id !== run.id) throw new PersonalConnectorError(
+      "execution_start_conflict", "Auxiliary execution changed after start. Refresh the execution.", 409,
+    );
+    return { work_item: item, run };
+  }
+
+  async abortPreparedAuxiliaryExecution(
+    prepared: PreparedAuxiliaryExecution,
+  ): Promise<WorkItemCreationAbortResult> {
+    return this.runtime.requireHost().get("authority").abortWorkItemCreation({
+      expected_item: prepared.work_item,
+      ...(prepared.search_answer ? { expected_search_answer: prepared.search_answer } : {}),
+    });
   }
 
   async startAuxiliaryExecution(
@@ -612,11 +880,12 @@ export class PersonalWorkService implements OnModuleDestroy {
     if (active) {
       await this.supervise.refreshOne(item, recipe, active);
     }
-    const [latestItem, runs] = await Promise.all([
-      host.get("authority").getWorkItem(orgId, item.id),
-      host.get("authority").listWorkRuns(orgId, item.id),
-    ]);
-    return { work_item: latestItem ?? item, run: runs[0] };
+    const latestItem = await host.get("authority").getWorkItem(orgId, item.id);
+    if (!latestItem) throw new Error("Auxiliary work item disappeared during refresh");
+    const run = latestItem.current_run_id
+      ? await host.get("authority").getWorkRun(orgId, latestItem.current_run_id)
+      : null;
+    return { work_item: latestItem, run: run ?? undefined };
   }
 
   async cancelAuxiliaryExecution(
@@ -630,38 +899,44 @@ export class PersonalWorkService implements OnModuleDestroy {
     if (!item || !isSystemRecipeId(item.recipe_id)) {
       throw new PersonalConnectorError("not_found", "Execution not found", 404);
     }
+    return this.cancelAuxiliaryItem(item, options);
+  }
+
+  private async cancelAuxiliaryItem(
+    item: WorkItem,
+    options: { emit?: boolean; timeout?: { record: SearchAnswerRecord; now: string } },
+  ): Promise<WorkRunView> {
+    const host = this.runtime.requireHost();
+    const authority = host.get("authority");
     if (!isActiveWorkStatus(item.status)) {
       return {
         work_item: item,
-        run: (await host.get("authority").listWorkRuns(orgId, item.id))[0],
+        run: item.current_run_id
+          ? (await authority.getWorkRun(item.org_id, item.current_run_id)) ?? undefined
+          : undefined,
       };
     }
-    const now = new Date().toISOString();
-    const run = await host.get("authority").getActiveWorkRun(orgId, item.id);
-    if (run) {
-      const executor = host.get("executors").get(run.executor_type);
-      if (executor?.cancel) {
-        try {
-          await executor.cancel(run, this.channel.contextFor(executor));
-        } catch {
-          // Ledger cancellation still stands if the executor ignores cancel.
-        }
-      }
-      await host.get("authority").putWorkRun(cancelWorkRun(run, now));
-      this.waits.drop(run.id);
-    }
-    const next = await host.get("authority").putWorkItem({
-      ...item,
-      status: "skipped",
-      updated_at: now,
+    const now = options.timeout?.now ?? new Date().toISOString();
+    const dismissed = await authority.dismissWorkItem({
+      expected_item: item, now, fold_visibility: false,
+      ...(options.timeout ? { search_answer_timeout: options.timeout.record } : {}),
     });
+    if (dismissed.outcome === "replayed") {
+      return { work_item: dismissed.item };
+    }
+    if (dismissed.outcome !== "applied") throw new PersonalConnectorError(
+      "work_dismissal_conflict", `Auxiliary cancellation rejected: ${dismissed.reason}. Refresh the execution.`, 409,
+    );
+    const { run } = dismissed;
+    if (run) this.waits.drop(run.id);
+    void this.drainCancellationJobs().catch((error) =>
+      console.error("personal auxiliary cancellation worker failed", { run_id: run?.id }, error));
     if (options.emit !== false) {
       this.events.workUpdated(item.id);
     }
     return {
-      work_item: next,
-      run:
-        (await host.get("authority").listWorkRuns(orgId, item.id))[0],
+      work_item: dismissed.item,
+      run: run ?? undefined,
     };
   }
 
@@ -733,9 +1008,19 @@ export class PersonalWorkService implements OnModuleDestroy {
         );
       }
     }
-    const saved = await host.get("authority").putRecipe(recipe);
+    const saved = await host.get("authority").putRecipeIfUnchanged({
+      recipe,
+      expected_recipe: existing,
+    });
+    if (saved.outcome === "conflict") {
+      throw new PersonalConnectorError(
+        "recipe_conflict",
+        "Recipe changed while it was being saved. Refresh the recipe and try again.",
+        409,
+      );
+    }
     void this.afterConnectorTick();
-    return saved;
+    return saved.recipe;
   }
 
   async deleteRecipe(id: string): Promise<{ id: string; removed: true }> {
@@ -868,50 +1153,57 @@ export class PersonalWorkService implements OnModuleDestroy {
     const now = new Date().toISOString();
     const filtered = recipe.trigger.kind === "push" &&
       Boolean(recipe.match.text_contains || recipe.match.text_excludes);
-    const item =
+    let item =
       existing &&
       (!filtered || existing.head_event_id === head?.event.id) &&
       (existing.status === "open" ||
         existing.status === "failed" ||
         existing.status === "done" ||
         existing.status === "skipped")
-        ? await authority.putWorkItem({
-            ...existing,
-            status: "open",
-            recipe_id: recipe.id,
-            record_class: subject.record_class,
-            thread_facet: subject.thread_facet,
-            updated_at: now,
-          })
-        : await authority.putWorkItem({
-            id: `work-${randomUUID()}`,
-            org_id: orgId,
-            thread_id: threadId,
-            unit_key: `try:${recipe.id}:${now}`,
-            ...(filtered && head ? { head_event_id: head.event.id } : {}),
-            record_class: subject.record_class,
-            thread_facet: subject.thread_facet,
-            status: "open",
-            recipe_id: recipe.id,
-            created_at: now,
-            updated_at: now,
-          });
+        ? existing
+        : null;
+    if (!item) {
+      const created = await authority.createWorkItem({
+        item: {
+          id: `work-${randomUUID()}`,
+          org_id: orgId,
+          thread_id: threadId,
+          unit_key: `try:${recipe.id}:${now}`,
+          ...(filtered && head ? { head_event_id: head.event.id } : {}),
+          record_class: subject.record_class,
+          thread_facet: subject.thread_facet,
+          status: "open",
+          recipe_id: recipe.id,
+          created_at: now,
+          updated_at: now,
+        },
+        recipe,
+        expected_recipe: recipe,
+      });
+      if (created.outcome === "conflict") {
+        throw new PersonalConnectorError(
+          "conflict",
+          "The trial work item or rule changed while it was being prepared. Refresh and try again.",
+          409,
+        );
+      }
+      item = created.item;
+    }
     const allowWriteBack =
       input?.write_back === true && Boolean(recipe.can_write_back);
-    this.supervise.setWriteBackOverride(item.id, allowWriteBack);
-    const pending = await authority.getWorkDeliveryByItem(orgId, item.id);
-    if (pending && pending.status !== "acked") {
-      // Drop stale queued send-back so keep-here (and a fresh try) cannot flush it.
-      await authority.putWorkDelivery(deliveryAbandoned(pending, now));
+    const run = await this.dispatch.startItem(item, recipe, undefined, "manual", {
+      write_back: allowWriteBack, rebind: true,
+    });
+    let latest = await authority.getWorkItem(orgId, item.id);
+    if (!latest || !run) throw new Error("Trial start did not persist its work item and run");
+    const queued = await authority.getWorkDeliveryByItem(orgId, item.id);
+    if (queued?.run_id === run.id && shouldFlushDelivery(queued, new Date().toISOString())) {
+      await this.flush.flushOne(latest, recipe, queued);
+      latest = await authority.getWorkItem(orgId, item.id);
+      if (!latest) throw new Error("Trial work item disappeared after delivery");
     }
-    try {
-      const result = await this.runWorkItem(item.id);
-      this.inbox.touchInboxDigest();
-      return { ...result, thread_id: threadId };
-    } catch (error) {
-      this.supervise.clearWriteBackOverride(item.id);
-      throw error;
-    }
+    this.inbox.touchInboxDigest();
+    return { work_item: latest, run, thread_id: threadId };
   }
 
   async getPrefs(): Promise<UiPrefsView> {
@@ -1098,74 +1390,125 @@ export class PersonalWorkService implements OnModuleDestroy {
     }
   }
 
-  async ackDoneThread(threadId: string): Promise<void> {
+  async ackDoneThread(
+    threadId: string,
+    attention: ConversationReadCursorPatch,
+  ): Promise<ConversationPref> {
     const host = this.runtime.requireHost();
-    const item = await host
-      .get("authority")
-      .getWorkItemByThread(this.runtime.orgId(), threadId);
-    if (!item || isActiveWorkStatus(item.status) || !item.head_event_id) {
-      return;
+    const authority = host.get("authority");
+    const item = await authority.getWorkItemByThread(this.runtime.orgId(), threadId);
+    if (!item || isActiveWorkStatus(item.status) || !item.head_event_id || !item.current_run_id) {
+      return authority.putConversationPref(attention);
     }
-    const event = await host.get("authority").getEvent(item.org_id, item.head_event_id);
-    if (!event) {
-      return;
+    const run = await authority.getWorkRun(item.org_id, item.current_run_id);
+    if (!run) {
+      return authority.putConversationPref(attention);
     }
-    const now = new Date().toISOString();
-    await forceDisposition(
-      host.get("authority"),
-      event,
-      "outside_current_work",
-      "work_acked",
-      now,
-    );
-    const run =
-      (await host.get("authority").getActiveWorkRun(item.org_id, item.id)) ??
-      (await host.get("authority").listWorkRuns(item.org_id, item.id))[0];
-    await foldFinishedWorkThreads(
-      host.get("authority"),
-      item.org_id,
-      threadId,
-      run?.agent_thread_id,
-      now,
-    );
-    this.inbox.touchInboxDigest();
+    const commandId = createHash("sha256")
+      .update([item.org_id, item.id, item.version ?? 0, run.id, run.version ?? 0, item.head_event_id].join("\0"))
+      .digest("hex");
+    const acknowledged = await authority.acknowledgeWorkResult({
+      expected_item: item,
+      run_id: run.id,
+      trigger_event_id: item.head_event_id,
+      expected_version: item.version ?? 0,
+      expected_run_version: run.version ?? 0,
+      command_id: `inbox-ack:${commandId}`,
+      issued_at: item.updated_at,
+      now: new Date().toISOString(),
+      conversation_attention: attention,
+    });
+    if (acknowledged.outcome === "conflict" && acknowledged.reason === "command_conflict") {
+      throw new Error("Work acknowledgment command identity conflict");
+    }
+    if (acknowledged.outcome !== "conflict") {
+      releaseFinishedAgentThread(run.agent_thread_id);
+    }
+    const pref = await authority.getConversationPref(item.org_id, threadId);
+    if (!pref) throw new Error("Conversation attention disappeared after acknowledgment");
+    return pref;
   }
 
-  async runWorkItem(id: string): Promise<WorkRunView> {
-    await this.executors.ensureMounted();
+  async runWorkItem(
+    id: string,
+    expectedVersion: unknown,
+    commandId: unknown,
+    issuedAt: unknown,
+  ): Promise<WorkRunView> {
     const host = this.runtime.requireHost();
     const orgId = this.runtime.orgId();
+    if (typeof expectedVersion !== "number" || !Number.isSafeInteger(expectedVersion) || expectedVersion < 0) {
+      throw new PersonalConnectorError("invalid_work_version", "A valid work version is required. Refresh the work item.", 400);
+    }
+    if (
+      typeof commandId !== "string" ||
+      commandId.trim().length < 1 ||
+      commandId !== commandId.trim() ||
+      commandId.length > 128 ||
+      typeof issuedAt !== "string" ||
+      !Number.isFinite(Date.parse(issuedAt)) ||
+      Date.parse(issuedAt) < Date.now() - 90 * 24 * 60 * 60 * 1000 ||
+      Date.parse(issuedAt) > Date.now() + 5 * 60 * 1000
+    ) {
+      throw new PersonalConnectorError(
+        "invalid_command",
+        "A valid command_id and issued_at are required. Refresh the work item and try again.",
+        400,
+      );
+    }
+    const command = {
+      org_id: orgId,
+      work_item_id: id,
+      expected_version: expectedVersion,
+      command_id: commandId,
+      issued_at: issuedAt,
+    };
+    const replay = await this.replayWorkRunStart(command);
+    if (replay) return replay;
     const item = await host.get("authority").getWorkItem(orgId, id);
     if (!item) {
       throw new PersonalConnectorError("not_found", "Work item not found", 404);
     }
+    const replayAfterLoad = await this.replayWorkRunStart(command);
+    if (replayAfterLoad) return replayAfterLoad;
     if (isSystemRecipeId(item.recipe_id)) {
       throw new PersonalConnectorError("not_found", "Work item not found", 404);
     }
+    if ((item.version ?? 0) !== expectedVersion) {
+      throw new PersonalConnectorError("work_start_conflict", "Work item changed since it was displayed. Refresh before starting it.", 409);
+    }
+    await this.executors.ensureMounted();
     const recipe = item.recipe_id
       ? await host.get("authority").getRecipe(orgId, item.recipe_id)
       : null;
-    if (!recipe) {
+    const delivery = await host.get("authority").getWorkDeliveryByItem(orgId, item.id);
+    if (delivery?.status === "uncertain" && !delivery.channel_receipt?.accepted) {
+      const replay = await this.replayWorkRunStart(command);
+      if (replay) return replay;
       throw new PersonalConnectorError(
-        "invalid_config",
-        "This work item has no recipe",
-        400,
+        "delivery_reconciliation_required", "Delivery acceptance is unknown. Check the original destination before retrying.", 409,
       );
     }
-    const delivery = await host.get("authority").getWorkDeliveryByItem(orgId, item.id);
     if (
       delivery &&
       (delivery.write_back === "failed" || isDeadLetter(delivery)) &&
       item.status === "done"
     ) {
-      await this.flush.flushOne(item, recipe, delivery, true);
-      return {
-        work_item: (await host.get("authority").getWorkItem(orgId, item.id)) ?? item,
-        run: (await host.get("authority").getActiveWorkRun(orgId, item.id)) ?? undefined,
-      };
+      throw new PersonalConnectorError(
+        "delivery_retry_required",
+        "Use the delivery retry command to retry this result without starting a new run.",
+        409,
+      );
+    }
+    if (!recipe) {
+      const replay = await this.replayWorkRunStart(command);
+      if (replay) return replay;
+      throw new PersonalConnectorError("invalid_config", "This work item has no recipe", 400);
     }
     const active = await host.get("authority").getActiveWorkRun(orgId, item.id);
     if (active) {
+      const replayAfterActiveRead = await this.replayWorkRunStart(command);
+      if (replayAfterActiveRead) return replayAfterActiveRead;
       this.assertStartConfirmed(active);
     }
     if (active && shouldRefreshActiveRun(item.status)) {
@@ -1175,37 +1518,240 @@ export class PersonalWorkService implements OnModuleDestroy {
         run: (await host.get("authority").getActiveWorkRun(orgId, item.id)) ?? active,
       };
     }
-    if (active) {
-      await host.get("authority").putWorkRun(
-        cancelWorkRun(active, new Date().toISOString()),
+    const unresolved = (await host.get("authority").listWorkDeliveries(orgId))
+      .find((row) => row.work_item_id === item.id && row.status !== "acked");
+    if (unresolved) {
+      const replay = await this.replayWorkRunStart(command);
+      if (replay) return replay;
+      throw new PersonalConnectorError(
+        "delivery_unresolved", "Resolve the previous write-back before starting another execution.", 409,
       );
     }
-    const opened =
-      item.status === "open"
-        ? item
-        : await host.get("authority").putWorkItem({
-            ...item,
-            status: "open",
-            updated_at: new Date().toISOString(),
-          });
-    const run = await this.dispatch.startItem(opened, recipe, undefined, "manual");
+    if (active) {
+      throw new PersonalConnectorError(
+        "execution_start_conflict", "A previous execution is still active. Refresh the work item.", 409,
+      );
+    }
+    let replayed = false;
+    const run = await this.dispatch.startItem(item, recipe, undefined, "manual", {
+      command,
+      onReplay: () => { replayed = true; },
+    });
     const latest =
-      (await host.get("authority").getWorkItem(orgId, opened.id)) ?? opened;
-    const queued = await host.get("authority").getWorkDeliveryByItem(orgId, opened.id);
+      (await host.get("authority").getWorkItem(orgId, item.id)) ?? item;
+    if (replayed) {
+      return { work_item: latest, ...(run ? { run } : {}) };
+    }
+    const queued = await host.get("authority").getWorkDeliveryByItem(orgId, item.id);
     if (
       queued &&
       shouldFlushDelivery(queued, new Date().toISOString()) &&
-      this.supervise.allowsWriteBack(opened.id, recipe)
+      (queued.run_id || this.supervise.allowsWriteBack(item.id, recipe))
     ) {
       await this.flush.flushOne(latest, recipe, queued);
     }
     return {
-      work_item: (await host.get("authority").getWorkItem(orgId, opened.id)) ?? latest,
+      work_item: (await host.get("authority").getWorkItem(orgId, item.id)) ?? latest,
       run,
     };
   }
 
-  async dismissWorkItem(id: string): Promise<WorkRunView> {
+  async retryWorkDelivery(
+    id: string,
+    expectedVersion: unknown,
+    deliverySnapshot: unknown,
+    commandId: unknown,
+    issuedAt: unknown,
+  ): Promise<WorkRunView> {
+    const host = this.runtime.requireHost();
+    const orgId = this.runtime.orgId();
+    if (typeof expectedVersion !== "number" || !Number.isSafeInteger(expectedVersion) || expectedVersion < 0) {
+      throw new PersonalConnectorError("invalid_work_version", "A valid work version is required. Refresh the work item.", 400);
+    }
+    if (
+      typeof commandId !== "string" ||
+      commandId.trim().length < 1 ||
+      commandId !== commandId.trim() ||
+      commandId.length > 128 ||
+      typeof issuedAt !== "string" ||
+      !Number.isFinite(Date.parse(issuedAt)) ||
+      Date.parse(issuedAt) < Date.now() - 90 * 24 * 60 * 60 * 1000 ||
+      Date.parse(issuedAt) > Date.now() + 5 * 60 * 1000
+    ) {
+      throw new PersonalConnectorError("invalid_command", "A valid command_id and issued_at are required.", 400);
+    }
+    if (!deliverySnapshot || typeof deliverySnapshot !== "object") {
+      throw new PersonalConnectorError("invalid_delivery", "A delivery snapshot is required. Refresh the work item.", 400);
+    }
+    const snapshot = deliverySnapshot as Partial<WorkDeliveryRetrySnapshot>;
+    if (
+      typeof snapshot.id !== "string" ||
+      typeof snapshot.version !== "number" ||
+      !Number.isSafeInteger(snapshot.version) ||
+      snapshot.version < 0 ||
+      !isWorkDeliveryStatus(snapshot.status) ||
+      !isWorkWriteBackState(snapshot.write_back) ||
+      typeof snapshot.attempts !== "number" ||
+      !Number.isSafeInteger(snapshot.attempts) ||
+      snapshot.attempts < 0
+    ) {
+      throw new PersonalConnectorError("invalid_delivery", "A valid delivery snapshot is required.", 400);
+    }
+    const item = await host.get("authority").getWorkItem(orgId, id);
+    if (!item || isSystemRecipeId(item.recipe_id)) {
+      throw new PersonalConnectorError("not_found", "Work item not found", 404);
+    }
+    const delivery = await host.get("authority").getWorkDelivery(orgId, snapshot.id);
+    if (!delivery || delivery.work_item_id !== item.id) {
+      throw new PersonalConnectorError("delivery_retry_conflict", "Delivery does not belong to this work item.", 409);
+    }
+    const command: Extract<WorkDeliveryCommand, { kind: "retry" }> = {
+      org_id: orgId,
+      delivery_id: snapshot.id,
+      kind: "retry",
+      expected_delivery: {
+        id: snapshot.id,
+        version: snapshot.version,
+        status: snapshot.status,
+        write_back: snapshot.write_back,
+        attempts: snapshot.attempts,
+      },
+      expected_item_version: expectedVersion,
+      command_id: commandId,
+      issued_at: issuedAt,
+      now: new Date().toISOString(),
+    };
+    const result = await host.get("authority").transitionWorkDelivery(command);
+    if (result.outcome === "conflict") {
+      throw new PersonalConnectorError(
+        "delivery_retry_conflict",
+        "The delivery changed or is not retryable. Refresh the work item and reconcile unknown delivery status first.",
+        409,
+      );
+    }
+    if (result.outcome === "applied") {
+      this.publishCommittedWorkUpdate(item.id);
+      const recipe = item.recipe_id ? await host.get("authority").getRecipe(orgId, item.recipe_id) : null;
+      await this.flush.flushOne(item, recipe, result.delivery);
+    }
+    return {
+      work_item: (await host.get("authority").getWorkItem(orgId, item.id)) ?? item,
+      run: (await host.get("authority").getActiveWorkRun(orgId, item.id)) ?? undefined,
+    };
+  }
+
+  async reconcileWorkDelivery(
+    id: string,
+    resolution: unknown,
+    expectedVersion: unknown,
+    deliverySnapshot: unknown,
+    commandId: unknown,
+    issuedAt: unknown,
+  ): Promise<WorkRunView> {
+    const host = this.runtime.requireHost();
+    const orgId = this.runtime.orgId();
+    if (resolution !== "sent" && resolution !== "not_sent") {
+      throw new PersonalConnectorError("invalid_delivery_resolution", "A valid delivery resolution is required.", 400);
+    }
+    if (typeof expectedVersion !== "number" || !Number.isSafeInteger(expectedVersion) || expectedVersion < 0) {
+      throw new PersonalConnectorError("invalid_work_version", "A valid work version is required. Refresh the work item.", 400);
+    }
+    if (
+      typeof commandId !== "string" ||
+      commandId.trim().length < 1 ||
+      commandId !== commandId.trim() ||
+      commandId.length > 128 ||
+      typeof issuedAt !== "string" ||
+      !Number.isFinite(Date.parse(issuedAt)) ||
+      Date.parse(issuedAt) < Date.now() - 90 * 24 * 60 * 60 * 1000 ||
+      Date.parse(issuedAt) > Date.now() + 5 * 60 * 1000
+    ) {
+      throw new PersonalConnectorError("invalid_command", "A valid command_id and issued_at are required.", 400);
+    }
+    if (!deliverySnapshot || typeof deliverySnapshot !== "object") {
+      throw new PersonalConnectorError("invalid_delivery", "A delivery snapshot is required. Refresh the work item.", 400);
+    }
+    const snapshot = deliverySnapshot as Partial<WorkDeliveryRetrySnapshot>;
+    if (
+      typeof snapshot.id !== "string" ||
+      typeof snapshot.version !== "number" ||
+      !Number.isSafeInteger(snapshot.version) ||
+      snapshot.version < 0 ||
+      !isWorkDeliveryStatus(snapshot.status) ||
+      !isWorkWriteBackState(snapshot.write_back) ||
+      typeof snapshot.attempts !== "number" ||
+      !Number.isSafeInteger(snapshot.attempts) ||
+      snapshot.attempts < 0
+    ) {
+      throw new PersonalConnectorError("invalid_delivery", "A valid delivery snapshot is required.", 400);
+    }
+    const item = await host.get("authority").getWorkItem(orgId, id);
+    if (!item || isSystemRecipeId(item.recipe_id)) {
+      throw new PersonalConnectorError("not_found", "Work item not found", 404);
+    }
+    const delivery = await host.get("authority").getWorkDelivery(orgId, snapshot.id);
+    if (!delivery || delivery.work_item_id !== item.id) {
+      throw new PersonalConnectorError("delivery_reconciliation_conflict", "Delivery does not belong to this work item.", 409);
+    }
+    const command: Extract<WorkDeliveryCommand, { kind: "reconcile" }> = {
+      org_id: orgId,
+      delivery_id: snapshot.id,
+      kind: "reconcile",
+      resolution,
+      expected_delivery: {
+        id: snapshot.id,
+        version: snapshot.version,
+        status: snapshot.status,
+        write_back: snapshot.write_back,
+        attempts: snapshot.attempts,
+      },
+      expected_item_version: expectedVersion,
+      command_id: commandId,
+      issued_at: issuedAt,
+      now: new Date().toISOString(),
+    };
+    const result = await host.get("authority").transitionWorkDelivery(command);
+    if (result.outcome === "conflict") {
+      throw new PersonalConnectorError(
+        "delivery_reconciliation_conflict",
+        "The delivery changed or has reliable acceptance evidence. Refresh and reconcile against its current state.",
+        409,
+      );
+    }
+    if (result.outcome === "applied") this.publishCommittedWorkUpdate(item.id);
+    if (result.outcome === "applied" && resolution === "not_sent" &&
+      result.delivery.status === "queued" && item.status !== "skipped") {
+      const recipe = item.recipe_id ? await host.get("authority").getRecipe(orgId, item.recipe_id) : null;
+      await this.flush.flushOne(item, recipe, result.delivery);
+    }
+    return {
+      work_item: (await host.get("authority").getWorkItem(orgId, item.id)) ?? item,
+      run: (await host.get("authority").getActiveWorkRun(orgId, item.id)) ?? undefined,
+    };
+  }
+
+  private async replayWorkRunStart(command: WorkRunStartCommand): Promise<WorkRunView | null> {
+    const authority = this.runtime.requireHost().get("authority");
+    const replay = await authority.getWorkRunStartReplay(command);
+    if (replay.outcome === "conflict") {
+      throw new PersonalConnectorError(
+        "command_conflict",
+        "This command id was already used for a different operation. Refresh and try again.",
+        409,
+      );
+    }
+    if (replay.outcome === "not_found") return null;
+    const item = await authority.getWorkItem(command.org_id, command.work_item_id);
+    if (!item) throw new PersonalConnectorError("not_found", "Work item not found", 404);
+    return { work_item: item, run: replay.run };
+  }
+
+  async dismissWorkItem(
+    id: string,
+    expectedVersion: unknown,
+    commandId: unknown,
+    issuedAt: unknown,
+  ): Promise<WorkRunView> {
     const host = this.runtime.requireHost();
     const orgId = this.runtime.orgId();
     const item = await host.get("authority").getWorkItem(orgId, id);
@@ -1215,61 +1761,192 @@ export class PersonalWorkService implements OnModuleDestroy {
     if (isSystemRecipeId(item.recipe_id)) {
       throw new PersonalConnectorError("not_found", "Work item not found", 404);
     }
+    if (typeof expectedVersion !== "number" || !Number.isSafeInteger(expectedVersion) || expectedVersion < 0) {
+      throw new PersonalConnectorError("invalid_work_version", "A valid work version is required. Refresh the work item.", 400);
+    }
+    if (
+      typeof commandId !== "string" ||
+      commandId.trim().length < 1 ||
+      commandId !== commandId.trim() ||
+      commandId.length > 128 ||
+      typeof issuedAt !== "string" ||
+      !Number.isFinite(Date.parse(issuedAt)) ||
+      Date.parse(issuedAt) < Date.now() - 90 * 24 * 60 * 60 * 1000 ||
+      Date.parse(issuedAt) > Date.now() + 5 * 60 * 1000
+    ) {
+      throw new PersonalConnectorError(
+        "invalid_command",
+        "A valid command_id and issued_at are required. Refresh the work item and try again.",
+        400,
+      );
+    }
     const now = new Date().toISOString();
-    const next =
-      item.status === "skipped"
-        ? item
-        : await host.get("authority").putWorkItem({
-            ...item,
-            status: "skipped",
-            updated_at: now,
-          });
-    const run = await host.get("authority").getActiveWorkRun(orgId, item.id);
-    if (run) {
-      const executor = host.get("executors").get(run.executor_type);
-      if (executor?.cancel) {
-        try {
-          await executor.cancel(run, this.channel.contextFor(executor));
-        } catch {
-          // Ledger unfollow still stands if the inferior ignores cancel.
-        }
-      }
-    }
-    const cancelled = run
-      ? await host.get("authority").putWorkRun(cancelWorkRun(run, now))
-      : undefined;
-    const delivery = await host.get("authority").getWorkDeliveryByItem(orgId, item.id);
-    if (delivery && delivery.status !== "acked") {
-      await host.get("authority").putWorkDelivery(deliveryAbandoned(delivery, now));
-    }
-    await foldFinishedWorkThreads(
-      host.get("authority"),
-      orgId,
-      next.thread_id,
-      run?.agent_thread_id ?? cancelled?.agent_thread_id,
+    const dismissed = await host.get("authority").dismissWorkItem({
+      expected_item: item,
+      expected_version: expectedVersion,
+      fold_visibility: !isSystemRecipeId(item.recipe_id),
       now,
+      command_id: commandId,
+      issued_at: issuedAt,
+    });
+    if (dismissed.outcome === "replayed") {
+      const replayRun = dismissed.item.current_run_id
+        ? await host.get("authority").getWorkRun(orgId, dismissed.item.current_run_id)
+        : null;
+      return { work_item: dismissed.item, run: replayRun ?? undefined };
+    }
+    if (dismissed.outcome !== "applied") throw new PersonalConnectorError(
+      "work_dismissal_conflict", `Work dismissal rejected: ${dismissed.reason}. Refresh the work item.`, 409,
     );
+    const { item: next, run } = dismissed;
+    if (run) this.waits.drop(run.id);
+    releaseFinishedAgentThread(run?.agent_thread_id);
+    void this.drainCancellationJobs().catch((error) =>
+      console.error("personal work cancellation worker failed", { run_id: run?.id }, error));
     this.supervise.clearWriteBackOverride(item.id);
-    this.inbox.touchInboxDigest();
+    this.publishCommittedWorkUpdate(item.id);
     return {
       work_item: next,
-      run: cancelled,
+      run: run ?? undefined,
     };
   }
 
+  async acknowledgeWorkResult(
+    id: string,
+    runId: unknown,
+    expectedVersion: unknown,
+    expectedRunVersion: unknown,
+    commandId: unknown,
+    issuedAt: unknown,
+  ): Promise<WorkRunView> {
+    const host = this.runtime.requireHost();
+    const orgId = this.runtime.orgId();
+    const authority = host.get("authority");
+    const item = await authority.getWorkItem(orgId, id);
+    if (!item || isSystemRecipeId(item.recipe_id)) {
+      throw new PersonalConnectorError("not_found", "Work item not found", 404);
+    }
+    if (!item.head_event_id) {
+      throw new PersonalConnectorError(
+        "work_acknowledgment_conflict",
+        "The triggering message identity is unavailable; this result cannot be closed safely.",
+        409,
+      );
+    }
+    if (typeof runId !== "string" || !runId.trim()
+      || typeof expectedVersion !== "number" || !Number.isSafeInteger(expectedVersion) || expectedVersion < 0
+      || typeof expectedRunVersion !== "number" || !Number.isSafeInteger(expectedRunVersion) || expectedRunVersion < 0) {
+      throw new PersonalConnectorError("invalid_work_acknowledgment", "Valid run, work version, and result version are required.", 400);
+    }
+    if (typeof commandId !== "string" || commandId.trim().length < 1
+      || commandId !== commandId.trim() || commandId.length > 128
+      || typeof issuedAt !== "string" || !Number.isFinite(Date.parse(issuedAt))
+      || Date.parse(issuedAt) < Date.now() - 90 * 24 * 60 * 60 * 1000
+      || Date.parse(issuedAt) > Date.now() + 5 * 60 * 1000) {
+      throw new PersonalConnectorError("invalid_command", "A valid command_id and issued_at are required.", 400);
+    }
+    const acknowledged = await authority.acknowledgeWorkResult({
+      expected_item: item,
+      run_id: runId,
+      trigger_event_id: item.head_event_id,
+      expected_version: expectedVersion,
+      expected_run_version: expectedRunVersion,
+      command_id: commandId,
+      issued_at: issuedAt,
+      now: new Date().toISOString(),
+    });
+    if (acknowledged.outcome === "conflict") {
+      throw new PersonalConnectorError(
+        "work_acknowledgment_conflict",
+        `Work result acknowledgment rejected: ${acknowledged.reason}. Refresh the work item and result.`,
+        409,
+      );
+    }
+    const run = await authority.getWorkRun(orgId, runId);
+    releaseFinishedAgentThread(run?.agent_thread_id);
+    this.publishCommittedWorkUpdate(item.id);
+    return { work_item: acknowledged.item, run: run ?? undefined };
+  }
+
+  private publishCommittedWorkUpdate(workItemId: string): void {
+    this.events.workUpdated(workItemId);
+    this.inbox.touchInboxDigest();
+  }
+
   /** @deprecated Human dismiss. Does not fake an executor exit or write back. */
-  async completeWorkItem(id: string): Promise<WorkRunView> {
-    return this.dismissWorkItem(id);
+  async completeWorkItem(
+    id: string,
+    expectedVersion: unknown,
+    commandId: unknown,
+    issuedAt: unknown,
+  ): Promise<WorkRunView> {
+    return this.dismissWorkItem(id, expectedVersion, commandId, issuedAt);
   }
 }
 
 const RECIPE_RECENT_RUN_LIMIT = 5;
 
-function recoverableAuxiliaryStart(run: WorkRun): boolean {
-  return run.start_state === "submitted" ||
-    run.start_state === "uncertain" ||
-    run.status === "running" ||
-    run.status === "waiting_human";
+class CancellationJobLeaseLostError extends Error {}
+
+async function withCancellationJobLease<T>(
+  authority: WorkStore,
+  lease: { org_id: string; id: string; owner: string; claim_token: string },
+  operation: () => Promise<T>,
+): Promise<T> {
+  let leaseLost = false;
+  let heartbeat = Promise.resolve();
+  const timer = setInterval(() => {
+    heartbeat = heartbeat.then(async () => {
+      if (leaseLost) return;
+      const renewed = await authority.renewCancellationJob({
+        ...lease,
+        now: new Date().toISOString(),
+        lease_ms: CANCELLATION_LEASE_MS,
+      });
+      leaseLost ||= !renewed;
+    }).catch(() => {
+      leaseLost = true;
+    });
+  }, CANCELLATION_HEARTBEAT_MS);
+  try {
+    const result = await operation();
+    await heartbeat;
+    if (leaseLost) throw new CancellationJobLeaseLostError();
+    return result;
+  } finally {
+    clearInterval(timer);
+    await heartbeat;
+  }
+}
+
+async function callWithCancellationTimeout<T>(
+  operation: () => Promise<T>,
+  controller: AbortController,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      operation(),
+      new Promise<T>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          controller.abort();
+          reject(new Error("cancel_call_timeout"));
+        }, CANCELLATION_CALL_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+function isTerminalRunStatus(status: WorkRunStatus): boolean {
+  return status === "cancelled" || status === "completed" || status === "failed";
+}
+
+function cancellationErrorCode(error: unknown): string {
+  if (!(error instanceof Error)) return "cancellation_failed";
+  const candidate = error.message.trim();
+  return /^[a-z0-9_]{1,120}$/i.test(candidate) ? candidate : error.name || "cancellation_failed";
 }
 
 function recentRunsForRecipe(

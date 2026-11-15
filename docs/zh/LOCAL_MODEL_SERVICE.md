@@ -11,7 +11,7 @@
 
 ## 1. 前置条件与固定模型
 
-- 从源码运行建议使用 **Node.js 22**、pnpm 9.15.0 和已克隆的仓库。
+- 从源码运行建议使用 **Node.js 22**、pnpm 12.16.1 和已克隆的仓库。
 - 安装 **Python 3.12**。Windows 的桌面安装器依次尝试 `py -3.12`、`python`；
   macOS / Linux 尝试 `python3.12`、`python3`，实际版本必须是 3.12。
 - 首次安装需要访问 PyPI / Hugging Face，下载依赖和固定版本权重；准备数 GB 磁盘空间，

@@ -78,11 +78,11 @@ export function createHttpTaskExecutor(options: HttpExecutorOptions): TaskExecut
         },
         idempotencyKey: input.run_id,
       });
-      return handleFromHttp(body, `${options.executor_type}:${input.work_item.id}`);
+      return handleFromHttp(body);
     },
 
     async resume(input: ExecutorResumeInput, ctx: ExecutorContext) {
-      const runId = input.run.external_run_id ?? input.run.id;
+      const runId = requireExternalRunId(input.run);
       const body = await callHttpExecutor(request, {
         url: `${baseUrl}/v1/runs/${encodeURIComponent(runId)}/resume`,
         method: "POST",
@@ -99,38 +99,37 @@ export function createHttpTaskExecutor(options: HttpExecutorOptions): TaskExecut
     },
 
     async status(run: WorkRun, ctx: ExecutorContext) {
-      const runId = run.external_run_id ?? run.id;
+      const runId = requireExternalRunId(run);
       const body = await callHttpExecutor(request, {
         url: `${baseUrl}/v1/runs/${encodeURIComponent(runId)}`,
         method: "GET",
         authEnv: options.auth_env,
         timeoutMs,
         env: ctx.env,
+        signal: ctx.signal,
       });
       return handleFromHttp(body, runId);
     },
 
     async cancel(run: WorkRun, ctx: ExecutorContext) {
-      const runId = run.external_run_id ?? run.id;
-      try {
-        await callHttpExecutor(request, {
-          url: `${baseUrl}/v1/runs/${encodeURIComponent(runId)}/cancel`,
-          method: "POST",
-          authEnv: options.auth_env,
-          timeoutMs,
-          env: ctx.env,
-          payload: { work_item_id: run.work_item_id },
-        });
-      } catch {
-        // Best effort. Dismiss still unfollows even if the inferior stays up.
-      }
+      const runId = requireExternalRunId(run);
+      const body = await callHttpExecutor(request, {
+        url: `${baseUrl}/v1/runs/${encodeURIComponent(runId)}/cancel`,
+        method: "POST",
+        authEnv: options.auth_env,
+        timeoutMs,
+        env: ctx.env,
+        payload: { work_item_id: run.work_item_id },
+        signal: ctx.signal,
+      });
+      return handleFromHttp(body, runId);
     },
   };
 }
 
 export function handleFromHttp(
   body: unknown,
-  fallbackId: string,
+  fallbackId?: string,
 ): ExecutorRunHandle {
   const record = asRecord(body);
   const status = parseHttpRunStatus(record.status);
@@ -138,6 +137,9 @@ export function handleFromHttp(
     typeof record.external_run_id === "string" && record.external_run_id.trim()
       ? record.external_run_id.trim()
       : fallbackId;
+  if (!external) {
+    throw new Error("HTTP executor returned no external run identity");
+  }
   const agent =
     typeof record.agent_thread_id === "string" && record.agent_thread_id.trim()
       ? record.agent_thread_id.trim()
@@ -151,6 +153,13 @@ export function handleFromHttp(
   };
 }
 
+function requireExternalRunId(run: WorkRun): string {
+  if (!run.external_run_id?.trim()) {
+    throw new Error("HTTP executor requires a known external run identity");
+  }
+  return run.external_run_id;
+}
+
 async function callHttpExecutor(
   request: typeof fetch,
   input: {
@@ -159,6 +168,7 @@ async function callHttpExecutor(
     authEnv?: string;
     timeoutMs: number;
     env: NodeJS.ProcessEnv;
+    signal?: AbortSignal;
     payload?: Record<string, unknown>;
     idempotencyKey?: string;
   },
@@ -173,7 +183,9 @@ async function callHttpExecutor(
   const init: RequestInit = {
     method: input.method,
     headers,
-    signal: AbortSignal.timeout(input.timeoutMs),
+    signal: input.signal
+      ? AbortSignal.any([AbortSignal.timeout(input.timeoutMs), input.signal])
+      : AbortSignal.timeout(input.timeoutMs),
   };
   if (input.idempotencyKey) {
     headers["idempotency-key"] = input.idempotencyKey;

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type {
   ConnectorInstallation,
   SyncPhase,
@@ -10,11 +11,13 @@ import type {
   SetConnectorInstallationConfig,
   ConnectorLease,
   ReleaseConnectorLease,
+  RenewConnectorLease,
   ResetConnectorCursor,
   ConnectorStreamCursor,
   NewIngestAttempt,
   CommitSyncPage,
   CommitSyncPageResult,
+  DispositionRepair,
   SettleIngestAttempt,
   NewSyncRun,
   ListSyncRunsQuery,
@@ -48,13 +51,23 @@ import {
   releaseHistoryPhase,
   syncWorkEnsurePlan,
   dueSyncWorkId,
+  assertAttemptSettlementBinding,
+  assertAttemptInstallationBinding,
+  assertSyncPageAttemptBinding,
+  assertDispositionRepairs,
+  AuthorityConflictError,
+  DispositionRepairConflictError,
 } from "@regenic/domain";
 import {
   commitIngestUnlocked,
 } from "./events";
 import {
-  putConversationPrefUnlocked,
+  setConversationPolicyVisibilityUnlocked,
+  putDispositionIfAbsentWithinTransaction,
 } from "./inbox";
+import {
+  observeWorkItemUnlocked,
+} from "./work";
 import {
   toCatalogSnapshot,
 } from "./context-artifacts";
@@ -76,6 +89,7 @@ interface CursorRow {
   cursor_value: string | null;
   cursor_version: number;
   lease_owner: string | null;
+  lease_claim_token: string | null;
   lease_expires_at: string | null;
   updated_at: string;
 }
@@ -333,29 +347,32 @@ export async function acquireLease(db: Database.Database, input: {
         input.installation_id,
         input.stream_key,
       );
+      const acquiredAt = new Date().toISOString();
       if (
         !input.preempt &&
         current?.lease_expires_at &&
-        current.lease_expires_at > input.now &&
+        current.lease_expires_at > acquiredAt &&
         current.lease_owner !== input.lease_owner
       ) {
         return null;
       }
 
+      const claimToken = randomUUID();
       const leaseExpiresAt = new Date(
-        new Date(input.now).getTime() + input.lease_duration_ms,
+        new Date(acquiredAt).getTime() + input.lease_duration_ms,
       ).toISOString();
       if (current) {
         db
           .prepare(
             `
               UPDATE connector_cursors
-              SET lease_owner = ?, lease_expires_at = ?, updated_at = ?
+              SET lease_owner = ?, lease_claim_token = ?, lease_expires_at = ?, updated_at = ?
               WHERE installation_id = ? AND stream_key = ?
             `,
           )
           .run(
             input.lease_owner,
+            claimToken,
             leaseExpiresAt,
             input.now,
             input.installation_id,
@@ -367,14 +384,15 @@ export async function acquireLease(db: Database.Database, input: {
             `
               INSERT INTO connector_cursors (
                 installation_id, stream_key, cursor_value, cursor_version,
-                lease_owner, lease_expires_at, updated_at
-              ) VALUES (?, ?, NULL, 1, ?, ?, ?)
+                lease_owner, lease_claim_token, lease_expires_at, updated_at
+              ) VALUES (?, ?, NULL, 1, ?, ?, ?, ?)
             `,
           )
           .run(
             input.installation_id,
             input.stream_key,
             input.lease_owner,
+            claimToken,
             leaseExpiresAt,
             input.now,
           );
@@ -392,8 +410,9 @@ export async function releaseLease(db: Database.Database, input: ReleaseConnecto
       .prepare(
         `
           UPDATE connector_cursors
-          SET lease_owner = NULL, lease_expires_at = NULL, updated_at = ?
+          SET lease_owner = NULL, lease_claim_token = NULL, lease_expires_at = NULL, updated_at = ?
           WHERE installation_id = ? AND stream_key = ? AND lease_owner = ?
+            AND lease_claim_token = ?
         `,
       )
       .run(
@@ -401,9 +420,39 @@ export async function releaseLease(db: Database.Database, input: ReleaseConnecto
         input.installation_id,
         input.stream_key,
         input.lease_owner,
+        input.claim_token,
       );
     return released.changes === 1;
   }
+
+export async function renewLease(
+  db: Database.Database,
+  input: RenewConnectorLease,
+): Promise<ConnectorLease | null> {
+  const transaction = db.transaction(() => {
+    const renewedAt = new Date().toISOString();
+    const leaseExpiresAt = new Date(
+      new Date(renewedAt).getTime() + input.lease_duration_ms,
+    ).toISOString();
+    const changed = db.prepare(`
+      UPDATE connector_cursors
+      SET lease_expires_at = ?, updated_at = ?
+      WHERE installation_id = ? AND stream_key = ? AND lease_owner = ?
+        AND lease_claim_token = ? AND lease_expires_at > ?
+    `).run(
+      leaseExpiresAt,
+      input.now,
+      input.installation_id,
+      input.stream_key,
+      input.lease_owner,
+      input.claim_token,
+      renewedAt,
+    );
+    if (changed.changes !== 1) return null;
+    return toLease(db, findCursorRow(db, input.installation_id, input.stream_key)!);
+  });
+  return transaction.immediate();
+}
 
 export async function resetCursor(db: Database.Database, input: ResetConnectorCursor): Promise<ConnectorStreamCursor | null> {
     
@@ -412,7 +461,7 @@ export async function resetCursor(db: Database.Database, input: ResetConnectorCu
       if (!cursor) {
         return null;
       }
-      if (cursor.lease_expires_at && cursor.lease_expires_at > input.now) {
+      if (cursor.lease_expires_at && cursor.lease_expires_at > new Date().toISOString()) {
         throw new Error("Connector cursor is leased and cannot be reset");
       }
       db
@@ -420,7 +469,7 @@ export async function resetCursor(db: Database.Database, input: ResetConnectorCu
           `
             UPDATE connector_cursors
             SET cursor_value = NULL, cursor_version = ?, lease_owner = NULL,
-                lease_expires_at = NULL, updated_at = ?
+                lease_claim_token = NULL, lease_expires_at = NULL, updated_at = ?
             WHERE installation_id = ? AND stream_key = ?
           `,
         )
@@ -436,22 +485,52 @@ export async function resetCursor(db: Database.Database, input: ResetConnectorCu
   }
 
 export async function beginAttempt(db: Database.Database, input: NewIngestAttempt): Promise<IngestAttempt> {
-    
-    beginAttemptUnlocked(db, input);
-    return findAttempt(db, input.id)!;
+    return db.transaction(() => {
+      beginAttemptUnlocked(db, input);
+      return findAttempt(db, input.id)!;
+    }).immediate();
   }
 
 export function commitSyncPageUnlocked(db: Database.Database, input: CommitSyncPage): CommitSyncPageResult {
+    assertSyncPageAttemptBinding(input);
     beginAttemptUnlocked(db, input.attempt);
+    for (const repair of input.disposition_repairs ?? []) {
+      repairDispositionUnlocked(db, repair);
+    }
     const events = input.ingest
       ? commitIngestUnlocked(db, input.ingest)
       : [];
+    for (const observation of input.work_observations ?? []) {
+      const result = observeWorkItemUnlocked(db, observation);
+      if (result.outcome === "conflict") throw new AuthorityConflictError();
+    }
     for (const pref of input.prefs ?? []) {
-      putConversationPrefUnlocked(db, pref);
+      setConversationPolicyVisibilityUnlocked(db, pref);
     }
     const attempt = settleAttemptUnlocked(db, input.settle);
     return { attempt, events };
   }
+
+export function repairDispositionUnlocked(
+  db: Database.Database,
+  repair: DispositionRepair,
+): void {
+  assertDispositionRepairs([repair]);
+  const { decision, identities } = repair;
+  const event = db.prepare("SELECT 1 FROM events WHERE org_id = ? AND id = ?")
+    .get(decision.org_id, decision.event_id);
+  const head = db.prepare(`SELECT current_event_id FROM source_heads
+    WHERE org_id = ? AND source = ? AND external_id = ?`);
+  if (!event ||
+    identities.some((identity) =>
+      (head.get(identity.org_id, identity.source, identity.external_id) as
+        { current_event_id: string } | undefined)?.current_event_id !== decision.event_id)) {
+    throw new AuthorityConflictError();
+  }
+  if (!putDispositionIfAbsentWithinTransaction(db, decision)) {
+    throw new DispositionRepairConflictError();
+  }
+}
 
 export async function settleAttempt(db: Database.Database, input: SettleIngestAttempt): Promise<IngestAttempt> {
     
@@ -462,6 +541,7 @@ export async function settleAttempt(db: Database.Database, input: SettleIngestAt
   }
 
 function beginAttemptUnlocked(db: Database.Database, input: NewIngestAttempt): void {
+    assertAttemptInstallationBinding(input, findAttemptInstallation(db, input.connector_installation_id));
     db
       .prepare(
         `
@@ -482,8 +562,12 @@ function beginAttemptUnlocked(db: Database.Database, input: NewIngestAttempt): v
   }
 
 function settleAttemptUnlocked(db: Database.Database, input: SettleIngestAttempt): IngestAttempt {
+    const attempt = findAttempt(db, input.attempt_id);
+    assertAttemptSettlementBinding(attempt, input);
+    assertAttemptInstallationBinding(attempt, findAttemptInstallation(db, attempt.connector_installation_id));
     const cursor = findCursorRow(db, input.installation_id, input.stream_key);
-    if (!cursor || cursor.lease_owner !== input.lease_owner) {
+    if (!cursor || cursor.lease_owner !== input.lease_owner ||
+      cursor.lease_claim_token !== input.claim_token) {
       throw new Error("Connector lease is not held by the attempt owner");
     }
     const status =
@@ -533,8 +617,9 @@ function settleAttemptUnlocked(db: Database.Database, input: SettleIngestAttempt
         `
           UPDATE connector_cursors
           SET cursor_value = ?, cursor_version = ?, lease_owner = NULL,
-              lease_expires_at = NULL, updated_at = ?
+              lease_claim_token = NULL, lease_expires_at = NULL, updated_at = ?
           WHERE installation_id = ? AND stream_key = ? AND lease_owner = ?
+            AND lease_claim_token = ? AND lease_expires_at > ?
         `,
       )
       .run(
@@ -544,11 +629,18 @@ function settleAttemptUnlocked(db: Database.Database, input: SettleIngestAttempt
         input.installation_id,
         input.stream_key,
         input.lease_owner,
+        input.claim_token,
+        new Date().toISOString(),
       );
     if (updated.changes !== 1) {
       throw new Error("Connector lease is not held by the attempt owner");
     }
     return findAttempt(db, input.attempt_id)!;
+  }
+
+function findAttemptInstallation(db: Database.Database, id: string): { id: string; org_id: string } | undefined {
+    return db.prepare("SELECT id, org_id FROM connector_installations WHERE id = ?")
+      .get(id) as { id: string; org_id: string } | undefined;
   }
 
 export async function listAttempts(db: Database.Database, installationId: string, limit?: number): Promise<IngestAttempt[]> {
@@ -716,7 +808,7 @@ export async function listCursors(db: Database.Database, installationId: string,
       .prepare(
         `
           SELECT installation_id, stream_key, cursor_value, cursor_version,
-                 lease_owner, lease_expires_at, updated_at
+                 lease_owner, lease_claim_token, lease_expires_at, updated_at
           FROM connector_cursors
           WHERE installation_id = ?
           ORDER BY stream_key
@@ -1838,7 +1930,7 @@ function findCursorRow(db: Database.Database, installationId: string, streamKey:
         .prepare(
           `
             SELECT installation_id, stream_key, cursor_value, cursor_version,
-                   lease_owner, lease_expires_at, updated_at
+                   lease_owner, lease_claim_token, lease_expires_at, updated_at
             FROM connector_cursors
             WHERE installation_id = ? AND stream_key = ?
           `,
@@ -1888,6 +1980,7 @@ function toLease(db: Database.Database, row: CursorRow): ConnectorLease {
     return {
       ...toCursor(db, row),
       lease_owner: row.lease_owner!,
+      claim_token: row.lease_claim_token!,
       lease_expires_at: row.lease_expires_at!,
     };
   }

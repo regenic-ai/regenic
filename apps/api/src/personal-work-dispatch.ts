@@ -10,7 +10,6 @@ import {
   formatWorkRunHistory,
   isActiveWorkStatus,
   isPullDue,
-  openOrUpdateWorkItem,
   parseConversationThread,
   pullUnitKey,
   ACTIVE_WORK_STATUSES,
@@ -22,34 +21,29 @@ import {
   recipeStartInflight,
   recipeWantsContext,
   recipeTextMatches,
-  isOccupiedRecipeSlot,
-  isTaskInboxItem,
+  recipeTriggerOf,
   isPushInboxDecision,
-  selectRecipeForSubject,
-  shouldAcceptPushRecord,
   shouldRetryFailedPush,
   taskInstructionOf,
   workSubjectFromEvent,
   type ExecutorContext,
-  type ConnectorInstallation,
-  type EventRecord,
-  type InboxItem,
   type Recipe,
   type TaskExecutor,
   type WorkItem,
   type WorkRun,
+  type WorkRunStartCheckpoint,
+  type WorkRunStartCheckpointResult,
   type WorkContextAccess,
 } from "@regenic/domain";
-import { resolveInboxBodies, resolveInboxBody, type InboxBody } from "./inbox-body";
+import { resolveInboxBody } from "./inbox-body";
 import { PersonalConnectorError } from "./personal-errors";
 import { PersonalWorkChannel } from "./personal-work-channel";
 import { PersonalWorkWait } from "./personal-work-wait";
 import { PersonalWorkSupervise } from "./personal-work-supervise";
 import { PersonalRuntimeService } from "./personal-runtime.service";
 import { shouldDeferWorkForThread } from "./personal-sync-phase";
+import { isSystemRecipeId } from "./personal-system-work";
 
-/** How many inbox rows one dispatch tick may open. The next tick continues after them. */
-const INBOX_OBSERVE_PAGE = 16;
 /** Failed retries are a second pass so open work is not stuck behind them. */
 const FAILED_RETRY_PAGE = 20;
 
@@ -58,10 +52,6 @@ export class PersonalWorkDispatch {
   /** Per-recipe claim order so parallel starts reserve slots one at a time. */
   private readonly startLanes = new Map<string, Promise<void>>();
   private autoWork: Promise<void>[] = [];
-  /** Order tasks move on their own cursor so the email backlog cannot block them. */
-  private orderScan: { occurred_at: string; id: string } | null = null;
-  private opsScan: { occurred_at: string; id: string } | null = null;
-  private messageScan: { occurred_at: string; id: string } | null = null;
   private failedScan = 0;
 
   constructor(
@@ -72,20 +62,11 @@ export class PersonalWorkDispatch {
     private readonly contextAccess?: {
       accessFor(runId: string, options?: { agent_key?: boolean }): WorkContextAccess;
     },
+    private readonly onCommittedWorkUpdate?: (workItemId: string) => void,
+    private readonly completionPolicyVersion?: () => 1 | undefined,
   ) {}
 
-  async reconcileInbox(): Promise<void> {
-    try {
-      await this.observeInbox();
-    } finally {
-      await this.drainAutoWork();
-    }
-  }
-
-  /**
-   * Start work already opened, up to each recipe cap, before the inbox walk.
-   * The walk decides new rows. It does not have to finish before slots fill.
-   */
+  /** Start atomically observed open work up to each recipe's concurrency cap. */
   async fillOpenSlots(): Promise<void> {
     try {
       const host = this.runtime.requireHost();
@@ -104,7 +85,8 @@ export class PersonalWorkDispatch {
       for (const item of items) {
         if (item.status === "open") {
           open.push(item);
-        } else if (item.status === "failed") {
+        } else if (item.status === "failed"
+          && !(item.current_run_id && item.acknowledged_run_id === item.current_run_id)) {
           failed.push(item);
         }
       }
@@ -136,6 +118,9 @@ export class PersonalWorkDispatch {
     ) {
       return;
     }
+    if (!(await this.hasCurrentWorkTrigger(item))) {
+      return;
+    }
     await this.retryOrResume(
       item,
       recipe,
@@ -144,100 +129,15 @@ export class PersonalWorkDispatch {
     );
   }
 
-  private async observeInbox(): Promise<void> {
-    const host = this.runtime.requireHost();
-    const orgId = this.runtime.orgId();
-    const authority = host.get("authority");
-    const [recipes, items, hiddenIds, taskRows, messageRows] = await Promise.all([
-      authority.listRecipes(orgId),
-      authority.listWorkItems(orgId, { statuses: [...ACTIVE_WORK_STATUSES] }),
-      authority.listHiddenExecutorThreadIds(orgId),
-      authority.listInbox(orgId, { tasks: true, needs_work: true }),
-      authority.listInbox(orgId, {
-        tasks: false,
-        needs_work: true,
-        push_candidates: true,
-        limit: INBOX_OBSERVE_PAGE,
-        before: this.messageScan?.occurred_at,
-        before_id: this.messageScan?.id,
-      }),
-    ]);
-    if (taskRows.length === 0 && messageRows.length === 0 && items.length === 0) {
-      this.messageScan = null;
-      return;
+  private async hasCurrentWorkTrigger(item: WorkItem): Promise<boolean> {
+    if (!item.head_event_id) {
+      return true;
     }
-    const hidden = new Set(hiddenIds);
-    const observeRows = uniqueInboxItems(taskRows).sort(compareInboxItems);
-    const orderRows = observeRows.filter((row) => isOrderTask(row));
-    const otherRows = observeRows.filter((row) => !isOrderTask(row));
-    const orderPage = takeInboxScanPage(orderRows, this.orderScan, INBOX_OBSERVE_PAGE);
-    const opsPage = takeInboxScanPage(otherRows, this.opsScan, INBOX_OBSERVE_PAGE);
-    this.orderScan = orderPage.next;
-    this.opsScan = opsPage.next;
-    // Messages use a separate bounded walk of source heads, not conversation faces:
-    // a newer reply must not hide an earlier matching message in the same thread.
-    const page = [...orderPage.page, ...opsPage.page, ...messageRows];
-    const bodies = await resolveInboxBodies(
-      authority,
-      host.get("blobs"),
-      page.map((row) => row.event.content_hash),
-      "meta",
-    );
-    const installations = await authority.listInstallations(orgId);
-    const coveredEvents = new Set(observeRows.map((row) => row.event.id));
-    const seenEvents = new Set<string>();
-    for (const row of page) {
-      const threadId = conversationId(row.event.source, row.event.external_id, row.event.id);
-      if (hidden.has(threadId) || seenEvents.has(row.event.id)) {
-        continue;
-      }
-      seenEvents.add(row.event.id);
-      const body = row.event.content_hash
-        ? (bodies.get(row.event.content_hash) ?? {})
-        : {};
-      await this.observeHead({
-        event: row.event,
-        threadId,
-        body,
-        recipes,
-        installations,
-        fallbackType: isTaskInboxItem(row) ? "task" : undefined,
-      });
-    }
-    for (const item of items) {
-      if (
-        hidden.has(item.thread_id) ||
-        (item.head_event_id &&
-          (seenEvents.has(item.head_event_id) ||
-            coveredEvents.has(item.head_event_id)))
-      ) {
-        continue;
-      }
-      if (isOccupiedRecipeSlot(item.status) || !item.head_event_id) {
-        continue;
-      }
-      const event = await authority.getEvent(orgId, item.head_event_id);
-      if (!event) {
-        continue;
-      }
-      const body = await resolveInboxBodies(
-        authority,
-        host.get("blobs"),
-        [event.content_hash],
-        "meta",
-      );
-      await this.observeHead({
-        event,
-        threadId: item.thread_id,
-        body: event.content_hash ? (body.get(event.content_hash) ?? {}) : {},
-        recipes,
-        installations,
-      });
-    }
-    const oldestMessage = messageRows[0]?.event;
-    this.messageScan = messageRows.length === INBOX_OBSERVE_PAGE && oldestMessage
-      ? { occurred_at: oldestMessage.occurred_at, id: oldestMessage.id }
-      : null;
+    const result = await this.runtime.requireHost().get("authority").observeWorkItem({
+      expected_item: item,
+      item,
+    });
+    return result.outcome !== "conflict";
   }
 
   async dispatchPullRecipes(): Promise<void> {
@@ -310,18 +210,26 @@ export class PersonalWorkDispatch {
         if (!subject) {
           continue;
         }
-        const opened = await authority.putWorkItem({
-          id: `work-${randomUUID()}`,
-          org_id: orgId,
-          thread_id: threadId,
-          unit_key,
-          record_class: subject.record_class,
-          thread_facet: subject.thread_facet,
-          status: "open",
-          recipe_id: recipe.id,
-          created_at: nowIso,
-          updated_at: nowIso,
+        const created = await authority.createWorkItem({
+          item: {
+            id: `work-${randomUUID()}`,
+            org_id: orgId,
+            thread_id: threadId,
+            unit_key,
+            record_class: subject.record_class,
+            thread_facet: subject.thread_facet,
+            status: "open",
+            recipe_id: recipe.id,
+            created_at: nowIso,
+            updated_at: nowIso,
+          },
+          recipe,
+          expected_recipe: recipe,
         });
+        if (created.outcome === "conflict") {
+          continue;
+        }
+        const opened = created.item;
         items.push(opened);
         await this.beginStart(
           opened,
@@ -330,9 +238,10 @@ export class PersonalWorkDispatch {
           recipe.max_concurrent !== undefined,
         );
       }
-      await authority.putRecipe({
-        ...recipe,
+      await authority.advanceRecipePullSchedule({
+        expected_recipe: recipe,
         next_run_at: advanceRecipePull(recipe.trigger, fireAt, nowIso),
+        updated_at: nowIso,
       });
     }
   }
@@ -385,13 +294,7 @@ export class PersonalWorkDispatch {
     ) {
       return;
     }
-    const opened = await authority.putWorkItem({
-      ...item,
-      status: "open",
-      recipe_id: recipe.id,
-      updated_at: new Date().toISOString(),
-    });
-    await this.beginStart(opened, recipe, evidenceText, schedule);
+    await this.beginStart(item, recipe, evidenceText, schedule);
   }
 
   private beginStart(
@@ -450,6 +353,18 @@ export class PersonalWorkDispatch {
     recipe: Recipe,
     evidenceText?: string,
     mode: "auto" | "manual" | "auxiliary" = "auto",
+    options?: {
+      write_back?: boolean;
+      rebind?: boolean;
+      command?: {
+        org_id: string;
+        work_item_id: string;
+        expected_version: number;
+        command_id: string;
+        issued_at: string;
+      };
+      onReplay?: () => void;
+    },
   ): Promise<WorkRun | undefined> {
     const host = this.runtime.requireHost();
     if (
@@ -479,7 +394,7 @@ export class PersonalWorkDispatch {
     }
     const executor = host.get("executors").get(recipe.executor_type);
     if (!executor) {
-      await this.noteStartFailed(item, recipe, "Unknown executor", mode);
+      await this.noteStartFailed(item, recipe, "Unknown executor", mode, options?.rebind);
       if (mode !== "auto") {
         throw new PersonalConnectorError("invalid_config", `Unknown executor: ${recipe.executor_type}`, 400);
       }
@@ -504,6 +419,20 @@ export class PersonalWorkDispatch {
     }
     if (this.starting.has(item.id)) {
       if (mode !== "auto") {
+        if (options?.command) {
+          const replay = await host.get("authority").getWorkRunStartReplay(options.command);
+          if (replay.outcome === "replayed") {
+            options.onReplay?.();
+            return replay.run;
+          }
+          if (replay.outcome === "conflict") {
+            throw new PersonalConnectorError(
+              "command_conflict",
+              "This command id was already used for a different operation. Refresh and try again.",
+              409,
+            );
+          }
+        }
         throw new PersonalConnectorError("execution_start_conflict", "Work start is already in progress. Refresh the work item.", 409);
       }
       return undefined;
@@ -519,6 +448,7 @@ export class PersonalWorkDispatch {
         executor,
         evidenceText,
         mode,
+        options,
       );
     } finally {
       this.starting.delete(item.id);
@@ -562,6 +492,18 @@ export class PersonalWorkDispatch {
     executor: TaskExecutor,
     evidenceText: string | undefined,
     mode: "auto" | "manual" | "auxiliary",
+    options?: {
+      write_back?: boolean;
+      rebind?: boolean;
+      command?: {
+        org_id: string;
+        work_item_id: string;
+        expected_version: number;
+        command_id: string;
+        issued_at: string;
+      };
+      onReplay?: () => void;
+    },
   ): Promise<WorkRun | undefined> {
     const host = this.runtime.requireHost();
     const now = new Date().toISOString();
@@ -591,36 +533,123 @@ export class PersonalWorkDispatch {
       thread_overflow: thread.overflow,
     });
     const authority = host.get("authority");
+    const writeBackRequired = options?.write_back ?? this.supervise.allowsWriteBack(item.id, recipe);
+    const writeBackTarget = writeBackRequired
+      ? await this.channel.freezeWriteBackTarget(recipe.write_back_thread_id ?? item.thread_id)
+      : undefined;
+    const visibilityIntentVersion =
+      (await authority.getConversationPref(item.org_id, item.thread_id))
+        ?.visibility_version ?? 0;
     const run: WorkRun & { status: "running"; start_state: "pending" } = {
       id: runId,
       org_id: item.org_id,
       work_item_id: item.id,
       recipe_id: recipe.id,
       executor_type: executor.executor_type,
+      executor_config: recipe.executor_config,
+      include_context: includeContext,
       status: "running",
       start_state: "pending",
+      write_back_required: writeBackRequired,
+      trigger_kind: recipeTriggerOf(recipe).kind,
+      hide_on_success: recipe.hide_on_success !== false,
+      ...(!isSystemRecipeId(recipe.id) && this.completionPolicyVersion?.() === 1
+        ? { completion_policy_version: 1 as const } : {}),
+      ...(writeBackTarget ? { write_back_target: writeBackTarget } : {}),
       created_at: now,
       updated_at: now,
     };
     const claimed = await authority.claimWorkRunStart({
       run,
+      expected_recipe: recipe,
+      expected_item: item,
+      ...(options?.command ? {
+        expected_version: options.command.expected_version,
+        command_id: options.command.command_id,
+        issued_at: options.command.issued_at,
+      } : {}),
+      retry: mode === "manual" ? "manual" : item.status === "failed" ? "automatic" : undefined,
+      rebind: mode === "manual" && options?.rebind ? "manual"
+        : mode === "auto" && recipe.trigger.kind === "push" && item.recipe_id !== recipe.id
+          && (recipe.match.text_contains || recipe.match.text_excludes) ? "automatic" : undefined,
       max_concurrent: mode === "manual" ? undefined : recipe.max_concurrent,
+      require_current_work_trigger:
+        mode === "auto" &&
+        recipe.trigger.kind === "push" &&
+        Boolean(item.head_event_id),
+      visibility_intent_version: visibilityIntentVersion,
     });
     if (!claimed) {
       if (mode !== "auto") {
+        if (options?.command) {
+          const replay = await authority.getWorkRunStartReplay(options.command);
+          if (replay.outcome === "replayed") {
+            options.onReplay?.();
+            return replay.run;
+          }
+          if (replay.outcome === "conflict") {
+            throw new PersonalConnectorError(
+              "command_conflict",
+              "This command id was already used for a different operation. Refresh and try again.",
+              409,
+            );
+          }
+        }
         throw new PersonalConnectorError("execution_start_conflict", "Work item changed before start could be reserved. Refresh the work item.", 409);
       }
       return undefined;
     }
-    const runningItem: WorkItem = { ...item, status: "running", updated_at: now };
+    try {
+      return await this.startReservedItem(item, recipe, executor, run, composed, workspace, mode);
+    } catch (error) {
+      if (mode === "auxiliary") {
+        const [savedItem, savedRun] = await Promise.all([
+          authority.getWorkItem(item.org_id, item.id),
+          authority.getWorkRun(item.org_id, run.id),
+        ]);
+        if (savedItem?.current_run_id === run.id && savedRun &&
+          (savedRun.status === "running" || savedRun.status === "waiting_human" || savedRun.status === "completed")) {
+          console.error("personal auxiliary start recovering reserved execution", {
+            work_item_id: item.id, run_id: run.id, error,
+          });
+          return savedRun;
+        }
+      }
+      throw error;
+    }
+  }
+
+  private async startReservedItem(
+    item: WorkItem,
+    recipe: Recipe,
+    executor: TaskExecutor,
+    run: WorkRun,
+    composed: ReturnType<typeof composeWorkConversation>,
+    workspace: boolean,
+    mode: "auto" | "manual" | "auxiliary",
+  ): Promise<WorkRun | undefined> {
+    const host = this.runtime.requireHost();
+    const authority = host.get("authority");
+    const frozenRecipe = {
+      ...recipe,
+      executor_config: run.executor_config ?? recipe.executor_config,
+      include_context: run.include_context ?? recipeWantsContext(recipe),
+    };
+    const runningItem = await authority.getWorkItem(item.org_id, item.id);
+    if (!runningItem || runningItem.current_run_id !== run.id) {
+      throw new Error(`Claimed work item identity disappeared: ${item.id}`);
+    }
+    if (!isActiveWorkStatus(runningItem.status)) throw new PersonalConnectorError(
+      "work_abandoned", "Work start is no longer active", 409,
+    );
     let handle;
     try {
       handle = await executor.start(
         {
           run_id: run.id,
-          work_item: item,
-          recipe,
-          task_instruction: taskInstructionOf(recipe.executor_config),
+          work_item: runningItem,
+          recipe: frozenRecipe,
+          task_instruction: taskInstructionOf(frozenRecipe.executor_config),
           evidence_text: formatWorkEvidence({
             thread_id: item.thread_id,
             record_class: item.record_class,
@@ -628,7 +657,7 @@ export class PersonalWorkDispatch {
             source: item.thread_id.split(":")[0] ?? "",
             text: composed.inline_text,
           }),
-          conversation: includeContext
+          conversation: frozenRecipe.include_context
             ? {
                 current: composed.current,
                 current_line: composed.current_line,
@@ -660,18 +689,11 @@ export class PersonalWorkDispatch {
         latestItem.status !== "skipped"
       ) {
         const failedAt = new Date().toISOString();
-        await authority.putWorkRun({
-          ...saved,
-          start_state: undefined,
-          status: "failed",
-          result: { summary: definite.message },
-          updated_at: failedAt,
+        await this.checkpointStart({
+          expected_item: latestItem, expected_run: saved,
+          kind: "failed", error: definite.message, now: failedAt,
         });
-        await authority.putWorkItem({
-          ...latestItem,
-          status: "failed",
-          updated_at: failedAt,
-        });
+        this.publishCommittedWorkUpdate(item.id);
         console.error("personal work start failed", {
           run_id: run.id,
           error: definite.message,
@@ -687,20 +709,12 @@ export class PersonalWorkDispatch {
       });
       if (saved && latestItem && saved.status !== "cancelled" && latestItem.status !== "skipped") {
         if (saved.start_state === "pending") {
-          await authority.putWorkRun({
-            ...saved,
-            start_state: "uncertain",
-            status: "waiting_human",
-            result: {
-              summary: `Executor start could not be confirmed: ${deliveryErrorMessage(error)}. Check the executor before dismissing this attempt and starting a new one.`,
-            },
-            updated_at: new Date().toISOString(),
+          await this.checkpointStart({
+            expected_item: latestItem, expected_run: saved, kind: "uncertain",
+            error: `Executor start could not be confirmed: ${deliveryErrorMessage(error)}. Check the executor before dismissing this attempt and starting a new one.`,
+            now: new Date().toISOString(),
           });
-          await authority.putWorkItem({
-            ...latestItem,
-            status: "waiting_human",
-            updated_at: new Date().toISOString(),
-          });
+          this.publishCommittedWorkUpdate(item.id);
         }
       }
       if (mode !== "auto") {
@@ -726,76 +740,84 @@ export class PersonalWorkDispatch {
     if (saved.status === "cancelled" || saved.start_state === undefined) {
       if (saved.status === "running" || saved.status === "waiting_human") {
         const latestItem = await authority.getWorkItem(item.org_id, item.id);
-        if (latestItem && isActiveWorkStatus(latestItem.status)) {
+        if (latestItem?.current_run_id === saved.id && isActiveWorkStatus(latestItem.status)) {
           this.waits.attach(latestItem, saved, executor);
         }
       }
       return saved;
     }
-    const acknowledged: WorkRun = {
-      ...saved,
+    const latestStartItem = await authority.getWorkItem(item.org_id, item.id);
+    if (!latestStartItem) throw new Error(`Claimed work item disappeared: ${item.id}`);
+    const acknowledged = await this.checkpointStart({
+      expected_item: latestStartItem, expected_run: saved, kind: "submitted",
       external_run_id: handle.external_run_id,
-      agent_thread_id: handle.agent_thread_id ?? saved.agent_thread_id,
-      start_state: "submitted",
-      result: handle.result ?? saved.result,
-      updated_at: new Date().toISOString(),
-    };
-    await authority.putWorkRun(acknowledged);
-    await this.supervise.applyHandle(runningItem, recipe, { ...acknowledged, start_state: undefined }, handle);
+      agent_thread_id: handle.agent_thread_id, result: handle.result,
+      now: new Date().toISOString(),
+    });
+    await this.supervise.applyHandle(acknowledged.item, recipe, acknowledged.run, handle);
     const latest = await host.get("authority").getActiveWorkRun(item.org_id, item.id);
     const latestItem = await host.get("authority").getWorkItem(item.org_id, item.id);
-    if (latest && latestItem && isActiveWorkStatus(latestItem.status)) {
+    if (latest?.id === run.id && latestItem?.current_run_id === run.id
+      && isActiveWorkStatus(latestItem.status)) {
       this.waits.attach(latestItem, latest, executor);
     }
-    return (
-      latest ?? await authority.getWorkRun(item.org_id, run.id) ?? run
-    );
+    const finishedStart = await authority.getWorkRun(item.org_id, run.id);
+    if (!finishedStart) throw new Error(`Claimed work run disappeared: ${run.id}`);
+    return finishedStart;
   }
 
   private startContext(run: WorkRun, ctx: ExecutorContext): ExecutorContext {
     const authority = this.runtime.requireHost().get("authority");
-    const current = async (): Promise<WorkRun> => {
+    const current = async (): Promise<{ expected_run: WorkRun; expected_item: WorkItem }> => {
       const [saved, item] = await Promise.all([
         authority.getWorkRun(run.org_id, run.id),
         authority.getWorkItem(run.org_id, run.work_item_id),
       ]);
       if (
-        !saved || !item || item.status === "skipped" ||
+        !saved || !item || saved.start_state !== "pending" || !isActiveWorkStatus(item.status)
+        || item.current_run_id !== saved.id ||
         saved.status === "cancelled" || saved.status === "completed" || saved.status === "failed"
       ) {
         throw new PersonalConnectorError("work_abandoned", "Work start is no longer active", 409);
       }
-      return saved;
+      return { expected_run: saved, expected_item: item };
     };
     return {
       ...ctx,
       spawnSysout: async (options) => {
-        await current();
+        const expected = await current();
         const thread = await ctx.spawnSysout(options);
-        const saved = await current();
         const sysoutId = `${thread.source}:${thread.target}`;
-        await authority.putWorkRun({
-          ...saved,
+        await this.checkpointStart({
+          ...expected, kind: "bound",
           external_run_id: sysoutId,
           agent_thread_id: sysoutId,
-          updated_at: new Date().toISOString(),
+          now: new Date().toISOString(),
         });
         return thread;
       },
       writeStdin: async (thread, text) => {
-        await current();
+        const expected = await current();
         await ctx.writeStdin(thread, text);
-        const saved = await current();
         const sysoutId = `${thread.source}:${thread.target}`;
-        await authority.putWorkRun({
-          ...saved,
+        await this.checkpointStart({
+          ...expected, kind: "submitted",
           external_run_id: sysoutId,
           agent_thread_id: sysoutId,
-          start_state: "submitted",
-          updated_at: new Date().toISOString(),
+          now: new Date().toISOString(),
         });
       },
     };
+  }
+
+  private async checkpointStart(
+    input: WorkRunStartCheckpoint,
+  ): Promise<Extract<WorkRunStartCheckpointResult, { outcome: "applied" }>> {
+    const result = await this.runtime.requireHost().get("authority").checkpointWorkRunStart(input);
+    if (result.outcome === "conflict") throw new PersonalConnectorError(
+      "execution_start_conflict", `Work start checkpoint rejected: ${result.reason}. Refresh the work item.`, 409,
+    );
+    return result;
   }
 
   private async canAutoStartMessage(item: WorkItem): Promise<boolean> {
@@ -852,128 +874,47 @@ export class PersonalWorkDispatch {
     return (await resolveInboxBody(authority, host.get("blobs"), event?.content_hash, "meta")).body_text;
   }
 
-  private async observeHead(input: {
-    event: EventRecord;
-    threadId: string;
-    body: InboxBody;
-    recipes: Recipe[];
-    installations: ConnectorInstallation[];
-    fallbackType?: string;
-  }): Promise<void> {
-    const host = this.runtime.requireHost();
-    const orgId = this.runtime.orgId();
-    const authority = host.get("authority");
-    try {
-      parseConversationThread(input.threadId);
-    } catch {
-      return;
-    }
-    const surface = input.body.surface;
-    if (
-      !shouldAcceptPushRecord({
-        kind: surface?.kind,
-        direction: surface?.direction,
-        external_id: input.event.external_id,
-        type: surface?.type ?? input.fallbackType,
-      })
-    ) {
-      return;
-    }
-    const existing = await authority.getWorkItemByThread(orgId, input.threadId);
-    const subject = workSubjectFromEvent({
-      type: surface?.type ?? input.fallbackType,
-      source: input.event.source,
-      thread_id: input.threadId,
-      unit_kind: surface?.unit_kind,
-      body_text: input.body.body_text,
-      prompts: false,
-      hint: surface?.thread_facet,
-      prior_facet:
-        existing && isActiveWorkStatus(existing.status)
-          ? existing.thread_facet
-          : undefined,
-    });
-    if (!subject) {
-      return;
-    }
-    const recipe = selectRecipeForSubject(input.recipes, subject);
-    const byUnit = await authority.getWorkItemByUnitKey(
-      orgId,
-      input.threadId,
-      input.event.id,
-    );
-    if (byUnit) {
-      if (recipe && recipeAllowsPushDispatch(recipe)) {
-        const bound =
-          (recipe.match.text_contains || recipe.match.text_excludes) &&
-          (byUnit.status === "open" || byUnit.status === "failed") &&
-          byUnit.recipe_id !== recipe.id
-            ? await authority.putWorkItem({
-                ...byUnit,
-                recipe_id: recipe.id,
-                updated_at: new Date().toISOString(),
-              })
-            : byUnit;
-        await this.retryOrResume(
-          bound,
-          recipe,
-          input.body.body_text,
-          recipe.max_concurrent !== undefined,
-        );
-      }
-      return;
-    }
-    // An unstarted older unit must not absorb a matching trigger if its own body fails.
-    const reuseExisting =
-      existing &&
-      !isOccupiedRecipeSlot(existing.status) &&
-      existing.head_event_id !== input.event.id &&
-      recipe &&
-      recipe.trigger.kind === "push" &&
-      (recipe.match.text_contains || recipe.match.text_excludes) &&
-      !recipeTextMatches(recipe.match, await this.filterBodyText(existing.thread_id, existing.head_event_id))
-        ? null
-        : existing;
-    const next = openOrUpdateWorkItem({
-      existing: reuseExisting,
-      org_id: orgId,
-      subject,
-      head_event_id: input.event.id,
-      recipe,
-      now: new Date().toISOString(),
-    });
-    if (!next) {
-      return;
-    }
-    const saved = await authority.putWorkItem(next);
-    if (saved.status === "open" && recipe && recipeAllowsPushDispatch(recipe)) {
-      await this.retryOrResume(
-        saved,
-        recipe,
-        input.body.body_text,
-        recipe.max_concurrent !== undefined,
-      );
-    }
-  }
-
   private async noteStartFailed(
     item: WorkItem,
     recipe: Recipe,
     error: string,
     mode: "auto" | "manual" | "auxiliary",
+    rebind = false,
   ): Promise<void> {
     const now = new Date().toISOString();
     const host = this.runtime.requireHost();
-    await host.get("authority").putWorkRun(
-      failedWorkStart({ item, recipe, error, now }),
-    );
+    const result = await host.get("authority").recordWorkRunStartFailure({
+      expected_item: item,
+      run: {
+        ...failedWorkStart({ item, recipe, error, now }),
+        executor_config: recipe.executor_config,
+        include_context: recipeWantsContext(recipe),
+        status: "failed", write_back_required: false, trigger_kind: recipeTriggerOf(recipe).kind,
+      },
+      mode: mode === "auto" ? "automatic" : mode,
+      rebind: mode === "manual" && rebind ? "manual" : undefined,
+    });
+    if (result.outcome === "conflict") {
+      if (mode !== "auto") throw new PersonalConnectorError(
+        "execution_start_conflict", `Work start failure rejected: ${result.reason}. Refresh the work item.`, 409,
+      );
+      console.error("personal work start failure rejected", result.reason, error);
+      return;
+    }
+    this.publishCommittedWorkUpdate(item.id);
     if (mode === "auto") {
-      await host.get("authority").putWorkItem({
-        ...item,
-        status: "failed",
-        updated_at: now,
-      });
       console.error("personal work start failed", error);
+    }
+  }
+
+  private publishCommittedWorkUpdate(workItemId: string): void {
+    try {
+      this.onCommittedWorkUpdate?.(workItemId);
+    } catch (error) {
+      console.error("personal work start lifecycle notification failed", {
+        work_item_id: workItemId,
+        error,
+      });
     }
   }
 }
@@ -992,55 +933,6 @@ function definiteLocalStartFailure(
 
 function failedRunCount(runs: WorkRun[]): number {
   return runs.filter((run) => run.status === "failed").length;
-}
-
-function isOrderTask(row: InboxItem): boolean {
-  return (row.event.thread_id ?? "").startsWith("crm:order:");
-}
-
-function compareInboxItems(left: InboxItem, right: InboxItem): number {
-  if (left.event.occurred_at !== right.event.occurred_at) {
-    return left.event.occurred_at < right.event.occurred_at ? -1 : 1;
-  }
-  if (left.event.id === right.event.id) {
-    return 0;
-  }
-  return left.event.id < right.event.id ? -1 : 1;
-}
-
-function isAfterInboxScan(
-  event: { occurred_at: string; id: string },
-  scan: { occurred_at: string; id: string },
-): boolean {
-  if (event.occurred_at !== scan.occurred_at) {
-    return event.occurred_at > scan.occurred_at;
-  }
-  return event.id > scan.id;
-}
-
-/** One forward page. Reaching the end arms the next tick to start over. */
-function takeInboxScanPage(
-  rows: InboxItem[],
-  scan: { occurred_at: string; id: string } | null,
-  limit: number,
-): { page: InboxItem[]; next: { occurred_at: string; id: string } | null } {
-  if (rows.length <= limit) {
-    return { page: rows, next: null };
-  }
-  let start = 0;
-  if (scan) {
-    const found = rows.findIndex((row) => isAfterInboxScan(row.event, scan));
-    start = found < 0 ? 0 : found;
-  }
-  const page = rows.slice(start, start + limit);
-  const last = page[page.length - 1];
-  if (!last || start + page.length >= rows.length) {
-    return { page, next: null };
-  }
-  return {
-    page,
-    next: { occurred_at: last.event.occurred_at, id: last.event.id },
-  };
 }
 
 function interleaveByRecipe(items: WorkItem[]): WorkItem[] {
@@ -1079,17 +971,4 @@ function takeRingPage<T>(items: T[], start: number, limit: number): { page: T[];
   const page = items.slice(index, index + limit);
   const next = index + page.length;
   return { page, next: next >= items.length ? 0 : next };
-}
-
-function uniqueInboxItems(rows: InboxItem[]): InboxItem[] {
-  const seen = new Set<string>();
-  const unique: InboxItem[] = [];
-  for (const row of rows) {
-    if (seen.has(row.event.id)) {
-      continue;
-    }
-    seen.add(row.event.id);
-    unique.push(row);
-  }
-  return unique;
 }

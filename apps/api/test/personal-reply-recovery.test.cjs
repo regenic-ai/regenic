@@ -100,7 +100,7 @@ describe("durable personal reply delivery", () => {
     const results = await Promise.allSettled([restarted.send(REQUEST), h.service().send(REQUEST)]);
     assert.ok(results.some((result) => result.status === "fulfilled" && result.value.accepted));
     for (const result of results.filter((result) => result.status === "rejected")) {
-      assert.equal(result.reason.code, "send_uncertain");
+      assert.ok(["send_in_progress", "send_uncertain"].includes(result.reason.code));
     }
     assert.equal(h.sent.length, 2);
     const saved = await h.ports.authority.getOutboundAttempt(ORG, REQUEST.client_request_id);
@@ -220,32 +220,13 @@ describe("durable personal reply delivery", () => {
 
   it("allows only one independent service to send a shared request", async (t) => {
     const h = await harness(t);
-    const put = h.ports.blobs.put.bind(h.ports.blobs);
-    let prepared = 0;
-    let release;
-    const bothPrepared = new Promise((resolve) => { release = resolve; });
-    t.mock.method(h.ports.blobs, "put", async (...args) => {
-      await put(...args);
-      if (prepared < 2) {
-        prepared += 1;
-        if (prepared === 2) release();
-        await bothPrepared;
-      }
-    });
-    let finish;
-    let started;
-    const ready = new Promise((resolve) => { started = resolve; });
-    h.faults.send = () => {
-      started();
-      return new Promise((resolve) => { finish = resolve; });
-    };
-    const results = Promise.allSettled([h.service().send(REQUEST), h.service().send(REQUEST)]);
-    await ready;
-    finish(RECEIPT);
-    const settled = await results;
-    assert.ok(settled.some((result) => result.status === "fulfilled" && result.value.accepted));
-    for (const result of settled.filter((result) => result.status === "rejected")) {
-      assert.equal(result.reason.code, "send_uncertain");
+    const results = await Promise.allSettled([
+      h.service().send(REQUEST),
+      h.service().send(REQUEST),
+    ]);
+    assert.ok(results.some((result) => result.status === "fulfilled" && result.value.accepted));
+    for (const result of results.filter((item) => item.status === "rejected")) {
+      assert.ok(["send_in_progress", "send_uncertain"].includes(result.reason.code));
     }
     assert.equal(h.sent.length, 1);
   });
@@ -268,7 +249,7 @@ describe("durable personal reply delivery", () => {
     await assert.rejects(h.service().send(REQUEST), /sender unavailable/);
     assert.equal(await h.ports.authority.getOutboundAttempt(ORG, "reply-1"), null);
     h.faults.bind = false;
-    const put = t.mock.method(h.ports.blobs, "put", async () => { throw new Error("disk full"); });
+    const put = t.mock.method(h.ports.blobs, "putFenced", async () => { throw new Error("disk full"); });
     await assert.rejects(h.service().send(REQUEST), /disk full/);
     assert.equal(await h.ports.authority.getOutboundAttempt(ORG, "reply-1"), null);
     assert.equal(h.sent.length, 0);

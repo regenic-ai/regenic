@@ -108,6 +108,7 @@ export function workStatusLabel(
   }
   if (typeof work !== "string") {
     const delivery = work.delivery;
+    if (delivery?.status === "uncertain") return t("work.deliveryUncertain");
     if (delivery?.status === "dead") {
       return t("work.dead");
     }
@@ -173,7 +174,7 @@ export function deliveryNeedsYou(delivery?: {
   status?: string;
   write_back?: string;
 } | null): boolean {
-  return delivery?.status === "dead" || delivery?.write_back === "failed";
+  return delivery?.status === "dead" || delivery?.status === "uncertain" || delivery?.write_back === "failed";
 }
 
 export function workNextStepCopy(thread: {
@@ -202,6 +203,7 @@ export function workNextStepCopy(thread: {
     return null;
   }
   const delivery = thread.work.delivery;
+  if (delivery?.status === "uncertain") return t("work.hint.deliveryUncertain");
   if (thread.work.start_state === "pending") {
     return t("work.hint.startPending");
   }

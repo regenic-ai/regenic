@@ -103,13 +103,20 @@ describe("inbox query helpers", () => {
         event_id: event.id, org_id: "org", disposition, reason_codes,
         layer: "L1_event", score: 1, decided_at: at,
       };
-      await store.putDisposition(decision);
+      await store.putDispositionIfAbsent(decision);
       assert.equal(isPushInboxDecision(decision), [0, 1, 2, 5, 6].includes(i));
     }
     for (const [target, hidden_reason] of [["folded", "policy"], ["hidden", "human"]]) {
-      await store.putConversationPref({
-        org_id: "org", thread_id: `chat:${target}`, hidden: true, hidden_reason, updated_at: at,
-      });
+      const visibility = hidden_reason === "policy"
+        ? await store.setConversationPolicyVisibility({
+          org_id: "org", thread_id: `chat:${target}`, hidden: true,
+          expected_visibility_version: 0, updated_at: at,
+        })
+        : await store.setConversationVisibility({
+          org_id: "org", thread_id: `chat:${target}`, hidden: true,
+          expected_version: 0, command_id: `hide-${target}`, issued_at: at, updated_at: at,
+        });
+      assert.equal(visibility.outcome, "applied");
     }
     const query = { tasks: false, push_candidates: true, limit: 2 };
     const recent = await store.listInbox("org", query);

@@ -20,8 +20,14 @@ import type {
   EventListQuery,
   ContextAuthorityRead,
   ContextAuthorityReadQuery,
+  BlobReservation,
+  BlobInventoryRecord,
+  BlobInventoryPage,
+  BlobInventoryPageQuery,
+  ReserveBlobWritesInput,
   ContextArtifact,
   ContextArtifactQuery,
+  ContextArtifactEvidenceReferenceBackfill,
   ContextArtifactIndex,
   ContextArtifactState,
   ContextArtifactDecision,
@@ -65,21 +71,56 @@ import type {
   InboxSummary,
   ConversationPref,
   ConversationPrefPatch,
+  ConversationVisibilityUpdate,
+  ConversationVisibilityUpdateResult,
+  ConversationPolicyFold,
+  ConversationPolicyFoldResult,
+  ConversationPolicyVisibility,
   StoreFootprint,
   StoreClearResult,
   Recipe,
+  CancellationJob,
+  ClaimCancellationJobs,
+  CommitCancellationJobObservation,
+  CommitCancellationJobObservationResult,
+  RetryCancellationJob,
+  RetryCancellationJobResult,
+  RenewCancellationJob,
+  SettleCancellationJob,
   WorkItem,
   WorkRun,
   WorkRunStartClaim,
+  WorkRunStartCommand,
+  WorkRunStartReplay,
+  WorkRunStartCheckpoint,
+  WorkRunStartCheckpointResult,
+  WorkRunStartFailure,
+  WorkRunStartFailureResult,
+  WorkDismissal,
+  WorkDismissalResult,
+  WorkAcknowledgment,
+  WorkAcknowledgmentResult,
+  WorkItemCreation,
+  WorkItemCreationResult,
+  WorkItemObservation,
+  WorkItemObservationResult,
+  WorkItemCreationAbort,
+  WorkItemCreationAbortResult,
+  WorkDeliveryCommand,
+  WorkDeliveryCommandResult,
+  CommitWorkObservation,
+  CommitWorkObservationResult,
   SearchAnswerRecord,
   WorkDelivery,
   DailyDigestPolicy,
   ExecutorInstallation,
   BlobRecord,
+  EventAttachmentReferenceBackfill,
   NewEvent,
   NewOutboundAttempt,
   RepointContentInput,
   IngestCommitRequest,
+  ConversationIntakeCommit,
   EventRevision,
   TombstoneEvent,
   NewConnectorInstallation,
@@ -88,6 +129,7 @@ import type {
   SetConnectorInstallationConfig,
   ConnectorLease,
   ReleaseConnectorLease,
+  RenewConnectorLease,
   ResetConnectorCursor,
   ConnectorStreamCursor,
   NewIngestAttempt,
@@ -134,6 +176,11 @@ import {
   handoffAgentRun as applyAgentRunHandoff,
   recordSyncDuration,
   processSyncMetrics,
+  assertSyncPageAttemptBinding,
+  assertDispositionRepairs,
+  AuthorityConflictError,
+  DispositionRepairConflictError,
+  conversationId,
 } from "@regenic/domain";
 import {
   getCustomerServiceTask,
@@ -179,6 +226,7 @@ import {
   listUnassignedSyncWorkIdentities,
   pruneIngestAttempts,
   putSyncState,
+  renewLease,
   releaseLease,
   renewSyncWork,
   resetCursor,
@@ -198,6 +246,11 @@ import {
   commitIngestOn,
   findBlob,
   findBlobs,
+  inspectBlobInventory,
+  listBlobInventoryPage,
+  backfillEventAttachmentReferences,
+  reserveBlobWrites,
+  releaseBlobReservations,
   findBySourceIdentity,
   getEvent,
   getOutboundAttempt,
@@ -208,6 +261,7 @@ import {
   putOutboundAttempt,
   repointContentHash,
 } from "./events";
+import { lockConversationThreads } from "./conversation-lock";
 import {
   decideArtifact,
   getArtifact,
@@ -217,6 +271,7 @@ import {
   getSnapshot,
   listSnapshotIndex,
   listArtifacts,
+  backfillArtifactEvidenceReferences,
   listArtifactIndexes,
   parseContextJson,
   putArtifact,
@@ -311,12 +366,35 @@ import {
   listConversationPrefs,
   listInbox,
   putConversationPref,
+  setConversationVisibility,
+  setConversationPolicyHidden,
+  setConversationPolicyVisibility,
+  setConversationPolicyVisibilityOn,
   putConversationPrefOn,
-  putDisposition,
+  putDispositionIfAbsent,
+  putDispositionIfAbsentOn,
+  transitionDisposition,
   summarizeInbox,
 } from "./inbox";
 import {
   claimWorkRunStart,
+  getWorkRunStartReplay,
+  checkpointWorkRunStart,
+  recordWorkRunStartFailure,
+  dismissWorkItem,
+  acknowledgeWorkResult,
+  createWorkItem,
+  observeWorkItem,
+  observeWorkItemOn,
+  abortWorkItemCreation,
+  transitionWorkDelivery,
+  commitWorkObservation,
+  claimCancellationJobs,
+  renewCancellationJob,
+  settleCancellationJob,
+  commitCancellationJobObservation,
+  listCancellationJobs,
+  retryCancellationJob,
   deleteSearchAnswer,
   deleteExecutorInstallation,
   deleteRecipe,
@@ -332,6 +410,8 @@ import {
   getWorkRun,
   listExecutorInstallations,
   listRecipes,
+  advanceRecipePullSchedule,
+  putRecipeIfUnchanged,
   listDueWorkDeliveries,
   listHiddenExecutorThreadIds,
   listWorkDeliveries,
@@ -340,9 +420,6 @@ import {
   putExecutorInstallation,
   putRecipe,
   putSearchAnswer,
-  putWorkDelivery,
-  putWorkItem,
-  putWorkRun,
 } from "./work";
 
 export {
@@ -366,12 +443,14 @@ export class PostgresAuthorityStore
     DailyDigestJobStore,
     DailyDigestPolicyStore
 {
+  readonly atomicSyncPage = true;
   private readonly sql: PgSql;
 
 
-  readonly readonly = false;
+  readonly readonly: boolean;
 
-  private constructor(private readonly pool: Pool) {
+  private constructor(private readonly pool: Pool, readonly = false) {
+    this.readonly = readonly;
     this.sql = {
       query: (text, params, client) => this.query(text, params, client),
       queryOne: (text, params, client) => this.queryOne(text, params, client),
@@ -380,11 +459,21 @@ export class PostgresAuthorityStore
     };
   }
 
-  static async open(connectionString: string): Promise<PostgresAuthorityStore> {
-    const pool = new Pool({ connectionString });
+  static async open(
+    connectionString: string,
+    options: { migrate?: boolean; readOnly?: boolean } = {},
+  ): Promise<PostgresAuthorityStore> {
+    if (options.readOnly && options.migrate !== false) {
+      throw new Error("Read-only PostgreSQL authority stores require migrations to be disabled");
+    }
+    const pool = new Pool({
+      connectionString: options.readOnly
+        ? readOnlyConnectionString(connectionString)
+        : connectionString,
+    });
     try {
-      await migratePostgresAuthority(pool);
-      return new PostgresAuthorityStore(pool);
+      if (options.migrate !== false) await migratePostgresAuthority(pool);
+      return new PostgresAuthorityStore(pool, options.readOnly ?? false);
     } catch (error) {
       await pool.end();
       throw error;
@@ -459,6 +548,12 @@ export class PostgresAuthorityStore
     return listEvents(this.sql, orgId, query);
   }
 
+  async backfillEventAttachmentReferences(
+    input: EventAttachmentReferenceBackfill,
+  ): Promise<void> {
+    return backfillEventAttachmentReferences(this.sql, input);
+  }
+
   async openContextRead(orgId: string, query?: ContextAuthorityReadQuery): Promise<ContextAuthorityRead> {
     return openContextRead(this.sql, orgId, query);
   }
@@ -470,8 +565,11 @@ export class PostgresAuthorityStore
     return openContextReadForThread(this.sql, orgId, threadId);
   }
 
-  async putArtifact(artifact: ContextArtifact): Promise<ContextArtifact> {
-    return putArtifact(this.sql, artifact);
+  async putArtifact(
+    artifact: ContextArtifact,
+    blobReservations?: readonly BlobReservation[],
+  ): Promise<ContextArtifact> {
+    return putArtifact(this.sql, artifact, blobReservations);
   }
 
   async getArtifact(orgId: string, id: string): Promise<ContextArtifact | null> {
@@ -480,6 +578,12 @@ export class PostgresAuthorityStore
 
   async listArtifacts(query: ContextArtifactQuery): Promise<ContextArtifact[]> {
     return listArtifacts(this.sql, query);
+  }
+
+  async backfillArtifactEvidenceReferences(
+    input: ContextArtifactEvidenceReferenceBackfill,
+  ): Promise<void> {
+    return backfillArtifactEvidenceReferences(this.sql, input);
   }
 
   async listArtifactIndexes(query: ContextArtifactQuery): Promise<ContextArtifactIndex[]> {
@@ -879,8 +983,14 @@ export class PostgresAuthorityStore
     return countStandardUsage(this.sql, input);
   }
 
-  async putDisposition(decision: ArrangementDecision): Promise<void> {
-    return putDisposition(this.sql, decision);
+  async putDispositionIfAbsent(decision: ArrangementDecision): Promise<boolean> {
+    return putDispositionIfAbsent(this.sql, decision);
+  }
+
+  async transitionDisposition(
+    input: import("@regenic/domain").InboxDispositionTransition,
+  ): Promise<import("@regenic/domain").InboxDispositionTransitionResult> {
+    return transitionDisposition(this.sql, input);
   }
 
   async getDisposition(eventId: string): Promise<ArrangementDecision | null> {
@@ -913,6 +1023,24 @@ export class PostgresAuthorityStore
     return putConversationPref(this.sql, input);
   }
 
+  async setConversationVisibility(
+    input: ConversationVisibilityUpdate,
+  ): Promise<ConversationVisibilityUpdateResult> {
+    return setConversationVisibility(this.sql, input);
+  }
+
+  async setConversationPolicyHidden(
+    input: ConversationPolicyFold,
+  ): Promise<ConversationPolicyFoldResult> {
+    return setConversationPolicyHidden(this.sql, input);
+  }
+
+  async setConversationPolicyVisibility(
+    input: ConversationPolicyVisibility,
+  ): Promise<ConversationPolicyFoldResult> {
+    return setConversationPolicyVisibility(this.sql, input);
+  }
+
   async summarizeStore(orgId: string): Promise<StoreFootprint> {
     return this.storeFootprint(orgId);
   }
@@ -923,6 +1051,12 @@ export class PostgresAuthorityStore
   ): Promise<StoreClearResult> {
     return this.withTx(async (client) => {
       const before = await this.storeFootprint(orgId, client);
+      await this.execute(
+        `DELETE FROM blob_references WHERE owner_org_id = $1`,
+        [orgId],
+        client,
+      );
+      await this.execute(`DELETE FROM conversation_lifecycle_jobs WHERE org_id = $1`, [orgId], client);
       await this.execute(`DELETE FROM work_deliveries WHERE org_id = $1`, [orgId], client);
       await this.execute(`DELETE FROM work_runs WHERE org_id = $1`, [orgId], client);
       await this.execute(`DELETE FROM search_answers WHERE org_id = $1`, [orgId], client);
@@ -955,6 +1089,11 @@ export class PostgresAuthorityStore
         client,
       );
       await this.execute(
+        `DELETE FROM conversation_lifecycle_events WHERE org_id = $1`,
+        [orgId],
+        client,
+      );
+      await this.execute(
         `
           DELETE FROM ingest_quarantines
           WHERE attempt_id IN (
@@ -980,12 +1119,13 @@ export class PostgresAuthorityStore
       await this.execute(`DELETE FROM events WHERE org_id = $1`, [orgId], client);
       await this.execute(
         `
-          DELETE FROM blobs
-          WHERE content_hash NOT IN (
-            SELECT content_hash FROM events WHERE content_hash IS NOT NULL
+          UPDATE blobs SET unreferenced_at = COALESCE(unreferenced_at, $1)
+          WHERE NOT EXISTS (
+              SELECT 1 FROM blob_references r
+              WHERE r.content_hash = blobs.content_hash
           )
         `,
-        [],
+        [now],
         client,
       );
       await this.execute(
@@ -1146,6 +1286,18 @@ export class PostgresAuthorityStore
     return putRecipe(this.sql, recipe);
   }
 
+  async putRecipeIfUnchanged(
+    input: import("@regenic/domain").RecipeWrite,
+  ): Promise<import("@regenic/domain").RecipeWriteResult> {
+    return putRecipeIfUnchanged(this.sql, input);
+  }
+
+  async advanceRecipePullSchedule(
+    input: import("@regenic/domain").RecipePullScheduleAdvance,
+  ): Promise<boolean> {
+    return advanceRecipePullSchedule(this.sql, input);
+  }
+
   async deleteRecipe(orgId: string, id: string): Promise<boolean> {
     return deleteRecipe(this.sql, orgId, id);
   }
@@ -1176,10 +1328,6 @@ export class PostgresAuthorityStore
     return getWorkItemByUnitKey(this.sql, orgId, threadId, unitKey);
   }
 
-  async putWorkItem(item: WorkItem): Promise<WorkItem> {
-    return putWorkItem(this.sql, item);
-  }
-
   async listWorkRuns(orgId: string, workItemId?: string): Promise<WorkRun[]> {
     return listWorkRuns(this.sql, orgId, workItemId);
   }
@@ -1199,12 +1347,74 @@ export class PostgresAuthorityStore
     return listHiddenExecutorThreadIds(this.sql, orgId);
   }
 
-  async putWorkRun(run: WorkRun): Promise<WorkRun> {
-    return putWorkRun(this.sql, run);
+  async getWorkRunStartReplay(command: WorkRunStartCommand): Promise<WorkRunStartReplay> {
+    return getWorkRunStartReplay(this.sql, command);
+  }
+
+  async claimCancellationJobs(input: ClaimCancellationJobs): Promise<CancellationJob[]> {
+    return claimCancellationJobs(this.sql, input);
+  }
+
+  async renewCancellationJob(input: RenewCancellationJob): Promise<boolean> {
+    return renewCancellationJob(this.sql, input);
+  }
+
+  async settleCancellationJob(input: SettleCancellationJob): Promise<boolean> {
+    return settleCancellationJob(this.sql, input);
+  }
+
+  async commitCancellationJobObservation(
+    input: CommitCancellationJobObservation,
+  ): Promise<CommitCancellationJobObservationResult> {
+    return commitCancellationJobObservation(this.sql, input);
+  }
+
+  async listCancellationJobs(
+    orgId: string,
+    limit?: number,
+    statuses?: CancellationJob["status"][],
+  ): Promise<CancellationJob[]> {
+    return listCancellationJobs(this.sql, orgId, limit, statuses);
+  }
+
+  async retryCancellationJob(input: RetryCancellationJob): Promise<RetryCancellationJobResult> {
+    return retryCancellationJob(this.sql, input);
   }
 
   async claimWorkRunStart(input: WorkRunStartClaim): Promise<boolean> {
     return claimWorkRunStart(this.sql, input);
+  }
+
+  async checkpointWorkRunStart(input: WorkRunStartCheckpoint): Promise<WorkRunStartCheckpointResult> {
+    return checkpointWorkRunStart(this.sql, input);
+  }
+
+  async recordWorkRunStartFailure(input: WorkRunStartFailure): Promise<WorkRunStartFailureResult> {
+    return recordWorkRunStartFailure(this.sql, input);
+  }
+
+  async dismissWorkItem(input: WorkDismissal): Promise<WorkDismissalResult> {
+    return dismissWorkItem(this.sql, input);
+  }
+
+  async acknowledgeWorkResult(input: WorkAcknowledgment): Promise<WorkAcknowledgmentResult> {
+    return acknowledgeWorkResult(this.sql, input);
+  }
+
+  async createWorkItem(input: WorkItemCreation): Promise<WorkItemCreationResult> {
+    return createWorkItem(this.sql, input);
+  }
+
+  async observeWorkItem(input: WorkItemObservation): Promise<WorkItemObservationResult> {
+    return observeWorkItem(this.sql, input);
+  }
+
+  async abortWorkItemCreation(input: WorkItemCreationAbort): Promise<WorkItemCreationAbortResult> {
+    return abortWorkItemCreation(this.sql, input);
+  }
+
+  async commitWorkObservation(input: CommitWorkObservation): Promise<CommitWorkObservationResult> {
+    return commitWorkObservation(this.sql, input);
   }
 
   async getSearchAnswer(
@@ -1243,8 +1453,8 @@ export class PostgresAuthorityStore
     return getWorkDeliveryByItem(this.sql, orgId, workItemId);
   }
 
-  async putWorkDelivery(delivery: WorkDelivery): Promise<WorkDelivery> {
-    return putWorkDelivery(this.sql, delivery);
+  async transitionWorkDelivery(input: WorkDeliveryCommand): Promise<WorkDeliveryCommandResult> {
+    return transitionWorkDelivery(this.sql, input);
   }
 
   async getUiPref(orgId: string, key: string): Promise<string | null> {
@@ -1301,6 +1511,24 @@ export class PostgresAuthorityStore
     return findBlobs(this.sql, contentHashes);
   }
 
+  async inspectBlobInventory(
+    contentHashes: readonly string[],
+  ): Promise<Map<string, BlobInventoryRecord>> {
+    return inspectBlobInventory(this.sql, contentHashes);
+  }
+
+  async listBlobInventoryPage(query: BlobInventoryPageQuery): Promise<BlobInventoryPage> {
+    return listBlobInventoryPage(this.sql, query);
+  }
+
+  async reserveBlobWrites(input: ReserveBlobWritesInput): Promise<BlobReservation[]> {
+    return reserveBlobWrites(this.sql, input);
+  }
+
+  async releaseBlobReservations(reservations: readonly BlobReservation[]): Promise<void> {
+    await releaseBlobReservations(this.sql, reservations);
+  }
+
   async append(input: NewEvent): Promise<EventRecord> {
     return append(this.sql, input);
   }
@@ -1314,6 +1542,87 @@ export class PostgresAuthorityStore
       return [];
     }
     return this.withTx((client) => commitIngestOn(this.sql, client, request));
+  }
+
+  async commitConversationIntake(
+    request: ConversationIntakeCommit,
+  ): Promise<EventRecord[]> {
+    const repairs = request.disposition_repairs ?? [];
+    assertDispositionRepairs(repairs);
+    if (
+      request.ingest.appends.length === 0 &&
+      request.ingest.dispositions.length === 0 &&
+      repairs.length === 0 &&
+      request.work_observations.length === 0 &&
+      request.visibility.length === 0
+    ) {
+      return [];
+    }
+    return this.withTx(async (client) => {
+      const repairThreads: Array<{ org_id: string; thread_id: string }> = [];
+      for (const repair of repairs) {
+        const event = await this.sql.queryOne<{
+          thread_id: string | null;
+          source: string;
+          external_id: string;
+        }>(`SELECT thread_id, source, external_id
+          FROM events WHERE org_id = $1 AND id = $2`,
+        [repair.decision.org_id, repair.decision.event_id], client);
+        if (!event) throw new AuthorityConflictError();
+        repairThreads.push({
+          org_id: repair.decision.org_id,
+          thread_id: event.thread_id ?? conversationId(
+            event.source, event.external_id, repair.decision.event_id,
+          ),
+        });
+      }
+      const threads = [
+        ...repairThreads,
+        ...request.work_observations.map(({ item }) => ({
+          org_id: item.org_id,
+          thread_id: item.thread_id,
+        })),
+        ...request.visibility.map(({ org_id, thread_id }) => ({ org_id, thread_id })),
+      ];
+      const events = await commitIngestOn(this.sql, client, request.ingest, threads);
+      const compareIdentityPart = (left: string, right: string): number =>
+        left < right ? -1 : left > right ? 1 : 0;
+      const repairIdentities = repairs.flatMap((repair) => repair.identities)
+        .sort((left, right) =>
+          compareIdentityPart(left.org_id, right.org_id) ||
+          compareIdentityPart(left.source, right.source) ||
+          compareIdentityPart(left.external_id, right.external_id));
+      const repairHeads = new Map<string, string | undefined>();
+      for (const identity of repairIdentities) {
+        const head = await this.sql.queryOne<{ current_event_id: string }>(
+          `SELECT current_event_id FROM source_heads
+           WHERE org_id = $1 AND source = $2 AND external_id = $3 FOR UPDATE`,
+          [identity.org_id, identity.source, identity.external_id], client,
+        );
+        repairHeads.set(JSON.stringify([
+          identity.org_id, identity.source, identity.external_id,
+        ]), head?.current_event_id);
+      }
+      for (const repair of repairs) {
+        if (repair.identities.some((identity) =>
+          repairHeads.get(JSON.stringify([
+            identity.org_id, identity.source, identity.external_id,
+          ])) !== repair.decision.event_id)) {
+          throw new AuthorityConflictError();
+        }
+        if (!(await putDispositionIfAbsentOn(this.sql, repair.decision, client))) {
+          throw new DispositionRepairConflictError();
+        }
+      }
+      for (const observation of request.work_observations) {
+        const result = await observeWorkItemOn(this.sql, observation, client);
+        if (result.outcome === "conflict") throw new AuthorityConflictError();
+      }
+      for (const visibility of request.visibility) {
+        await setConversationPolicyVisibilityOn(this.sql, client, visibility);
+      }
+      return events;
+    });
   }
 
   async appendRevision(input: EventRevision): Promise<EventRecord> {
@@ -1369,6 +1678,10 @@ export class PostgresAuthorityStore
     return releaseLease(this.sql, input);
   }
 
+  async renewLease(input: RenewConnectorLease): Promise<ConnectorLease | null> {
+    return renewLease(this.sql, input);
+  }
+
   async resetCursor(
     input: ResetConnectorCursor,
   ): Promise<ConnectorStreamCursor | null> {
@@ -1380,15 +1693,88 @@ export class PostgresAuthorityStore
   }
 
   async commitSyncPage(input: CommitSyncPage): Promise<CommitSyncPageResult> {
+    assertSyncPageAttemptBinding(input);
     const startedAt = Date.now();
     try {
       return await this.withTx(async (client) => {
         await beginAttemptOn(this.sql, client, input.attempt);
+        const prefs = [...(input.prefs ?? [])].sort((a, b) =>
+          a.org_id < b.org_id ? -1 : a.org_id > b.org_id ? 1 :
+            a.thread_id < b.thread_id ? -1 : a.thread_id > b.thread_id ? 1 : 0,
+        );
+        const repairs = input.disposition_repairs ?? [];
+        const repairEvents: Array<{ org_id: string; thread_id: string }> = [];
+        for (const repair of repairs) {
+          const event = await this.sql.queryOne<{
+            thread_id: string | null;
+            source: string;
+            external_id: string;
+          }>(`SELECT thread_id, source, external_id
+            FROM events WHERE org_id = $1 AND id = $2`,
+          [repair.decision.org_id, repair.decision.event_id], client);
+          if (!event) throw new AuthorityConflictError();
+          repairEvents.push({
+            org_id: repair.decision.org_id,
+            thread_id: event.thread_id ?? conversationId(
+              event.source, event.external_id, repair.decision.event_id,
+            ),
+          });
+        }
         const events = input.ingest
-          ? await commitIngestOn(this.sql, client, input.ingest)
+          ? await commitIngestOn(this.sql, client, input.ingest, [
+            ...prefs,
+            ...repairEvents,
+            ...(input.work_observations ?? []).map(({ item }) => ({
+              org_id: item.org_id,
+              thread_id: item.thread_id,
+            })),
+          ])
           : [];
-        for (const pref of input.prefs ?? []) {
-          await putConversationPrefOn(this.sql, client, pref);
+        if (!input.ingest) {
+          await lockConversationThreads(this.sql, client, [
+            ...prefs,
+            ...repairEvents,
+            ...(input.work_observations ?? []).map(({ item }) => ({
+              org_id: item.org_id,
+              thread_id: item.thread_id,
+            })),
+          ]);
+        }
+        for (const observation of input.work_observations ?? []) {
+          const result = await observeWorkItemOn(this.sql, observation, client);
+          if (result.outcome === "conflict") throw new AuthorityConflictError();
+        }
+        const compareIdentityPart = (left: string, right: string): number =>
+          left < right ? -1 : left > right ? 1 : 0;
+        const repairIdentities = repairs.flatMap((repair) => repair.identities)
+          .sort((left, right) =>
+            compareIdentityPart(left.org_id, right.org_id) ||
+            compareIdentityPart(left.source, right.source) ||
+            compareIdentityPart(left.external_id, right.external_id));
+        const repairHeads = new Map<string, string | undefined>();
+        for (const identity of repairIdentities) {
+          const head = await this.sql.queryOne<{ current_event_id: string }>(
+            `SELECT current_event_id FROM source_heads
+             WHERE org_id = $1 AND source = $2 AND external_id = $3 FOR UPDATE`,
+            [identity.org_id, identity.source, identity.external_id], client,
+          );
+          repairHeads.set(JSON.stringify([
+            identity.org_id, identity.source, identity.external_id,
+          ]), head?.current_event_id);
+        }
+        for (const repair of repairs) {
+          if (repair.identities.some((identity) =>
+            repairHeads.get(JSON.stringify([
+              identity.org_id, identity.source, identity.external_id,
+            ])) !== repair.decision.event_id)) {
+            throw new AuthorityConflictError();
+          }
+          if (!(await putDispositionIfAbsentOn(this.sql, repair.decision, client))) {
+            throw new DispositionRepairConflictError();
+          }
+        }
+        for (const pref of prefs) {
+          await setConversationPolicyVisibilityOn(this.sql, client, pref);
         }
         const attempt = await settleAttemptOn(this.sql, client, input.settle);
         return { attempt, events };
@@ -1604,4 +1990,24 @@ export class PostgresAuthorityStore
     return result.rowCount ?? 0;
   }
 
+}
+
+function readOnlyConnectionString(connectionString: string): string {
+  let url: URL;
+  try {
+    url = new URL(connectionString);
+  } catch {
+    throw new Error("Read-only PostgreSQL authority stores require a postgres:// URL");
+  }
+  if (url.protocol !== "postgres:" && url.protocol !== "postgresql:") {
+    throw new Error("Read-only PostgreSQL authority stores require a postgres:// URL");
+  }
+  const existingOptions = url.searchParams.get("options")?.trim();
+  url.searchParams.set(
+    "options",
+    [existingOptions, "-cdefault_transaction_read_only=on"]
+      .filter((value): value is string => Boolean(value))
+      .join(" "),
+  );
+  return url.toString();
 }

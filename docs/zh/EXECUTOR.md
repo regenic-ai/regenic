@@ -169,6 +169,10 @@ WorkRun，同时把开放的 WorkItem 标记为运行中并占用自动执行名
 | GET | `/v1/runs/:id` | — | 同上 |
 | POST | `/v1/runs/:id/resume` | `work_item_id`、`recipe_id`、`answer` | 同上 |
 
+启动响应必须返回非空 `external_run_id`，否则启动结果保持不确定。状态查询、
+恢复和取消必须使用已记录的外部运行 ID，不以本地 Run ID 代替；这些请求的
+响应可省略 ID，此时保留请求所用的外部 ID。
+
 以下旧版降级说明保留用于升级对照；当前版本的错误处理规则见后文：
 
 `status` 只能是 `running` / `waiting_human` / `completed` / `failed` /

@@ -69,11 +69,11 @@ describe("compactEmbeddedContent", () => {
     assert.equal(second.rewritten, 0);
     assert.equal(second.failed, 0);
     assert.notEqual(updated.content_hash, oldHash);
-    assert.equal(await blobs.exists(oldHash), false);
+    assert.equal(await blobs.exists(oldHash), true);
     assert.equal(body.text, "see this");
     assert.equal(attachment.bytes_base64, undefined);
     assert.deepEqual(Buffer.from(await blobs.get(attachment.content_hash)), png);
-    assert.ok(first.released_bytes > 0);
+    assert.equal(first.released_bytes, 0);
   });
 
   it("stops when the caller aborts", async () => {

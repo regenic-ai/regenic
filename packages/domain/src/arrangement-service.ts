@@ -9,7 +9,6 @@ import {
 } from "./personal-dispatch-policy";
 
 export interface ArrangementStore {
-  putDisposition(decision: ArrangementDecision): Promise<void>;
   getUiPref?(orgId: string, key: string): Promise<string | null>;
 }
 
@@ -46,17 +45,6 @@ export class ArrangementService {
       dispatch_policy: dispatchPolicy,
       now,
     });
-  }
-
-  async remember(
-    event: EventRecord,
-    record: Pick<IngestRecord, "type" | "content" | "weight_hints">,
-    now?: string,
-    dispatchPolicy?: PersonalDispatchPolicy,
-  ): Promise<ArrangementDecision> {
-    const decision = this.decide(event, record, now, dispatchPolicy);
-    await this.store.putDisposition(decision);
-    return decision;
   }
 }
 

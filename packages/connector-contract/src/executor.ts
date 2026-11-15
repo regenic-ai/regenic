@@ -57,15 +57,35 @@ export interface WorkRun {
   id: string;
   org_id: string;
   work_item_id: string;
+  /** Persisted row version; omitted only by pre-migration callers and fixtures. */
+  version?: number;
   recipe_id: string;
   executor_type: string;
+  /** Frozen configuration used for this attempt; absent only for historical runs. */
+  executor_config?: Record<string, JsonValue>;
+  /** Whether conversation history was included; absent only for historical runs. */
+  include_context?: boolean;
   external_run_id?: string;
   agent_thread_id?: string;
   status: WorkRunStatus;
   start_state?: "pending" | "submitted" | "uncertain";
   result?: ResultEnvelope;
+  /** Frozen before external start; absent only for historical runs. */
+  write_back_required?: boolean;
+  write_back_target?: WorkWriteBackTarget;
+  trigger_kind?: "push" | "pull" | "manual";
+  /** Kernel-owned completion policy frozen at reservation; absent for legacy attempts. */
+  completion_policy_version?: 1;
+  /** Frozen rule preference; completion and visibility remain separate decisions. */
+  hide_on_success?: boolean;
   created_at: string;
   updated_at: string;
+}
+
+export interface WorkWriteBackTarget {
+  installation_id: string;
+  source: string;
+  target: string;
 }
 
 export interface ExecutorCapabilities {
@@ -117,6 +137,8 @@ export interface ExecutorCatalogEntry {
 
 export interface ExecutorContext {
   org_id: string;
+  /** Optional operation deadline or cancellation signal supplied by a lifecycle worker. */
+  signal?: AbortSignal;
   /**
    * Host-owned pinned connector installation for a local executor, not recipe
    * configuration. Absent for unpinned and HTTP executors. Direct runtimes must
@@ -299,7 +321,7 @@ export interface TaskExecutor {
     ctx: ExecutorContext,
   ): Promise<ExecutorRunHandle>;
   status(run: WorkRun, ctx: ExecutorContext): Promise<ExecutorRunHandle>;
-  cancel?(run: WorkRun, ctx: ExecutorContext): Promise<void>;
+  cancel?(run: WorkRun, ctx: ExecutorContext): Promise<ExecutorRunHandle | void>;
   /** Whether the agent can look up chat context itself (Mode 1) when a recipe includes context. */
   contextSelfServe?(ctx: ExecutorContext): Promise<boolean>;
 }

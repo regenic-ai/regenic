@@ -244,12 +244,15 @@ export type WorkDeliveryStatus =
   | "queued"
   | "running"
   | "write_back"
+  | "uncertain"
   | "acked"
   | "dead";
 
 export type WorkWriteBackState = "pending" | "sent" | "skipped" | "failed";
 
 export interface WorkDeliveryFace {
+  id: string;
+  version: number;
   status: WorkDeliveryStatus;
   write_back: WorkWriteBackState;
   attempts: number;
@@ -259,10 +262,14 @@ export interface WorkDeliveryFace {
 export interface WorkFace {
   id: string;
   status: WorkItemStatus;
+  version: number;
   start_state?: "pending" | "submitted" | "uncertain";
   recipe_id?: string;
   executor_type?: string;
   run_id?: string;
+  run_version?: number;
+  acknowledged_run_id?: string;
+  auto_completed?: boolean;
   agent_thread_id?: string;
   head_event_id?: string;
   can_write_back?: boolean;
@@ -290,6 +297,7 @@ export interface InboxViewItem {
   title?: string | null;
   pinned?: boolean;
   hidden?: boolean;
+  visibility_version?: number;
   pref_updated_at?: string | null;
   conversation_label?: string | null;
   conversation_kind?: string | null;
@@ -506,6 +514,31 @@ export interface PersonalDispatchPolicy {
   actionable_disposition: MessageDisposition;
   short_text_disposition: MessageDisposition;
   default_disposition: MessageDisposition;
+}
+
+export interface CancellationJobView {
+  id: string;
+  run_id: string;
+  status: "pending" | "running" | "succeeded" | "failed" | "dead";
+  attempts: number;
+  last_error_code?: string;
+  last_error?: string;
+  updated_at: string;
+}
+
+export interface WorkIdentityDiagnosticView {
+  work_item_id: string;
+  thread_id: string;
+  unit_key: string;
+  item_status: "open" | "running" | "waiting_human" | "done" | "failed" | "skipped";
+  current_run_id?: string;
+  reason:
+    | "missing_current_run"
+    | "current_run_not_found"
+    | "current_run_identity_mismatch"
+    | "current_run_recipe_mismatch"
+    | "current_run_not_active";
+  candidate_run_ids: string[];
 }
 
 export interface PersonalContextEvidence {
@@ -849,6 +882,7 @@ export interface ConversationPrefView {
   title: string | null;
   pinned: boolean;
   hidden: boolean;
+  visibility_version: number;
   updated_at: string;
 }
 

@@ -60,6 +60,7 @@ export interface SearchAnswerRecord {
 
 export interface SearchAnswerStore {
   getSearchAnswer(orgId: string, id: string): Promise<SearchAnswerRecord | null>;
+  /** Existing identity and outcome are immutable here; historical inserts remain supported. */
   putSearchAnswer(record: SearchAnswerRecord): Promise<SearchAnswerRecord>;
   deleteSearchAnswer(orgId: string, id: string): Promise<boolean>;
 }

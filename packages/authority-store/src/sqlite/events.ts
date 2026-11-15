@@ -1,4 +1,5 @@
 import type {
+  ArrangementDecision,
   IngestOperation,
   SourceIdentity,
   NewEvent,
@@ -10,8 +11,14 @@ import type {
   EventListQuery,
   ContextAuthorityRead,
   ContextAuthorityReadQuery,
+  BlobReservation,
   BlobRecord,
+  BlobInventoryRecord,
+  BlobInventoryPage,
+  BlobInventoryPageQuery,
+  EventAttachmentReferenceBackfill,
   RepointContentInput,
+  ReserveBlobWritesInput,
   IngestCommitRequest,
   EventRevision,
   TombstoneEvent,
@@ -21,7 +28,11 @@ import {
   threadExternalIdLike,
   hashCanonicalContext,
   conversationId,
+  assertBlobInventoryPageQuery,
   AuthorityConflictError,
+  BlobReservationConflictError,
+  assertEventDispositionBinding,
+  assertIngestDispositionBindings,
 } from "@regenic/domain";
 import {
   randomUUID,
@@ -29,6 +40,7 @@ import {
 import {
   putDispositionWithinTransaction,
   refreshThreadHeadWithinTransaction,
+  unfoldCurrentWorkWithinTransaction,
 } from "./inbox";
 import { contextReadScope } from "../context-read-scope";
 
@@ -61,6 +73,14 @@ interface BlobRow {
   created_at: string;
 }
 
+interface BlobInventoryRow extends BlobRow {
+  state: BlobInventoryRecord["state"];
+  generation: number;
+  unreferenced_at: string | null;
+  write_lease_expires_at: string | null;
+  reference_count: number;
+}
+
 interface InsertEventInput extends SourceIdentity {
   id?: string;
   operation: IngestOperation;
@@ -85,11 +105,6 @@ export async function findBySourceIdentity(db: Database.Database, identity: Sour
   }
 
 export async function bindSourceIdentityAliases(db: Database.Database, input: SourceIdentityAliasBind): Promise<void> {
-    
-    const event = await getEvent(db, input.org_id, input.event_id);
-    if (!event) {
-      throw new Error(`Unknown event for identity alias: ${input.event_id}`);
-    }
     const insert = db.prepare(
       `
         INSERT OR IGNORE INTO source_heads (
@@ -98,65 +113,35 @@ export async function bindSourceIdentityAliases(db: Database.Database, input: So
       `,
     );
     const run = db.transaction(() => {
+      if (!db.prepare("SELECT 1 FROM events WHERE org_id = ? AND id = ?").get(input.org_id, input.event_id)) {
+        throw new Error(`Unknown event for identity alias: ${input.event_id}`);
+      }
+      const isCurrent = Boolean(db.prepare(
+        "SELECT 1 FROM source_heads WHERE org_id = ? AND current_event_id = ? LIMIT 1",
+      ).get(input.org_id, input.event_id));
+      const findAlias = db.prepare(
+        "SELECT 1 FROM source_heads WHERE org_id = ? AND source = ? AND external_id = ?",
+      );
       for (const alias of input.aliases) {
         const externalId = alias.external_id.trim();
         if (!alias.source.trim() || !externalId) {
           continue;
         }
+        if (!isCurrent && !findAlias.get(input.org_id, alias.source, externalId)) {
+          throw new AuthorityConflictError();
+        }
         insert.run(input.org_id, alias.source, externalId, input.event_id);
       }
     });
-    run();
+    run.immediate();
   }
 
 export async function getOutboundAttempt(db: Database.Database, orgId: string, clientRequestId: string): Promise<OutboundAttemptRecord | null> {
-    const row = db
-      .prepare(
-        `
-          SELECT org_id, client_request_id, thread_id, event_id, status,
-                 channel_message_ids_json, recovery_hash, receipt_json, created_at, updated_at
-          FROM outbound_attempts
-          WHERE org_id = ? AND client_request_id = ?
-        `,
-      )
-      .get(orgId, clientRequestId) as
-      | {
-          org_id: string;
-          client_request_id: string;
-          thread_id: string;
-          event_id: string | null;
-          status: OutboundAttemptRecord["status"];
-          channel_message_ids_json: string | null;
-          recovery_hash: string | null;
-          receipt_json: string | null;
-          created_at: string;
-          updated_at: string;
-        }
-      | undefined;
-    if (!row) {
-      return null;
-    }
-    return {
-      org_id: row.org_id,
-      client_request_id: row.client_request_id,
-      thread_id: row.thread_id,
-      ...(row.event_id ? { event_id: row.event_id } : {}),
-      status: row.status,
-      ...(row.recovery_hash ? { recovery_hash: row.recovery_hash } : {}),
-      ...(row.receipt_json
-        ? { receipt: JSON.parse(row.receipt_json) as OutboundAttemptRecord["receipt"] }
-        : {}),
-      ...(row.channel_message_ids_json
-        ? {
-            channel_message_ids: JSON.parse(row.channel_message_ids_json) as string[],
-          }
-        : {}),
-      created_at: row.created_at,
-      updated_at: row.updated_at,
-    };
+    return getOutboundAttemptSync(db, orgId, clientRequestId);
   }
 
 export async function claimOutboundAttempt(db: Database.Database, input: NewOutboundAttempt): Promise<boolean> {
+  return db.transaction(() => {
     const result = db.prepare(`
       INSERT INTO outbound_attempts (
         org_id, client_request_id, thread_id, status, recovery_hash, created_at, updated_at
@@ -174,15 +159,15 @@ export async function claimOutboundAttempt(db: Database.Database, input: NewOutb
       input.org_id, input.client_request_id, input.thread_id,
       input.recovery_hash ?? null, input.now, input.now,
     );
-    return result.changes === 1;
-  }
+    if (result.changes !== 1) return false;
+    syncOutboundRecoveryBlobReference(db, input);
+    return true;
+  }).immediate();
+}
 
 export async function putOutboundAttempt(db: Database.Database, input: OutboundAttemptPut): Promise<OutboundAttemptRecord> {
-    
-    const previous = await getOutboundAttempt(db, 
-      input.org_id,
-      input.client_request_id,
-    );
+  return db.transaction(() => {
+    const previous = getOutboundAttemptSync(db, input.org_id, input.client_request_id);
     const createdAt = previous?.created_at ?? input.now;
     db
       .prepare(
@@ -215,6 +200,10 @@ export async function putOutboundAttempt(db: Database.Database, input: OutboundA
         createdAt,
         input.now,
       );
+    syncOutboundRecoveryBlobReference(db, {
+      ...input,
+      recovery_hash: input.recovery_hash ?? previous?.recovery_hash,
+    });
     return {
       org_id: input.org_id,
       client_request_id: input.client_request_id,
@@ -229,7 +218,111 @@ export async function putOutboundAttempt(db: Database.Database, input: OutboundA
       created_at: createdAt,
       updated_at: input.now,
     };
+  }).immediate();
+}
+
+function getOutboundAttemptSync(
+  db: Database.Database,
+  orgId: string,
+  clientRequestId: string,
+): OutboundAttemptRecord | null {
+  const row = db.prepare(`
+    SELECT org_id, client_request_id, thread_id, event_id, status,
+           channel_message_ids_json, recovery_hash, receipt_json, created_at, updated_at
+    FROM outbound_attempts WHERE org_id = ? AND client_request_id = ?
+  `).get(orgId, clientRequestId) as {
+    org_id: string;
+    client_request_id: string;
+    thread_id: string;
+    event_id: string | null;
+    status: OutboundAttemptRecord["status"];
+    channel_message_ids_json: string | null;
+    recovery_hash: string | null;
+    receipt_json: string | null;
+    created_at: string;
+    updated_at: string;
+  } | undefined;
+  return row ? {
+    org_id: row.org_id,
+    client_request_id: row.client_request_id,
+    thread_id: row.thread_id,
+    ...(row.event_id ? { event_id: row.event_id } : {}),
+    status: row.status,
+    ...(row.recovery_hash ? { recovery_hash: row.recovery_hash } : {}),
+    ...(row.receipt_json
+      ? { receipt: JSON.parse(row.receipt_json) as OutboundAttemptRecord["receipt"] }
+      : {}),
+    ...(row.channel_message_ids_json
+      ? { channel_message_ids: JSON.parse(row.channel_message_ids_json) as string[] }
+      : {}),
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  } : null;
+}
+
+function syncOutboundRecoveryBlobReference(
+  db: Database.Database,
+  input: NewOutboundAttempt | OutboundAttemptPut,
+): void {
+  const expected = new Set(input.recovery_hash ? [input.recovery_hash] : []);
+  const reservations = input.blob_reservations;
+  const oldHashes = db.prepare(`
+    SELECT content_hash FROM blob_references
+    WHERE owner_org_id = ? AND owner_type = 'outbound_attempt'
+      AND owner_id = ? AND reference_kind = 'reply_recovery'
+  `).all(input.org_id, input.client_request_id) as Array<{ content_hash: string }>;
+  if (reservations !== undefined) {
+    const hashes = new Set(reservations.map((reservation) => reservation.content_hash));
+    if (hashes.size !== reservations.length || hashes.size !== expected.size
+      || [...expected].some((hash) => !hashes.has(hash))) {
+      throw new Error("Outbound recovery reservations must exactly match the stored recovery hash");
+    }
+    completeBlobReservations(db, reservations, expected);
+  } else if (input.recovery_hash && !oldHashes.some((row) => row.content_hash === input.recovery_hash)) {
+    insertBlobRow(
+      db,
+      input.recovery_hash,
+      "application/vnd.regenic.reply-recovery+json",
+      0,
+      input.now,
+    );
+    const protectedBlob = db.prepare(`
+      UPDATE blobs SET state = 'protected', unreferenced_at = NULL
+      WHERE content_hash = ? AND state IN ('available', 'protected') AND write_claim_token IS NULL
+    `).run(input.recovery_hash);
+    if (protectedBlob.changes !== 1) {
+      throw new BlobReservationConflictError(input.recovery_hash);
+    }
   }
+
+  db.prepare(`
+    DELETE FROM blob_references WHERE owner_org_id = ? AND owner_type = 'outbound_attempt'
+      AND owner_id = ? AND reference_kind = 'reply_recovery'
+  `).run(input.org_id, input.client_request_id);
+  if (input.recovery_hash) {
+    const eligible = db.prepare(`
+      UPDATE blobs SET unreferenced_at = NULL
+      WHERE content_hash = ? AND state IN ('available', 'protected') AND write_claim_token IS NULL
+    `).run(input.recovery_hash);
+    if (eligible.changes !== 1) {
+      throw new BlobReservationConflictError(input.recovery_hash);
+    }
+    db.prepare(`
+      INSERT INTO blob_references (
+        owner_org_id, owner_type, owner_id, reference_kind, content_hash, created_at
+      ) VALUES (?, 'outbound_attempt', ?, 'reply_recovery', ?, ?)
+    `).run(input.org_id, input.client_request_id, input.recovery_hash, input.now);
+  }
+  const markUnreferenced = db.prepare(`
+    UPDATE blobs SET unreferenced_at = ?
+    WHERE content_hash = ? AND NOT EXISTS (
+      SELECT 1 FROM blob_references r WHERE r.content_hash = blobs.content_hash
+    )
+  `);
+  for (const { content_hash } of oldHashes) {
+    if (content_hash !== input.recovery_hash) markUnreferenced.run(input.now, content_hash);
+  }
+}
 
 export async function getEvent(db: Database.Database, orgId: string, eventId: string): Promise<EventRecord | null> {
     const row = db
@@ -281,6 +374,9 @@ export async function listEvents(db: Database.Database, orgId: string, query?: E
         ? query.limit
         : undefined;
     const order = query?.order === "recent" ? "DESC" : "ASC";
+    const orderBy = query?.order === "ingested"
+      ? "ingested_at ASC, id ASC"
+      : `sequence ${order}`;
     const rows = db
       .prepare(
         `
@@ -288,7 +384,7 @@ export async function listEvents(db: Database.Database, orgId: string, query?: E
                parent_event_id, thread_id, actor_id, required_scope_ids_json,
                direction_tags_json, weight_hints_json, attrs_json,
                occurred_at, ingested_at
-          FROM events WHERE ${clauses.join(" AND ")} ORDER BY sequence ${order}
+          FROM events WHERE ${clauses.join(" AND ")} ORDER BY ${orderBy}
           ${limit === undefined ? "" : "LIMIT ?"}
         `,
       )
@@ -384,6 +480,106 @@ export async function findBlobs(db: Database.Database, contentHashes: readonly s
     return found;
   }
 
+  export function inspectBlobInventory(
+    db: Database.Database,
+    contentHashes: readonly string[],
+  ): Map<string, BlobInventoryRecord> {
+    const unique = [...new Set(contentHashes.filter((hash) => hash.length > 0))];
+    const found = new Map<string, BlobInventoryRecord>();
+    const chunkSize = 400;
+    for (let offset = 0; offset < unique.length; offset += chunkSize) {
+      const chunk = unique.slice(offset, offset + chunkSize);
+      const rows = db.prepare(`
+        SELECT b.content_hash, b.media_type, b.byte_size, b.created_at, b.state,
+               b.generation, b.unreferenced_at, b.write_lease_expires_at,
+               COUNT(r.content_hash) AS reference_count
+        FROM blobs b
+        LEFT JOIN blob_references r ON r.content_hash = b.content_hash
+        WHERE b.content_hash IN (${chunk.map(() => "?").join(", ")})
+        GROUP BY b.content_hash
+      `).all(...chunk) as BlobInventoryRow[];
+      for (const row of rows) {
+        found.set(row.content_hash, {
+          content_hash: row.content_hash,
+          media_type: row.media_type,
+          byte_size: row.byte_size,
+          created_at: row.created_at,
+          state: row.state,
+          generation: row.generation,
+          unreferenced_at: row.unreferenced_at,
+          write_lease_expires_at: row.write_lease_expires_at,
+          reference_count: row.reference_count,
+        });
+      }
+    }
+    return found;
+  }
+
+  export function listBlobInventoryPage(
+    db: Database.Database,
+    query: BlobInventoryPageQuery,
+  ): BlobInventoryPage {
+    assertBlobInventoryPageQuery(query);
+    const rows = db.prepare(`
+      SELECT b.content_hash, b.media_type, b.byte_size, b.created_at, b.state,
+             b.generation, b.unreferenced_at, b.write_lease_expires_at,
+             COUNT(r.content_hash) AS reference_count
+      FROM blobs b
+      LEFT JOIN blob_references r ON r.content_hash = b.content_hash
+      WHERE (? IS NULL OR b.content_hash > ?)
+      GROUP BY b.content_hash
+      ORDER BY b.content_hash
+      LIMIT ?
+    `).all(query.after_hash ?? null, query.after_hash ?? null, query.limit + 1) as BlobInventoryRow[];
+    const hasMore = rows.length > query.limit;
+    const entries = rows.slice(0, query.limit).map((row) => ({
+      content_hash: row.content_hash,
+      media_type: row.media_type,
+      byte_size: row.byte_size,
+      created_at: row.created_at,
+      state: row.state,
+      generation: row.generation,
+      unreferenced_at: row.unreferenced_at,
+      write_lease_expires_at: row.write_lease_expires_at,
+      reference_count: row.reference_count,
+    }));
+    return {
+      entries,
+      next_after_hash: hasMore ? entries.at(-1)?.content_hash ?? null : null,
+    };
+  }
+
+export function backfillEventAttachmentReferences(
+  db: Database.Database,
+  input: EventAttachmentReferenceBackfill,
+): void {
+  if (!/^[a-f0-9]{64}$/.test(input.expected_content_hash) ||
+    input.attachment_hashes.some((hash) => !/^[a-f0-9]{64}$/.test(hash))) {
+    throw new Error("Invalid Event attachment reference hash");
+  }
+  db.transaction(() => {
+    const event = db.prepare(
+      `SELECT content_hash, ingested_at FROM events WHERE org_id = ? AND id = ?`,
+    ).get(input.org_id, input.event_id) as
+      | { content_hash: string | null; ingested_at: string }
+      | undefined;
+    if (!event || event.content_hash !== input.expected_content_hash) {
+      throw new Error("Event changed during attachment reference backfill");
+    }
+    for (const hash of [...new Set(input.attachment_hashes)].sort()) {
+      insertBlobRow(db, hash, "application/octet-stream", 0, event.ingested_at);
+      const protectedBlob = db.prepare(
+        `UPDATE blobs SET state = 'protected', unreferenced_at = NULL,
+           gc_claim_token = NULL, gc_started_at = NULL
+         WHERE content_hash = ? AND state IN ('available', 'protected')
+           AND write_claim_token IS NULL`,
+      ).run(hash);
+      if (protectedBlob.changes !== 1) throw new BlobReservationConflictError(hash);
+      insertBlobReference(db, input.org_id, input.event_id, "attachment", hash, event.ingested_at);
+    }
+  }).immediate();
+}
+
 export async function append(db: Database.Database, input: NewEvent): Promise<EventRecord> {
     
     return insert(db, { ...input, operation: "create" });
@@ -396,6 +592,7 @@ export async function repointContentHash(db: Database.Database, input: RepointCo
       const affectedEvents = db.prepare(
         `SELECT id, org_id FROM events WHERE content_hash = ? ORDER BY sequence`,
       ).all(input.old_content_hash) as Array<{ id: string; org_id: string }>;
+      if (affectedEvents.length === 0) return 0;
       insertBlobRow(db, 
         input.new_content_hash,
         input.content_media_type,
@@ -413,6 +610,44 @@ export async function repointContentHash(db: Database.Database, input: RepointCo
       const updated = db
         .prepare(`UPDATE events SET content_hash = ? WHERE content_hash = ?`)
         .run(input.new_content_hash, input.old_content_hash);
+      if (updated.changes > 0) {
+        const referencedHashes = new Set([
+          input.new_content_hash,
+          ...(input.extra_blobs ?? []).map((blob) => blob.content_hash),
+        ]);
+        if (input.blob_reservations) {
+          assertCompleteRepointReservations(referencedHashes, input.blob_reservations);
+          completeBlobReservations(db, input.blob_reservations, referencedHashes);
+        } else {
+          protectRepointBlobs(db, referencedHashes);
+        }
+        const eventIds = affectedEvents.map((event) => event.id);
+        const placeholders = eventIds.map(() => "?").join(", ");
+        db.prepare(
+          `DELETE FROM blob_references
+           WHERE owner_type = 'event' AND owner_id IN (${placeholders})`,
+        ).run(...eventIds);
+        for (const event of affectedEvents) {
+          insertBlobReference(
+            db,
+            event.org_id,
+            event.id,
+            "body",
+            input.new_content_hash,
+            now,
+          );
+          for (const blob of input.extra_blobs ?? []) {
+            insertBlobReference(
+              db,
+              event.org_id,
+              event.id,
+              "attachment",
+              blob.content_hash,
+              now,
+            );
+          }
+        }
+      }
       for (const event of affectedEvents) {
         enqueueContextProjection(db, event.id, event.org_id, now);
       }
@@ -420,59 +655,352 @@ export async function repointContentHash(db: Database.Database, input: RepointCo
         db
           .prepare(
             `
-              DELETE FROM blobs
+              UPDATE blobs SET unreferenced_at = ?
               WHERE content_hash = ?
-                AND content_hash NOT IN (
-                  SELECT content_hash FROM events WHERE content_hash IS NOT NULL
+                AND NOT EXISTS (
+                  SELECT 1 FROM blob_references r
+                  WHERE r.content_hash = blobs.content_hash
                 )
             `,
           )
-          .run(input.old_content_hash);
+          .run(now, input.old_content_hash);
       }
       return updated.changes;
     }).immediate();
   }
+
+function assertCompleteRepointReservations(
+  referencedHashes: ReadonlySet<string>,
+  reservations: readonly BlobReservation[],
+): void {
+  const hashes = new Set(reservations.map((reservation) => reservation.content_hash));
+  if (hashes.size !== reservations.length || hashes.size !== referencedHashes.size
+    || [...referencedHashes].some((hash) => !hashes.has(hash))) {
+    throw new Error("Content repoint reservations must exactly match its Blob references");
+  }
+}
+
+function protectRepointBlobs(db: Database.Database, referencedHashes: ReadonlySet<string>): void {
+  const protect = db.prepare(`
+    UPDATE blobs SET state = 'protected', unreferenced_at = NULL
+    WHERE content_hash = ? AND state IN ('available', 'protected') AND write_claim_token IS NULL
+  `);
+  for (const hash of referencedHashes) {
+    if (protect.run(hash).changes !== 1) {
+      throw new BlobReservationConflictError(hash);
+    }
+  }
+}
+
+export function reserveBlobWrites(
+    db: Database.Database,
+    input: ReserveBlobWritesInput,
+): BlobReservation[] {
+    const blobs = [...new Map(input.blobs.map((blob) => [blob.content_hash, blob])).values()]
+      .sort((left, right) => left.content_hash.localeCompare(right.content_hash));
+    const forceWrite = new Set(input.force_write_hashes ?? []);
+    if (!input.owner_id.trim() ||
+      !Number.isSafeInteger(input.lease_duration_ms) ||
+      input.lease_duration_ms < 1 ||
+      blobs.some((blob) =>
+        !/^[a-f0-9]{64}$/.test(blob.content_hash) ||
+        !blob.media_type.trim() ||
+        !Number.isSafeInteger(blob.byte_size) ||
+        blob.byte_size < 0) ||
+      [...forceWrite].some((hash) => !blobs.some((blob) => blob.content_hash === hash))) {
+      throw new Error("Invalid Blob reservation request");
+    }
+
+    return db.transaction(() => {
+      const now = new Date().toISOString();
+      const expiresAt = new Date(Date.now() + input.lease_duration_ms).toISOString();
+      const select = db.prepare(`
+        SELECT state, generation, write_claim_token, write_lease_expires_at
+        FROM blobs WHERE content_hash = ?
+      `);
+      const insert = db.prepare(`
+        INSERT INTO blobs (
+          content_hash, media_type, byte_size, created_at, state, generation,
+          write_lease_owner, write_claim_token, write_lease_expires_at, unreferenced_at
+        ) VALUES (?, ?, ?, ?, 'reserved', 1, ?, ?, ?, ?)
+      `);
+      const update = db.prepare(`
+        UPDATE blobs SET state = ?, generation = ?, write_lease_owner = ?,
+          write_claim_token = ?, write_lease_expires_at = ?, unreferenced_at = ?
+        WHERE content_hash = ?
+      `);
+      const clearExpiredLease = db.prepare(`
+        UPDATE blobs SET write_lease_owner = NULL, write_claim_token = NULL,
+          write_lease_expires_at = NULL
+        WHERE content_hash = ? AND write_claim_token IS NOT NULL
+      `);
+      const plans: BlobReservation[] = [];
+
+      for (const blob of blobs) {
+        const current = select.get(blob.content_hash) as {
+          state: "reserved" | "available" | "deleting" | "protected";
+          generation: number;
+          write_claim_token: string | null;
+          write_lease_expires_at: string | null;
+        } | undefined;
+        if (!current) {
+          const token = randomUUID();
+          insert.run(
+            blob.content_hash,
+            blob.media_type,
+            blob.byte_size,
+            now,
+            input.owner_id,
+            token,
+            expiresAt,
+            now,
+          );
+          plans.push({
+            content_hash: blob.content_hash,
+            generation: 1,
+            mode: "write",
+            claim_token: token,
+          });
+          continue;
+        }
+
+        const leaseActive = current.write_claim_token !== null &&
+          current.write_lease_expires_at !== null &&
+          Date.parse(current.write_lease_expires_at) > Date.now();
+        if (current.state === "deleting" || leaseActive) {
+          throw new BlobReservationConflictError(blob.content_hash);
+        }
+
+        const needsWrite = current.state === "reserved" || forceWrite.has(blob.content_hash);
+        if (needsWrite) {
+          const generation = current.generation + 1;
+          const token = randomUUID();
+          const state = current.state === "protected" ? "protected" : "reserved";
+          update.run(
+            state,
+            generation,
+            input.owner_id,
+            token,
+            expiresAt,
+            current.state === "protected" ? null : now,
+            blob.content_hash,
+          );
+          plans.push({
+            content_hash: blob.content_hash,
+            generation,
+            mode: "write",
+            claim_token: token,
+          });
+        } else {
+          if (current.write_claim_token !== null) clearExpiredLease.run(blob.content_hash);
+          plans.push({
+            content_hash: blob.content_hash,
+            generation: current.generation,
+            mode: "reuse",
+          });
+        }
+      }
+      return plans;
+    }).immediate();
+}
+
+export function releaseBlobReservations(
+    db: Database.Database,
+    reservations: readonly BlobReservation[],
+): void {
+    db.transaction(() => {
+      const release = db.prepare(`
+        UPDATE blobs SET write_lease_owner = NULL, write_claim_token = NULL,
+          write_lease_expires_at = NULL,
+          unreferenced_at = CASE
+            WHEN state = 'protected' THEN unreferenced_at
+            WHEN EXISTS (
+              SELECT 1 FROM blob_references r WHERE r.content_hash = blobs.content_hash
+            ) THEN NULL
+            ELSE COALESCE(unreferenced_at, ?)
+          END
+        WHERE content_hash = ? AND generation = ? AND write_claim_token = ?
+      `);
+      const now = new Date().toISOString();
+      for (const reservation of reservations) {
+        if (reservation.mode === "write") {
+          release.run(
+            now,
+            reservation.content_hash,
+            reservation.generation,
+            reservation.claim_token,
+          );
+        }
+      }
+    }).immediate();
+}
+
+export function completeBlobReservations(
+    db: Database.Database,
+    reservations: readonly BlobReservation[] | undefined,
+    referencedHashes: ReadonlySet<string>,
+): void {
+    const completeWrite = db.prepare(`
+      UPDATE blobs SET state = CASE WHEN state = 'protected' THEN 'protected' ELSE 'available' END,
+        write_lease_owner = NULL, write_claim_token = NULL, write_lease_expires_at = NULL,
+        unreferenced_at = NULL
+      WHERE content_hash = ? AND generation = ? AND write_claim_token = ?
+        AND state IN ('reserved', 'protected')
+        AND write_lease_expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    `);
+    const validateReuse = db.prepare(`
+      UPDATE blobs SET unreferenced_at = NULL
+      WHERE content_hash = ? AND generation = ? AND state IN ('available', 'protected')
+        AND write_claim_token IS NULL
+    `);
+    const seen = new Set<string>();
+    for (const reservation of reservations ?? []) {
+      if (seen.has(reservation.content_hash)) {
+        throw new Error("Blob reservations must contain unique hashes");
+      }
+      seen.add(reservation.content_hash);
+      if (reservation.mode === "write") {
+        if (!referencedHashes.has(reservation.content_hash) ||
+          completeWrite.run(
+            reservation.content_hash,
+            reservation.generation,
+            reservation.claim_token,
+          ).changes !== 1) {
+          throw new BlobReservationConflictError(reservation.content_hash);
+        }
+      } else if (validateReuse.run(
+        reservation.content_hash,
+        reservation.generation,
+      ).changes !== 1) {
+        throw new BlobReservationConflictError(reservation.content_hash);
+      }
+    }
+}
 
 function insertBlobRow(db: Database.Database, contentHash: string, mediaType: string | undefined, byteSize: number | undefined, createdAt: string): void {
     db
       .prepare(
         `
           INSERT OR IGNORE INTO blobs (
-            content_hash, media_type, byte_size, created_at
-          ) VALUES (?, ?, ?, ?)
+            content_hash, media_type, byte_size, created_at, state
+          ) VALUES (?, ?, ?, ?, 'protected')
         `,
       )
       .run(contentHash, mediaType ?? "application/octet-stream", byteSize ?? 0, createdAt);
   }
 
+function insertBlobReference(
+  db: Database.Database,
+  orgId: string,
+  eventId: string,
+  kind: "body" | "attachment",
+  contentHash: string,
+  createdAt: string,
+): void {
+  const eligible = db.prepare(
+    `UPDATE blobs SET unreferenced_at = NULL
+     WHERE content_hash = ? AND state IN ('available', 'protected')
+       AND write_claim_token IS NULL`,
+  ).run(contentHash);
+  if (eligible.changes !== 1) throw new BlobReservationConflictError(contentHash);
+  db.prepare(
+    `INSERT OR IGNORE INTO blob_references (
+       owner_org_id, owner_type, owner_id, reference_kind, content_hash, created_at
+     ) VALUES (?, 'event', ?, ?, ?, ?)`,
+  ).run(orgId, eventId, kind, contentHash, createdAt);
+}
+
 export function commitIngestUnlocked(db: Database.Database, request: IngestCommitRequest): EventRecord[] {
+    assertIngestDispositionBindings(request);
     if (request.appends.length === 0 && request.dispositions.length === 0) {
       return [];
     }
-    const events = request.appends.map((input) =>
-      insertWithinTransaction(db, { ...input, operation: "create" }),
+    completeBlobReservations(
+      db,
+      request.blob_reservations,
+      new Set(request.appends.flatMap((append) => [
+        ...(append.content_hash ? [append.content_hash] : []),
+        ...(append.extra_blobs ?? []).map((blob) => blob.content_hash),
+      ])),
+    );
+    const events = request.appends.map((input) => {
+      const operation = input.operation ?? "create";
+      if (operation === "tombstone") {
+        const current = findCurrent(db, input);
+        if ((current?.id ?? null) !== input.expected_head_id) {
+          throw new AuthorityConflictError();
+        }
+        return insertWithinTransaction(db, {
+          ...input,
+          operation,
+          content_hash: current?.content_hash ?? input.content_hash,
+          parent_event_id: current?.id,
+        });
+      }
+      return insertWithinTransaction(db, {
+        ...input,
+        operation,
+        ...(operation === "revise" && input.parent_event_id
+          ? { parent_event_id: input.parent_event_id }
+          : {}),
+      });
+    });
+    const eventsById = new Map(events.map((event) => [event.id, event]));
+    const appendsByEventId = new Map(
+      events.map((event, index) => [event.id, request.appends[index]]),
     );
     for (const decision of request.dispositions) {
-      putDispositionWithinTransaction(db, decision);
+      const event = eventsById.get(decision.event_id);
+      if (!event) {
+        throw new Error("Ingest disposition event was not created");
+      }
+      const append = appendsByEventId.get(event.id);
+      persistIngestionDisposition(
+        db,
+        event,
+        decision,
+        append?.parent_event_id,
+      );
     }
     return events;
   }
 
 export async function appendRevision(db: Database.Database, input: EventRevision): Promise<EventRecord> {
-    
-    return insert(db, { ...input, operation: "revise" });
+    assertEventDispositionBinding(input);
+    return db.transaction(() => {
+      completeBlobReservations(
+        db,
+        input.blob_reservations,
+        new Set([
+          input.content_hash,
+          ...(input.extra_blobs ?? []).map((blob) => blob.content_hash),
+        ]),
+      );
+      const event = insertWithinTransaction(db, { ...input, operation: "revise" });
+      if (input.disposition) {
+        persistIngestionDisposition(db, event, input.disposition, input.parent_event_id);
+      }
+      return event;
+    }).immediate();
   }
 
 export async function markTombstone(db: Database.Database, input: TombstoneEvent): Promise<EventRecord> {
-    
+    assertEventDispositionBinding(input);
     const transaction = db.transaction(() => {
       const current = findCurrent(db, input);
-      return insertWithinTransaction(db, {
+      if ((current?.id ?? null) !== input.expected_head_id) {
+        throw new AuthorityConflictError();
+      }
+      const event = insertWithinTransaction(db, {
         ...input,
         operation: "tombstone",
         content_hash: current?.content_hash,
         parent_event_id: current?.id,
       });
+      if (input.disposition) {
+        persistIngestionDisposition(db, event, input.disposition, current?.id);
+      }
+      return event;
     });
     return transaction.immediate();
   }
@@ -599,10 +1127,78 @@ function insertWithinTransaction(db: Database.Database, input: InsertEventInput)
     if (headUpdate.changes !== 1) {
       throw new AuthorityConflictError();
     }
+    if (event.content_hash) {
+      insertBlobReference(db, event.org_id, event.id, "body", event.content_hash, event.ingested_at);
+    }
+    for (const blob of input.extra_blobs ?? []) {
+      insertBlobReference(db, event.org_id, event.id, "attachment", blob.content_hash, event.ingested_at);
+    }
     enqueueContextProjection(db, event.id, event.org_id, event.ingested_at);
-    refreshThreadHeadWithinTransaction(db, event.org_id, event.thread_id);
+    const threadId = event.thread_id ?? conversationId(event.source, event.external_id, event.id);
+    if (input.expected_head_id !== null) {
+      const previous = db.prepare(`SELECT thread_id, source, external_id FROM events WHERE org_id = ? AND id = ?`)
+        .get(event.org_id, input.expected_head_id) as
+        | { thread_id: string | null; source: string; external_id: string }
+        | undefined;
+      if (previous) {
+        const previousThreadId = previous.thread_id ??
+          conversationId(previous.source, previous.external_id, input.expected_head_id);
+        if (previousThreadId !== threadId) {
+          refreshThreadHeadWithinTransaction(db, event.org_id, previousThreadId);
+        }
+      }
+    }
+    refreshThreadHeadWithinTransaction(db, event.org_id, threadId);
     return event;
   }
+
+function persistIngestionDisposition(
+  db: Database.Database,
+  event: EventRecord,
+  decision: ArrangementDecision,
+  previousEventId?: string,
+): void {
+  const saved = putDispositionWithinTransaction(db, decision);
+  const previous = previousEventId
+    ? db.prepare(`SELECT disposition FROM message_dispositions WHERE event_id = ?`)
+        .get(previousEventId) as { disposition: ArrangementDecision["disposition"] } | undefined
+    : undefined;
+  if (
+    decision.disposition !== "current_work" &&
+    previous?.disposition !== "current_work"
+  ) {
+    return;
+  }
+  const threadId =
+    event.thread_id ??
+    conversationId(event.source, event.external_id, event.id);
+  if (saved.disposition === "current_work" && event.operation !== "tombstone") {
+    unfoldCurrentWorkWithinTransaction(db, {
+      org_id: event.org_id, thread_id: threadId, event_id: event.id,
+      cause: "current_work_ingested", dedupe_id: event.id, now: event.ingested_at,
+    });
+  }
+  db.prepare(`INSERT INTO conversation_lifecycle_events (
+    id, org_id, thread_id, aggregate_type, aggregate_id, aggregate_version,
+    event_type, command_id, dedupe_key, schema_version, payload_json, occurred_at, created_at
+  ) VALUES (?, ?, ?, 'source_event', ?, 1, 'current_work_changed', NULL, ?, 1, ?, ?, ?)`)
+    .run(
+      randomUUID(),
+      event.org_id,
+      threadId,
+      event.id,
+      JSON.stringify(["source_event", event.id, 1, "current_work_changed"]),
+      JSON.stringify({
+        source: "ingestion",
+        previous: previousEventId
+          ? { event_id: previousEventId, disposition: previous?.disposition ?? null }
+          : null,
+        result: saved,
+      }),
+      decision.decided_at,
+      event.ingested_at,
+    );
+}
 
 function enqueueContextProjection(db: Database.Database, eventId: string, orgId: string, at: string): void {
     db.prepare(

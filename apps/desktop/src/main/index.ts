@@ -315,6 +315,11 @@ function sidecarEnv(
   env.REGENIC_DATABASE = database;
   env.REGENIC_BLOB_ROOT = blobRoot;
   env.REGENIC_ORG = process.env.REGENIC_ORG ?? "local-owner";
+  if (process.platform !== "win32") {
+    env.REGENIC_SIDECAR_PARENT_PID = String(process.pid);
+  } else {
+    delete env.REGENIC_SIDECAR_PARENT_PID;
+  }
   env.PORT = String(port);
   env.LISTEN_HOST = "127.0.0.1";
   if (personalApiKey) {

@@ -95,11 +95,14 @@ describe("accepted thread summary retriever", () => {
 
   it("fails closed when an accepted summary body no longer matches its immutable manifest", async () => {
     const artifacts = new MemoryContextArtifactStore();
-    const blobs = new MemoryBlobStore();
     const value = artifact();
     await artifacts.putArtifact(value);
     await artifacts.decideArtifact({ org_id: "example-org", artifact_id: value.id, status: "accepted", decided_at: "2026-09-05T00:02:00.000Z" });
-    await blobs.put(value.body_hash, Buffer.from(canonicalContextJson({ changed: true })), "application/vnd.regenic.context-artifact+json");
+    const blobs = {
+      async get() {
+        return Buffer.from(canonicalContextJson({ changed: true }));
+      },
+    };
 
     await assert.rejects(
       new AcceptedThreadSummaryRetriever(artifacts, blobs).retrieve(plan()),

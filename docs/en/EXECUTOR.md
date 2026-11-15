@@ -210,6 +210,11 @@ A remote executor implements these three calls. The kernel forwards
 | GET | `/v1/runs/:id` | — | Same |
 | POST | `/v1/runs/:id/resume` | `work_item_id`, `recipe_id`, `answer` | Same |
 
+Start must return a non-empty `external_run_id`; otherwise its outcome remains
+uncertain. Status, resume, and cancel require a previously recorded external
+run ID and never substitute the local run ID. Their responses may omit the ID,
+in which case the requested external ID is retained.
+
 `status` is `running` / `waiting_human` / `completed` / `failed` /
 `cancelled`. Missing or unknown statuses raise protocol errors; status polling lets the recorded job
 stay running. The Bearer token comes from the environment variable named

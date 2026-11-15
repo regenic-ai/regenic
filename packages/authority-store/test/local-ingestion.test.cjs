@@ -61,6 +61,428 @@ async function createRoot() {
 }
 
 describe("local ingestion persistence", () => {
+  it("protects pre-reference blob rows during the schema migration", async () => {
+    const root = await createRoot();
+    const path = join(root, "legacy-authority.db");
+    const legacy = new Database(path);
+    legacy.function("conversation_id", (source, externalId, fallbackId) =>
+      conversationId(source, externalId, fallbackId));
+    try {
+      for (const migration of MIGRATIONS.filter(({ version }) => version <= 71)) {
+        legacy.exec(migration.sql);
+      }
+      legacy.prepare(
+        `INSERT INTO blobs (content_hash, media_type, byte_size, created_at)
+         VALUES (?, 'text/plain', 3, ?)`,
+      ).run("e".repeat(64), "2026-08-24T00:00:00.000Z");
+      legacy.pragma("user_version = 71");
+    } finally {
+      legacy.close();
+    }
+
+    const store = new SqliteAuthorityStore(path);
+    const inspect = new Database(path);
+    try {
+      assert.equal(store.schemaVersion, LATEST_SCHEMA_VERSION);
+      assert.equal(
+        inspect.prepare(`SELECT state FROM blobs WHERE content_hash = ?`).get("e".repeat(64)).state,
+        "protected",
+      );
+    } finally {
+      inspect.close();
+      store.close();
+    }
+  });
+
+  it("records event body and attachment references atomically", async () => {
+    const root = await createRoot();
+    const path = join(root, "authority.db");
+    const store = new SqliteAuthorityStore(path);
+    const inspect = new Database(path);
+    const bodyHash = "a".repeat(64);
+    const attachmentHash = "b".repeat(64);
+    const event = {
+      id: "blob-reference-event",
+      org_id: "local-owner",
+      source: "synthetic",
+      external_id: "blob-reference-source",
+      content_hash: bodyHash,
+      content_media_type: "application/vnd.regenic.content-parts+json",
+      content_byte_size: 10,
+      extra_blobs: [{
+        content_hash: attachmentHash,
+        media_type: "image/png",
+        byte_size: 4,
+      }],
+      occurred_at: "2026-08-24T00:00:00.000Z",
+      expected_head_id: null,
+    };
+    try {
+      await store.commitIngest({ appends: [event], dispositions: [] });
+      assert.deepEqual(
+        inspect.prepare(
+          `SELECT reference_kind, content_hash FROM blob_references
+           WHERE owner_org_id = ? AND owner_type = 'event' AND owner_id = ?
+           ORDER BY reference_kind`,
+        ).all(event.org_id, event.id),
+        [
+          { reference_kind: "attachment", content_hash: attachmentHash },
+          { reference_kind: "body", content_hash: bodyHash },
+        ],
+      );
+      assert.deepEqual(
+        inspect.prepare(
+          `SELECT content_hash, state FROM blobs WHERE content_hash IN (?, ?) ORDER BY content_hash`,
+        ).all(attachmentHash, bodyHash),
+        [
+          { content_hash: bodyHash, state: "protected" },
+          { content_hash: attachmentHash, state: "protected" },
+        ],
+      );
+
+      const newBodyHash = "c".repeat(64);
+      const newAttachmentHash = "d".repeat(64);
+      assert.equal(await store.repointContentHash({
+        old_content_hash: bodyHash,
+        new_content_hash: newBodyHash,
+        content_media_type: "application/vnd.regenic.content-parts+json",
+        content_byte_size: 12,
+        extra_blobs: [{
+          content_hash: newAttachmentHash,
+          media_type: "image/png",
+          byte_size: 5,
+        }],
+      }), 1);
+      assert.deepEqual(
+        inspect.prepare(
+          `SELECT reference_kind, content_hash FROM blob_references
+           WHERE owner_org_id = ? AND owner_type = 'event' AND owner_id = ?
+           ORDER BY reference_kind`,
+        ).all(event.org_id, event.id),
+        [
+          { reference_kind: "attachment", content_hash: newAttachmentHash },
+          { reference_kind: "body", content_hash: newBodyHash },
+        ],
+      );
+      assert.notEqual(
+        inspect.prepare(`SELECT unreferenced_at FROM blobs WHERE content_hash = ?`).get(bodyHash)
+          .unreferenced_at,
+        null,
+      );
+
+      inspect.exec(`
+        CREATE TRIGGER reject_attachment_blob_reference
+        BEFORE INSERT ON blob_references
+        WHEN NEW.reference_kind = 'attachment'
+        BEGIN
+          SELECT RAISE(ABORT, 'injected blob reference failure');
+        END
+      `);
+      const rejected = {
+        ...event,
+        id: "blob-reference-rollback",
+        external_id: "blob-reference-rollback",
+        content_hash: "e".repeat(64),
+        extra_blobs: [{
+          content_hash: "f".repeat(64),
+          media_type: "image/png",
+          byte_size: 4,
+        }],
+      };
+      await assert.rejects(
+        store.commitIngest({ appends: [rejected], dispositions: [] }),
+        /injected blob reference failure/,
+      );
+      assert.equal(await store.getEvent(rejected.org_id, rejected.id), null);
+      assert.equal(
+        inspect.prepare(`SELECT COUNT(*) AS count FROM blobs WHERE content_hash IN (?, ?)`)
+          .get("e".repeat(64), "f".repeat(64)).count,
+        0,
+      );
+
+      await store.clearOperationalData(event.org_id, "2026-08-25T00:00:00.000Z");
+      assert.equal(
+        inspect.prepare(`SELECT COUNT(*) AS count FROM blob_references WHERE owner_org_id = ?`)
+          .get(event.org_id).count,
+        0,
+      );
+      assert.notEqual(
+        inspect.prepare(`SELECT unreferenced_at FROM blobs WHERE content_hash = ?`)
+          .get(newBodyHash).unreferenced_at,
+        null,
+      );
+    } finally {
+      inspect.close();
+      store.close();
+    }
+  });
+
+  it("commits compaction reservations with the Event reference repoint", async () => {
+    const root = await createRoot();
+    const store = new SqliteAuthorityStore(join(root, "authority.db"));
+    const inspect = new Database(join(root, "authority.db"));
+    const oldHash = "a".repeat(64);
+    const newBodyHash = "c".repeat(64);
+    const newAttachmentHash = "d".repeat(64);
+    try {
+      await store.commitIngest({
+        appends: [{
+          id: "compaction-reservation-event",
+          org_id: "local-owner",
+          source: "synthetic",
+          external_id: "compaction-reservation-source",
+          content_hash: oldHash,
+          content_media_type: "application/vnd.regenic.content-parts+json",
+          content_byte_size: 10,
+          occurred_at: "2026-08-24T00:00:00.000Z",
+          expected_head_id: null,
+        }],
+        dispositions: [],
+      });
+      const reservations = await store.reserveBlobWrites({
+        owner_id: "content-compactor",
+        lease_duration_ms: 60_000,
+        blobs: [
+          { content_hash: newBodyHash, media_type: "application/vnd.regenic.content-parts+json", byte_size: 12 },
+          { content_hash: newAttachmentHash, media_type: "image/png", byte_size: 5 },
+        ],
+      });
+      assert.equal(await store.repointContentHash({
+        old_content_hash: oldHash,
+        new_content_hash: newBodyHash,
+        content_media_type: "application/vnd.regenic.content-parts+json",
+        content_byte_size: 12,
+        extra_blobs: [{ content_hash: newAttachmentHash, media_type: "image/png", byte_size: 5 }],
+        blob_reservations: reservations,
+      }), 1);
+      assert.deepEqual(
+        inspect.prepare(
+          `SELECT reference_kind, content_hash FROM blob_references
+           WHERE owner_type = 'event' AND owner_id = ? ORDER BY reference_kind`,
+        ).all("compaction-reservation-event"),
+        [
+          { reference_kind: "attachment", content_hash: newAttachmentHash },
+          { reference_kind: "body", content_hash: newBodyHash },
+        ],
+      );
+      assert.deepEqual(
+        inspect.prepare(`SELECT content_hash, state FROM blobs WHERE content_hash IN (?, ?) ORDER BY content_hash`)
+          .all(newAttachmentHash, newBodyHash),
+        [
+          { content_hash: newBodyHash, state: "available" },
+          { content_hash: newAttachmentHash, state: "available" },
+        ],
+      );
+    } finally {
+      inspect.close();
+      store.close();
+    }
+  });
+
+  it("uses a fenced reservation and releases it after a failed owner commit", async () => {
+    const root = await createRoot();
+    const path = join(root, "authority.db");
+    const { authorityStore, blobStore, service } = await createHarness(root);
+    const inspect = new Database(path);
+    try {
+      inspect.exec(`
+        CREATE TRIGGER reject_reserved_blob_reference
+        BEFORE INSERT ON blob_references
+        BEGIN
+          SELECT RAISE(ABORT, 'injected reservation commit failure');
+        END
+      `);
+      await assert.rejects(
+        service.ingest(createBatch()),
+        /injected reservation commit failure/,
+      );
+      const failedReservation = inspect
+        .prepare(`SELECT content_hash, state, generation, write_claim_token FROM blobs`)
+        .get();
+      assert.equal(failedReservation.state, "reserved");
+      assert.equal(failedReservation.generation, 1);
+      assert.equal(failedReservation.write_claim_token, null);
+      assert.equal(await blobStore.exists(failedReservation.content_hash), true);
+
+      inspect.exec("DROP TRIGGER reject_reserved_blob_reference");
+      const result = await service.ingest(createBatch());
+      assert.equal(result.valid, true);
+      assert.equal(result.records[0].status, "accepted");
+      assert.deepEqual(
+        inspect.prepare(
+          `SELECT state, generation, write_claim_token FROM blobs WHERE content_hash = ?`,
+        ).get(failedReservation.content_hash),
+        { state: "available", generation: 2, write_claim_token: null },
+      );
+      assert.equal(
+        inspect.prepare(
+          `SELECT COUNT(*) AS count FROM blob_references WHERE content_hash = ?`,
+        ).get(failedReservation.content_hash).count,
+        1,
+      );
+    } finally {
+      inspect.close();
+      authorityStore.close();
+    }
+  });
+
+  it("can add references to a verified protected legacy Blob without unprotecting it", async () => {
+    const root = await createRoot();
+    const { authorityStore, blobStore, service } = await createHarness(root);
+    const body = Buffer.from("Persistent body.", "utf8");
+    const { createHash } = require("node:crypto");
+    const hash = createHash("sha256").update(body).digest("hex");
+    const inspect = new Database(join(root, "authority.db"));
+    try {
+      await blobStore.put(hash, body, "text/plain");
+      await authorityStore.commitIngest({
+        appends: [{
+          id: "legacy-protected-event",
+          org_id: "local-owner",
+          source: "legacy",
+          external_id: "legacy-protected-event",
+          content_hash: hash,
+          content_media_type: "text/plain",
+          content_byte_size: body.byteLength,
+          occurred_at: "2026-08-24T00:00:00.000Z",
+          expected_head_id: null,
+        }],
+        dispositions: [],
+      });
+
+      const result = await service.ingest(createBatch({
+        external_id: "new-reference-to-legacy-blob",
+      }));
+      assert.equal(result.valid, true);
+      assert.deepEqual(
+        inspect.prepare(`SELECT state FROM blobs WHERE content_hash = ?`).get(hash),
+        { state: "protected" },
+      );
+      assert.equal(
+        inspect.prepare(
+          `SELECT COUNT(*) AS count FROM blob_references WHERE content_hash = ?`,
+        ).get(hash).count,
+        2,
+      );
+    } finally {
+      inspect.close();
+      authorityStore.close();
+    }
+  });
+
+  it("repairs stale current-work thread projections when upgrading version 69", async () => {
+    const root = await createRoot();
+    const path = join(root, "authority.db");
+    const { authorityStore: store } = await createHarness(root);
+    const now = "2026-08-24T00:00:00.000Z";
+    const decision = (id) => ({
+      event_id: id, org_id: "local-owner", disposition: "current_work",
+      layer: "L1_event", reason_codes: [], score: 1, decided_at: now,
+    });
+    const append = (id, thread) => ({
+      id, org_id: "local-owner", source: "synthetic", external_id: id, thread_id: thread,
+      content_hash: "a".repeat(64), content_media_type: "text/plain", content_byte_size: 1,
+      occurred_at: now, expected_head_id: null,
+    });
+    const first = append("old", "stale-thread");
+    const aliasFirst = append("alias-old", "alias-thread");
+    try {
+      for (const event of [first, aliasFirst, append("live", "live-thread")]) {
+        await store.commitIngest({ appends: [event], dispositions: [decision(event.id)] });
+      }
+      await store.bindSourceIdentityAliases({
+        org_id: "local-owner", event_id: aliasFirst.id,
+        aliases: [{ source: "synthetic", external_id: "alias-extra" }],
+      });
+      for (const event of [first, aliasFirst]) {
+        const id = `${event.id}-deleted`;
+        await store.markTombstone({
+          id, org_id: event.org_id, source: event.source, external_id: event.external_id,
+          thread_id: event.thread_id, expected_head_id: event.id, occurred_at: now,
+          disposition: decision(id),
+        });
+      }
+    } finally {
+      store.close();
+    }
+    const legacy = new Database(path);
+    try {
+      legacy.prepare("UPDATE thread_heads SET has_current_work = 1 WHERE thread_id = ?").run("stale-thread");
+      legacy.exec("ALTER TABLE connector_cursors DROP COLUMN lease_claim_token;");
+      legacy.exec("ALTER TABLE work_runs DROP COLUMN hide_on_success;");
+      legacy.exec("ALTER TABLE work_runs DROP COLUMN completion_policy_version;");
+      legacy.exec("DROP TABLE blob_references;");
+      legacy.exec("DROP INDEX blobs_gc_candidate_idx;");
+      for (const column of [
+        "gc_started_at",
+        "gc_claim_token",
+        "unreferenced_at",
+        "write_lease_expires_at",
+        "write_claim_token",
+        "write_lease_owner",
+        "generation",
+        "state",
+      ]) {
+        legacy.exec(`ALTER TABLE blobs DROP COLUMN ${column};`);
+      }
+      legacy.pragma("user_version = 69");
+    } finally {
+      legacy.close();
+    }
+    const reopened = new SqliteAuthorityStore(path);
+    const inspect = new Database(path);
+    try {
+      assert.equal(reopened.schemaVersion, LATEST_SCHEMA_VERSION);
+      assert.deepEqual(inspect.prepare("SELECT thread_id, has_current_work FROM thread_heads ORDER BY thread_id").all(), [
+        { thread_id: "alias-thread", has_current_work: 1 },
+        { thread_id: "live-thread", has_current_work: 1 },
+        { thread_id: "stale-thread", has_current_work: 0 },
+      ]);
+      assert.equal((await reopened.summarizeInbox("local-owner")).count, 2);
+      assert.equal((await reopened.getDisposition("old-deleted")).disposition, "current_work");
+      assert.equal((await reopened.findBySourceIdentity({
+        org_id: "local-owner", source: "synthetic", external_id: "alias-extra",
+      })).id, aliasFirst.id);
+    } finally {
+      inspect.close();
+      reopened.close();
+    }
+  });
+
+  it("rolls back head changes when the old conversation projection cannot refresh", async () => {
+    const root = await createRoot();
+    const { authorityStore: store } = await createHarness(root);
+    const inspect = new Database(join(root, "authority.db"));
+    const now = "2026-08-24T00:00:00.000Z";
+    const input = {
+      id: "projection-first", org_id: "local-owner", source: "synthetic", external_id: "projection-source",
+      thread_id: "projection-old", content_hash: "a".repeat(64), content_media_type: "text/plain",
+      content_byte_size: 1, occurred_at: now, expected_head_id: null,
+    };
+    try {
+      await store.commitIngest({
+        appends: [input],
+        dispositions: [{
+          event_id: input.id, org_id: input.org_id, disposition: "current_work", layer: "L1_event",
+          reason_codes: [], score: 1, decided_at: now,
+        }],
+      });
+      inspect.exec(`CREATE TRIGGER reject_old_projection
+        BEFORE UPDATE ON thread_heads WHEN OLD.thread_id = 'projection-old'
+        BEGIN SELECT RAISE(ABORT, 'projection unavailable'); END`);
+      await assert.rejects(store.appendRevision({
+        ...input, id: "projection-next", thread_id: "projection-new",
+        parent_event_id: input.id, expected_head_id: input.id,
+      }), /projection unavailable/);
+      assert.equal((await store.findBySourceIdentity(input)).id, input.id);
+      assert.equal(await store.getEvent(input.org_id, "projection-next"), null);
+      assert.equal((await store.summarizeInbox(input.org_id)).count, 1);
+    } finally {
+      inspect.close();
+      store.close();
+    }
+  });
+
   it("upgrades rejection support without reclassifying existing attempt states or losing receipts", async () => {
     const root = await createRoot();
     const path = join(root, "authority.db");
@@ -109,8 +531,99 @@ describe("local ingestion persistence", () => {
       assert.deepEqual(inspected.pragma("foreign_key_check"), []);
       assert.ok(inspected.prepare("SELECT name FROM sqlite_master WHERE name = 'outbound_attempts_event_idx'").get());
       assert.equal(inspected.prepare("SELECT name FROM sqlite_master WHERE name = 'outbound_attempts_next'").get(), undefined);
+      assert.equal(inspected.prepare(`
+        SELECT state FROM blobs WHERE content_hash = ?
+      `).get("a".repeat(64)).state, "protected");
+      assert.equal(inspected.prepare(`
+        SELECT COUNT(*) AS count FROM blob_references
+        WHERE owner_type = 'outbound_attempt' AND reference_kind = 'reply_recovery'
+          AND content_hash = ?
+      `).get("a".repeat(64)).count, states.length);
     } finally {
       inspected.close();
+    }
+  });
+
+  it("fences outbound recovery references with the attempt owner transaction", async () => {
+    const root = await createRoot();
+    const path = join(root, "authority.db");
+    const store = new SqliteAuthorityStore(path);
+    const inspect = new Database(path);
+    const now = "2026-08-25T00:00:00.000Z";
+    const metadata = (content_hash) => ({
+      content_hash,
+      media_type: "application/vnd.regenic.reply-recovery+json",
+      byte_size: 12,
+    });
+    const reserve = (content_hash) => store.reserveBlobWrites({
+      owner_id: `reply-${content_hash}`,
+      lease_duration_ms: 60_000,
+      blobs: [metadata(content_hash)],
+    });
+    try {
+      const firstHash = "a".repeat(64);
+      const [first] = await reserve(firstHash);
+      assert.equal(await store.claimOutboundAttempt({
+        org_id: "local-owner",
+        client_request_id: "recovery",
+        thread_id: "feishu:oc_1",
+        recovery_hash: firstHash,
+        blob_reservations: [first],
+        now,
+      }), true);
+      assert.deepEqual(inspect.prepare(`
+        SELECT owner_org_id, owner_type, owner_id, reference_kind, content_hash
+        FROM blob_references WHERE owner_type = 'outbound_attempt'
+      `).get(), {
+        owner_org_id: "local-owner",
+        owner_type: "outbound_attempt",
+        owner_id: "recovery",
+        reference_kind: "reply_recovery",
+        content_hash: firstHash,
+      });
+
+      const secondHash = "b".repeat(64);
+      const [second] = await reserve(secondHash);
+      await store.putOutboundAttempt({
+        org_id: "local-owner",
+        client_request_id: "recovery",
+        thread_id: "feishu:oc_1",
+        status: "accepted",
+        recovery_hash: secondHash,
+        blob_reservations: [second],
+        now: "2026-08-25T00:01:00.000Z",
+      });
+      assert.deepEqual(inspect.prepare(`
+        SELECT content_hash FROM blob_references
+        WHERE owner_type = 'outbound_attempt' AND owner_id = 'recovery'
+      `).all(), [{ content_hash: secondHash }]);
+      assert.equal(inspect.prepare(`
+        SELECT unreferenced_at FROM blobs WHERE content_hash = ?
+      `).get(firstHash).unreferenced_at, "2026-08-25T00:01:00.000Z");
+
+      const staleHash = "c".repeat(64);
+      const [stale] = await reserve(staleHash);
+      await store.releaseBlobReservations([stale]);
+      const [current] = await reserve(staleHash);
+      const staleAttempt = {
+        org_id: "local-owner",
+        client_request_id: "stale-reservation",
+        thread_id: "feishu:oc_1",
+        recovery_hash: staleHash,
+        now,
+      };
+      await assert.rejects(store.claimOutboundAttempt({
+        ...staleAttempt,
+        blob_reservations: [stale],
+      }), /reservation/i);
+      assert.equal(await store.getOutboundAttempt("local-owner", "stale-reservation"), null);
+      assert.equal(await store.claimOutboundAttempt({
+        ...staleAttempt,
+        blob_reservations: [current],
+      }), true);
+    } finally {
+      inspect.close();
+      store.close();
     }
   });
 
@@ -151,6 +664,204 @@ describe("local ingestion persistence", () => {
     }
   });
 
+  it("protects and references an existing recovery Blob during schema 73", async () => {
+    const root = await createRoot();
+    const path = join(root, "authority.db");
+    const legacy = new Database(path);
+    legacy.function("conversation_id", (source, externalId, fallbackId) =>
+      conversationId(source, externalId, fallbackId));
+    for (const migration of MIGRATIONS.filter((migration) => migration.version <= 72)) {
+      legacy.exec(migration.sql);
+      legacy.pragma(`user_version = ${migration.version}`);
+    }
+    const hash = "d".repeat(64);
+    const now = "2026-08-25T00:00:00.000Z";
+    legacy.prepare(`
+      INSERT INTO blobs (
+        content_hash, media_type, byte_size, created_at, state, generation,
+        unreferenced_at, gc_claim_token, gc_started_at
+      ) VALUES (?, ?, ?, ?, 'available', 1, ?, 'old-gc-claim', ?)
+    `).run(hash, "application/octet-stream", 12, now, now, now);
+    legacy.prepare(`
+      INSERT INTO outbound_attempts (
+        org_id, client_request_id, thread_id, status, recovery_hash, created_at, updated_at
+      ) VALUES (?, ?, ?, 'sent', ?, ?, ?)
+    `).run("local-owner", "legacy-recovery", "feishu:oc_1", hash, now, now);
+    legacy.close();
+
+    const store = new SqliteAuthorityStore(path);
+    const inspect = new Database(path);
+    try {
+      assert.equal(store.schemaVersion, LATEST_SCHEMA_VERSION);
+      assert.deepEqual(inspect.prepare(`
+        SELECT owner_org_id, owner_type, owner_id, reference_kind, content_hash
+        FROM blob_references WHERE owner_id = 'legacy-recovery'
+      `).get(), {
+        owner_org_id: "local-owner",
+        owner_type: "outbound_attempt",
+        owner_id: "legacy-recovery",
+        reference_kind: "reply_recovery",
+        content_hash: hash,
+      });
+      assert.deepEqual(inspect.prepare(`
+        SELECT state, unreferenced_at, gc_claim_token, gc_started_at
+        FROM blobs WHERE content_hash = ?
+      `).get(hash), {
+        state: "protected",
+        unreferenced_at: null,
+        gc_claim_token: null,
+        gc_started_at: null,
+      });
+    } finally {
+      inspect.close();
+      store.close();
+    }
+  });
+
+  it("backfills and protects historical Event body references during schema 74", async () => {
+    const root = await createRoot();
+    const path = join(root, "authority.db");
+    const legacy = new Database(path);
+    legacy.function("conversation_id", (source, externalId, fallbackId) =>
+      conversationId(source, externalId, fallbackId));
+    for (const migration of MIGRATIONS.filter(({ version }) => version <= 71)) {
+      legacy.exec(migration.sql);
+    }
+    const hash = "b".repeat(64);
+    const now = "2026-08-25T00:00:00.000Z";
+    legacy.prepare(`
+      INSERT INTO blobs (content_hash, media_type, byte_size, created_at)
+      VALUES (?, 'text/plain', 8, ?)
+    `).run(hash, now);
+    legacy.prepare(`
+      INSERT INTO events (
+        id, org_id, source, external_id, operation, content_hash, occurred_at, ingested_at
+      ) VALUES (?, ?, ?, ?, 'create', ?, ?, ?)
+    `).run("legacy-event", "local-owner", "synthetic", "legacy-event", hash, now, now);
+    legacy.pragma("user_version = 71");
+    legacy.close();
+
+    const store = new SqliteAuthorityStore(path);
+    const inspect = new Database(path);
+    try {
+      assert.equal(store.schemaVersion, LATEST_SCHEMA_VERSION);
+      assert.deepEqual(inspect.prepare(`
+        SELECT owner_org_id, owner_type, owner_id, reference_kind, content_hash
+        FROM blob_references WHERE owner_id = 'legacy-event'
+      `).get(), {
+        owner_org_id: "local-owner",
+        owner_type: "event",
+        owner_id: "legacy-event",
+        reference_kind: "body",
+        content_hash: hash,
+      });
+      assert.deepEqual(inspect.prepare(`
+        SELECT state, unreferenced_at, gc_claim_token, gc_started_at
+        FROM blobs WHERE content_hash = ?
+      `).get(hash), {
+        state: "protected",
+        unreferenced_at: null,
+        gc_claim_token: null,
+        gc_started_at: null,
+      });
+    } finally {
+      inspect.close();
+      store.close();
+    }
+  });
+
+  it("backfills legacy ContextArtifact body and evidence references during schema 75", async () => {
+    const root = await createRoot();
+    const path = join(root, "authority.db");
+    const legacy = new Database(path);
+    legacy.function("conversation_id", (source, externalId, fallbackId) =>
+      conversationId(source, externalId, fallbackId));
+    for (const migration of MIGRATIONS.filter(({ version }) => version <= 74)) {
+      legacy.exec(migration.sql);
+    }
+    const bodyHash = "c".repeat(64);
+    const evidenceHash = "f".repeat(64);
+    const manifestHash = "a".repeat(64);
+    const now = "2026-08-26T00:00:00.000Z";
+    legacy.prepare(`
+      INSERT INTO blobs (
+        content_hash, media_type, byte_size, created_at, state, generation,
+        unreferenced_at, gc_claim_token, gc_started_at
+      ) VALUES (?, 'application/octet-stream', 32, ?, 'available', 2, ?, 'old-claim', ?)
+    `).run(evidenceHash, now, now, now);
+    const insertArtifact = legacy.prepare(`
+      INSERT INTO context_artifacts (
+        org_id, id, kind, status, generation, recorded_at, payload_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    `);
+    insertArtifact.run("local-owner", "legacy-external-artifact", "thread_summary",
+      "accepted", "generation-1", now, JSON.stringify({
+        org_id: "local-owner",
+        id: "legacy-external-artifact",
+        body_hash: bodyHash,
+        input_refs: [{ content_hash: evidenceHash }],
+        recorded_at: now,
+      }));
+    insertArtifact.run("local-owner", "legacy-manifest-artifact", "thread_summary",
+      "accepted", "generation-1", now, JSON.stringify({
+        org_id: "local-owner",
+        id: "legacy-manifest-artifact",
+        body_hash: manifestHash,
+        body_storage: "artifact",
+        input_refs: [],
+        recorded_at: now,
+      }));
+    legacy.pragma("user_version = 74");
+    legacy.close();
+
+    const store = new SqliteAuthorityStore(path);
+    const inspect = new Database(path);
+    try {
+      assert.equal(store.schemaVersion, LATEST_SCHEMA_VERSION);
+      assert.deepEqual(inspect.prepare(`
+        SELECT owner_id, reference_kind, content_hash
+        FROM blob_references
+        WHERE owner_type = 'context_artifact'
+        ORDER BY owner_id, reference_kind
+      `).all(), [
+        {
+          owner_id: "legacy-external-artifact",
+          reference_kind: "artifact_body",
+          content_hash: bodyHash,
+        },
+        {
+          owner_id: "legacy-external-artifact",
+          reference_kind: "evidence",
+          content_hash: evidenceHash,
+        },
+      ]);
+      assert.equal(inspect.prepare("SELECT 1 FROM blobs WHERE content_hash = ?").get(manifestHash), undefined);
+      assert.deepEqual(inspect.prepare(`
+        SELECT content_hash, state, unreferenced_at, gc_claim_token, gc_started_at
+        FROM blobs
+        WHERE content_hash IN (?, ?) ORDER BY content_hash
+      `).all(evidenceHash, bodyHash), [
+        {
+          content_hash: bodyHash,
+          state: "protected",
+          unreferenced_at: null,
+          gc_claim_token: null,
+          gc_started_at: null,
+        },
+        {
+          content_hash: evidenceHash,
+          state: "protected",
+          unreferenced_at: null,
+          gc_claim_token: null,
+          gc_started_at: null,
+        },
+      ]);
+    } finally {
+      inspect.close();
+      store.close();
+    }
+  });
+
   it("migrates a new SQLite authority database", async () => {
     const root = await createRoot();
     const { authorityStore } = await createHarness(root);
@@ -163,8 +874,24 @@ describe("local ingestion persistence", () => {
          WHERE type = 'index' AND name = 'ingest_attempts_installation_started_idx'`,
       )
       .get();
+    const deliveryVersion = inspect
+      .prepare("PRAGMA table_info(work_deliveries)")
+      .all()
+      .find(({ name }) => name === "version");
+    const dispositionVersion = inspect
+      .prepare("PRAGMA table_info(message_dispositions)")
+      .all()
+      .find(({ name }) => name === "version");
     inspect.close();
     assert.equal(index.name, "ingest_attempts_installation_started_idx");
+    assert.deepEqual(
+      [deliveryVersion.type, deliveryVersion.notnull, deliveryVersion.dflt_value],
+      ["INTEGER", 1, "0"],
+    );
+    assert.deepEqual(
+      [dispositionVersion.type, dispositionVersion.notnull, dispositionVersion.dflt_value],
+      ["INTEGER", 1, "0"],
+    );
     authorityStore.close();
   });
 
@@ -194,6 +921,276 @@ describe("local ingestion persistence", () => {
     assert.equal(blob.media_type, "text/plain");
     assert.equal(blob.byte_size, Buffer.byteLength("Persistent body."));
     harness.authorityStore.close();
+  });
+
+  it("rolls back disposition changes when their policy-unfold audit fails", async () => {
+    const root = await createRoot();
+    const harness = await createHarness(root);
+    const inspect = new Database(join(root, "authority.db"));
+    const now = "2026-08-24T00:00:00.000Z";
+    try {
+      for (const mode of ["transition", "restore"]) {
+        const id = `event-${mode}`;
+        const thread = `thread-${mode}`;
+        await harness.authorityStore.append({
+          id, org_id: "local-owner", source: "synthetic", external_id: id, thread_id: thread,
+          content_hash: "a".repeat(64), content_media_type: "text/plain", content_byte_size: 1,
+          occurred_at: now, expected_head_id: null,
+        });
+        const initial = {
+          event_id: id, org_id: "local-owner", disposition: "outside_current_work",
+          layer: "L1_event", reason_codes: [], score: 1, decided_at: now,
+        };
+        if (mode === "transition") await harness.authorityStore.putDispositionIfAbsent(initial);
+        const expected = await harness.authorityStore.getDisposition(id);
+        await harness.authorityStore.setConversationPolicyHidden({
+          org_id: "local-owner", thread_id: thread, expected_visibility_version: 0, updated_at: now,
+        });
+        const decision = { ...initial, disposition: "current_work" };
+        const input = {
+          expected, decision, command: {
+            org_id: "local-owner", event_id: id, action: "triage", disposition: "current_work",
+            command_id: `command-${mode}`, issued_at: now,
+          },
+        };
+        inspect.exec(`CREATE TRIGGER reject_disposition_unfold
+          BEFORE INSERT ON conversation_lifecycle_events
+          WHEN NEW.event_type = 'visibility_changed'
+          BEGIN SELECT RAISE(ABORT, 'unfold audit unavailable'); END`);
+        await assert.rejects(mode === "transition"
+          ? harness.authorityStore.transitionDisposition(input)
+          : harness.authorityStore.putDispositionIfAbsent(decision), /unfold audit unavailable/);
+        assert.deepEqual(await harness.authorityStore.getDisposition(id), expected);
+        assert.equal((await harness.authorityStore.getConversationPref("local-owner", thread)).hidden, true);
+        inspect.exec("DROP TRIGGER reject_disposition_unfold");
+        if (mode === "transition") {
+          assert.equal((await harness.authorityStore.transitionDisposition(input)).outcome, "applied");
+        } else {
+          assert.equal(await harness.authorityStore.putDispositionIfAbsent(decision), true);
+        }
+        assert.equal((await harness.authorityStore.getConversationPref("local-owner", thread)).hidden, false);
+        const audit = inspect.prepare(`SELECT payload_json FROM conversation_lifecycle_events
+          WHERE org_id = ? AND thread_id = ? AND event_type = 'visibility_changed'
+            AND json_extract(payload_json, '$.cause') = ?`).get("local-owner", thread,
+          `current_work_disposition_${mode === "transition" ? "changed" : "restored"}`);
+        assert.equal(JSON.parse(audit.payload_json).cause, `current_work_disposition_${mode === "transition" ? "changed" : "restored"}`);
+      }
+    } finally {
+      inspect.close();
+      harness.authorityStore.close();
+    }
+  });
+
+  it("rolls back current-work ingestion when its policy-unfold audit fails", async () => {
+    const root = await createRoot();
+    const harness = await createHarness(root);
+    const inspect = new Database(join(root, "authority.db"));
+    const thread = "regenic:source-event-1";
+    try {
+      await harness.authorityStore.setConversationPolicyHidden({
+        org_id: "local-owner", thread_id: thread, expected_visibility_version: 0,
+        updated_at: "2026-08-24T00:00:00.000Z",
+      });
+      inspect.exec(`CREATE TRIGGER reject_unfold_audit
+        BEFORE INSERT ON conversation_lifecycle_events
+        WHEN NEW.event_type = 'visibility_changed'
+        BEGIN SELECT RAISE(ABORT, 'unfold audit unavailable'); END`);
+      await assert.rejects(harness.service.ingest(createBatch({ type: "task" })),
+        /unfold audit unavailable/);
+      assert.equal((await harness.authorityStore.getConversationPref("local-owner", thread)).hidden, true);
+      assert.equal(await harness.authorityStore.findBySourceIdentity({
+        org_id: "local-owner", source: "regenic", external_id: "source-event-1",
+      }), null);
+      inspect.exec("DROP TRIGGER reject_unfold_audit");
+      const ingested = await harness.service.ingest(createBatch({ type: "task" }));
+      const eventId = ingested.records[0].event_id;
+      assert.equal((await harness.authorityStore.getConversationPref("local-owner", thread)).hidden, false);
+      const event = inspect.prepare(`SELECT aggregate_version, payload_json FROM conversation_lifecycle_events
+        WHERE org_id = ? AND thread_id = ? AND event_type = 'visibility_changed'
+          AND json_extract(payload_json, '$.cause') = 'current_work_ingested'`).get("local-owner", thread);
+      assert.equal(event.aggregate_version, 0);
+      assert.deepEqual(JSON.parse(event.payload_json), {
+        hidden: false, hidden_reason: null, cause: "current_work_ingested", event_id: eventId,
+      });
+    } finally {
+      inspect.close();
+      harness.authorityStore.close();
+    }
+  });
+
+  it("audits current-work ingestion in the event and disposition transaction", async () => {
+    const root = await createRoot();
+    const harness = await createHarness(root);
+    const inspect = new Database(join(root, "authority.db"));
+    try {
+      const ingested = await harness.service.ingest(createBatch({ type: "task" }));
+      const eventId = ingested.records[0].event_id;
+      const decision = await harness.authorityStore.getDisposition(eventId);
+      assert.equal(decision.disposition, "current_work");
+      assert.deepEqual(inspect.prepare(`SELECT thread_id, aggregate_type, aggregate_id,
+        aggregate_version, event_type, command_id, payload_json
+        FROM conversation_lifecycle_events WHERE aggregate_id = ?`).get(eventId), {
+        thread_id: "regenic:source-event-1",
+        aggregate_type: "source_event",
+        aggregate_id: eventId,
+        aggregate_version: 1,
+        event_type: "current_work_changed",
+        command_id: null,
+        payload_json: JSON.stringify({ source: "ingestion", previous: null, result: decision }),
+      });
+
+      inspect.exec(`CREATE TRIGGER reject_ingest_lifecycle_audit
+        BEFORE INSERT ON conversation_lifecycle_events
+        WHEN NEW.aggregate_type = 'source_event' AND NEW.event_type = 'current_work_changed'
+        BEGIN SELECT RAISE(ABORT, 'ingestion audit unavailable'); END`);
+      await assert.rejects(
+        harness.service.ingest(createBatch({
+          external_id: "source-event-rollback",
+          type: "task",
+        })),
+        /ingestion audit unavailable/,
+      );
+      assert.equal(await harness.authorityStore.findBySourceIdentity({
+        org_id: "local-owner",
+        source: "regenic",
+        external_id: "source-event-rollback",
+      }), null);
+      assert.equal(inspect.prepare(`SELECT COUNT(*) AS count FROM message_dispositions
+        WHERE event_id IN (SELECT id FROM events WHERE external_id = ?)`)
+        .get("source-event-rollback").count, 0);
+    } finally {
+      inspect.close();
+      harness.authorityStore.close();
+    }
+  });
+
+  it("commits revision disposition and current-work audit with its source-head update", async () => {
+    const root = await createRoot();
+    const harness = await createHarness(root);
+    const inspect = new Database(join(root, "authority.db"));
+    try {
+      const created = await harness.service.ingest(createBatch({ type: "task" }));
+      const originalId = created.records[0].event_id;
+      inspect.exec(`CREATE TRIGGER reject_revision_lifecycle_audit
+        BEFORE INSERT ON conversation_lifecycle_events
+        WHEN NEW.aggregate_type = 'source_event'
+          AND NEW.event_type = 'current_work_changed'
+          AND NEW.aggregate_id != '${originalId}'
+        BEGIN SELECT RAISE(ABORT, 'revision audit unavailable'); END`);
+
+      await assert.rejects(harness.service.ingest(createBatch({
+        operation: "revise",
+        revision_id: "revision-current-work",
+        type: "text",
+        content: [{ role: "body", media_type: "text/plain", text: "ok" }],
+      })), /revision audit unavailable/);
+      assert.equal((await harness.authorityStore.findBySourceIdentity({
+        org_id: "local-owner",
+        source: "regenic",
+        external_id: "source-event-1",
+      })).id, originalId);
+      assert.equal(inspect.prepare(`SELECT COUNT(*) AS count FROM events
+        WHERE external_id = ?`).get("source-event-1").count, 1);
+
+      inspect.exec("DROP TRIGGER reject_revision_lifecycle_audit");
+      const revised = await harness.service.ingest(createBatch({
+        operation: "revise",
+        revision_id: "revision-current-work",
+        type: "text",
+        content: [{ role: "body", media_type: "text/plain", text: "ok" }],
+      }));
+      const next = await harness.authorityStore.findBySourceIdentity({
+        org_id: "local-owner",
+        source: "regenic",
+        external_id: "source-event-1",
+      });
+      assert.equal(revised.records[0].event_id, next.id);
+      const decision = await harness.authorityStore.getDisposition(next.id);
+      assert.equal(decision.disposition, "outside_current_work");
+      const audit = inspect.prepare(`SELECT payload_json FROM conversation_lifecycle_events
+        WHERE aggregate_id = ? AND event_type = 'current_work_changed'`).get(next.id);
+      assert.equal(JSON.parse(audit.payload_json).previous.disposition, "current_work");
+      assert.deepEqual(JSON.parse(audit.payload_json).result, decision);
+
+      inspect.exec(`CREATE TRIGGER reject_tombstone_disposition
+        BEFORE INSERT ON message_dispositions
+        WHEN NEW.event_id IN (
+          SELECT id FROM events WHERE external_id = 'source-event-1' AND operation = 'tombstone'
+        )
+        BEGIN SELECT RAISE(ABORT, 'tombstone disposition unavailable'); END`);
+      await assert.rejects(harness.service.ingest(createBatch({
+        operation: "tombstone",
+        content: undefined,
+      })), /tombstone disposition unavailable/);
+      assert.equal((await harness.authorityStore.findBySourceIdentity({
+        org_id: "local-owner",
+        source: "regenic",
+        external_id: "source-event-1",
+      })).id, next.id);
+      inspect.exec("DROP TRIGGER reject_tombstone_disposition");
+      const tombstoned = await harness.service.ingest(createBatch({
+        operation: "tombstone",
+        content: undefined,
+      }));
+      const tombstone = await harness.authorityStore.findBySourceIdentity({
+        org_id: "local-owner",
+        source: "regenic",
+        external_id: "source-event-1",
+      });
+      assert.equal(tombstoned.records[0].event_id, tombstone.id);
+      assert.equal(tombstone.operation, "tombstone");
+      assert.equal((await harness.authorityStore.getDisposition(tombstone.id)).disposition,
+        "outside_current_work");
+    } finally {
+      inspect.close();
+      harness.authorityStore.close();
+    }
+  });
+
+  it("atomically recreates a tombstoned source identity", async () => {
+    const root = await createRoot();
+    const harness = await createHarness(root);
+    const inspect = new Database(join(root, "authority.db"));
+    try {
+      const deleted = await harness.service.ingest(createBatch({
+        operation: "tombstone",
+        content: undefined,
+      }));
+      const originalTombstoneId = deleted.records[0].event_id;
+      inspect.exec(`CREATE TRIGGER reject_recreated_tombstone_disposition
+        BEFORE INSERT ON message_dispositions
+        WHEN NEW.event_id IN (
+          SELECT id FROM events
+          WHERE external_id = 'source-event-1' AND operation = 'tombstone'
+        ) AND NEW.event_id != '${originalTombstoneId}'
+        BEGIN SELECT RAISE(ABORT, 'recreated disposition unavailable'); END`);
+
+      await assert.rejects(harness.service.ingest(createBatch()), /recreated disposition unavailable/);
+      assert.equal((await harness.authorityStore.findBySourceIdentity({
+        org_id: "local-owner",
+        source: "regenic",
+        external_id: "source-event-1",
+      })).id, originalTombstoneId);
+      assert.equal(inspect.prepare(`SELECT COUNT(*) AS count FROM events
+        WHERE external_id = ?`).get("source-event-1").count, 1);
+      inspect.exec("DROP TRIGGER reject_recreated_tombstone_disposition");
+
+      const recreated = await harness.service.ingest(createBatch());
+      const events = await harness.authorityStore.listEvents("local-owner");
+      assert.equal(recreated.records[0].event_id, events.at(-1).id);
+      assert.deepEqual(events.map((event) => event.operation),
+        ["tombstone", "create", "tombstone"]);
+      assert.equal((await harness.authorityStore.findBySourceIdentity({
+        org_id: "local-owner",
+        source: "regenic",
+        external_id: "source-event-1",
+      })).id, events.at(-1).id);
+      assert.equal((await harness.authorityStore.getDisposition(events.at(-1).id))
+        .disposition, "outside_current_work");
+    } finally {
+      inspect.close();
+      harness.authorityStore.close();
+    }
   });
 
   it("lists append-only Event history in insertion order for one authority", async () => {
@@ -418,11 +1415,11 @@ describe("local ingestion persistence", () => {
     assert.equal(pref.pinned, true);
     assert.equal(pref.hidden, false);
     assert.equal(listed.length, 1);
-    await store.putConversationPref({
+    await store.setConversationVisibility({
       org_id: "local-owner",
       thread_id: "dsh:session-a",
       hidden: true,
-      hidden_reason: "human",
+      expected_version: 0,
       updated_at: "2026-08-22T00:00:30.000Z",
     });
     const folded = await store.getConversationPref("local-owner", "dsh:session-a");
@@ -940,7 +1937,7 @@ describe("local ingestion persistence", () => {
       config: { scope: "personal" },
       created_at: "2026-08-26T00:00:00.000Z",
     });
-    await authorityStore.acquireLease({
+    const lease = await authorityStore.acquireLease({
       installation_id: "keep-connector",
       stream_key: "personal",
       lease_owner: "worker-a",
@@ -960,6 +1957,7 @@ describe("local ingestion persistence", () => {
       installation_id: "keep-connector",
       stream_key: "personal",
       lease_owner: "worker-a",
+      claim_token: lease.claim_token,
       finished_at: "2026-08-26T00:00:01.000Z",
       accepted_count: 1,
       duplicate_count: 0,
@@ -972,7 +1970,7 @@ describe("local ingestion persistence", () => {
       id: "keep-recipe",
       org_id: "local-owner",
       name: "Keep me",
-      match: { record_class: "task" },
+      match: { record_class: "utterance" },
       trigger: { kind: "push", coalesce: true },
       executor_type: "dsh",
       executor_config: {},
@@ -983,6 +1981,7 @@ describe("local ingestion persistence", () => {
       created_at: "2026-08-26T00:00:00.000Z",
       updated_at: "2026-08-26T00:00:00.000Z",
     });
+    const savedRecipe = await authorityStore.getRecipe("local-owner", "keep-recipe");
     await authorityStore.putExecutorInstallation({
       id: "keep-executor",
       org_id: "local-owner",
@@ -993,17 +1992,17 @@ describe("local ingestion persistence", () => {
       created_at: "2026-08-26T00:00:00.000Z",
       updated_at: "2026-08-26T00:00:00.000Z",
     });
-    await authorityStore.putWorkItem({
-      id: "drop-work",
-      org_id: "local-owner",
-      thread_id: "regenic:source-event-1",
-      unit_key: "unit-1",
-      record_class: "utterance",
-      thread_facet: "chat",
-      status: "open",
-      created_at: "2026-08-26T00:00:00.000Z",
-      updated_at: "2026-08-26T00:00:00.000Z",
+    const createdWork = await authorityStore.createWorkItem({
+      item: {
+        id: "drop-work", org_id: "local-owner", recipe_id: "keep-recipe",
+        thread_id: "regenic:source-event-1", unit_key: "unit-1",
+        record_class: "utterance", thread_facet: "chat", status: "open",
+        created_at: "2026-08-26T00:00:00.000Z", updated_at: "2026-08-26T00:00:00.000Z",
+      },
+      recipe: savedRecipe,
+      expected_recipe: savedRecipe,
     });
+    assert.equal(createdWork.outcome, "applied");
     await authorityStore.applySyncCatalogPage({
       installation_id: "keep-connector",
       members: [
@@ -1086,5 +2085,102 @@ describe("local ingestion persistence", () => {
       [],
     );
     authorityStore.close();
+  });
+
+  it("audits and replays inbox disposition commands while fencing stale snapshots", async () => {
+    const root = await createRoot();
+    const harness = await createHarness(root);
+    try {
+      const ingested = await harness.service.ingest(createBatch());
+      const eventId = ingested.records[0].event_id;
+      const expected = await harness.authorityStore.getDisposition(eventId);
+      assert.ok(expected);
+      const decision = {
+        ...expected,
+        version: (expected.version ?? 0) + 1,
+        disposition: "pending",
+        reason_codes: [...expected.reason_codes, "human_triage"],
+        decided_at: "2026-08-26T00:01:00.000Z",
+      };
+      const input = {
+        expected,
+        decision,
+        command: {
+          org_id: expected.org_id,
+          event_id: eventId,
+          action: "triage",
+          disposition: "pending",
+          command_id: "inbox-triage-local-1",
+          issued_at: "2026-08-26T00:01:00.000Z",
+        },
+      };
+
+      assert.equal((await harness.authorityStore.transitionDisposition(input)).outcome, "applied");
+      const replay = await harness.authorityStore.transitionDisposition(input);
+      assert.equal(replay.outcome, "replayed");
+      assert.deepEqual(replay.decision, decision);
+      assert.equal((await harness.authorityStore.transitionDisposition({
+        ...input,
+        command: { ...input.command, action: "reset", disposition: undefined },
+      })).outcome, "command_conflict");
+      const resetDecision = {
+        ...decision,
+        version: (decision.version ?? 0) + 1,
+        disposition: "current_work",
+        reason_codes: ["reset"],
+        decided_at: "2026-08-26T00:02:00.000Z",
+      };
+      assert.equal((await harness.authorityStore.transitionDisposition({
+        expected: decision,
+        decision: resetDecision,
+        command: {
+          ...input.command,
+          action: "reset",
+          disposition: undefined,
+          command_id: "inbox-triage-local-reset",
+          issued_at: "2026-08-26T00:02:00.000Z",
+        },
+      })).outcome, "applied");
+      const replayAfterReset = await harness.authorityStore.transitionDisposition(input);
+      assert.equal(replayAfterReset.outcome, "replayed");
+      assert.deepEqual(replayAfterReset.decision, decision);
+      assert.equal((await harness.authorityStore.transitionDisposition({
+        ...input,
+        command: { ...input.command, command_id: "inbox-triage-local-2" },
+      })).outcome, "conflict");
+      assert.deepEqual(await harness.authorityStore.getDisposition(eventId), resetDecision);
+      const audit = new Database(join(root, "authority.db"));
+      try {
+        audit.exec(`CREATE TRIGGER reject_inbox_disposition_audit
+          BEFORE INSERT ON conversation_lifecycle_events
+          WHEN NEW.command_id = 'inbox-triage-local-fail'
+          BEGIN SELECT RAISE(ABORT, 'audit unavailable'); END`);
+        await assert.rejects(harness.authorityStore.transitionDisposition({
+          expected: resetDecision,
+          decision: { ...resetDecision, disposition: "pending" },
+          command: {
+            ...input.command,
+            disposition: "pending",
+            command_id: "inbox-triage-local-fail",
+            issued_at: "2026-08-26T00:03:00.000Z",
+          },
+        }), /audit unavailable/);
+        assert.deepEqual(await harness.authorityStore.getDisposition(eventId), resetDecision);
+        audit.exec("DROP TRIGGER reject_inbox_disposition_audit");
+        const events = audit.prepare(`SELECT event_type, command_id, aggregate_type, aggregate_id
+          FROM conversation_lifecycle_events WHERE command_id = ?`)
+          .all(input.command.command_id);
+        assert.deepEqual(events, [{
+          event_type: "current_work_changed",
+          command_id: input.command.command_id,
+          aggregate_type: "source_event",
+          aggregate_id: eventId,
+        }]);
+      } finally {
+        audit.close();
+      }
+    } finally {
+      harness.authorityStore.close();
+    }
   });
 });

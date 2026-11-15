@@ -18,6 +18,7 @@ export type InboxPrefPatch = {
   title: string | null;
   pinned: boolean;
   hidden: boolean;
+  visibility_version?: number;
   updated_at: string;
 };
 
@@ -477,6 +478,9 @@ export class InboxListStore {
         title: pref.title,
         pinned: pref.pinned,
         hidden: pref.hidden,
+        ...(pref.visibility_version !== undefined
+          ? { visibility_version: pref.visibility_version }
+          : {}),
         pref_updated_at: pref.updated_at,
       };
     }

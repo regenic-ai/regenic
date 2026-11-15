@@ -130,6 +130,7 @@ export * from "./local-connector-executor";
 export * from "./http-executor";
 export * from "./work-delivery";
 export * from "./work-policy";
+export * from "./work-transition";
 export * from "./memory-work-store";
 
 /** @unstable RFC 0001 */

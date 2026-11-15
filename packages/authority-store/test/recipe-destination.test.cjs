@@ -1,145 +1,269 @@
 const assert = require("node:assert/strict");
+const { randomUUID } = require("node:crypto");
 const { mkdtemp, rm } = require("node:fs/promises");
 const { tmpdir } = require("node:os");
 const { join } = require("node:path");
-const { afterEach, describe, it } = require("node:test");
+const { describe, it } = require("node:test");
 const Database = require("better-sqlite3");
-const { conversationId, MemoryWorkStore } = require("@regenic/domain");
+const { Client } = require("pg");
+const { MemoryWorkStore, conversationId } = require("@regenic/domain");
 const { SqliteAuthorityStore, SqliteSplitAuthorityStore } = require("../dist/sqlite");
+const { PostgresAuthorityStore } = require("../dist/postgres");
 const { LATEST_SCHEMA_VERSION, MIGRATIONS } = require("../dist/sqlite/migrations");
+const { PG_SCHEMA_VERSION, PG_MIGRATIONS, PG_BASELINE_SQL } = require("../dist/postgres/schema");
 
-const roots = [];
-afterEach(async () => {
-  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
-});
+const NOW = "2026-11-09T08:00:00.000Z";
+const ORG = "owner";
 
-async function databasePath() {
-  const root = await mkdtemp(join(tmpdir(), "regenic-recipe-destination-"));
-  roots.push(root);
-  return join(root, "authority.db");
-}
-
-function recipe() {
+function recipe(overrides = {}) {
   return {
-    id: "destination-rule", org_id: "local-owner", name: "Result delivery",
-    match: { thread_id: "test:source" }, trigger: { kind: "manual" },
-    executor_type: "test", executor_config: { prompt: "Summarize updates." },
-    can_write_back: true, write_back_thread_id: "test:results",
-    hide_on_success: false,
-    include_context: false, enabled: true,
-    created_at: "2026-09-01T00:00:00.000Z", updated_at: "2026-09-01T00:00:00.000Z",
+    id: "rule", org_id: ORG, name: "Handle work",
+    match: { record_class: "task" }, trigger: { kind: "push" },
+    executor_type: "test", executor_config: { prompt: "Handle the task." },
+    can_write_back: true, hide_on_success: false, include_context: false, enabled: true,
+    created_at: NOW, updated_at: NOW, ...overrides,
   };
 }
 
-function rawDestination(path) {
-  const db = new Database(path, { readonly: true });
-  try {
-    return db.prepare("SELECT write_back_thread_id FROM recipes WHERE id = ?")
-      .get("destination-rule").write_back_thread_id;
-  } finally {
-    db.close();
-  }
+async function openPostgres(t, beforeOpen) {
+  const admin = new Client({ connectionString: process.env.TEST_DATABASE_URL });
+  await admin.connect();
+  const schema = `s${randomUUID().replaceAll("-", "")}`;
+  let store;
+  t.after(async () => {
+    try {
+      await store?.close();
+    } finally {
+      try {
+        await admin.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
+      } finally {
+        await admin.end();
+      }
+    }
+  });
+  await admin.query(`CREATE SCHEMA ${schema}`);
+  await admin.query(`SET search_path TO ${schema}`);
+  await beforeOpen?.(admin);
+  const url = new URL(process.env.TEST_DATABASE_URL.trim());
+  url.searchParams.set("options", `-csearch_path=${schema}`);
+  store = await PostgresAuthorityStore.open(url.toString());
+  return store;
 }
 
-describe("recipe send-back destination", () => {
-  for (const [name, open] of [
-    ["SQLite", (path) => new SqliteAuthorityStore(path)],
-    ["split SQLite worker", (path) => SqliteSplitAuthorityStore.open(path)],
-  ]) {
-    it(`${name} persists insert, update, unrelated edit and clear across reopen`, async () => {
-      const path = await databasePath();
-      let store = await open(path);
-      const input = recipe();
-      try {
-        assert.equal((await store.putRecipe(input)).write_back_thread_id, "test:results");
-        assert.equal((await store.getRecipe(input.org_id, input.id)).write_back_thread_id, "test:results");
-        assert.equal((await store.getRecipe(input.org_id, input.id)).hide_on_success, false);
-        assert.equal(rawDestination(path), "test:results");
-      } finally {
-        await store.close();
-      }
-      for (const [patch, expected] of [
-        [{}, "test:results"],
-        [{ write_back_thread_id: "test:other" }, "test:other"],
-        [{ name: "Renamed" }, "test:other"],
-        [{ write_back_thread_id: undefined }, undefined],
-      ]) {
-        store = await open(path);
+const drivers = [
+  { name: "memory", open: async () => new MemoryWorkStore() },
+  { name: "sqlite", open: async (_, path) => new SqliteAuthorityStore(path) },
+  { name: "sqlite writer RPC", open: async (_, path) => SqliteSplitAuthorityStore.open(path) },
+  {
+    name: "postgres", skip: !process.env.TEST_DATABASE_URL?.trim(),
+    open: (t) => openPostgres(t),
+  },
+];
+
+for (const driver of drivers) {
+  describe(`${driver.name} recipe destination`, { skip: driver.skip }, () => {
+    it("preserves, replaces and clears the destination in reads and lists", async (t) => {
+      const root = await mkdtemp(join(tmpdir(), "regenic-recipe-target-"));
+      let store;
+      t.after(async () => {
         try {
-          const current = await store.getRecipe(input.org_id, input.id);
-          await store.putRecipe({ ...current, ...patch });
-          assert.equal((await store.getRecipe(input.org_id, input.id)).write_back_thread_id, expected);
-          assert.equal((await store.getRecipe(input.org_id, input.id)).hide_on_success, false);
-          assert.equal((await store.listRecipes(input.org_id))[0].write_back_thread_id, expected);
-          assert.equal(rawDestination(path), expected ?? null);
-          assert.deepEqual(await store.listRecipes("another-org"), []);
+          if (driver.name !== "postgres") await store?.close?.();
         } finally {
-          await store.close();
+          await rm(root, { recursive: true, force: true });
+        }
+      });
+      store = await driver.open(t, join(root, "authority.db"));
+      await store.putRecipe(recipe());
+      assert.equal((await store.getRecipe(ORG, "rule")).write_back_thread_id, undefined);
+      for (const can_write_back of [true, false]) {
+        for (const destination of ["source:results", "removed:previous-target"]) {
+          await store.putRecipe(recipe({ can_write_back, write_back_thread_id: destination }));
+          const saved = await store.getRecipe(ORG, "rule");
+          assert.equal(saved.write_back_thread_id, destination);
+          assert.equal(saved.can_write_back, can_write_back);
+          assert.equal(saved.hide_on_success, false);
+          assert.equal((await store.listRecipes(ORG))[0].write_back_thread_id, destination);
+          await store.putRecipe({ ...saved, name: "Renamed" });
+          assert.equal((await store.getRecipe(ORG, "rule")).write_back_thread_id, destination);
+          assert.equal(await store.getRecipe("other-owner", "rule"), null);
+          assert.deepEqual(await store.listRecipes("other-owner"), []);
         }
       }
-      store = await open(path);
+      await store.putRecipe(recipe());
+      assert.equal((await store.getRecipe(ORG, "rule")).write_back_thread_id, undefined);
+      assert.equal((await store.listRecipes(ORG))[0].write_back_thread_id, undefined);
+    });
+  });
+}
+
+describe("recipe destination migrations", () => {
+  it("upgrades shipped SQLite schema 58 without losing its hide setting or active run", async (t) => {
+    const root = await mkdtemp(join(tmpdir(), "regenic-shipped-schema-"));
+    const path = join(root, "authority.db");
+    let store;
+    t.after(async () => {
+      try { await store?.close(); }
+      finally { await rm(root, { recursive: true, force: true }); }
+    });
+    const db = new Database(path);
+    try {
+      db.function("conversation_id", (source, externalId, fallbackId) =>
+        conversationId(source, externalId, fallbackId));
+      for (const migration of MIGRATIONS.filter(({ version }) => version <= 58)) db.exec(migration.sql);
+      db.prepare(`INSERT INTO recipes (
+        id, org_id, name, match_json, executor_type, executor_config_json,
+        can_write_back, hide_on_success, created_at, updated_at
+      ) VALUES ('shipped-rule', ?, 'Keep visible', '{}', 'test', '{}', 0, 0, ?, ?)`).run(ORG, NOW, NOW);
+      db.prepare(`INSERT INTO work_items (
+        id, org_id, thread_id, unit_key, record_class, thread_facet, status, recipe_id, created_at, updated_at
+      ) VALUES ('shipped-work', ?, 'source:shipped', 'unit', 'task', 'ticket', 'running', 'shipped-rule', ?, ?)`)
+        .run(ORG, NOW, NOW);
+      db.prepare(`INSERT INTO work_runs (
+        id, org_id, work_item_id, recipe_id, executor_type, status, start_state, external_run_id, created_at, updated_at
+      ) VALUES ('shipped-run', ?, 'shipped-work', 'shipped-rule', 'test', 'running', 'submitted', 'external-shipped', ?, ?)`)
+        .run(ORG, NOW, NOW);
+      db.pragma("user_version = 58");
+    } finally { db.close(); }
+    store = new SqliteAuthorityStore(path);
+    assert.equal(store.schemaVersion, LATEST_SCHEMA_VERSION);
+    assert.equal((await store.getRecipe(ORG, "shipped-rule")).hide_on_success, false);
+    assert.equal((await store.getWorkItem(ORG, "shipped-work")).current_run_id, "shipped-run");
+    const run = await store.getWorkRun(ORG, "shipped-run");
+    assert.equal(run.external_run_id, "external-shipped");
+    assert.equal(run.start_state, "submitted");
+    assert.equal(run.completion_policy_version, undefined);
+    assert.equal(run.hide_on_success, undefined);
+    assert.deepEqual(await store.listWorkDeliveries(ORG), []);
+  });
+
+  it("adds the same nullable column to both schemas without backfilling guessed targets", () => {
+    assert.ok(LATEST_SCHEMA_VERSION >= 56);
+    assert.ok(PG_SCHEMA_VERSION >= 56);
+    const sql = "ALTER TABLE recipes ADD COLUMN write_back_thread_id TEXT;";
+    assert.match(MIGRATIONS.find(({ version }) => version === 57).sql, /ADD COLUMN write_back_thread_id TEXT/);
+    assert.match(PG_MIGRATIONS.find(({ version }) => version === 57).sql, /ADD COLUMN IF NOT EXISTS write_back_thread_id TEXT/);
+    assert.match(PG_BASELINE_SQL, /write_back_thread_id TEXT/);
+  });
+
+  it("upgrades SQLite v55 and preserves destinations across direct and writer restarts", async (t) => {
+    const root = await mkdtemp(join(tmpdir(), "regenic-recipe-target-upgrade-"));
+    const path = join(root, "authority.db");
+    let store;
+    t.after(async () => {
       try {
-        assert.equal((await store.getRecipe(input.org_id, input.id)).write_back_thread_id, undefined);
+        await store?.close();
       } finally {
-        await store.close();
+        await rm(root, { recursive: true, force: true });
       }
     });
-  }
+    const legacy = new Database(path);
+    try {
+      legacy.function("conversation_id", (source, externalId, fallbackId) =>
+        conversationId(source, externalId, fallbackId));
+      for (const migration of MIGRATIONS.filter(({ version }) => version <= 55)) {
+        legacy.exec(migration.sql);
+      }
+      legacy.pragma("user_version = 55");
+      legacy.prepare(`
+        INSERT INTO recipes (
+          id, org_id, name, match_json, executor_type, executor_config_json,
+          can_write_back, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run("rule", ORG, "Handle work", "{}", "test", "{}", 1, NOW, NOW);
+    } finally {
+      legacy.close();
+    }
+    store = new SqliteAuthorityStore(path);
+    assert.equal(store.schemaVersion, LATEST_SCHEMA_VERSION);
+    const historical = await store.getRecipe(ORG, "rule");
+    assert.equal(historical.write_back_thread_id, undefined);
+    assert.equal(historical.can_write_back, true);
+    assert.equal(historical.created_at, NOW);
+    await store.putRecipe(recipe({ write_back_thread_id: "source:results" }));
+    await store.close();
+    store = undefined;
+    store = await SqliteSplitAuthorityStore.open(path);
+    assert.equal((await store.getRecipe(ORG, "rule")).write_back_thread_id, "source:results");
+    await store.putRecipe(recipe({ can_write_back: false, write_back_thread_id: "removed:old-room" }));
+    await store.close();
+    store = undefined;
+    store = new SqliteAuthorityStore(path);
+    assert.equal((await store.getRecipe(ORG, "rule")).write_back_thread_id, "removed:old-room");
+    assert.equal((await store.getRecipe(ORG, "rule")).can_write_back, false);
+    await store.putRecipe(recipe());
+    await store.close();
+    store = undefined;
+    store = new SqliteAuthorityStore(path);
+    assert.equal((await store.getRecipe(ORG, "rule")).write_back_thread_id, undefined);
+    const inspect = new Database(path, { readonly: true });
+    try {
+      assert.deepEqual(inspect.pragma("foreign_key_check"), []);
+      assert.equal(inspect.prepare("SELECT write_back_thread_id FROM recipes").get().write_back_thread_id, null);
+    } finally {
+      inspect.close();
+    }
+  });
 
-  for (const existingColumn of [false, true]) {
-    it(`upgrades v56 with ${existingColumn ? "an existing destination column and value" : "legacy rows without a destination"}`, async () => {
-      const path = await databasePath();
-      const legacy = new Database(path);
-      try {
-        legacy.function("conversation_id", (source, externalId, fallbackId) =>
-          conversationId(source, externalId, fallbackId));
-        for (const migration of MIGRATIONS.filter(({ version }) => version <= 56)) {
-          legacy.exec(migration.sql);
-        }
-        legacy.pragma("user_version = 56");
-        if (existingColumn) legacy.exec("ALTER TABLE recipes ADD COLUMN write_back_thread_id TEXT");
-        const input = recipe();
-        legacy.prepare(`INSERT INTO recipes (
-          id, org_id, name, match_json, executor_type, executor_config_json, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(
-          input.id, input.org_id, input.name, JSON.stringify(input.match),
-          input.executor_type, JSON.stringify(input.executor_config), input.created_at, input.updated_at,
-        );
-        if (existingColumn) {
-          legacy.prepare("UPDATE recipes SET write_back_thread_id = ?").run("test:preserved");
-        }
-      } finally {
-        legacy.close();
-      }
-      for (let reopen = 0; reopen < 2; reopen += 1) {
-        const store = new SqliteAuthorityStore(path);
-        try {
-          assert.equal(store.schemaVersion, LATEST_SCHEMA_VERSION);
-          const saved = await store.getRecipe("local-owner", "destination-rule");
-          assert.equal(saved.write_back_thread_id, existingColumn ? "test:preserved" : undefined);
-          assert.equal(saved.hide_on_success, true);
-          assert.equal(saved.name, recipe().name);
-          assert.deepEqual(saved.match, recipe().match);
-          assert.equal(rawDestination(path), existingColumn ? "test:preserved" : null);
-        } finally {
-          store.close();
-        }
-      }
-      const inspect = new Database(path);
-      try {
-        assert.deepEqual(inspect.pragma("foreign_key_check"), []);
-      } finally {
-        inspect.close();
-      }
+  it("upgrades PostgreSQL v55 without inventing a historical destination", {
+    skip: !process.env.TEST_DATABASE_URL?.trim(),
+  }, async (t) => {
+    const store = await openPostgres(t, async (db) => {
+      const historicalSchema = PG_BASELINE_SQL
+        .replace(/CREATE TABLE conversation_lifecycle_events \([\s\S]*?CREATE UNIQUE INDEX conversation_lifecycle_events_command_unique_idx[\s\S]*?;\n/, "")
+        .replace(/CREATE TABLE conversation_lifecycle_jobs \([\s\S]*?CREATE INDEX conversation_lifecycle_jobs_org_idx[\s\S]*?;\n/, "")
+        .replace(
+          "  state TEXT NOT NULL DEFAULT 'protected'\n    CHECK (state IN ('reserved', 'available', 'deleting', 'protected')),\n  generation INTEGER NOT NULL DEFAULT 0 CHECK (generation >= 0),\n  write_lease_owner TEXT,\n  write_claim_token TEXT,\n  write_lease_expires_at TIMESTAMPTZ,\n  unreferenced_at TIMESTAMPTZ,\n  gc_claim_token TEXT,\n  gc_started_at TIMESTAMPTZ\n",
+          "",
+        )
+        .replace(
+          "  created_at TIMESTAMPTZ NOT NULL,\n);\n\nCREATE INDEX blobs_gc_candidate_idx",
+          "  created_at TIMESTAMPTZ NOT NULL\n);\n\nCREATE INDEX blobs_gc_candidate_idx",
+        )
+        .replace("CREATE INDEX blobs_gc_candidate_idx\n  ON blobs (state, unreferenced_at, content_hash);\n", "")
+        .replace(/CREATE TABLE blob_references \([\s\S]*?CREATE INDEX blob_references_owner_idx[\s\S]*?;\n/, "")
+        .replace("  write_back_thread_id TEXT,\n", "")
+        .replace("  write_back_required BOOLEAN,\n", "")
+        .replace("  trigger_kind TEXT CHECK (trigger_kind IN ('push', 'pull', 'manual')),\n", "")
+        .replace("  write_back_target_json JSONB,\n", "")
+        .replace("  executor_config_json JSONB,\n  include_context BOOLEAN,\n", "")
+        .replace("CREATE UNIQUE INDEX work_runs_org_id_idx ON work_runs (org_id, id);\n", "")
+        .replace("  lease_claim_token TEXT,\n", "")
+        .replace(
+          "  hidden_reason TEXT,\n  visibility_version INTEGER NOT NULL DEFAULT 0 CHECK (visibility_version >= 0),\n",
+          "  hidden_reason TEXT,\n",
+        )
+        .replace(
+          "  event_id TEXT PRIMARY KEY REFERENCES events(id),\n  org_id TEXT NOT NULL,\n  version INTEGER NOT NULL DEFAULT 0 CHECK (version >= 0),\n",
+          "  event_id TEXT PRIMARY KEY REFERENCES events(id),\n  org_id TEXT NOT NULL,\n",
+        )
+        .replace(
+          "  work_item_id TEXT NOT NULL REFERENCES work_items(id),\n  version INTEGER NOT NULL DEFAULT 0 CHECK (version >= 0),\n  recipe_id TEXT NOT NULL,\n",
+          "  work_item_id TEXT NOT NULL REFERENCES work_items(id),\n  recipe_id TEXT NOT NULL,\n",
+        )
+        .replace("  run_id TEXT,\n  target_json JSONB,\n", "")
+        .replace("  lease_owner TEXT,\n  claim_token TEXT,\n  cancel_requested_at TIMESTAMPTZ,\n", "")
+        .replace("  FOREIGN KEY (org_id, run_id) REFERENCES work_runs(org_id, id)", "  UNIQUE (org_id, work_item_id)")
+        .replace("CREATE UNIQUE INDEX work_deliveries_run_idx ON work_deliveries (org_id, run_id) WHERE run_id IS NOT NULL;\n", "")
+        .replace("CREATE UNIQUE INDEX work_deliveries_legacy_item_idx ON work_deliveries (org_id, work_item_id) WHERE run_id IS NULL;\n", "")
+        .replace("CREATE INDEX work_deliveries_item_idx ON work_deliveries (org_id, work_item_id, created_at, id);\n", "")
+        .replace("ALTER TABLE work_items ADD COLUMN current_run_id TEXT REFERENCES work_runs(id) DEFERRABLE INITIALLY DEFERRED;\n", "")
+        .replace("ALTER TABLE work_items ADD COLUMN acknowledged_run_id TEXT REFERENCES work_runs(id) DEFERRABLE INITIALLY DEFERRED;\n", "")
+        .replace("ALTER TABLE work_items ADD COLUMN version INTEGER NOT NULL DEFAULT 0 CHECK (version >= 0);\n", "")
+        .replace("ALTER TABLE work_items ADD COLUMN visibility_intent_version INTEGER NOT NULL DEFAULT 0 CHECK (visibility_intent_version >= 0);\n", "")
+        .replace("ALTER TABLE work_runs ADD COLUMN version INTEGER NOT NULL DEFAULT 0 CHECK (version >= 0);\n", "");
+      assert.doesNotMatch(historicalSchema, /CREATE TABLE conversation_lifecycle_(events|jobs)/);
+      await db.query(historicalSchema);
+      await db.query("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL)");
+      await db.query("INSERT INTO schema_migrations VALUES (55, $1)", [NOW]);
+      await db.query(`
+        INSERT INTO recipes (
+          id, org_id, name, match_json, executor_type, executor_config_json,
+          can_write_back, created_at, updated_at
+        ) VALUES ('rule', $1, 'Handle work', '{}', 'test', '{}', TRUE, $2, $2)
+      `, [ORG, NOW]);
     });
-  }
-
-  it("memory store preserves and clears the optional destination", async () => {
-    const store = new MemoryWorkStore();
-    const input = recipe();
-    await store.putRecipe(input);
-    assert.equal((await store.getRecipe(input.org_id, input.id)).write_back_thread_id, input.write_back_thread_id);
-    await store.putRecipe({ ...input, write_back_thread_id: undefined });
-    assert.equal((await store.listRecipes(input.org_id))[0].write_back_thread_id, undefined);
+    assert.equal((await store.getRecipe(ORG, "rule")).write_back_thread_id, undefined);
+    await store.putRecipe(recipe({ write_back_thread_id: "source:results" }));
+    assert.equal((await store.getRecipe(ORG, "rule")).write_back_thread_id, "source:results");
   });
 });

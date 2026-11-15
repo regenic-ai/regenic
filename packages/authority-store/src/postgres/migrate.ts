@@ -10,6 +10,11 @@ export async function migratePostgresAuthority(pool: Pool): Promise<void> {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    await client.query(
+      `SELECT pg_advisory_xact_lock(hashtextextended(
+        jsonb_build_array('regenic-authority-migration', current_schema())::text, 0
+      ))`,
+    );
     await client.query(`
       CREATE TABLE IF NOT EXISTS schema_migrations (
         version INTEGER PRIMARY KEY,

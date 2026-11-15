@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { Inject, Injectable } from "@nestjs/common";
 import {
   ChannelDriverRegistry,
+  BlobReservationConflictError,
   SendNotAcceptedError,
   driverCanReply,
   INGEST_SCHEMA_VERSION,
@@ -249,15 +250,36 @@ export class PersonalReplyService {
           received_at: now,
           records: [record],
         };
-        const recoveryHash = await saveReplyRecovery(host.get("blobs"), batch);
-        const claimed = await host.get("authority").claimOutboundAttempt({
-          org_id: this.runtime.orgId(),
-          client_request_id: clientRequestId,
-          thread_id: threadId,
-          recovery_hash: recoveryHash,
-          now,
-        });
+        const authority = host.get("authority");
+        let recovery: Awaited<ReturnType<typeof saveReplyRecovery>>;
+        try {
+          recovery = await saveReplyRecovery(host.get("blobs"), authority, batch);
+        } catch (error) {
+          if (!(error instanceof BlobReservationConflictError)) throw error;
+          const prior = await this.replayPriorAttempt(clientRequestId, threadId);
+          if (prior) return prior;
+          throw new PersonalConnectorError(
+            "send_in_progress",
+            "Reply recovery is being prepared for this request. Retry with the same request id.",
+            409,
+          );
+        }
+        let claimed: boolean;
+        try {
+          claimed = await authority.claimOutboundAttempt({
+            org_id: this.runtime.orgId(),
+            client_request_id: clientRequestId,
+            thread_id: threadId,
+            recovery_hash: recovery.hash,
+            blob_reservations: [recovery.reservation],
+            now,
+          });
+        } catch (error) {
+          await authority.releaseBlobReservations([recovery.reservation]);
+          throw error;
+        }
         if (!claimed) {
+          await authority.releaseBlobReservations([recovery.reservation]);
           const prior = await this.replayPriorAttempt(clientRequestId, threadId);
           if (prior) {
             return prior;
@@ -284,7 +306,7 @@ export class PersonalReplyService {
                 client_request_id: clientRequestId,
                 thread_id: threadId,
                 status: "rejected",
-                recovery_hash: recoveryHash,
+                recovery_hash: recovery.hash,
                 now: new Date().toISOString(),
               });
             } catch (persistenceError) {
@@ -315,17 +337,23 @@ export class PersonalReplyService {
 
         try {
           record.external_id = ports.outboundId(thread, receipt);
-          const deliveredHash = await saveReplyRecovery(host.get("blobs"), batch);
-          await host.get("authority").putOutboundAttempt({
-            org_id: this.runtime.orgId(),
-            client_request_id: clientRequestId,
-            thread_id: threadId,
-            status: "accepted",
-            recovery_hash: deliveredHash,
-            receipt,
-            channel_message_ids: channelMessageIds(receipt),
-            now: new Date().toISOString(),
-          });
+          const deliveredRecovery = await saveReplyRecovery(host.get("blobs"), authority, batch);
+          try {
+            await authority.putOutboundAttempt({
+              org_id: this.runtime.orgId(),
+              client_request_id: clientRequestId,
+              thread_id: threadId,
+              status: "accepted",
+              recovery_hash: deliveredRecovery.hash,
+              blob_reservations: [deliveredRecovery.reservation],
+              receipt,
+              channel_message_ids: channelMessageIds(receipt),
+              now: new Date().toISOString(),
+            });
+          } catch (error) {
+            await authority.releaseBlobReservations([deliveredRecovery.reservation]);
+            throw error;
+          }
           return await this.storeDeliveredReply(host, batch, receipt, threadId, clientRequestId);
         } catch (error) {
           console.error("delivered reply persistence failed", {

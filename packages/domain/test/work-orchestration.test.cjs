@@ -405,6 +405,65 @@ describe("recipe auto-start specification", () => {
     );
   });
 
+  it("advances pull schedules only against the recipe snapshot it observed", async () => {
+    const store = new MemoryWorkStore();
+    const initial = makeRecipe("pull-cas", { thread_id: "chat-src:t1" }, {
+      kind: "pull",
+      interval_ms: 60 * 60 * 1000,
+    });
+    initial.next_run_at = "2026-08-27T10:00:00.000Z";
+    await store.putRecipe(initial);
+    const expected = await store.getRecipe(initial.org_id, initial.id);
+    const edited = { ...expected, name: "Edited", updated_at: "2026-08-27T10:05:00.000Z" };
+    await store.putRecipe(edited);
+
+    assert.equal(await store.advanceRecipePullSchedule({
+      expected_recipe: expected,
+      next_run_at: "2026-08-27T11:00:00.000Z",
+      updated_at: "2026-08-27T10:06:00.000Z",
+    }), false);
+    assert.deepEqual(await store.getRecipe(initial.org_id, initial.id), edited);
+
+    assert.equal(await store.advanceRecipePullSchedule({
+      expected_recipe: edited,
+      next_run_at: "2026-08-27T11:00:00.000Z",
+      updated_at: "2026-08-27T10:06:00.000Z",
+    }), true);
+    const advanced = await store.getRecipe(initial.org_id, initial.id);
+    assert.equal(advanced.name, "Edited");
+    assert.equal(advanced.next_run_at, "2026-08-27T11:00:00.000Z");
+  });
+
+  it("writes recipes only against the expected complete snapshot", async () => {
+    const store = new MemoryWorkStore();
+    const initial = makeRecipe("recipe-cas", { thread_id: "chat-src:t1" });
+    const created = await store.putRecipeIfUnchanged({
+      recipe: initial,
+      expected_recipe: null,
+    });
+    assert.equal(created.outcome, "applied");
+    assert.deepEqual(await store.putRecipeIfUnchanged({
+      recipe: { ...initial, name: "Duplicate create" },
+      expected_recipe: null,
+    }), { outcome: "conflict" });
+
+    const expected = await store.getRecipe(initial.org_id, initial.id);
+    const edited = { ...expected, name: "Concurrent edit", updated_at: "2026-08-27T00:01:00.000Z" };
+    await store.putRecipe(edited);
+    assert.deepEqual(await store.putRecipeIfUnchanged({
+      recipe: { ...expected, name: "Stale edit" },
+      expected_recipe: expected,
+    }), { outcome: "conflict" });
+    assert.deepEqual(await store.getRecipe(initial.org_id, initial.id), edited);
+
+    const saved = await store.putRecipeIfUnchanged({
+      recipe: { ...edited, name: "Current edit", updated_at: "2026-08-27T00:02:00.000Z" },
+      expected_recipe: edited,
+    });
+    assert.equal(saved.outcome, "applied");
+    assert.equal(saved.recipe.name, "Current edit");
+  });
+
   it("accepts a custom interval and aligns daily and weekly clocks", () => {
     assert.equal(isPullIntervalMs(5 * 60 * 1000), true);
     assert.equal(isPullIntervalMs(90 * 60 * 1000), true);
@@ -770,6 +829,7 @@ describe("work face", () => {
     };
     const item = { id: "w1", status: "waiting_human" };
     assert.equal(workFaceOf(item, undefined, run).start_state, "uncertain");
+    assert.equal(workFaceOf(item).version, 0);
     assert.equal(workFaceOf({ ...item, status: "skipped" }, undefined,
       cancelWorkRun(run, "2026-08-24T00:01:00.000Z")).start_state, undefined);
   });
@@ -784,7 +844,9 @@ describe("work face", () => {
       unit_key: "task-1", record_class: "task", thread_facet: "ticket", status: "open",
       created_at: now, updated_at: now,
     };
-    await store.putWorkItem(item);
+    assert.equal((await store.createWorkItem({
+      item, recipe, expected_recipe: null,
+    })).outcome, "applied");
     const input = {
       run: {
         id: "run-1", org_id: recipe.org_id, recipe_id: recipe.id, work_item_id: item.id,
@@ -798,11 +860,104 @@ describe("work face", () => {
     assert.equal(claims.filter(Boolean).length, 1);
     assert.equal((await store.getWorkItem(item.org_id, item.id)).status, "running");
     assert.equal((await store.getActiveWorkRun(item.org_id, item.id)).start_state, "pending");
-    await store.putWorkItem({ ...item, id: "w2", unit_key: "task-2" });
+    const savedRecipe = await store.getRecipe(recipe.org_id, recipe.id);
+    assert.equal((await store.createWorkItem({
+      item: { ...item, id: "w2", unit_key: "task-2" },
+      recipe: savedRecipe, expected_recipe: savedRecipe,
+    })).outcome, "applied");
     assert.equal(await store.claimWorkRunStart({
       ...input, run: { ...input.run, id: "run-2-new", work_item_id: "w2" },
     }), false);
     assert.equal((await store.getWorkItem(item.org_id, "w2")).status, "open");
+    const secondItem = await store.getWorkItem(item.org_id, "w2");
+    const command = {
+      org_id: item.org_id, work_item_id: secondItem.id, expected_version: secondItem.version,
+      command_id: "manual-start-1", issued_at: now,
+    };
+    const commandRun = {
+      ...input.run, id: "run-command", work_item_id: secondItem.id,
+    };
+    assert.equal(await store.claimWorkRunStart({
+      run: commandRun, expected_item: secondItem, expected_version: secondItem.version,
+      command_id: command.command_id, issued_at: command.issued_at,
+    }), true);
+    assert.equal((await store.getWorkRunStartReplay(command)).run.id, commandRun.id);
+    assert.equal(await store.claimWorkRunStart({
+      run: { ...commandRun, id: "run-command-retry" },
+      expected_item: secondItem, expected_version: secondItem.version,
+      command_id: command.command_id, issued_at: command.issued_at,
+    }), false);
+    assert.equal((await store.getWorkRunStartReplay({
+      ...command, expected_version: command.expected_version + 1,
+    })).outcome, "conflict");
+  });
+
+  it("refuses a start prepared from a stale recipe snapshot", async () => {
+    const store = new MemoryWorkStore();
+    const now = "2026-08-24T00:00:00.000Z";
+    const recipe = { ...makeRecipe("r1", { record_class: "task" }), org_id: "local-owner" };
+    const item = {
+      id: "w1", org_id: recipe.org_id, recipe_id: recipe.id, thread_id: "feishu:oc_1",
+      unit_key: "task-1", record_class: "task", thread_facet: "ticket", status: "open",
+      created_at: now, updated_at: now,
+    };
+    const run = {
+      id: "run-1", org_id: recipe.org_id, recipe_id: recipe.id, work_item_id: item.id,
+      executor_type: "session", status: "running", start_state: "pending",
+      created_at: now, updated_at: now,
+    };
+    assert.equal((await store.createWorkItem({
+      item, recipe, expected_recipe: null,
+    })).outcome, "applied");
+    await store.putRecipe({ ...recipe, name: "Updated recipe", updated_at: "2026-08-25T00:00:00.000Z" });
+
+    assert.equal(await store.claimWorkRunStart({ run, expected_recipe: recipe }), false);
+    assert.equal(await store.getWorkItem(item.org_id, item.id).then((saved) => saved.status), "open");
+    assert.equal(await store.getActiveWorkRun(item.org_id, item.id), null);
+  });
+
+  it("keeps the reserved run configuration after recipe edits", async () => {
+    const store = new MemoryWorkStore();
+    const now = "2026-08-24T00:00:00.000Z";
+    const recipe = {
+      ...makeRecipe("r1", { record_class: "task" }),
+      org_id: "local-owner",
+      executor_config: { prompt: "Original", limits: { retries: 2 } },
+    };
+    const item = {
+      id: "w1", org_id: recipe.org_id, recipe_id: recipe.id, thread_id: "feishu:oc_1",
+      unit_key: "task-1", record_class: "task", thread_facet: "ticket", status: "open",
+      created_at: now, updated_at: now,
+    };
+    const run = {
+      id: "run-1", org_id: recipe.org_id, recipe_id: recipe.id, work_item_id: item.id,
+      executor_type: "session", executor_config: recipe.executor_config, include_context: true,
+      status: "running", start_state: "pending", created_at: now, updated_at: now,
+    };
+    assert.equal((await store.createWorkItem({
+      item, recipe, expected_recipe: null,
+    })).outcome, "applied");
+    assert.equal(await store.claimWorkRunStart({ run, expected_recipe: recipe }), true);
+    await store.putRecipe({
+      ...recipe, executor_config: { prompt: "Changed", limits: { retries: 1 } },
+      include_context: false, updated_at: "2026-08-25T00:00:00.000Z",
+    });
+
+    const savedRun = await store.getWorkRun(recipe.org_id, run.id);
+    assert.deepEqual(savedRun.executor_config, recipe.executor_config);
+    assert.equal(savedRun.include_context, true);
+    const bound = await store.checkpointWorkRunStart({
+      expected_item: await store.getWorkItem(item.org_id, item.id),
+      expected_run: savedRun,
+      kind: "bound",
+      external_run_id: "executor-run-1",
+      agent_thread_id: "executor:thread-1",
+      now: "2026-08-25T00:00:00.000Z",
+    });
+    assert.equal(bound.outcome, "applied");
+    assert.deepEqual(bound.run.executor_config, recipe.executor_config);
+    assert.equal(bound.run.include_context, true);
+    assert.deepEqual(await store.getWorkRun(recipe.org_id, run.id), bound.run);
   });
 
   it("exposes the run summary on the inbox face", () => {
@@ -879,6 +1034,17 @@ describe("work delivery", () => {
     });
   }
 
+  function seedTestWorkItem(store, item) {
+    store.items.set(item.id, structuredClone(item));
+    return structuredClone(item);
+  }
+
+  function seedTestWorkDelivery(store, delivery) {
+    const saved = { ...delivery, version: delivery.version ?? 0 };
+    store.deliveries.set(saved.id, structuredClone(saved));
+    return structuredClone(saved);
+  }
+
   it("reuses one outbox row and snapshots the payload", () => {
     const first = queued();
     const again = enqueueWriteBack({
@@ -926,19 +1092,323 @@ describe("work delivery", () => {
     assert.equal(same.idempotency_key, sent.idempotency_key);
     const claimed = deliveryClaimSend(queued(), now);
     const timedOut = deliverySendTimedOut(claimed, now);
-    assert.equal(timedOut.attempts, 0);
-    assert.equal(timedOut.status, "write_back");
-    assert.equal(timedOut.lease_expires_at, claimed.lease_expires_at);
+    assert.equal(timedOut.attempts, 1);
+    assert.equal(timedOut.status, "uncertain");
+    assert.equal(timedOut.lease_expires_at, undefined);
+    assert.equal(shouldFlushDelivery(timedOut, now), false);
+    assert.throws(() => deliveryRetryNow(timedOut, now), /reconciliation/);
   });
 
-  it("reclaims an expired lease and does not flush an in-flight send", () => {
+  it("increments delivery versions when dismissing work", async () => {
+    const store = new MemoryWorkStore();
+    const recipe = makeRecipe("dismiss-work-recipe", { record_class: "task" });
+    const item = {
+      id: "dismiss-work",
+      org_id: "local-owner",
+      recipe_id: recipe.id,
+      thread_id: "source:room",
+      unit_key: "evt-dismiss",
+      record_class: "task",
+      thread_facet: "ticket",
+      status: "open",
+      created_at: now,
+      updated_at: now,
+    };
+    const created = await store.createWorkItem({ item, recipe, expected_recipe: null });
+    assert.equal(created.outcome, "applied");
+    const run = {
+      id: "dismiss-run",
+      org_id: item.org_id,
+      work_item_id: item.id,
+      recipe_id: recipe.id,
+      executor_type: "exec",
+      status: "running",
+      start_state: "pending",
+      write_back_required: true,
+      write_back_target: { installation_id: "sender-1", source: "source", target: "results" },
+      trigger_kind: "push",
+      created_at: now,
+      updated_at: now,
+    };
+    assert.equal(await store.claimWorkRunStart({ run, expected_recipe: recipe }), true);
+    const started = await store.checkpointWorkRunStart({
+      expected_item: await store.getWorkItem(item.org_id, item.id),
+      expected_run: await store.getWorkRun(item.org_id, run.id),
+      kind: "submitted",
+      external_run_id: "dismiss-executor-run",
+      now,
+    });
+    assert.equal(started.outcome, "applied");
+    const completed = await store.commitWorkObservation({
+      expected_item: started.item,
+      expected_run: started.run,
+      handle: {
+        external_run_id: "dismiss-executor-run",
+        status: "completed",
+        result: { summary: "Completed result" },
+      },
+      can_write_back: true,
+      trigger_kind: "push",
+      now: "2026-08-27T00:00:01.000Z",
+    });
+    assert.equal(completed.outcome, "applied");
+    const delivery = await store.getWorkDeliveryByItem(item.org_id, item.id);
+    assert.ok(delivery);
+
+    const result = await store.dismissWorkItem({
+      expected_item: completed.transition.item,
+      now: "2026-08-27T00:01:00.000Z",
+    });
+
+    assert.equal(result.outcome, "applied");
+    assert.equal(result.deliveries[0].version, delivery.version + 1);
+    assert.equal((await store.getWorkDelivery(item.org_id, delivery.id)).version, delivery.version + 1);
+  });
+
+  it("increments delivery versions when an observation updates a legacy delivery", async () => {
+    const store = new MemoryWorkStore();
+    const recipe = makeRecipe("delivery-observation", { record_class: "task" });
+    const item = {
+      id: "observed-work",
+      org_id: recipe.org_id,
+      recipe_id: recipe.id,
+      thread_id: "source:observed-room",
+      unit_key: "evt-observed",
+      record_class: "task",
+      thread_facet: "ticket",
+      status: "open",
+      created_at: now,
+      updated_at: now,
+    };
+    assert.equal((await store.createWorkItem({
+      item, recipe, expected_recipe: null,
+    })).outcome, "applied");
+    const run = {
+      id: "observed-run",
+      org_id: recipe.org_id,
+      recipe_id: recipe.id,
+      work_item_id: item.id,
+      executor_type: "exec",
+      status: "running",
+      start_state: "pending",
+      created_at: now,
+      updated_at: now,
+    };
+    assert.equal(await store.claimWorkRunStart({ run }), true);
+    const submitted = await store.checkpointWorkRunStart({
+      expected_item: await store.getWorkItem(item.org_id, item.id),
+      expected_run: await store.getWorkRun(item.org_id, run.id),
+      kind: "submitted",
+      external_run_id: "executor-run",
+      now,
+    });
+    assert.equal(submitted.outcome, "applied");
+    const delivery = seedTestWorkDelivery(store, {
+      ...queued(),
+      work_item_id: item.id,
+      recipe_id: recipe.id,
+      unit_key: item.unit_key,
+    });
+
+    const result = await store.commitWorkObservation({
+      expected_item: submitted.item,
+      expected_run: submitted.run,
+      handle: {
+        external_run_id: "executor-run",
+        status: "completed",
+        result: { summary: "Completed" },
+      },
+      can_write_back: true,
+      trigger_kind: "push",
+      now: "2026-08-27T00:01:00.000Z",
+    });
+
+    assert.equal(result.outcome, "applied");
+    assert.equal((await store.getWorkDelivery(item.org_id, delivery.id)).version, delivery.version + 1);
+  });
+
+  it("replays an audited memory delivery retry without reapplying it", async () => {
+    const store = new MemoryWorkStore();
+    const item = {
+      id: "work-1",
+      org_id: "local-owner",
+      thread_id: "source:room",
+      unit_key: "evt-1",
+      record_class: "task",
+      thread_facet: "ticket",
+      status: "done",
+      version: 4,
+      created_at: now,
+      updated_at: now,
+    };
+    seedTestWorkItem(store, item);
+    const failed = { ...queued(), status: "dead", write_back: "failed", attempts: 3 };
+    seedTestWorkDelivery(store, failed);
+    const command = {
+      org_id: item.org_id,
+      delivery_id: failed.id,
+      kind: "retry",
+      expected_delivery: {
+        id: failed.id,
+        version: failed.version ?? 0,
+        status: failed.status,
+        write_back: failed.write_back,
+        attempts: failed.attempts,
+      },
+      expected_item_version: item.version,
+      command_id: "retry-command-1",
+      issued_at: now,
+      now,
+    };
+
+    const applied = await store.transitionWorkDelivery(command);
+    assert.equal(applied.outcome, "applied");
+    assert.equal(applied.delivery.status, "queued");
+    assert.equal(applied.delivery.version, (failed.version ?? 0) + 1);
+    const replay = await store.transitionWorkDelivery(command);
+    assert.equal(replay.outcome, "replayed");
+    assert.equal(replay.delivery.id, failed.id);
+    assert.equal(replay.delivery.status, "queued");
+    assert.equal(replay.delivery.version, applied.delivery.version);
+    assert.equal((await store.getWorkDelivery(item.org_id, failed.id)).version, applied.delivery.version);
+    const conflict = await store.transitionWorkDelivery({
+      ...command,
+      expected_item_version: item.version + 1,
+    });
+    assert.equal(conflict.outcome, "conflict");
+  });
+
+  it("audits manual delivery reconciliation without inventing receipts or reviving dismissed work", async () => {
+    const store = new MemoryWorkStore();
+    const item = (id, status = "done") => ({
+      id,
+      org_id: "local-owner",
+      thread_id: `source:${id}`,
+      unit_key: id,
+      record_class: "task",
+      thread_facet: "ticket",
+      status,
+      version: 4,
+      created_at: now,
+      updated_at: now,
+    });
+    const uncertain = (workItem) => ({
+      ...enqueueWriteBack({
+        org_id: workItem.org_id,
+        work_item_id: workItem.id,
+        recipe_id: "recipe-1",
+        kind: "push",
+        unit_key: workItem.unit_key,
+        payload: { summary: "Completed result" },
+        now,
+      }),
+      status: "uncertain",
+      last_error: "acceptance unknown",
+    });
+    const sentItem = item("work-sent");
+    const sentDelivery = uncertain(sentItem);
+    seedTestWorkItem(store, sentItem);
+    seedTestWorkDelivery(store, sentDelivery);
+    const sentCommand = {
+      org_id: sentItem.org_id,
+      delivery_id: sentDelivery.id,
+      kind: "reconcile",
+      resolution: "sent",
+      expected_delivery: {
+        id: sentDelivery.id,
+        version: sentDelivery.version ?? 0,
+        status: "uncertain",
+        write_back: "pending",
+        attempts: sentDelivery.attempts,
+      },
+      expected_item_version: sentItem.version,
+      command_id: "reconcile-sent",
+      issued_at: now,
+      now,
+    };
+    const sent = await store.transitionWorkDelivery(sentCommand);
+    assert.equal(sent.outcome, "applied");
+    assert.equal(sent.delivery.status, "acked");
+    assert.equal(sent.delivery.write_back, "sent");
+    assert.equal(sent.delivery.channel_receipt, undefined);
+    assert.equal((await store.transitionWorkDelivery(sentCommand)).outcome, "replayed");
+    assert.equal((await store.transitionWorkDelivery({
+      ...sentCommand,
+      resolution: "not_sent",
+    })).outcome, "conflict");
+
+    const retryItem = item("work-retry");
+    const retryDelivery = uncertain(retryItem);
+    seedTestWorkItem(store, retryItem);
+    seedTestWorkDelivery(store, retryDelivery);
+    const notSent = await store.transitionWorkDelivery({
+      ...sentCommand,
+      delivery_id: retryDelivery.id,
+      expected_delivery: {
+        id: retryDelivery.id,
+        version: retryDelivery.version ?? 0,
+        status: "uncertain",
+        write_back: "pending",
+        attempts: retryDelivery.attempts,
+      },
+      resolution: "not_sent",
+      command_id: "reconcile-not-sent",
+    });
+    assert.equal(notSent.outcome, "applied");
+    assert.equal(notSent.delivery.status, "queued");
+    assert.equal(notSent.delivery.idempotency_key, retryDelivery.idempotency_key);
+
+    const dismissedItem = item("work-dismissed", "skipped");
+    const dismissedDelivery = uncertain(dismissedItem);
+    seedTestWorkItem(store, dismissedItem);
+    seedTestWorkDelivery(store, dismissedDelivery);
+    const dismissed = await store.transitionWorkDelivery({
+      ...sentCommand,
+      delivery_id: dismissedDelivery.id,
+      expected_delivery: {
+        id: dismissedDelivery.id,
+        version: dismissedDelivery.version ?? 0,
+        status: "uncertain",
+        write_back: "pending",
+        attempts: dismissedDelivery.attempts,
+      },
+      resolution: "not_sent",
+      command_id: "reconcile-dismissed",
+    });
+    assert.equal(dismissed.outcome, "applied");
+    assert.equal(dismissed.delivery.status, "acked");
+    assert.equal(dismissed.delivery.write_back, "skipped");
+
+    const receiptItem = item("work-receipt");
+    const receiptDelivery = {
+      ...uncertain(receiptItem),
+      channel_receipt: { accepted: true, rpc_id: "receipt-1" },
+    };
+    seedTestWorkItem(store, receiptItem);
+    seedTestWorkDelivery(store, receiptDelivery);
+    const receiptConflict = await store.transitionWorkDelivery({
+      ...sentCommand,
+      delivery_id: receiptDelivery.id,
+      expected_delivery: {
+        id: receiptDelivery.id,
+        version: receiptDelivery.version ?? 0,
+        status: "uncertain",
+        write_back: "pending",
+        attempts: receiptDelivery.attempts,
+      },
+      command_id: "reconcile-receipt",
+    });
+    assert.equal(receiptConflict.outcome, "conflict");
+  });
+
+  it("marks expired sends uncertain instead of requeuing an unknown external request", () => {
     let delivery = deliveryClaimSend(queued(), now);
     assert.equal(delivery.status, "write_back");
     assert.equal(shouldFlushDelivery(delivery, now), false);
     const later = new Date(Date.parse(delivery.lease_expires_at) + 1).toISOString();
     const reclaimed = reclaimDeliveryLease(delivery, later);
-    assert.equal(reclaimed.status, "queued");
-    assert.equal(shouldFlushDelivery(delivery, later), true);
+    assert.equal(reclaimed.status, "uncertain");
+    assert.equal(shouldFlushDelivery(delivery, later), false);
   });
 
   it("acks a sent write-back and dead-letters after three send failures", () => {

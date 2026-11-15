@@ -197,7 +197,6 @@ describe("authority-backed context integration", () => {
     other.records[0].scope.id = "chat-2";
     const unrelated = await ingestion.ingest(other);
     const unrelatedEvent = await authority.getEvent("local-owner", unrelated.records[0].event_id);
-    await blobs.delete(unrelatedEvent.content_hash);
     const requested = [];
     const source = new AuthorityContextEvidenceSource(authority, {
       async getMany(hashes) {
@@ -309,10 +308,13 @@ describe("authority-backed context integration", () => {
     const authority = await SqliteSplitAuthorityStore.open(database);
     const ingestion = new IngestionService(blobs, authority);
     await ingestion.ingest(ingestBatch("create", "Required body.", "delivery-required"));
-    const read = await authority.openContextRead("local-owner");
-    await blobs.delete(read.events[0].content_hash);
+    const missingBlobStore = {
+      async getMany() {
+        return new Map();
+      },
+    };
 
-    const source = new AuthorityContextEvidenceSource(authority, blobs);
+    const source = new AuthorityContextEvidenceSource(authority, missingBlobStore);
     const metadata = await source.openRead(
       contextRequest({ query: undefined, anchors: undefined }),
     );

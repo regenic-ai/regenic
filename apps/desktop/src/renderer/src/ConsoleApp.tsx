@@ -14,9 +14,12 @@ import {
   fetchUiPrefs,
   focusConversation,
   dismissWorkItem,
+  acknowledgeWorkResult,
   isInboxAbortError,
   isKernelTimeoutError,
   runWorkItem,
+  retryWorkDelivery,
+  reconcileWorkDelivery,
   saveUiPrefs,
   updateConversationPrefs,
   fetchCustomerServiceTasks,
@@ -79,6 +82,7 @@ import {
   type InboxListFact,
   type InboxListSnapshot,
 } from "./inbox-list-store.ts";
+
 import {
   decideInboxSync,
   headsPageCacheEntry,
@@ -119,6 +123,13 @@ import type {
   PersonalEngineView,
   RecipeSeed,
 } from "./types";
+
+function newClientCommandId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `visibility-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
 
 const POLL_MS = 2000;
 const IDLE_POLL_MS = 8000;
@@ -1446,6 +1457,12 @@ export function ConsoleApp() {
     thread: InboxThread,
     patch: { title?: string | null; pinned?: boolean; hidden?: boolean },
   ) => {
+    const visibilityCommand = patch.hidden === undefined
+      ? {}
+      : {
+          command_id: newClientCommandId(),
+          issued_at: new Date().toISOString(),
+        };
     const write = async () => {
       const currentItem = listStoreRef.current.items.find(
         (item) => item.thread_id === thread.id,
@@ -1456,6 +1473,8 @@ export function ConsoleApp() {
         title: patch.title !== undefined ? patch.title : (base.title ?? null),
         pinned: patch.pinned !== undefined ? patch.pinned : Boolean(base.pinned),
         hidden: patch.hidden !== undefined ? patch.hidden : Boolean(base.hidden),
+        visibility_version: patch.hidden !== undefined
+          ? (base.visibility_version ?? 0) + 1 : (base.visibility_version ?? 0),
         updated_at: new Date().toISOString(),
       };
       await commitHeads({
@@ -1467,6 +1486,10 @@ export function ConsoleApp() {
         const saved = await updateConversationPrefs({
           thread_id: thread.id,
           ...patch,
+          ...(patch.hidden !== undefined
+            ? { expected_visibility_version: base.visibility_version ?? 0 }
+            : {}),
+          ...visibilityCommand,
         });
         if (
           isActivePrefWrite(
@@ -1481,6 +1504,7 @@ export function ConsoleApp() {
               title: saved.title,
               pinned: saved.pinned,
               hidden: saved.hidden,
+              visibility_version: saved.visibility_version,
               updated_at: saved.updated_at,
             },
           });
@@ -1577,7 +1601,11 @@ export function ConsoleApp() {
         return;
       }
       try {
-        await runWorkItem(thread.work.id);
+        if (thread.work.status === "done" && thread.work.delivery) {
+          await retryWorkDelivery(thread.work.id, thread.work.version, thread.work.delivery);
+        } else {
+          await runWorkItem(thread.work.id, thread.work.version);
+        }
         await refresh();
         setError(null);
       } catch (caught) {
@@ -1592,11 +1620,54 @@ export function ConsoleApp() {
         return;
       }
       try {
-        await dismissWorkItem(thread.work.id);
+        await dismissWorkItem(
+          thread.work.id,
+          thread.work.version,
+          newClientCommandId(),
+          new Date().toISOString(),
+        );
         await refresh();
         setError(null);
       } catch (caught) {
         setError(caught instanceof Error ? caught.message : translate("error.cannotDismissWork"));
+      }
+    },
+    [refresh],
+  );
+  const acknowledgeSelectedWork = useCallback(
+    async (thread: InboxThread) => {
+      if (!thread.work?.id || !thread.work.run_id) return;
+      try {
+        await acknowledgeWorkResult(
+          thread.work.id,
+          thread.work.run_id,
+          thread.work.version,
+          thread.work.run_version ?? 0,
+          newClientCommandId(),
+          new Date().toISOString(),
+        );
+        await refresh();
+        setError(null);
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : translate("error.cannotAcknowledgeWork"));
+      }
+    },
+    [refresh],
+  );
+  const reconcileSelectedDelivery = useCallback(
+    async (thread: InboxThread, resolution: "sent" | "not_sent") => {
+      if (!thread.work?.id || !thread.work.delivery) return;
+      try {
+        await reconcileWorkDelivery(
+          thread.work.id,
+          resolution,
+          thread.work.version,
+          thread.work.delivery,
+        );
+        await refresh();
+        setError(null);
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : translate("error.cannotStartWork"));
       }
     },
     [refresh],
@@ -1781,7 +1852,9 @@ export function ConsoleApp() {
               void ensureOtherListHeads();
             }}
             onRunWork={runSelectedWork}
+            onReconcileDelivery={reconcileSelectedDelivery}
             onDismissWork={dismissSelectedWork}
+            onAcknowledgeWork={acknowledgeSelectedWork}
             onBindRecipe={bindSelectedRecipe}
             onForwardCreated={openForwardedConversation}
             onOverlaysChanged={reloadOverlays}

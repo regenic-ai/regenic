@@ -171,9 +171,33 @@ describe("session stdin", () => {
       /review\n\nWORK\nticket/,
     );
   });
+
+  it("does not fabricate a session status when its execution identity is missing", async () => {
+    const executor = createSessionTaskExecutor();
+    await assert.rejects(executor.status({ id: "run-1", status: "running" }, {}),
+      /requires a known execution identity/);
+  });
 });
 
 describe("http executor", () => {
+  it("requires a remote run identity instead of guessing one for start or later requests", async () => {
+    let calls = 0;
+    const executor = createHttpTaskExecutor({
+      executor_type: "remote", label: "Remote", base_url: "https://agent.example",
+      fetch: async () => { calls += 1; return Response.json({ status: "running" }); },
+    });
+    const ctx = { org_id: "o", env: {} };
+    await assert.rejects(executor.start({
+      run_id: "run-1", work_item: { id: "w1", thread_id: "source:thread" },
+      recipe: { id: "r1", executor_config: {} }, evidence_text: "task",
+    }, ctx), /no external run identity/);
+    const run = { id: "run-1", status: "running", agent_thread_id: "agent-1" };
+    await assert.rejects(executor.status(run, ctx), /requires a known external run identity/);
+    await assert.rejects(executor.resume({ run }, ctx), /requires a known external run identity/);
+    await assert.rejects(executor.cancel(run, ctx), /requires a known external run identity/);
+    assert.equal(calls, 1);
+  });
+
   it("posts start and reads status through the public contract", async () => {
     const calls = [];
     const executor = createHttpTaskExecutor({

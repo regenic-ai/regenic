@@ -274,7 +274,14 @@ test("disable waits for reply acceptance and storage after egress send has retur
   });
   const host = f.runtime.host;
   const get = host.get.bind(host);
-  host.get = (name) => name === "blobs" ? { put: async () => {} } : get(name);
+  host.get = (name) => name === "blobs" ? { putFenced: async () => {} } : get(name);
+  f.store.reserveBlobWrites = async ({ blobs }) => blobs.map((blob) => ({
+    content_hash: blob.content_hash,
+    generation: 1,
+    mode: "write",
+    claim_token: "test-claim",
+  }));
+  f.store.releaseBlobReservations = async () => {};
   f.store.claimOutboundAttempt = async () => ({ status: "pending" });
   f.store.putOutboundAttempt = async () => {};
   const reply = new PersonalReplyService(f.runtime, {}, f.service, f.drivers);

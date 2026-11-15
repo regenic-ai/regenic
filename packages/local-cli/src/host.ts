@@ -1,5 +1,9 @@
-import { sqliteAuthorityPlugin } from "@regenic/authority-store";
+import {
+  postgresAuthorityPlugin,
+  sqliteAuthorityPlugin,
+} from "@regenic/authority-store";
 import { fsBlobPlugin } from "@regenic/blob-store";
+import { resolveAuthorityBackend, type AuthorityBackend } from "@regenic/config";
 import {
   acceptedThreadSummaryRetrieverPlugin,
   contextProjectionCoordinatorPlugin,
@@ -100,6 +104,62 @@ export async function withLocalReadOnlyHost<T>(
   const host = await createHost();
   try {
     await host.plugin(sqliteAuthorityPlugin, { path: database, readonly: true });
+    return await run(host);
+  } finally {
+    await host.dispose();
+  }
+}
+
+export interface BlobMaintenanceHostOptions {
+  database?: string;
+  blobRoot: string;
+  env: NodeJS.ProcessEnv;
+  readOnly: boolean;
+}
+
+export function resolveBlobMaintenanceBackend(
+  options: BlobMaintenanceHostOptions,
+): Exclude<AuthorityBackend, { driver: "none" }> {
+  const driver = options.env.REGENIC_AUTHORITY_DRIVER?.trim().toLowerCase();
+  if (driver === "postgres" && options.database !== undefined) {
+    throw new Error("Do not pass --database when REGENIC_AUTHORITY_DRIVER=postgres");
+  }
+  if (driver === "postgres" && !options.env.DATABASE_URL?.trim()) {
+    throw new Error("DATABASE_URL must be explicitly set for PostgreSQL Blob maintenance");
+  }
+  const backend = resolveAuthorityBackend({
+    ...options.env,
+    ...(options.database !== undefined ? { REGENIC_DATABASE: options.database } : {}),
+    REGENIC_BLOB_ROOT: options.blobRoot,
+  });
+  if (backend.driver === "none") {
+    throw new Error(
+      "Blob maintenance requires --database for SQLite or REGENIC_AUTHORITY_DRIVER=postgres with DATABASE_URL",
+    );
+  }
+  return backend;
+}
+
+export async function withBlobMaintenanceHost<T>(
+  options: BlobMaintenanceHostOptions,
+  run: (host: Host) => Promise<T>,
+): Promise<T> {
+  const backend = resolveBlobMaintenanceBackend(options);
+  const host = await createHost();
+  try {
+    if (backend.driver === "sqlite") {
+      await host.plugin(sqliteAuthorityPlugin, {
+        path: backend.path,
+        ...(options.readOnly ? { readonly: true } : {}),
+      });
+    } else {
+      await host.plugin(postgresAuthorityPlugin, {
+        connectionString: backend.url,
+        migrate: false,
+        readOnly: options.readOnly,
+      });
+    }
+    await host.plugin(fsBlobPlugin, { root: backend.blobRoot });
     return await run(host);
   } finally {
     await host.dispose();

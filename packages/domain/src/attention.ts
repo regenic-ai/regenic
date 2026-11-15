@@ -25,6 +25,7 @@ export function attentionOf(input: {
   work_status?: WorkItemStatus;
   can_write_back?: boolean;
   has_result?: boolean;
+  auto_completed?: boolean;
   activity?: string;
 }): AttentionClass {
   if (
@@ -38,6 +39,7 @@ export function attentionOf(input: {
   if (
     input.work_status === "done" &&
     input.has_result &&
+    input.auto_completed !== true &&
     input.can_write_back === false
   ) {
     return "needs_ack";

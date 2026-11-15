@@ -1,19 +1,34 @@
 const assert = require("node:assert/strict");
 const { describe, it } = require("node:test");
 const {
-  applyListSurfaceAfterIngest,
+  collectListSurfacePatches,
   effectiveHiddenReason,
   foldByHuman,
   foldByPolicy,
-  foldThreadByPolicy,
   listSurfacePatches,
   nextHiddenPref,
   normalizeInboxListView,
   unfold,
-  writeHiddenPref,
 } = require("../dist");
 
 describe("list surface", () => {
+  it("does not reopen a policy-hidden thread for a tombstone disposition", () => {
+    const event = {
+      id: "deleted", org_id: "org", source: "source", external_id: "deleted",
+      thread_id: "thread", operation: "tombstone", occurred_at: "t0", ingested_at: "t0",
+    };
+    const decision = {
+      event_id: event.id, org_id: event.org_id, disposition: "current_work",
+      layer: "L1_event", reason_codes: [], score: 1, decided_at: "t0",
+    };
+    assert.deepEqual(listSurfacePatches({
+      orgId: "org", now: "t1", events: [event],
+      dispositions: new Map([[event.id, decision]]),
+      prefs: new Map([["thread", { hidden: true, hidden_reason: "policy", visibility_version: 0 }]]),
+      onDesk: new Map([["thread", false]]),
+    }), []);
+  });
+
   it("maps leftover membership values onto the list view", () => {
     assert.equal(normalizeInboxListView("hidden"), "hidden");
     assert.equal(normalizeInboxListView("done"), "hidden");
@@ -79,6 +94,27 @@ describe("list surface", () => {
     );
   });
 
+  it("collects tombstone folds against the persisted conversation identity", async () => {
+    const event = {
+      id: "event-1", org_id: "org", source: "source", external_id: "message-1",
+      thread_id: "source:conversation", operation: "tombstone",
+      occurred_at: "t0", ingested_at: "t0",
+    };
+    const requested = [];
+    const patches = await collectListSurfacePatches({
+      async getEvent() { return event; },
+      async getDisposition() { return null; },
+      async getConversationPref(_org, thread) { requested.push(["pref", thread]); return null; },
+      async listInbox(_org, query) { requested.push(["inbox", ...query.thread_ids]); return []; },
+    }, "org", [event.id]);
+    assert.deepEqual(requested, [
+      ["pref", "source:conversation"], ["inbox", "source:conversation"],
+    ]);
+    assert.equal(patches.length, 1);
+    assert.equal(patches[0].thread_id, "source:conversation");
+    assert.deepEqual(patches[0].fold_current_tombstone_event_ids, [event.id]);
+  });
+
   it("builds hide patches without writing the store", () => {
     const patches = listSurfacePatches({
       orgId: "org",
@@ -115,8 +151,9 @@ describe("list surface", () => {
         org_id: "org",
         thread_id: "crm:order-1",
         hidden: false,
-        hidden_reason: null,
+        expected_visibility_version: 0,
         updated_at: "t1",
+        unfold_current_work_event_ids: ["event-1"],
       },
     ]);
   });
@@ -129,43 +166,7 @@ describe("list surface", () => {
     });
   });
 
-  it("writes hide prefs through the store port only", async () => {
-    const prefs = new Map();
-    const store = {
-      async getConversationPref(_orgId, threadId) {
-        return prefs.get(threadId) ?? null;
-      },
-      async putConversationPref(input) {
-        const next = {
-          org_id: input.org_id,
-          thread_id: input.thread_id,
-          title: null,
-          pinned: false,
-          hidden: input.hidden === true,
-          hidden_reason: input.hidden_reason ?? null,
-          last_read_at: null,
-          last_read_external_id: null,
-          updated_at: input.updated_at,
-        };
-        prefs.set(input.thread_id, next);
-        return next;
-      },
-    };
-    await foldThreadByPolicy(store, "org", "crm:order-1", "t1");
-    assert.deepEqual(prefs.get("crm:order-1")?.hidden_reason, "policy");
-    await writeHiddenPref(
-      store,
-      "org",
-      "crm:order-1",
-      foldByHuman(),
-      "t2",
-    );
-    assert.equal(prefs.get("crm:order-1")?.hidden_reason, "human");
-    await foldThreadByPolicy(store, "org", "crm:order-1", "t3");
-    assert.equal(prefs.get("crm:order-1")?.updated_at, "t2");
-  });
-
-  it("applies ingest folds from accepted events, not connector names", async () => {
+  it("builds ingest folds from accepted events, not connector names", async () => {
     const events = new Map([
       [
         "gone",
@@ -178,7 +179,6 @@ describe("list surface", () => {
         },
       ],
     ]);
-    const prefs = new Map();
     const store = {
       async getEvent(_orgId, id) {
         return events.get(id) ?? null;
@@ -187,30 +187,16 @@ describe("list surface", () => {
         return { disposition: "outside_current_work" };
       },
       async getConversationPref(_orgId, threadId) {
-        return prefs.get(threadId) ?? null;
-      },
-      async putConversationPref(input) {
-        const next = {
-          org_id: input.org_id,
-          thread_id: input.thread_id,
-          title: null,
-          pinned: false,
-          hidden: input.hidden === true,
-          hidden_reason: input.hidden_reason ?? null,
-          last_read_at: null,
-          last_read_external_id: null,
-          updated_at: input.updated_at,
-        };
-        prefs.set(input.thread_id, next);
-        return next;
+        assert.equal(threadId, "crm:order-1");
+        return null;
       },
       async listInbox() {
         return [];
       },
     };
-    await applyListSurfaceAfterIngest(store, "org", ["gone"]);
-    const pref = prefs.get("crm:order-1");
-    assert.equal(pref?.hidden, true);
-    assert.equal(pref?.hidden_reason, "policy");
+    const patches = await collectListSurfacePatches(store, "org", ["gone"]);
+    assert.equal(patches.length, 1);
+    assert.equal(patches[0].hidden, true);
+    assert.deepEqual(patches[0].fold_current_tombstone_event_ids, ["gone"]);
   });
 });

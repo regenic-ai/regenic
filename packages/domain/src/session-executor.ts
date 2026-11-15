@@ -103,10 +103,7 @@ export function createSessionTaskExecutor(meta?: {
     ): Promise<ExecutorRunHandle> {
       const sysoutId = run.agent_thread_id ?? run.external_run_id;
       if (!sysoutId) {
-        return {
-          external_run_id: run.id,
-          status: run.status === "waiting_human" ? "waiting_human" : "running",
-        };
+        throw new Error("Session executor requires a known execution identity");
       }
       let thread;
       try {

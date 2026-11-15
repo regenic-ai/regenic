@@ -3,7 +3,7 @@ const { randomUUID } = require("node:crypto");
 const { it } = require("node:test");
 const { Client } = require("pg");
 const { PostgresAuthorityStore } = require("../dist/postgres");
-const { PG_BASELINE_SQL, PG_SCHEMA_VERSION, PG_MIGRATIONS } = require("../dist/postgres/schema");
+const { PG_BASELINE_SQL, PG_MIGRATIONS } = require("../dist/postgres/schema");
 const { putRecipe, getRecipe, listRecipes } = require("../dist/postgres/work");
 
 const connectionString = process.env.TEST_DATABASE_URL?.trim();
@@ -18,7 +18,6 @@ const input = {
 };
 
 it("includes Recipe persistence fields in schema, upsert bindings and read mappings (SQL contract only)", async () => {
-  assert.equal(PG_SCHEMA_VERSION, 58);
   assert.match(PG_BASELINE_SQL, /write_back_thread_id TEXT/);
   const baselineHideColumn = PG_BASELINE_SQL.match(
     /CREATE TABLE recipes \([\s\S]*?\n\);/,

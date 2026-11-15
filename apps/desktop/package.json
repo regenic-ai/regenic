@@ -6,7 +6,7 @@
   "main": "./out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
-    "predev": "pnpm --filter @regenic/api... build",
+    "predev": "node scripts/check-sidecar-runtime.cjs && pnpm --filter @regenic/api... build",
     "build": "electron-vite build",
     "typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.web.json --noEmit",
     "test": "node --experimental-strip-types --test test/*.test.ts",

@@ -340,6 +340,15 @@ describe("inbox sort", () => {
   });
 
   it("uses unread and prompts even when attention is missing", () => {
+    const uncertain = {
+      ...thread({ id: "source:uncertain" }),
+      work: {
+        id: "work-uncertain", status: "done" as const,
+        delivery: { status: "uncertain" as const, write_back: "pending" as const, attempts: 1 },
+      },
+    };
+    assert.equal(resolveThreadAttention(uncertain), "waiting_you");
+    assert.equal(threadStatusFilterKey(uncertain), "waiting");
     const olderUnread = {
       ...thread({
         id: "feishu:old",

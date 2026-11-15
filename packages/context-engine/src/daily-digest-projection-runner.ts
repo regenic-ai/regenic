@@ -3,7 +3,7 @@ import {
   CONTEXT_DAILY_DIGEST_ALGORITHM_VERSION,
   hashCanonicalContext,
   hashContextArtifactInputs,
-  type BlobStore,
+  type FencedBlobStore,
   type ContextArtifactStore,
   type DailyDigestProjectionRunner,
   DEFAULT_DAILY_DIGEST_POLICY,
@@ -13,12 +13,13 @@ import {
 } from "@regenic/domain";
 import { AuthorityContextEvidenceSource } from "./authority-context-source";
 import { DeterministicDailyDigestProjector } from "./deterministic-daily-digest-projector";
+import { persistContextArtifact } from "./context-artifact-blob-writer";
 
 export class DailyDigestProjectionCoordinator implements DailyDigestProjectionRunner {
   constructor(
     private readonly source: AuthorityContextEvidenceSource,
     private readonly artifacts: ContextArtifactStore,
-    private readonly blobs: BlobStore,
+    private readonly blobs: FencedBlobStore,
     private readonly projector = new DeterministicDailyDigestProjector(),
     private readonly policies?: DailyDigestPolicyStore,
     private readonly coverageAlerts?: DailyDigestCoverageAlertStore,
@@ -85,12 +86,7 @@ export class DailyDigestProjectionCoordinator implements DailyDigestProjectionRu
     if (await this.artifacts.getArtifact(input.org_id, proposal.id)) {
       return { artifact_id: proposal.id, input_event_count: proposal.input_refs.length };
     }
-    await this.blobs.put(
-      proposal.body_hash,
-      Buffer.from(canonicalContextJson(proposal.attrs), "utf8"),
-      "application/vnd.regenic.context-artifact+json",
-    );
-    await this.artifacts.putArtifact(proposal);
+    await persistContextArtifact(proposal, this.artifacts, this.blobs);
     if (previous && previous.id !== proposal.id) {
       await this.artifacts.supersedeProposedArtifact({
         org_id: input.org_id,

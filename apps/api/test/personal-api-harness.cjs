@@ -1,9 +1,11 @@
+const assert = require("node:assert/strict");
 const { createServer } = require("node:http");
 const { WebSocketServer } = require("ws");
-const { mkdtemp, rm } = require("node:fs/promises");
-const { tmpdir } = require("node:os");
+const { mkdir, rm } = require("node:fs/promises");
+const { randomUUID } = require("node:crypto");
 const { join } = require("node:path");
 const { afterEach } = require("node:test");
+const { DatabaseSync } = require("node:sqlite");
 const {
   createHttpApp,
   enablePersonalCors,
@@ -42,7 +44,8 @@ async function waitForSyncRun(origin, runId, timeoutMs = 8_000) {
 }
 
 async function createRoot() {
-  const root = await mkdtemp(join(tmpdir(), "regenic-personal-api-"));
+  const root = join(process.cwd(), `.test-personal-api-${randomUUID()}`);
+  await mkdir(root, { recursive: true });
   roots.push(root);
   return root;
 }
@@ -331,20 +334,26 @@ async function seedHostedWork(authority, input) {
     created_at: now,
     updated_at: now,
   });
-  await authority.putWorkItem({
-    id: input.workId,
-    org_id: "local-owner",
-    thread_id: input.threadId,
-    unit_key: input.eventId,
-    head_event_id: input.eventId,
-    record_class: "task",
-    thread_facet: "ticket",
-    status: input.status,
-    recipe_id: input.recipeId,
-    created_at: now,
-    updated_at: now,
+  const recipe = await authority.getRecipe("local-owner", input.recipeId);
+  const created = await authority.createWorkItem({
+    item: {
+      id: input.workId,
+      org_id: "local-owner",
+      thread_id: input.threadId,
+      unit_key: input.eventId,
+      head_event_id: input.eventId,
+      record_class: "task",
+      thread_facet: "ticket",
+      status: "open",
+      recipe_id: input.recipeId,
+      created_at: now,
+      updated_at: now,
+    },
+    recipe,
+    expected_recipe: recipe,
   });
-  await authority.putWorkRun({
+  assert.equal(created.outcome, "applied");
+  const run = {
     id: input.runId,
     org_id: "local-owner",
     work_item_id: input.workId,
@@ -353,9 +362,81 @@ async function seedHostedWork(authority, input) {
     external_run_id: "dsh:seed-sysout",
     agent_thread_id: "dsh:seed-sysout",
     status: "running",
+    start_state: "pending",
+    write_back_required: input.writeBackRequired,
     created_at: now,
     updated_at: now,
+  };
+  assert.equal(await authority.claimWorkRunStart({ run }), true);
+  const submitted = await authority.checkpointWorkRunStart({
+    expected_item: await authority.getWorkItem("local-owner", run.work_item_id),
+    expected_run: await authority.getWorkRun("local-owner", run.id),
+    kind: "submitted", external_run_id: run.external_run_id,
+    agent_thread_id: run.agent_thread_id, now,
   });
+  assert.equal(submitted.outcome, "applied");
+  const running = await authority.commitWorkObservation({
+    expected_item: submitted.item, expected_run: submitted.run,
+    handle: {
+      external_run_id: run.external_run_id, agent_thread_id: run.agent_thread_id, status: "running",
+    },
+    can_write_back: false, trigger_kind: "push", now,
+  });
+  assert.equal(running.outcome, "applied");
+  if (input.status === "done" || input.status === "failed") {
+    const observed = await authority.commitWorkObservation({
+      expected_item: running.transition.item, expected_run: running.transition.run,
+      handle: {
+        external_run_id: run.external_run_id, agent_thread_id: run.agent_thread_id,
+        status: input.status === "done" ? "completed" : "failed",
+        result: { summary: input.resultSummary },
+      },
+      can_write_back: false, trigger_kind: "push", now,
+    });
+    assert.equal(observed.outcome, "applied");
+  } else if (input.status === "skipped") {
+    const dismissed = await authority.dismissWorkItem({ expected_item: running.transition.item, now });
+    assert.equal(dismissed.outcome, "applied");
+  } else {
+    assert.equal(input.status, "running");
+  }
+}
+
+function seedLegacyWorkIdentity(database, { item, run }) {
+  const db = new DatabaseSync(database);
+  try {
+    db.exec("BEGIN");
+    db.prepare(`INSERT INTO work_items (
+      id, org_id, thread_id, unit_key, head_event_id, record_class, thread_facet, status,
+      recipe_id, created_at, updated_at, current_run_id, version, visibility_intent_version
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      item.id, item.org_id, item.thread_id, item.unit_key, item.head_event_id ?? null,
+      item.record_class, item.thread_facet, item.status, item.recipe_id ?? null,
+      item.created_at, item.updated_at, item.current_run_id ?? null, item.version ?? 0,
+      item.visibility_intent_version ?? 0,
+    );
+    db.prepare(`INSERT INTO work_runs (
+      id, org_id, work_item_id, recipe_id, executor_type, external_run_id, agent_thread_id,
+      status, start_state, result_json, created_at, updated_at, version, write_back_required,
+      write_back_target_json, trigger_kind, executor_config_json, include_context
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      run.id, run.org_id, run.work_item_id, run.recipe_id, run.executor_type,
+      run.external_run_id ?? null, run.agent_thread_id ?? null, run.status,
+      run.start_state ?? null, run.result ? JSON.stringify(run.result) : null,
+      run.created_at, run.updated_at, run.version ?? 0,
+      run.write_back_required === undefined ? null : Number(run.write_back_required),
+      run.write_back_target ? JSON.stringify(run.write_back_target) : null,
+      run.trigger_kind ?? null,
+      run.executor_config ? JSON.stringify(run.executor_config) : null,
+      run.include_context === undefined ? null : Number(run.include_context),
+    );
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  } finally {
+    db.close();
+  }
 }
 
 async function startPersonalApi(database, blobRoot, extraEnv = {}) {
@@ -402,5 +483,6 @@ module.exports = {
   startDshWebStub,
   waitUntil,
   seedHostedWork,
+  seedLegacyWorkIdentity,
   startPersonalApi,
 };

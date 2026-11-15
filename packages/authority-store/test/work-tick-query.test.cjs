@@ -44,16 +44,75 @@ function delivery(id, workItemId, status, extra = {}) {
   };
 }
 
+function seedWorkItem(db, value) {
+  db.prepare(`INSERT INTO work_items (
+    id, org_id, thread_id, unit_key, head_event_id, record_class, thread_facet, status,
+    recipe_id, created_at, updated_at, current_run_id, version, visibility_intent_version
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    value.id,
+    value.org_id,
+    value.thread_id,
+    value.unit_key,
+    value.head_event_id ?? null,
+    value.record_class,
+    value.thread_facet,
+    value.status,
+    value.recipe_id ?? null,
+    value.created_at,
+    value.updated_at,
+    value.current_run_id ?? null,
+    value.version ?? 0,
+    value.visibility_intent_version ?? 0,
+  );
+}
+
+function seedWorkDelivery(db, value) {
+  db.prepare(`INSERT INTO work_deliveries (
+    id, org_id, work_item_id, version, recipe_id, kind, unit_key, event_id,
+    status, write_back, attempts, last_error, next_retry_at, payload_json,
+    lease_expires_at, idempotency_key, channel_receipt_json, created_at, updated_at,
+    run_id, target_json, lease_owner, claim_token, cancel_requested_at
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    value.id,
+    value.org_id,
+    value.work_item_id,
+    value.version ?? 0,
+    value.recipe_id,
+    value.kind,
+    value.unit_key,
+    value.event_id ?? null,
+    value.status,
+    value.write_back,
+    value.attempts,
+    value.last_error ?? null,
+    value.next_retry_at ?? null,
+    value.payload ? JSON.stringify(value.payload) : null,
+    value.lease_expires_at ?? null,
+    value.idempotency_key ?? null,
+    value.channel_receipt ? JSON.stringify(value.channel_receipt) : null,
+    value.created_at,
+    value.updated_at,
+    value.run_id ?? null,
+    value.target ? JSON.stringify(value.target) : null,
+    value.lease_owner ?? null,
+    value.claim_token ?? null,
+    value.cancel_requested_at ?? null,
+  );
+}
+
 describe("work tick queries", () => {
   it("returns due deliveries and active work without the settled rows", async () => {
     const root = await mkdtemp(join(tmpdir(), "regenic-work-tick-"));
     roots.push(root);
-    const store = new SqliteAuthorityStore(join(root, "authority.db"));
-    await store.putWorkItem(item("open-1", "open", "event-open"));
-    await store.putWorkItem(item("run-1", "running", "event-run"));
-    await store.putWorkItem(item("done-1", "done", "event-done"));
-    await store.putWorkDelivery(delivery("due", "open-1", "queued"));
-    await store.putWorkDelivery(delivery("sent", "done-1", "acked", { write_back: "sent" }));
+    const path = join(root, "authority.db");
+    const store = new SqliteAuthorityStore(path);
+    const db = new Database(path);
+    seedWorkItem(db, item("open-1", "open", "event-open"));
+    seedWorkItem(db, item("run-1", "running", "event-run"));
+    seedWorkItem(db, item("done-1", "done", "event-done"));
+    seedWorkDelivery(db, delivery("due", "open-1", "queued"));
+    seedWorkDelivery(db, delivery("sent", "done-1", "acked", { write_back: "sent" }));
+    db.close();
     const now = "2026-10-13T01:00:00.000Z";
     const due = await store.listDueWorkDeliveries("local-owner", now);
     assert.deepEqual(due.map((row) => row.id), ["due"]);
@@ -69,30 +128,6 @@ describe("work tick queries", () => {
     store.close();
   });
 
-  it("overwrites the existing delivery when the same work item is saved with a new id", async () => {
-    const root = await mkdtemp(join(tmpdir(), "regenic-work-tick-"));
-    roots.push(root);
-    const store = new SqliteAuthorityStore(join(root, "authority.db"));
-    await store.putWorkItem(item("open-1", "open", "event-open"));
-    await store.putWorkDelivery(delivery("deliv-old", "open-1", "queued"));
-    const saved = await store.putWorkDelivery(
-      delivery("deliv-new", "open-1", "write_back", { write_back: "pending" }),
-    );
-    assert.equal(saved.id, "deliv-new");
-    assert.equal(saved.status, "write_back");
-    assert.equal(await store.getWorkDelivery("local-owner", "deliv-old"), null);
-    const current = await store.getWorkDeliveryByItem("local-owner", "open-1");
-    assert.equal(current?.id, "deliv-new");
-    const listed = await store.listWorkDeliveries("local-owner");
-    assert.deepEqual(listed.map((row) => row.id), ["deliv-new"]);
-    const retried = await store.putWorkDelivery(
-      delivery("deliv-new", "open-1", "acked", { write_back: "sent" }),
-    );
-    assert.equal(retried.id, "deliv-new");
-    assert.equal(retried.status, "acked");
-    store.close();
-  });
-
   it("loads task rows that still need work, and counts shown and hidden heads", async () => {
     const root = await mkdtemp(join(tmpdir(), "regenic-work-tick-"));
     roots.push(root);
@@ -104,21 +139,22 @@ describe("work tick queries", () => {
     insertCurrent(db, "evt-retry", "slack:task-retry", ["task"]);
     insertCurrent(db, "evt-done", "slack:task-done", ["task"]);
     insertCurrent(db, "evt-hidden", "slack:hidden", ["actionable"]);
-    db.close();
-    await store.putWorkItem({
+    seedWorkItem(db, {
       ...item("done-task", "done", "evt-done"),
       thread_id: "slack:task-done",
       record_class: "task",
     });
-    await store.putWorkItem({
+    seedWorkItem(db, {
       ...item("retry-1", "open", "evt-retry"),
       thread_id: "slack:task-retry",
       record_class: "task",
     });
-    await store.putConversationPref({
+    db.close();
+    await store.setConversationVisibility({
       org_id: "local-owner",
       thread_id: "slack:hidden",
       hidden: true,
+      expected_version: 0,
       updated_at: "2026-10-13T00:00:00.000Z",
     });
     const tasks = await store.listInbox("local-owner", {

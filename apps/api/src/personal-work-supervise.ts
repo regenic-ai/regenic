@@ -1,15 +1,7 @@
 import {
-  cancelWorkRun,
-  deliveryAbandoned,
-  foldThreadByPolicy,
-  isActiveWorkStatus,
-  enqueueWriteBack,
-  isAbandonedWorkItem,
   recipeTriggerOf,
   recipeWantsWriteBack,
-  shouldWriteBackHandle,
-  workStatusFromHandle,
-  workRunNeedsStartConfirmation,
+  workRunHandleMatchesExecution,
   type ExecutorContext,
   type ExecutorRunHandle,
   type Recipe,
@@ -18,7 +10,7 @@ import {
   type WorkRun,
 } from "@regenic/domain";
 import { PersonalWorkChannel } from "./personal-work-channel";
-import { preferThread, preferredThreadId } from "./personal-pull-status";
+import { releaseFinishedAgentThread } from "./personal-work-lifecycle";
 import { PersonalRuntimeService } from "./personal-runtime.service";
 import type { PersonalWorkWait } from "./personal-work-wait";
 import { isWorkTickShutdown } from "./personal-work-support";
@@ -32,24 +24,7 @@ import {
   WORK_REAP_LOG_EVERY_MS,
 } from "./personal-work-reap";
 import { isSystemRecipeId } from "./personal-system-work";
-
-export async function foldFinishedWorkThreads(
-  store: Parameters<typeof foldThreadByPolicy>[0],
-  orgId: string,
-  sourceThreadId: string,
-  agentThreadId: string | undefined,
-  now: string,
-): Promise<void> {
-  await foldThreadByPolicy(store, orgId, sourceThreadId, now);
-  const agent = agentThreadId?.trim();
-  if (!agent || agent === sourceThreadId) {
-    return;
-  }
-  await foldThreadByPolicy(store, orgId, agent, now);
-  if (preferredThreadId() === agent) {
-    preferThread(null);
-  }
-}
+import { PersonalConnectorError } from "./personal-errors";
 
 export class PersonalWorkSupervise {
   private waits?: PersonalWorkWait;
@@ -93,7 +68,7 @@ export class PersonalWorkSupervise {
     const host = this.runtime.requireHost();
     const orgId = this.runtime.orgId();
     const items = await host.get("authority").listWorkItems(orgId, {
-      statuses: ["running", "waiting_human"],
+      statuses: ["running", "waiting_human", "skipped"],
     });
     const active = [...items].sort((left, right) =>
       left.created_at.localeCompare(right.created_at),
@@ -103,7 +78,14 @@ export class PersonalWorkSupervise {
         ? await host.get("authority").getRecipe(orgId, item.recipe_id)
         : null;
       const run = await host.get("authority").getActiveWorkRun(orgId, item.id);
-      if (!recipe || !run) {
+      if (recipe && !run && !item.current_run_id) {
+        console.error("personal work current run requires reconciliation", {
+          org_id: orgId,
+          work_item_id: item.id,
+          code: "execution_identity_unknown",
+        });
+      }
+      if (!run || (!recipe && run.write_back_required === undefined)) {
         continue;
       }
       try {
@@ -124,10 +106,23 @@ export class PersonalWorkSupervise {
 
   async refreshOne(
     item: WorkItem,
-    recipe: Recipe,
+    recipe: Recipe | null,
     run: WorkRun,
   ): Promise<void> {
-    if (workRunNeedsStartConfirmation(run)) {
+    if (run.start_state === "pending") {
+      return;
+    }
+    if (run.start_state === "uncertain") {
+      if (item.status === "skipped") return;
+      await this.reconcileUncertainStart(item, recipe, run);
+      return;
+    }
+    if ((!run.external_run_id && !run.agent_thread_id)
+      || (item.status === "skipped" && !run.external_run_id)) {
+      console.error("personal work execution requires identity reconciliation", {
+        org_id: item.org_id, work_item_id: item.id, run_id: run.id,
+        code: "execution_identity_unknown",
+      });
       return;
     }
     const host = this.runtime.requireHost();
@@ -137,11 +132,45 @@ export class PersonalWorkSupervise {
     }
     const ctx = this.channel.contextFor(executor);
     let handle = await executor.status(run, ctx);
+    this.requireMatchingHandle(run, handle);
     const now = Date.now();
-    if (isStaleWork(item.created_at, now, workReapStaleMs()) && handle.status === "running") {
+    if (item.status !== "skipped" && isStaleWork(item.created_at, now, workReapStaleMs()) && handle.status === "running") {
       handle = await this.reapIfInboxEnded(item, run, handle, executor, ctx, now);
     }
     await this.applyHandle(item, recipe, run, handle);
+  }
+
+  private async reconcileUncertainStart(
+    item: WorkItem,
+    recipe: Recipe | null,
+    run: WorkRun,
+  ): Promise<void> {
+    if (!run.external_run_id && !run.agent_thread_id) return;
+    const host = this.runtime.requireHost();
+    const executor = host.get("executors").get(run.executor_type);
+    if (!executor) return;
+    const handle = await executor.status(run, this.channel.contextFor(executor));
+    if (!hasPositiveStartEvidence(handle)
+      || !handle.external_run_id?.trim()
+      || !workRunHandleMatchesExecution(run, handle)) return;
+    const authority = host.get("authority");
+    const confirmed = await authority.checkpointWorkRunStart({
+      expected_item: item,
+      expected_run: run,
+      kind: "submitted",
+      external_run_id: handle.external_run_id,
+      ...(run.agent_thread_id ? { agent_thread_id: run.agent_thread_id } : {}),
+      ...(handle.result ? { result: handle.result } : {}),
+      now: new Date().toISOString(),
+    });
+    if (confirmed.outcome === "conflict") {
+      throw new PersonalConnectorError(
+        "execution_start_conflict",
+        `Work start confirmation rejected: ${confirmed.reason}. Refresh the work item.`,
+        409,
+      );
+    }
+    await this.applyHandle(confirmed.item, recipe, confirmed.run, handle);
   }
 
   private async reapIfInboxEnded(
@@ -170,6 +199,7 @@ export class PersonalWorkSupervise {
       }
       if (followed) {
         handle = await executor.status(run, ctx);
+        this.requireMatchingHandle(run, handle);
       }
     }
     if (handle.status !== "running" || !sysoutId) {
@@ -217,10 +247,21 @@ export class PersonalWorkSupervise {
       return handle;
     }
     const latest = await executor.status(run, ctx);
+    this.requireMatchingHandle(run, latest);
     if (latest.status !== "running") {
       return latest;
     }
     return handleFromInboxEnd(run, scan, transcript);
+  }
+
+  private requireMatchingHandle(run: WorkRun, handle: ExecutorRunHandle): void {
+    if (!workRunHandleMatchesExecution(run, handle)) {
+      throw new PersonalConnectorError(
+        "execution_observation_conflict",
+        "Executor observation does not match the bound run identity.",
+        409,
+      );
+    }
   }
 
   private logReapProbe(
@@ -264,121 +305,75 @@ export class PersonalWorkSupervise {
 
   async applyHandle(
     item: WorkItem,
-    recipe: Recipe,
+    recipe: Recipe | null,
     run: WorkRun,
     handle: ExecutorRunHandle,
   ): Promise<void> {
     const host = this.runtime.requireHost();
     const authority = host.get("authority");
-    if (await this.abandonIfSkipped(item, run)) {
-      return;
-    }
     const now = new Date().toISOString();
-    const nextRun: WorkRun = {
-      ...run,
-      start_state: undefined,
-      external_run_id: handle.external_run_id,
-      agent_thread_id: handle.agent_thread_id ?? run.agent_thread_id,
-      status:
-        handle.status === "completed"
-          ? "completed"
-          : handle.status === "failed"
-            ? "failed"
-            : handle.status === "waiting_human"
-              ? "waiting_human"
-              : "running",
-      result: handle.result ?? run.result,
-      updated_at: now,
-    };
-    if (await this.abandonIfSkipped(item, nextRun)) {
+    const triggerKind = run.trigger_kind ?? (recipe ? recipeTriggerOf(recipe).kind : undefined);
+    if (!triggerKind) throw new Error("Historical execution requires recipe reconciliation");
+    const result = await authority.commitWorkObservation({
+      expected_item: item,
+      expected_run: run,
+      handle,
+      can_write_back: run.write_back_required ?? (recipe ? this.wantsWriteBack(item.id, recipe) : false),
+      trigger_kind: triggerKind,
+      now,
+    });
+    if (result.outcome === "ignored") {
+      this.waits?.drop(run.id);
       return;
     }
-    const changed = workRunChanged(run, nextRun);
-    await authority.putWorkRun(nextRun);
-    if (await this.abandonIfSkipped(item, nextRun)) {
-      return;
-    }
-    const status = workStatusFromHandle(handle);
-    const delivery = await authority.getWorkDeliveryByItem(item.org_id, item.id);
-    if (shouldWriteBackHandle(handle, this.wantsWriteBack(item.id, recipe))) {
-      if (await this.abandonIfSkipped(item, nextRun)) {
-        return;
-      }
-      await authority.putWorkDelivery(
-        enqueueWriteBack({
-          org_id: item.org_id,
-          work_item_id: item.id,
-          recipe_id: recipe.id,
-          kind: recipeTriggerOf(recipe).kind,
-          unit_key: item.unit_key,
-          event_id: item.head_event_id,
-          payload: {
-            summary: handle.result?.summary ?? "",
-            content: handle.result?.content,
-          },
-          now,
-          existing: delivery,
-        }),
+    if (result.outcome === "conflict") {
+      throw new PersonalConnectorError(
+        "execution_observation_conflict",
+        result.reason === "completed_result_changed"
+          ? "Completed work results are immutable. Start a new attempt to change the result."
+          : result.reason === "execution_identity_mismatch"
+          ? "Executor observation does not match the bound run identity."
+          : result.reason === "execution_start_unconfirmed"
+          ? "Executor start must be confirmed before applying an observation."
+          : result.reason === "execution_identity_unknown"
+          ? "Executor identity could not be verified. Reconcile this run before applying an observation."
+          : "Work changed while its executor was being observed. Refresh the work item before applying another observation.",
+        409,
       );
-    } else if (handle.status === "completed" && delivery && delivery.status !== "acked") {
-      await authority.putWorkDelivery(deliveryAbandoned(delivery, now));
     }
-    if (await this.abandonIfSkipped(item, nextRun)) {
+    const { transition } = result;
+    const nextRun = transition.run;
+    if (transition.item.status === "skipped" && item.status === "skipped") {
+      this.waits?.drop(run.id);
+      this.writeBackOverride.delete(item.id);
+      if (transition.changed) this.workUpdated?.(item.id);
       return;
     }
-    if (item.status !== status) {
-      await authority.putWorkItem({
-        ...item,
-        status,
-        updated_at: now,
-      });
-    }
-    if (!isActiveWorkStatus(status)) {
+    if (transition.settled) {
       this.writeBackOverride.delete(item.id);
       this.waits?.drop(run.id);
-      if (!isSystemRecipeId(recipe.id)) {
-        if (status === "done" && recipe.hide_on_success) {
-          await foldFinishedWorkThreads(
-            authority,
-            item.org_id,
-            item.thread_id,
-            nextRun.agent_thread_id,
-            now,
-          );
-        }
-        if (item.status !== status) {
+      if (!isSystemRecipeId(run.recipe_id)) {
+        releaseFinishedAgentThread(nextRun.agent_thread_id);
+        if (transition.item.status !== item.status) {
           this.touchInboxDigest?.();
         }
       }
     }
-    if (changed || item.status !== status) {
+    if (transition.changed) {
       this.workUpdated?.(item.id);
     }
   }
-
-  async abandonIfSkipped(item: WorkItem, run: WorkRun): Promise<boolean> {
-    const latest = await this.runtime
-      .requireHost()
-      .get("authority")
-      .getWorkItem(item.org_id, item.id);
-    if (!isAbandonedWorkItem(latest?.status)) {
-      return false;
-    }
-    if (run.status !== "cancelled") {
-      await this.runtime
-        .requireHost()
-        .get("authority")
-        .putWorkRun(cancelWorkRun(run, new Date().toISOString()));
-    }
-    this.waits?.drop(run.id);
-    return true;
-  }
 }
 
-function workRunChanged(before: WorkRun, after: WorkRun): boolean {
-  return before.status !== after.status
-    || before.start_state !== after.start_state
-    || before.external_run_id !== after.external_run_id
-    || before.agent_thread_id !== after.agent_thread_id
-    || JSON.stringify(before.result) !== JSON.stringify(after.result);
+function hasPositiveStartEvidence(handle: ExecutorRunHandle): boolean {
+  if (handle.status === "completed" || handle.status === "cancelled") return true;
+  if (handle.status === "running") {
+    return handle.transcript?.turn?.state === "open"
+      || handle.transcript?.activity === "working";
+  }
+  if (handle.status === "waiting_human") {
+    return (handle.prompts?.length ?? 0) > 0
+      || handle.transcript?.activity === "awaiting_user";
+  }
+  return false;
 }

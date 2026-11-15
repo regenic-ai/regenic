@@ -5,13 +5,18 @@ const { createHttpApp } = require("../dist/http-app");
 const { PersonalConnectorService } = require("../dist/personal-connector.service");
 const { SqliteAuthorityStore } = require("@regenic/authority-store/sqlite");
 const { FsBlobStore } = require("@regenic/blob-store");
-const { INGEST_SCHEMA_VERSION, IngestionService, channelRecord } = require("@regenic/domain");
+const { INGEST_SCHEMA_VERSION, IngestionService, channelRecord, conversationId } = require("@regenic/domain");
 const {
   createRoot,
   ingestActionable,
+  seedHostedWork,
   setEnv,
   startPersonalApi,
 } = require("./personal-api-harness.cjs");
+
+function inboxCommand(command_id) {
+  return { command_id, issued_at: new Date().toISOString() };
+}
 
 describe("personal /v1/me", { concurrency: 1 }, () => {
   it("persists sync settings, applies them without a restart, and restores environment defaults", async () => {
@@ -204,12 +209,18 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ policy: { ...defaults, actionable_disposition: "pending" } }),
       });
-      const decision = await (
-        await fetch(`${origin}/v1/me/inbox/${eventId}/dispatch-policy/reapply`, { method: "POST" })
-      ).json();
+      const command = inboxCommand("api-dispatch-reapply-1");
+      const request = () => fetch(`${origin}/v1/me/inbox/${eventId}/dispatch-policy/reapply`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(command),
+      });
+      const decision = await (await request()).json();
+      const replay = await (await request()).json();
       assert.equal(decision.disposition, "pending");
       assert.ok(decision.reason_codes.includes("policy_actionable"));
       assert.ok(decision.reason_codes.includes("personal_dispatch_policy"));
+      assert.deepEqual(replay, decision);
       assert.deepEqual(await (await fetch(`${origin}/v1/me/inbox`)).json(), []);
       const pending = await (await fetch(`${origin}/v1/me/inbox?disposition=pending`)).json();
       assert.equal(pending.length, 1);
@@ -227,19 +238,29 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
     const eventId = await ingestActionable(database, blobRoot);
     const { app, origin } = await startPersonalApi(database, blobRoot);
     try {
-      const triaged = await (
-        await fetch(`${origin}/v1/me/inbox/${eventId}/triage`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ disposition: "outside_current_work" }),
-        })
-      ).json();
+      const command = {
+        ...inboxCommand("api-inbox-triage-1"),
+        disposition: "outside_current_work",
+      };
+      const request = (body) => fetch(`${origin}/v1/me/inbox/${eventId}/triage`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const triaged = await (await request(command)).json();
       assert.equal(triaged.disposition, "outside_current_work");
       assert.ok(triaged.reason_codes.includes("human_triage"));
+      assert.deepEqual(await (await request(command)).json(), triaged);
+      const reused = await request({ ...command, disposition: "pending" });
+      assert.equal(reused.status, 409);
+      assert.equal((await reused.json()).error.code, "command_conflict");
       assert.deepEqual(await (await fetch(`${origin}/v1/me/inbox`)).json(), []);
+      const resetCommand = inboxCommand("api-inbox-reset-1");
       const reset = await (
         await fetch(`${origin}/v1/me/inbox/${eventId}/triage/reset`, {
           method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(resetCommand),
         })
       ).json();
       assert.equal(reset.disposition, "current_work");
@@ -269,24 +290,104 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
     }
   });
 
-  it("folds and unfolds an inbox event's thread with human preference", async () => {
+  it("commits an eligible work acknowledgment with its inbox read cursor", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    const eventId = await ingestActionable(database, blobRoot);
+    const authority = new SqliteAuthorityStore(database);
+    const event = await authority.getEvent("local-owner", eventId);
+    assert.ok(event);
+    const threadId = conversationId(event.source, event.external_id, event.id);
+    await seedHostedWork(authority, {
+      recipeId: "ack-recipe",
+      workId: "ack-work",
+      runId: "ack-run",
+      eventId,
+      threadId,
+      status: "done",
+      resultSummary: "Handled",
+      writeBackRequired: false,
+    });
+    await authority.close();
+    const { app, origin } = await startPersonalApi(database, blobRoot);
+    try {
+      const response = await fetch(`${origin}/v1/me/inbox/${eventId}/ack`, {
+        method: "POST",
+      });
+      if (!response.ok) assert.fail(await response.text());
+      const pref = await response.json();
+      assert.equal(pref.last_read_external_id, "ask-1");
+      assert.equal(pref.last_read_at, "2026-08-21T00:00:00.000Z");
+      assert.equal(pref.hidden_reason, "policy");
+      const verification = new SqliteAuthorityStore(database);
+      try {
+        const item = await verification.getWorkItem("local-owner", "ack-work");
+        assert.equal(item.acknowledged_run_id, "ack-run");
+      } finally {
+        await verification.close();
+      }
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("folds and unfolds an inbox event's thread with human preference, including repeated show commands", async () => {
     const root = await createRoot();
     const database = join(root, "authority.db");
     const blobRoot = join(root, "blobs");
     const eventId = await ingestActionable(database, blobRoot);
     const { app, origin } = await startPersonalApi(database, blobRoot);
     try {
-      const folded = await (
-        await fetch(`${origin}/v1/me/inbox/${eventId}/fold`, { method: "POST" })
-      ).json();
+      const postCommand = (path, command) => fetch(`${origin}/v1/me/inbox/${eventId}/${path}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(command),
+      });
+      const showCommand = {
+        expected_visibility_version: 0,
+        command_id: "api-inbox-show-1",
+        issued_at: new Date().toISOString(),
+      };
+      const shownResponse = await postCommand("unfold", showCommand);
+      assert.equal(shownResponse.status, 201);
+      const shown = await shownResponse.json();
+      assert.equal(shown.hidden, false);
+      assert.equal(shown.visibility_version, 1);
+      assert.deepEqual(await (await postCommand("unfold", showCommand)).json(), shown);
+      const sameValueResponse = await postCommand("unfold", {
+        ...showCommand, expected_visibility_version: 1, command_id: "api-inbox-show-2",
+      });
+      assert.equal(sameValueResponse.status, 201);
+      const sameValue = await sameValueResponse.json();
+      assert.equal(sameValue.hidden, false);
+      assert.equal(sameValue.visibility_version, 2);
+      const foldCommand = {
+        expected_visibility_version: sameValue.visibility_version,
+        command_id: "api-inbox-fold-1",
+        issued_at: new Date().toISOString(),
+      };
+      const foldedResponse = await postCommand("fold", foldCommand);
+      assert.equal(foldedResponse.status, 201);
+      const folded = await foldedResponse.json();
       assert.equal(folded.hidden, true);
       assert.equal(folded.hidden_reason, "human");
+      assert.equal(folded.visibility_version, 3);
+      assert.deepEqual(await (await postCommand("fold", foldCommand)).json(), folded);
+      assert.deepEqual(await (await postCommand("unfold", showCommand)).json(), shown);
+      const staleResponse = await postCommand("unfold", { ...showCommand, command_id: "api-inbox-stale-show" });
+      assert.equal(staleResponse.status, 409);
       assert.deepEqual(await (await fetch(`${origin}/v1/me/inbox`)).json(), []);
       assert.equal((await (await fetch(`${origin}/v1/me/inbox?list=hidden`)).json()).length, 1);
 
-      const unfolded = await (
-        await fetch(`${origin}/v1/me/inbox/${eventId}/unfold`, { method: "POST" })
-      ).json();
+      const unfoldCommand = {
+        expected_visibility_version: folded.visibility_version,
+        command_id: "api-inbox-unfold-1",
+        issued_at: new Date().toISOString(),
+      };
+      const unfoldedResponse = await postCommand("unfold", unfoldCommand);
+      assert.equal(unfoldedResponse.status, 201);
+      const unfolded = await unfoldedResponse.json();
       assert.equal(unfolded.hidden, false);
       assert.equal(unfolded.hidden_reason, null);
       assert.equal((await (await fetch(`${origin}/v1/me/inbox`)).json()).length, 1);
@@ -341,12 +442,12 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
           occurred_at: "2026-08-21T00:00:00.000Z",
           actor: { id: "local-owner" },
           scope: { id: "personal" },
-          type: "task",
+          type: "text",
           content: [
             {
               role: "body",
               media_type: "text/plain",
-              text: "Review this order.",
+              text: "The order has been archived.",
             },
           ],
         },
@@ -382,7 +483,7 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
       assert.equal(hidden[0].event.external_id, "order-9");
       assert.notEqual(hidden[0].event.operation, "tombstone");
       assert.equal(hidden[0].hidden, true);
-      assert.match(hidden[0].body_text ?? "", /Review this order/);
+      assert.match(hidden[0].body_text ?? "", /order has been archived/);
     } finally {
       await app.close();
     }

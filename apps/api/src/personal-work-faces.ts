@@ -31,10 +31,13 @@ export function workInboxFaces(input: {
   extraPrompts?: ReadonlyMap<string, ThreadPrompt[]>;
 }): Map<string, WorkInboxFace> {
   const recipesById = new Map(input.recipes.map((recipe) => [recipe.id, recipe]));
-  const runsByItem = latestRunsByItem(input.runs);
-  const deliveryByItem = new Map(
-    input.deliveries.map((item) => [item.work_item_id, item]),
-  );
+  const runsById = new Map(input.runs.map((run) => [run.id, run]));
+  const deliveriesByItem = new Map<string, WorkDelivery[]>();
+  for (const delivery of input.deliveries) {
+    const rows = deliveriesByItem.get(delivery.work_item_id) ?? [];
+    rows.push(delivery);
+    deliveriesByItem.set(delivery.work_item_id, rows);
+  }
   const faces = new Map<string, WorkInboxFace>();
   for (const threadId of new Set(input.threadIds)) {
     const item = currentJobOnSession(input.items, threadId);
@@ -42,28 +45,22 @@ export function workInboxFaces(input: {
       continue;
     }
     const recipe = item.recipe_id ? recipesById.get(item.recipe_id) : undefined;
-    const run = runsByItem.get(item.id);
-    const work = workFaceOf(item, recipe, run, deliveryByItem.get(item.id));
+    const run = item.current_run_id ? runsById.get(item.current_run_id) : undefined;
+    const deliveries = deliveriesByItem.get(item.id) ?? [];
+    const delivery = deliveries.find((row) => row.run_id
+      ? row.run_id === item.current_run_id : run?.write_back_required === undefined);
+    const work = workFaceOf(item, recipe, run, delivery);
+    const unresolvedHistory = deliveries.some((row) => row !== delivery && row.status !== "acked");
     faces.set(threadId, {
       record_class: item.record_class,
       thread_facet: item.thread_facet,
-      attention: attentionForWork(work, input.extraPrompts?.get(threadId)?.length ?? 0),
+      attention: unresolvedHistory ? "waiting_you"
+        : attentionForWork(work, input.extraPrompts?.get(threadId)?.length ?? 0),
       work,
       agent_thread_id: run?.agent_thread_id,
     });
   }
   return faces;
-}
-
-export function latestRunsByItem(runs: WorkRun[]): Map<string, WorkRun> {
-  const best = new Map<string, WorkRun>();
-  for (const run of runs) {
-    const current = best.get(run.work_item_id);
-    if (!current || current.updated_at < run.updated_at) {
-      best.set(run.work_item_id, run);
-    }
-  }
-  return best;
 }
 
 export function attentionForWork(
@@ -79,7 +76,8 @@ export function attentionForWork(
   ) {
     return "waiting_you";
   }
-  if (work.status === "done" && work.has_result && work.can_write_back === false) {
+  if (work.status === "done" && work.has_result && work.can_write_back === false
+    && work.auto_completed !== true) {
     return "needs_ack";
   }
   if (work.status === "running") {

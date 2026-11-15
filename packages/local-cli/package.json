@@ -17,6 +17,7 @@
   "dependencies": {
     "@regenic/authority-store": "workspace:*",
     "@regenic/blob-store": "workspace:*",
+    "@regenic/config": "workspace:*",
     "@regenic/context-engine": "workspace:*",
     "@regenic/domain": "workspace:*",
     "@regenic/embedding-provider": "workspace:*",

@@ -57,6 +57,7 @@ export interface InboxViewItem {
   title: string | null;
   pinned: boolean;
   hidden: boolean;
+  visibility_version: number;
   pref_updated_at: string | null;
   conversation_label: string | null;
   conversation_kind: string | null;
@@ -120,6 +121,7 @@ export function decorateInboxItem(
     title: pref?.title ?? null,
     pinned: pref?.pinned === true,
     hidden: pref?.hidden === true,
+    visibility_version: pref?.visibility_version ?? 0,
     pref_updated_at: pref?.updated_at ?? null,
     conversation_label:
       surface.conversation_label ?? labels.get(threadId) ?? null,
@@ -153,11 +155,13 @@ export function decorateInboxItem(
     attention: attentionOf({
       prompts: prompts.length,
       awaiting_user:
-        awaitingUser.has(threadId) || surface.activity === "awaiting_user",
+        awaitingUser.has(threadId) || surface.activity === "awaiting_user" ||
+        workFace?.attention === "waiting_you",
       unread: attention.unread,
       work_status: workFace?.work?.status,
       can_write_back: workFace?.work?.can_write_back,
       has_result: workFace?.work?.has_result,
+      auto_completed: workFace?.work?.auto_completed,
       activity: surface.activity,
     }),
     work: workFace?.work,

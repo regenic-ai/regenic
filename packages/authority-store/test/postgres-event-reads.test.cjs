@@ -5,6 +5,7 @@ const {
   claimOutboundAttempt,
   getEvent,
   listEvents,
+  listBlobInventoryPage,
   openContextRead,
 } = require("../dist/postgres/events");
 const { listInbox } = require("../dist/postgres/inbox");
@@ -55,6 +56,64 @@ function assertMetadata(actual, expected) {
 }
 
 describe("postgres Event read projections without a live database", () => {
+  it("pages Blob inventory by hash and returns the continuation cursor", async () => {
+    let capturedSql = "";
+    let capturedParams = [];
+    const db = {
+      async query(sql, params) {
+        capturedSql = sql;
+        capturedParams = params;
+        return [
+          {
+            content_hash: "b".repeat(64),
+            media_type: "text/plain",
+            byte_size: "3",
+            created_at: new Date(occurredAt),
+            state: "protected",
+            generation: 1,
+            unreferenced_at: null,
+            write_lease_expires_at: null,
+            reference_count: 2,
+          },
+          {
+            content_hash: "c".repeat(64),
+            media_type: "text/plain",
+            byte_size: "4",
+            created_at: new Date(occurredAt),
+            state: "available",
+            generation: 2,
+            unreferenced_at: null,
+            write_lease_expires_at: null,
+            reference_count: 0,
+          },
+        ];
+      },
+    };
+
+    const page = await listBlobInventoryPage(db, {
+      after_hash: "a".repeat(64),
+      limit: 1,
+    });
+
+    assert.match(capturedSql, /ORDER BY b\.content_hash/);
+    assert.match(capturedSql, /LIMIT \$2/);
+    assert.deepEqual(capturedParams, ["a".repeat(64), 2]);
+    assert.deepEqual(page, {
+      entries: [{
+        content_hash: "b".repeat(64),
+        media_type: "text/plain",
+        byte_size: 3,
+        created_at: occurredAt,
+        state: "protected",
+        generation: 1,
+        unreferenced_at: null,
+        write_lease_expires_at: null,
+        reference_count: 2,
+      }],
+      next_after_hash: "b".repeat(64),
+    });
+  });
+
   it("keeps push candidate eligibility and tied-time paging in SQL before the limit", async () => {
     const db = {
       async query(sql, params) {
@@ -138,18 +197,32 @@ describe("postgres Event read projections without a live database", () => {
               recovery_hash: "a".repeat(64), now: occurredAt,
             };
             for (const affected of [0, 1]) {
+              const client = {};
               const db = {
-                async execute(sql, values) {
-                  assert.match(sql, /ON CONFLICT\s*\(org_id, client_request_id\)\s*DO UPDATE/);
-                  assert.match(sql, /WHERE outbound_attempts\.status = 'rejected'/);
-                  assert.match(sql, /outbound_attempts\.thread_id = EXCLUDED\.thread_id/);
-                  for (const field of ["event_id", "receipt_json", "channel_message_ids"]) {
-                    assert.ok(sql.includes(`outbound_attempts.${field} IS NULL`), field);
+                async withTx(work) {
+                  return work(client);
+                },
+                async query(sql, values, activeClient) {
+                  assert.equal(activeClient, client);
+                  assert.match(sql, /FROM blob_references/);
+                  assert.deepEqual(values, [input.org_id, input.client_request_id]);
+                  return [];
+                },
+                async execute(sql, values, activeClient) {
+                  assert.equal(activeClient, client);
+                  if (sql.includes("INSERT INTO outbound_attempts")) {
+                    assert.match(sql, /ON CONFLICT\s*\(org_id, client_request_id\)\s*DO UPDATE/);
+                    assert.match(sql, /WHERE outbound_attempts\.status = 'rejected'/);
+                    assert.match(sql, /outbound_attempts\.thread_id = EXCLUDED\.thread_id/);
+                    for (const field of ["event_id", "receipt_json", "channel_message_ids"]) {
+                      assert.ok(sql.includes(`outbound_attempts.${field} IS NULL`), field);
+                    }
+                    assert.deepEqual(values, [
+                      input.org_id, input.client_request_id, input.thread_id, input.recovery_hash, input.now,
+                    ]);
+                    return affected;
                   }
-                  assert.deepEqual(values, [
-                    input.org_id, input.client_request_id, input.thread_id, input.recovery_hash, input.now,
-                  ]);
-                  return affected;
+                  return 1;
                 },
               };
               assert.equal(await claimOutboundAttempt(db, input), affected === 1);
