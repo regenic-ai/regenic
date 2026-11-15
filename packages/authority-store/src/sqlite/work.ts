@@ -296,11 +296,21 @@ async function putWorkItem(db: Database.Database, item: WorkItem): Promise<WorkI
 export async function createWorkItem(db: Database.Database, input: WorkItemCreation): Promise<WorkItemCreationResult> {
   return db.transaction((): WorkItemCreationResult => {
     const recipe = db.prepare("SELECT * FROM recipes WHERE id = ?").get(input.recipe.id) as RecipeRow | undefined;
+    const transition = input.search_answer_transition;
+    const previousAnswer = transition ? db.prepare("SELECT * FROM search_answers WHERE id = ?")
+      .get(transition.expected_answer.id) as SearchAnswerRow | undefined : undefined;
+    const previousItem = transition ? db.prepare("SELECT * FROM work_items WHERE id = ?")
+      .get(transition.expected_item.id) as WorkItemRow | undefined : undefined;
+    const previousRun = transition ? db.prepare("SELECT * FROM work_runs WHERE id = ?")
+      .get(transition.expected_run.id) as WorkRunRow | undefined : undefined;
     const result = prepareWorkItemCreation(input, {
       item_exists: Boolean(db.prepare("SELECT id FROM work_items WHERE id = ?").get(input.item.id)),
       recipe: recipe ? toRecipe(recipe) : null,
       search_answer_exists: input.search_answer
         ? Boolean(db.prepare("SELECT id FROM search_answers WHERE id = ?").get(input.search_answer.id)) : false,
+      search_answer: previousAnswer ? toSearchAnswer(previousAnswer) : null,
+      answer_item: previousItem ? toWorkItem(previousItem) : null,
+      answer_run: previousRun ? toWorkRun(previousRun) : null,
     });
     if (result.outcome !== "applied") return result;
     writeRecipe(db, result.recipe);
@@ -311,7 +321,11 @@ export async function createWorkItem(db: Database.Database, input: WorkItemCreat
     const answer = result.search_answer;
     const savedAnswer = answer ? db.prepare(`INSERT INTO search_answers (
       id, org_id, work_item_id, query, event_ids_json, scope_json, outcome, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?) RETURNING *`).get(
+    ) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?)
+    ${transition ? `ON CONFLICT(id) DO UPDATE SET
+      work_item_id = excluded.work_item_id, scope_json = excluded.scope_json,
+      updated_at = excluded.updated_at` : ""}
+    RETURNING *`).get(
       answer.id, answer.org_id, answer.work_item_id, answer.query, JSON.stringify(answer.event_ids),
       answer.scope ? JSON.stringify(answer.scope) : null,
       answer.created_at, answer.updated_at,

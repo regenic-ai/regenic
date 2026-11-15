@@ -7,12 +7,13 @@ import {
   type SearchAnswerMapReduce,
   type SearchAnswerScope,
   type WorkRun,
+  type WorkItem,
 } from "@regenic/domain";
 import { PersonalContextError } from "./personal-context-error";
 import { PersonalConversationContextService } from "./personal-conversation-context.service";
 import { PersonalConversationLabelsService } from "./personal-conversation-labels.service";
 import { PersonalRuntimeService } from "./personal-runtime.service";
-import { PersonalWorkService } from "./personal-work.service";
+import { PersonalWorkService, type PreparedAuxiliaryExecution } from "./personal-work.service";
 import {
   SEARCH_ANSWER_PURPOSE,
   SEARCH_ANSWER_MAP_PURPOSE,
@@ -163,7 +164,7 @@ export class PersonalSearchAnswerService {
       return view(record, state.run, state.work_item.status);
     }
     if (record.scope?.map_reduce?.phase === "mapping") {
-      return this.advanceMap(record, state.run, state.work_item.status);
+      return this.advanceMap(record, state.run, state.work_item);
     }
     if (
       record.scope?.map_reduce?.phase === "reducing"
@@ -197,8 +198,9 @@ export class PersonalSearchAnswerService {
   private async advanceMap(
     record: SearchAnswerRecord,
     run: WorkRun | undefined,
-    itemStatus: string,
+    item: WorkItem,
   ): Promise<SearchAnswerView> {
+    const itemStatus = item.status;
     const map = record.scope!.map_reduce!;
     if (!run && itemStatus === "open") {
       const batchIndex = map.completed_batches;
@@ -207,13 +209,7 @@ export class PersonalSearchAnswerService {
         searchAnswerMapBatchRefs(record.event_ids, map, batchIndex),
         record.query,
       );
-      const prepared = await this.work.prepareAuxiliaryExecution({
-        id: record.work_item_id,
-        purpose: SEARCH_ANSWER_MAP_PURPOSE,
-        executor_type: map.executor_type,
-        prompt: SEARCH_ANSWER_MAP_PROMPT,
-        max_concurrent: SEARCH_ANSWER_ACTIVE_MAX,
-      });
+      const prepared = await this.work.prepareExistingAuxiliaryExecution(record.work_item_id);
       const started = await this.work.startPreparedAuxiliaryExecution(
         prepared,
         evidenceText,
@@ -253,20 +249,20 @@ export class PersonalSearchAnswerService {
         record.query,
       );
       const nextWorkItemId = mapWorkItemId(record.id, nextMap.completed_batches);
+      const nextRecord = {
+        ...record,
+        work_item_id: nextWorkItemId,
+        scope: { ...record.scope!, map_reduce: nextMap },
+        updated_at: new Date().toISOString(),
+      };
       const prepared = await this.work.prepareAuxiliaryExecution({
         id: nextWorkItemId,
         purpose: SEARCH_ANSWER_MAP_PURPOSE,
         executor_type: nextMap.executor_type,
         prompt: SEARCH_ANSWER_MAP_PROMPT,
         max_concurrent: SEARCH_ANSWER_ACTIVE_MAX,
-      });
-      record = {
-        ...record,
-        work_item_id: nextWorkItemId,
-        scope: { ...record.scope!, map_reduce: nextMap },
-        updated_at: new Date().toISOString(),
-      };
-      await this.runtime.requireHost().get("authority").putSearchAnswer(record);
+      }, nextRecord, { expected_answer: record, expected_item: item, expected_run: run });
+      record = nextRecord;
       const started = await this.work.startPreparedAuxiliaryExecution(
         prepared,
         evidenceText,
@@ -287,32 +283,28 @@ export class PersonalSearchAnswerService {
         }
       : { ...record.scope!, map_reduce: finalMap };
     const finalWorkItemId = `${SEARCH_ANSWER_WORK_ITEM_PREFIX}${record.id}`;
-    await this.work.prepareAuxiliaryExecution({
-      id: finalWorkItemId,
-      purpose: SEARCH_ANSWER_PURPOSE,
-      executor_type: nextMap.executor_type,
-      prompt: SEARCH_ANSWER_PROMPT,
-      max_concurrent: SEARCH_ANSWER_ACTIVE_MAX,
-    });
-    record = {
+    const nextRecord = {
       ...record,
       work_item_id: finalWorkItemId,
       scope: nextScope,
       updated_at: new Date().toISOString(),
     };
-    await this.runtime.requireHost().get("authority").putSearchAnswer(record);
-    return this.resumeReduce(record);
-  }
-
-  private async resumeReduce(record: SearchAnswerRecord): Promise<SearchAnswerView> {
-    const map = record.scope!.map_reduce!;
     const prepared = await this.work.prepareAuxiliaryExecution({
-      id: record.work_item_id,
+      id: finalWorkItemId,
       purpose: SEARCH_ANSWER_PURPOSE,
-      executor_type: map.executor_type,
+      executor_type: nextMap.executor_type,
       prompt: SEARCH_ANSWER_PROMPT,
       max_concurrent: SEARCH_ANSWER_ACTIVE_MAX,
-    });
+    }, nextRecord, { expected_answer: record, expected_item: item, expected_run: run });
+    return this.resumeReduce(nextRecord, prepared);
+  }
+
+  private async resumeReduce(
+    record: SearchAnswerRecord,
+    supplied?: PreparedAuxiliaryExecution,
+  ): Promise<SearchAnswerView> {
+    const map = record.scope!.map_reduce!;
+    const prepared = supplied ?? await this.work.prepareExistingAuxiliaryExecution(record.work_item_id);
     const started = await this.work.startPreparedAuxiliaryExecution(
       prepared,
       [

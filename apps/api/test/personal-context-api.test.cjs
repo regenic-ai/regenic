@@ -15,6 +15,7 @@ const {
   hashContextArtifactInputs,
 } = require("@regenic/domain");
 const { createHttpApp } = require("../dist/http-app");
+const { PersonalWorkService } = require("../dist/personal-work.service");
 
 const roots = [];
 const apps = [];
@@ -1317,12 +1318,13 @@ describe("personal context API", () => {
           }])
         : "There were 11 extracted task groups [1].";
     });
-    const { origin } = await startApi(
+    const { app, origin: initialOrigin } = await startApi(
       root,
       { driver: "none" },
       undefined,
       ingestLargeAggregateConversation,
     );
+    let origin = initialOrigin;
     const executorType = await installHttpExecutor(origin, executor.baseUrl);
     const conversation = JSON.parse((await postJson(
       `${origin}/v1/me/context/search/expand`,
@@ -1362,11 +1364,12 @@ describe("personal context API", () => {
     } finally {
       ledger.close();
     }
-    answer = await fetch(
-      `${origin}/v1/me/context/search/answers/${answer.answer_id}`,
-    ).then((response) => response.json());
+    const resumed = await fetch(`${origin}/v1/me/context/search/answers/${answer.answer_id}`);
+    assert.equal(resumed.status, 200, await resumed.clone().text());
+    answer = await resumed.json();
     const startsAfterResume = executor.requests.filter((request) =>
       request.method === "POST" && request.url === "/v1/runs");
+    assert.equal(startsAfterResume.length, 2, JSON.stringify(answer));
     assert.match(
       startsAfterResume[1].body.evidence_text,
       new RegExp(`bulk-task-${persistedOffsets[1]} completed`),
@@ -1375,11 +1378,43 @@ describe("personal context API", () => {
       startsAfterResume[1].body.evidence_text,
       new RegExp(`bulk-task-${persistedOffsets[1] - 1} completed`),
     );
+    const work = app.get(PersonalWorkService);
+    const startPrepared = work.startPreparedAuxiliaryExecution.bind(work);
+    let interrupted = false;
+    let restarts = 0;
+    work.startPreparedAuxiliaryExecution = async (prepared, evidenceText) => {
+      if (!interrupted && prepared.search_answer?.scope?.map_reduce?.phase === "reducing") {
+        interrupted = true;
+        throw new Error("Simulated interruption before reduce startup");
+      }
+      return startPrepared(prepared, evidenceText);
+    };
     for (let index = 1; index < answer.progress.total_batches + 1; index += 1) {
-      answer = await fetch(
-        `${origin}/v1/me/context/search/answers/${answer.answer_id}`,
-      ).then((response) => response.json());
+      let response = await fetch(`${origin}/v1/me/context/search/answers/${answer.answer_id}`);
+      if (response.status === 500) {
+        assert.equal(interrupted, true, await response.text());
+        restarts += 1;
+        assert.equal(restarts, 1);
+        const pendingLedger = new SqliteAuthorityStore(join(root, "authority.db"));
+        try {
+          const record = await pendingLedger.getSearchAnswer("local-owner", answer.answer_id);
+          const item = await pendingLedger.getWorkItem("local-owner", record.work_item_id);
+          assert.equal(record.scope.map_reduce.phase, "reducing");
+          assert.equal(record.scope.map_reduce.completed_batches, persistedOffsets.length - 1);
+          assert.equal(item.status, "open");
+          assert.equal(item.current_run_id, undefined);
+        } finally {
+          pendingLedger.close();
+        }
+        await app.close();
+        apps.splice(apps.indexOf(app), 1);
+        ({ origin } = await startApi(root, { driver: "none" }, undefined, null));
+        response = await fetch(`${origin}/v1/me/context/search/answers/${answer.answer_id}`);
+      }
+      assert.equal(response.status, 200, await response.clone().text());
+      answer = await response.json();
     }
+    assert.equal(restarts, 1);
     assert.equal(answer.status, "completed");
     assert.deepEqual(answer.progress, {
       completed_batches: persistedOffsets.length - 1,

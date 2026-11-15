@@ -1403,6 +1403,55 @@ for (const driver of drivers) {
       assert.deepEqual(await f.store.listWorkRuns(ORG, saved.item.id), []);
     });
 
+    it("atomically advances answer stages with fenced source snapshots and survives reopen", async (t) => {
+      const f = await fixture(t, driver, { write_back_required: false });
+      const previous = await f.store.putSearchAnswer({
+        id: "staged-answer", org_id: ORG, work_item_id: f.item.id,
+        query: "Question", event_ids: ["event-1", "event-2"], created_at: NOW, updated_at: NOW,
+        scope: {
+          intent: "aggregate", complete: true, total_count: 2, included_count: 2, omitted_count: 0,
+          map_reduce: {
+            strategy: "map_reduce", phase: "mapping", snapshot_id: "snapshot",
+            batch_offsets: [0, 1, 2], completed_batches: 0, total_batches: 2, facts: [],
+          },
+        },
+      });
+      const observed = await f.store.commitWorkObservation(f.input);
+      assert.equal(observed.outcome, "applied");
+      const [completedItem, completedRun] = await Promise.all([
+        f.store.getWorkItem(ORG, f.item.id), f.store.getWorkRun(ORG, f.run.id),
+      ]);
+      assert.equal(completedItem.status, "done");
+      const input = creationInput(f);
+      input.search_answer = {
+        ...previous, work_item_id: input.item.id, updated_at: LATER,
+        scope: {
+          ...previous.scope,
+          map_reduce: { ...previous.scope.map_reduce, completed_batches: 1 },
+        },
+      };
+      input.search_answer_transition = {
+        expected_answer: previous, expected_item: completedItem, expected_run: completedRun,
+      };
+      assert.deepEqual(await f.store.createWorkItem({
+        ...input, search_answer_transition: {
+          ...input.search_answer_transition,
+          expected_run: { ...completedRun, version: completedRun.version + 1 },
+        },
+      }), { outcome: "conflict", reason: "stale_search_answer" });
+      assert.equal(await f.store.getWorkItem(ORG, input.item.id), null);
+      assert.equal(await f.store.getRecipe(ORG, input.recipe.id), null);
+      assert.deepEqual(await f.store.getSearchAnswer(ORG, previous.id), previous);
+      const saved = await f.store.createWorkItem(input);
+      assert.equal(saved.outcome, "applied");
+      assert.equal(saved.search_answer.work_item_id, saved.item.id);
+      await f.reopen();
+      assert.deepEqual(await f.store.getSearchAnswer(ORG, previous.id), saved.search_answer);
+      assert.deepEqual(await f.store.getWorkItem(ORG, saved.item.id), saved.item);
+      assert.deepEqual(await f.store.listWorkRuns(ORG, saved.item.id), []);
+      await assert.rejects(f.store.putSearchAnswer(previous), /identity|outcome/);
+    });
+
     for (const orgId of [ORG, "other-org"]) {
       it(`never overwrites an answer ID already owned by ${orgId}`, async (t) => {
         const f = await fixture(t, driver);

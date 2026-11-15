@@ -363,6 +363,11 @@ export interface WorkItemCreation {
   recipe: Recipe;
   expected_recipe: Recipe | null;
   search_answer?: SearchAnswerRecord;
+  search_answer_transition?: {
+    expected_answer: SearchAnswerRecord;
+    expected_item: WorkItem;
+    expected_run: WorkRun;
+  };
 }
 
 export interface WorkItemObservation {
@@ -565,12 +570,15 @@ export function prepareWorkItemCreationAbort(input: WorkItemCreationAbort, facts
 
 export type WorkItemCreationResult =
   | { outcome: "applied"; item: WorkItem; recipe: Recipe; search_answer?: SearchAnswerRecord }
-  | { outcome: "conflict"; reason: "work_exists" | "stale_recipe" | "search_answer_exists" };
+  | { outcome: "conflict"; reason: "work_exists" | "stale_recipe" | "search_answer_exists" | "stale_search_answer" };
 
 export function prepareWorkItemCreation(input: WorkItemCreation, facts: {
   item_exists: boolean;
   recipe: Recipe | null;
   search_answer_exists?: boolean;
+  search_answer?: SearchAnswerRecord | null;
+  answer_item?: WorkItem | null;
+  answer_run?: WorkRun | null;
 }): WorkItemCreationResult {
   const { item, recipe, expected_recipe: expected } = input;
   if (!item.id?.trim() || !item.org_id?.trim() || !item.thread_id?.trim() || !item.unit_key?.trim()
@@ -584,14 +592,52 @@ export function prepareWorkItemCreation(input: WorkItemCreation, facts: {
     throw new Error("Work creation requires a fresh open item and a matching recipe snapshot");
   }
   const answer = input.search_answer;
+  const transition = input.search_answer_transition;
+  if (transition && !answer) throw new Error("Search answer advancement requires the next stage metadata");
   if (answer && (!answer.id?.trim() || answer.org_id !== item.org_id || answer.work_item_id !== item.id
     || answer.outcome !== undefined || typeof answer.query !== "string" || !answer.query.trim()
     || !Array.isArray(answer.event_ids) || answer.event_ids.some((id) => typeof id !== "string" || !id.trim())
-    || !Number.isFinite(Date.parse(answer.created_at)) || answer.created_at !== answer.updated_at)) {
+    || !Number.isFinite(Date.parse(answer.created_at)) || !Number.isFinite(Date.parse(answer.updated_at))
+    || (!transition && answer.created_at !== answer.updated_at))) {
     throw new Error("Work creation requires fresh search answer metadata belonging to the same work item");
   }
   if (facts.item_exists) return { outcome: "conflict", reason: "work_exists" };
-  if (answer && facts.search_answer_exists) return { outcome: "conflict", reason: "search_answer_exists" };
+  if (transition && answer) {
+    const previous = transition.expected_answer;
+    const priorMap = previous.scope?.map_reduce;
+    const nextMap = answer.scope?.map_reduce;
+    if (!sameJson(facts.search_answer, previous) || previous.outcome !== undefined
+      || !sameJson(facts.answer_item, transition.expected_item)
+      || !sameJson(facts.answer_run, transition.expected_run)
+      || transition.expected_item.org_id !== item.org_id
+      || transition.expected_item.id !== previous.work_item_id
+      || transition.expected_item.status !== "done"
+      || transition.expected_item.current_run_id !== transition.expected_run.id
+      || transition.expected_run.org_id !== item.org_id
+      || transition.expected_run.work_item_id !== previous.work_item_id
+      || transition.expected_run.recipe_id !== transition.expected_item.recipe_id
+      || transition.expected_run.status !== "completed"
+      || item.id === previous.work_item_id
+      || answer.id !== previous.id || answer.org_id !== previous.org_id
+      || answer.query !== previous.query || answer.created_at !== previous.created_at
+      || !sameJson(answer.event_ids, previous.event_ids)
+      || !priorMap || !nextMap || priorMap.phase !== "mapping"
+      || priorMap.completed_batches >= priorMap.total_batches
+      || nextMap.completed_batches !== priorMap.completed_batches + 1
+      || nextMap.phase !== (nextMap.completed_batches === priorMap.total_batches ? "reducing" : "mapping")
+      || !sameJson(
+        { ...priorMap, phase: undefined, completed_batches: undefined, facts: undefined },
+        { ...nextMap, phase: undefined, completed_batches: undefined, facts: undefined },
+      )
+      || !sameJson(nextMap.facts.slice(0, priorMap.facts.length), priorMap.facts)
+      || (previous.scope?.complete === false && answer.scope?.complete !== false)
+      || !sameJson(
+        { ...previous.scope, map_reduce: undefined, complete: undefined, incomplete_reason: undefined },
+        { ...answer.scope, map_reduce: undefined, complete: undefined, incomplete_reason: undefined },
+      )) return { outcome: "conflict", reason: "stale_search_answer" };
+  } else if (answer && facts.search_answer_exists) {
+    return { outcome: "conflict", reason: "search_answer_exists" };
+  }
   const current = facts.recipe;
   const equivalent = current && sameJson(
     { ...current, hide_on_success: current.hide_on_success ?? true, created_at: undefined, updated_at: undefined },

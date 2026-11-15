@@ -327,6 +327,11 @@ export class MemoryWorkStore implements WorkStore, ExecutorStore {
       item_exists: this.items.has(input.item.id),
       recipe: this.recipes.get(input.recipe.id) ?? null,
       search_answer_exists: input.search_answer ? this.searchAnswers.has(input.search_answer.id) : false,
+      ...(input.search_answer_transition ? {
+        search_answer: this.searchAnswers.get(input.search_answer_transition.expected_answer.id) ?? null,
+        answer_item: this.items.get(input.search_answer_transition.expected_item.id) ?? null,
+        answer_run: this.runs.get(input.search_answer_transition.expected_run.id) ?? null,
+      } : {}),
     });
     if (result.outcome !== "applied") return result;
     const saved = structuredClone(result);

@@ -189,6 +189,82 @@ describe("work item creation transitions", () => {
       item_exists: false, recipe: null, search_answer_exists: true,
     }), { outcome: "conflict", reason: "search_answer_exists" });
   });
+  function answerAdvancement(completed = 0) {
+    const base = answerCreation();
+    const fact = { dedupe_key: "first", group: "owner", metric: "tasks", value: 1, event_ids: ["event"] };
+    const previous = {
+      ...base.search_answer,
+      event_ids: ["event", "event-2"],
+      scope: {
+        intent: "aggregate", complete: true, total_count: 2, included_count: 2, omitted_count: 0,
+        map_reduce: {
+          strategy: "map_reduce", phase: "mapping", snapshot_id: "snapshot",
+          batch_offsets: [0, 1, 2], total_batches: 2, completed_batches: completed,
+          facts: completed ? [fact] : [],
+        },
+      },
+    };
+    const item = { ...base.item, status: "done", version: 2, current_run_id: "run-1" };
+    const run = { ...fixture().run, status: "completed", version: 2 };
+    const next = {
+      ...previous, work_item_id: "next-work", updated_at: NOW,
+      scope: {
+        ...previous.scope,
+        map_reduce: {
+          ...previous.scope.map_reduce, completed_batches: completed + 1,
+          phase: completed === 1 ? "reducing" : "mapping",
+          facts: [...previous.scope.map_reduce.facts, { ...fact, dedupe_key: "next" }],
+        },
+      },
+    };
+    return {
+      input: {
+        ...base,
+        item: { ...base.item, id: next.work_item_id, unit_key: next.work_item_id },
+        search_answer: next,
+        search_answer_transition: { expected_answer: previous, expected_item: item, expected_run: run },
+      },
+      facts: {
+        item_exists: false, recipe: null, search_answer_exists: true,
+        search_answer: previous, answer_item: item, answer_run: run,
+      },
+    };
+  }
+  it("advances a completed map into the next batch or reduce in the same creation plan", () => {
+    for (const completed of [0, 1]) {
+      const { input, facts } = answerAdvancement(completed);
+      const result = prepareWorkItemCreation(input, facts);
+      assert.equal(result.outcome, "applied");
+      assert.equal(result.item.id, result.search_answer.work_item_id);
+      assert.equal(result.search_answer.scope.map_reduce.completed_batches, completed + 1);
+      assert.equal(result.search_answer.scope.map_reduce.phase, completed ? "reducing" : "mapping");
+      assert.equal(facts.search_answer.scope.map_reduce.completed_batches, completed);
+    }
+  });
+  it("fences changed answer metadata and cancelled or replaced source work before advancing", () => {
+    const base = answerAdvancement();
+    const candidates = [
+      { ...base.facts, search_answer: { ...base.facts.search_answer, outcome: "timed_out" } },
+      { ...base.facts, search_answer: { ...base.facts.search_answer, work_item_id: "another-map" } },
+      { ...base.facts, answer_item: { ...base.facts.answer_item, status: "skipped", version: 3 } },
+      { ...base.facts, answer_item: { ...base.facts.answer_item, current_run_id: "another-run" } },
+      { ...base.facts, answer_run: { ...base.facts.answer_run, version: 3 } },
+    ];
+    for (const facts of candidates) {
+      assert.deepEqual(prepareWorkItemCreation(base.input, facts),
+        { outcome: "conflict", reason: "stale_search_answer" });
+    }
+    for (const change of [
+      { query: "Different question" }, { event_ids: ["unauthorized-event"] },
+      { scope: { ...base.input.search_answer.scope, map_reduce: {
+        ...base.input.search_answer.scope.map_reduce, completed_batches: 2,
+      } } },
+    ]) {
+      assert.deepEqual(prepareWorkItemCreation({
+        ...base.input, search_answer: { ...base.input.search_answer, ...change },
+      }, base.facts), { outcome: "conflict", reason: "stale_search_answer" });
+    }
+  });
   describe("pre-reservation abort", () => {
     function abortFacts() {
       const input = answerCreation();

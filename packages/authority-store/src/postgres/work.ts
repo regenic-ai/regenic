@@ -491,18 +491,33 @@ async function putWorkItem(
 export async function createWorkItem(db: PgSql, input: WorkItemCreation): Promise<WorkItemCreationResult> {
   try {
     return await db.withTx(async (client): Promise<WorkItemCreationResult> => {
+      const transition = input.search_answer_transition;
       await lockConversationThreads(db, client, [{
         org_id: input.item.org_id,
         thread_id: input.item.thread_id,
-      }]);
+      }, ...(transition ? [{
+        org_id: transition.expected_item.org_id, thread_id: transition.expected_item.thread_id,
+      }] : [])]);
       await db.execute("SELECT pg_advisory_xact_lock(hashtext($1))", [`work-recipe:${input.recipe.id}`], client);
       let recipe = await db.queryOne<RecipeRow>("SELECT * FROM recipes WHERE id = $1 FOR UPDATE", [input.recipe.id], client);
       const exists = await db.queryOne("SELECT id FROM work_items WHERE id = $1 FOR UPDATE", [input.item.id], client);
-      const answerExists = input.search_answer ? await db.queryOne(
-        "SELECT id FROM search_answers WHERE id = $1 FOR UPDATE", [input.search_answer.id], client,
+      const answerExists = input.search_answer ? await db.queryOne<SearchAnswerRow>(
+        "SELECT * FROM search_answers WHERE id = $1 FOR UPDATE", [input.search_answer.id], client,
       ) : null;
+      const previousItem = transition ? await db.queryOne<WorkItemRow>(
+        "SELECT * FROM work_items WHERE id = $1 FOR UPDATE", [transition.expected_item.id], client,
+      ) : null;
+      const previousRun = transition ? await db.queryOne<WorkRunRow>(
+        "SELECT * FROM work_runs WHERE id = $1 FOR UPDATE", [transition.expected_run.id], client,
+      ) : null;
+      const answerFacts = {
+        search_answer_exists: Boolean(answerExists),
+        search_answer: answerExists ? toSearchAnswer(answerExists) : null,
+        answer_item: previousItem ? toWorkItem(previousItem) : null,
+        answer_run: previousRun ? toWorkRun(previousRun) : null,
+      };
       let result = prepareWorkItemCreation(input, {
-        item_exists: Boolean(exists), recipe: recipe ? toRecipe(recipe) : null, search_answer_exists: Boolean(answerExists),
+        item_exists: Boolean(exists), recipe: recipe ? toRecipe(recipe) : null, ...answerFacts,
       });
       if (result.outcome !== "applied") return result;
       if (!recipe) {
@@ -510,7 +525,7 @@ export async function createWorkItem(db: PgSql, input: WorkItemCreation): Promis
         recipe = await db.queryOne<RecipeRow>("SELECT * FROM recipes WHERE id = $1 FOR UPDATE", [input.recipe.id], client);
         if (!recipe) throw new Error("Created recipe disappeared inside its transaction");
         if (!inserted) {
-          result = prepareWorkItemCreation(input, { item_exists: false, recipe: toRecipe(recipe) });
+          result = prepareWorkItemCreation(input, { item_exists: false, recipe: toRecipe(recipe), ...answerFacts });
           if (result.outcome !== "applied") return result;
         }
       }
@@ -533,7 +548,9 @@ export async function createWorkItem(db: PgSql, input: WorkItemCreation): Promis
       const savedAnswer = answer ? await db.queryOne<SearchAnswerRow>(`INSERT INTO search_answers (
         id, org_id, work_item_id, query, event_ids_json, scope_json, outcome, created_at, updated_at
       ) VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, $8)
-      ON CONFLICT (id) DO NOTHING RETURNING *`, [
+      ${transition ? `ON CONFLICT (id) DO UPDATE SET
+        work_item_id = EXCLUDED.work_item_id, scope_json = EXCLUDED.scope_json,
+        updated_at = EXCLUDED.updated_at` : "ON CONFLICT (id) DO NOTHING"} RETURNING *`, [
         answer.id, answer.org_id, answer.work_item_id, answer.query, jsonb(answer.event_ids),
         answer.scope ? jsonb(answer.scope) : null, answer.created_at, answer.updated_at,
       ], client) : null;

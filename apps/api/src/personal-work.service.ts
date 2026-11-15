@@ -43,6 +43,7 @@ import {
   type PromptAnswer,
   type Recipe,
   type SearchAnswerRecord,
+  type WorkItemCreation,
   type WorkItemCreationAbortResult,
   type ThreadPrompt,
   type WorkItem,
@@ -729,6 +730,7 @@ export class PersonalWorkService implements OnModuleDestroy {
   async prepareAuxiliaryExecution(
     input: Omit<AuxiliaryExecutionInput, "evidence_text">,
     searchAnswer?: SearchAnswerRecord,
+    searchAnswerTransition?: WorkItemCreation["search_answer_transition"],
   ): Promise<PreparedAuxiliaryExecution> {
     await this.executors.ensureMounted();
     const host = this.runtime.requireHost();
@@ -782,6 +784,7 @@ export class PersonalWorkService implements OnModuleDestroy {
     const created = await host.get("authority").createWorkItem({
       item, recipe, expected_recipe: expectedRecipe,
       ...(searchAnswer ? { search_answer: searchAnswer } : {}),
+      ...(searchAnswerTransition ? { search_answer_transition: searchAnswerTransition } : {}),
     });
     if (created.outcome !== "applied") throw new PersonalConnectorError(
       "execution_prepare_conflict", `Auxiliary preparation rejected: ${created.reason}. Refresh the execution.`, 409,
@@ -790,6 +793,20 @@ export class PersonalWorkService implements OnModuleDestroy {
       work_item: created.item, recipe: created.recipe,
       ...(created.search_answer ? { search_answer: created.search_answer } : {}),
     };
+  }
+
+  async prepareExistingAuxiliaryExecution(workItemId: string): Promise<PreparedAuxiliaryExecution> {
+    await this.executors.ensureMounted();
+    const authority = this.runtime.requireHost().get("authority");
+    const orgId = this.runtime.orgId();
+    const item = await authority.getWorkItem(orgId, workItemId);
+    const recipe = item?.recipe_id ? await authority.getRecipe(orgId, item.recipe_id) : null;
+    if (!item || !recipe || !isSystemRecipeId(recipe.id) || item.status !== "open" || item.current_run_id) {
+      throw new PersonalConnectorError(
+        "execution_prepare_conflict", "Auxiliary preparation changed. Refresh the execution.", 409,
+      );
+    }
+    return { work_item: item, recipe };
   }
 
   async startPreparedAuxiliaryExecution(
