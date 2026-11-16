@@ -259,6 +259,7 @@ export interface WorkDismissal {
   issued_at?: string;
   /** Compare-and-set the timeout cause in the same commit as the local stop. */
   search_answer_timeout?: SearchAnswerRecord;
+  search_answer_outcome?: "timed_out" | "cancelled";
 }
 
 export interface WorkAcknowledgment {
@@ -606,34 +607,70 @@ export function prepareWorkItemCreation(input: WorkItemCreation, facts: {
     const previous = transition.expected_answer;
     const priorMap = previous.scope?.map_reduce;
     const nextMap = answer.scope?.map_reduce;
+    const serialAdvance = !!priorMap && !!nextMap &&
+      priorMap.phase === "mapping" &&
+      priorMap.completed_batches < priorMap.total_batches &&
+      nextMap.completed_batches === priorMap.completed_batches + 1 &&
+      nextMap.phase === (
+        nextMap.completed_batches === priorMap.total_batches
+          ? "reducing"
+          : "mapping"
+      );
+    const parallelReduction = !!priorMap && !!nextMap &&
+      priorMap.phase === "mapping" &&
+      priorMap.completed_batches === priorMap.total_batches &&
+      priorMap.batches?.length === priorMap.total_batches &&
+      priorMap.batches.every((batch) => batch.status === "completed") &&
+      nextMap.completed_batches === priorMap.total_batches &&
+      nextMap.phase === "reducing";
+    const parallelSource = parallelReduction && priorMap.batches?.some(
+      (batch) =>
+        batch.status === "completed" &&
+        batch.work_item_id === transition.expected_item.id,
+    ) === true;
     if (!sameJson(facts.search_answer, previous) || previous.outcome !== undefined
       || !sameJson(facts.answer_item, transition.expected_item)
       || !sameJson(facts.answer_run, transition.expected_run)
       || transition.expected_item.org_id !== item.org_id
-      || transition.expected_item.id !== previous.work_item_id
+      || (transition.expected_item.id !== previous.work_item_id && !parallelSource)
       || transition.expected_item.status !== "done"
       || transition.expected_item.current_run_id !== transition.expected_run.id
       || transition.expected_run.org_id !== item.org_id
-      || transition.expected_run.work_item_id !== previous.work_item_id
+      || transition.expected_run.work_item_id !== transition.expected_item.id
       || transition.expected_run.recipe_id !== transition.expected_item.recipe_id
       || transition.expected_run.status !== "completed"
       || item.id === previous.work_item_id
       || answer.id !== previous.id || answer.org_id !== previous.org_id
       || answer.query !== previous.query || answer.created_at !== previous.created_at
       || !sameJson(answer.event_ids, previous.event_ids)
-      || !priorMap || !nextMap || priorMap.phase !== "mapping"
-      || priorMap.completed_batches >= priorMap.total_batches
-      || nextMap.completed_batches !== priorMap.completed_batches + 1
-      || nextMap.phase !== (nextMap.completed_batches === priorMap.total_batches ? "reducing" : "mapping")
+      || !priorMap || !nextMap || (!serialAdvance && !parallelReduction)
       || !sameJson(
         { ...priorMap, phase: undefined, completed_batches: undefined, facts: undefined },
         { ...nextMap, phase: undefined, completed_batches: undefined, facts: undefined },
       )
       || !sameJson(nextMap.facts.slice(0, priorMap.facts.length), priorMap.facts)
       || (previous.scope?.complete === false && answer.scope?.complete !== false)
+      || (!parallelReduction &&
+        answer.scope?.conflict_count !== previous.scope?.conflict_count)
+      || (parallelReduction && answer.scope?.conflict_count !== undefined &&
+        (!Number.isSafeInteger(answer.scope.conflict_count) ||
+          answer.scope.conflict_count < 1 ||
+          answer.scope.conflict_count > 2_000))
       || !sameJson(
-        { ...previous.scope, map_reduce: undefined, complete: undefined, incomplete_reason: undefined },
-        { ...answer.scope, map_reduce: undefined, complete: undefined, incomplete_reason: undefined },
+        {
+          ...previous.scope,
+          map_reduce: undefined,
+          complete: undefined,
+          incomplete_reason: undefined,
+          conflict_count: undefined,
+        },
+        {
+          ...answer.scope,
+          map_reduce: undefined,
+          complete: undefined,
+          incomplete_reason: undefined,
+          conflict_count: undefined,
+        },
       )) return { outcome: "conflict", reason: "stale_search_answer" };
   } else if (answer && facts.search_answer_exists) {
     return { outcome: "conflict", reason: "search_answer_exists" };
@@ -680,6 +717,7 @@ export function prepareWorkDismissal(input: WorkDismissal, facts: {
   if (!Number.isFinite(Date.parse(input.now))) throw new Error("Work dismissal requires a valid timestamp");
   if (
     (input.fold_visibility !== undefined && typeof input.fold_visibility !== "boolean") ||
+    (input.search_answer_outcome !== undefined && !input.search_answer_timeout) ||
     (input.command_id === undefined) !== (input.issued_at === undefined) ||
     (input.command_id !== undefined &&
       (!input.command_id.trim() || input.command_id !== input.command_id.trim() ||
@@ -703,8 +741,14 @@ export function prepareWorkDismissal(input: WorkDismissal, facts: {
   let searchAnswer: SearchAnswerRecord | undefined;
   if (input.search_answer_timeout) {
     const expected = input.search_answer_timeout;
-    if (expected.org_id !== item.org_id || expected.work_item_id !== item.id) {
-      throw new Error("Search answer timeout must belong to the dismissed work item");
+    const belongsToActiveMapBatch = expected.scope?.map_reduce?.batches?.some(
+      (batch) => batch.status === "running" && batch.work_item_id === item.id,
+    ) === true;
+    if (
+      expected.org_id !== item.org_id ||
+      (expected.work_item_id !== item.id && !belongsToActiveMapBatch)
+    ) {
+      throw new Error("Search answer terminal transition must belong to the dismissed work item");
     }
     if (!facts.search_answer || !sameJson(facts.search_answer, expected) || facts.search_answer.outcome) {
       return { outcome: "conflict", reason: "stale_search_answer" };
@@ -712,7 +756,11 @@ export function prepareWorkDismissal(input: WorkDismissal, facts: {
     if (!isActiveWorkStatus(item.status) || !run || isTerminalWorkRun(run)) {
       return { outcome: "conflict", reason: "inactive_search_answer" };
     }
-    searchAnswer = { ...facts.search_answer, outcome: "timed_out", updated_at: input.now };
+    searchAnswer = {
+      ...facts.search_answer,
+      outcome: input.search_answer_outcome ?? "timed_out",
+      updated_at: input.now,
+    };
   }
   const deliveries = facts.deliveries.map((delivery) => {
     if (delivery.org_id !== item.org_id || delivery.work_item_id !== item.id) {

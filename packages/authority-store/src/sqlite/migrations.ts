@@ -1,4 +1,4 @@
-export const LATEST_SCHEMA_VERSION = 79;
+export const LATEST_SCHEMA_VERSION = 80;
 
 export const PRE_MERGE_LIFECYCLE_REPAIR_SQL = `
   ALTER TABLE work_items ADD COLUMN current_run_id TEXT REFERENCES work_runs(id);
@@ -1587,6 +1587,32 @@ export const MIGRATIONS = [
   },
   {
     version: 79,
+    sql: `
+      CREATE TABLE search_answers_next (
+        id TEXT PRIMARY KEY,
+        org_id TEXT NOT NULL,
+        work_item_id TEXT NOT NULL REFERENCES work_items(id),
+        query TEXT NOT NULL,
+        event_ids_json TEXT NOT NULL CHECK (json_valid(event_ids_json)),
+        outcome TEXT CHECK (outcome IN ('timed_out', 'cancelled')),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        scope_json TEXT CHECK (scope_json IS NULL OR json_valid(scope_json))
+      );
+      INSERT INTO search_answers_next
+        (id, org_id, work_item_id, query, event_ids_json, outcome,
+         created_at, updated_at, scope_json)
+      SELECT id, org_id, work_item_id, query, event_ids_json, outcome,
+        created_at, updated_at, scope_json
+      FROM search_answers;
+      DROP TABLE search_answers;
+      ALTER TABLE search_answers_next RENAME TO search_answers;
+      CREATE UNIQUE INDEX search_answers_work_item_idx
+        ON search_answers (org_id, work_item_id);
+    `,
+  },
+  {
+    version: 80,
     sql: `
       CREATE TABLE connector_push_watermarks (
         installation_id TEXT NOT NULL REFERENCES connector_installations(id),

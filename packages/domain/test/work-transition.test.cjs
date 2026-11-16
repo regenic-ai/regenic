@@ -241,6 +241,48 @@ describe("work item creation transitions", () => {
       assert.equal(facts.search_answer.scope.map_reduce.completed_batches, completed);
     }
   });
+  it("atomically advances a fully completed parallel map into reduce", () => {
+    const base = answerAdvancement(1);
+    const previousMap = {
+      ...base.facts.search_answer.scope.map_reduce,
+      completed_batches: 2,
+      facts: [
+        ...base.facts.search_answer.scope.map_reduce.facts,
+        { dedupe_key: "next", group: "owner", metric: "tasks", value: 1, event_ids: ["event-2"] },
+      ],
+      batches: [
+        { index: 0, start_offset: 0, end_offset: 1, status: "completed", attempt: 0, work_item_id: base.facts.answer_item.id, facts: [] },
+        { index: 1, start_offset: 1, end_offset: 2, status: "completed", attempt: 0, work_item_id: "other-map", facts: [] },
+      ],
+    };
+    const previous = {
+      ...base.facts.search_answer,
+      work_item_id: "failed-initial-map",
+      scope: { ...base.facts.search_answer.scope, map_reduce: previousMap },
+    };
+    const next = {
+      ...previous,
+      work_item_id: base.input.item.id,
+      updated_at: NOW,
+      scope: {
+        ...previous.scope,
+        conflict_count: 1,
+        map_reduce: { ...previousMap, phase: "reducing" },
+      },
+    };
+    const result = prepareWorkItemCreation({
+      ...base.input,
+      search_answer: next,
+      search_answer_transition: {
+        expected_answer: previous,
+        expected_item: base.facts.answer_item,
+        expected_run: base.facts.answer_run,
+      },
+    }, { ...base.facts, search_answer: previous });
+    assert.equal(result.outcome, "applied");
+    assert.equal(result.search_answer.scope.map_reduce.phase, "reducing");
+    assert.equal(result.search_answer.scope.map_reduce.completed_batches, 2);
+  });
   it("fences changed answer metadata and cancelled or replaced source work before advancing", () => {
     const base = answerAdvancement();
     const candidates = [
@@ -423,6 +465,46 @@ describe("work dismissal transitions", () => {
       ...input, expected_item: skipped, search_answer_timeout: record,
     }, { ...facts, item: skipped, search_answer: record }),
     { outcome: "conflict", reason: "inactive_search_answer" });
+  });
+  it("atomically records cancellation through an active parallel map batch", () => {
+    const { input, facts } = dismissal();
+    const record = {
+      id: "answer",
+      org_id: facts.item.org_id,
+      work_item_id: "completed-map",
+      query: "Question",
+      event_ids: ["event"],
+      scope: {
+        intent: "aggregate",
+        complete: true,
+        map_reduce: {
+          strategy: "map_reduce",
+          phase: "mapping",
+          snapshot_id: "snapshot",
+          batch_offsets: [0, 1],
+          total_batches: 1,
+          completed_batches: 0,
+          facts: [],
+          batches: [{
+            index: 0,
+            start_offset: 0,
+            end_offset: 1,
+            status: "running",
+            attempt: 0,
+            work_item_id: facts.item.id,
+          }],
+        },
+      },
+      created_at: BEFORE,
+      updated_at: BEFORE,
+    };
+    const result = prepareWorkDismissal({
+      ...input,
+      search_answer_timeout: record,
+      search_answer_outcome: "cancelled",
+    }, { ...facts, search_answer: record });
+    assert.equal(result.outcome, "applied");
+    assert.equal(result.search_answer.outcome, "cancelled");
   });
   for (const status of ["write_back", "uncertain"]) {
     it(`preserves ${status} delivery evidence while recording a stop request`, () => {

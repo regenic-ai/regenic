@@ -1,4 +1,4 @@
-export const PG_SCHEMA_VERSION = 79;
+export const PG_SCHEMA_VERSION = 80;
 
 /** Applied when an existing postgres authority DB is already at a prior baseline. */
 export const PG_MIGRATIONS = [
@@ -935,6 +935,14 @@ ON CONFLICT DO NOTHING;
   {
     version: 79,
     sql: `
+      ALTER TABLE search_answers DROP CONSTRAINT search_answers_outcome_check;
+      ALTER TABLE search_answers ADD CONSTRAINT search_answers_outcome_check
+        CHECK (outcome IN ('timed_out', 'cancelled'));
+    `,
+  },
+  {
+    version: 80,
+    sql: `
       CREATE TABLE connector_push_watermarks (
         installation_id TEXT NOT NULL REFERENCES connector_installations(id),
         stream_key TEXT NOT NULL,
@@ -1246,7 +1254,7 @@ CREATE TABLE search_answers (
   query TEXT NOT NULL,
   event_ids_json JSONB NOT NULL,
   scope_json JSONB,
-  outcome TEXT CHECK (outcome IN ('timed_out')),
+  outcome TEXT CHECK (outcome IN ('timed_out', 'cancelled')),
   created_at TIMESTAMPTZ NOT NULL,
   updated_at TIMESTAMPTZ NOT NULL
 );

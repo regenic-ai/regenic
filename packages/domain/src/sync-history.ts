@@ -57,11 +57,13 @@ export function shouldRunHistoryTick(input: {
 export function owedSyncLanes(
   state: Pick<SyncStreamState, "phase" | "media_pending">,
   policy: HistoryPolicy = DEFAULT_HISTORY_POLICY,
-  _options?: { live_via?: "poll" | "push" },
+  options?: { live_via?: "poll" | "push" },
 ): SyncLane[] {
   const lanes: SyncLane[] = [];
   if (messageDuty(state.phase, policy) === "history") {
     lanes.push("history");
+  } else if ((options?.live_via ?? "poll") === "poll") {
+    lanes.push("live");
   }
   if (state.media_pending) {
     lanes.push("media");

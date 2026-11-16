@@ -187,6 +187,7 @@ export function planSyncWorkGaps(input: {
   const planned: EnqueueSyncWork[] = [];
   for (const gap of input.gaps) {
     if (
+      liveVia === "push" &&
       (gap.missing_lane === "live" || gap.missing_lane === "interactive") &&
       gap.phase !== "unseeded"
     ) {
@@ -309,8 +310,9 @@ export function dueWorkCoverageLanes(
   if (plane === "bootstrap") {
     return ["history"];
   }
-  void liveVia;
-  return ["media"];
+  return liveVia === "push"
+    ? ["media"]
+    : ["interactive", "live", "media"];
 }
 
 /**

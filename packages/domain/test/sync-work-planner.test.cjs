@@ -229,7 +229,10 @@ describe("due-work planner", () => {
   });
 
   it("skips members that already have unassigned work at this generation", () => {
-    assert.deepEqual(dueWorkCoverageLanes("steady"), ["media"]);
+    assert.deepEqual(
+      dueWorkCoverageLanes("steady"),
+      ["interactive", "live", "media"],
+    );
     assert.deepEqual(dueWorkCoverageLanes("bootstrap"), ["history"]);
     const uncovered = uncoveredCatalogMembers(
       [
@@ -475,12 +478,15 @@ describe("sync run due-work selection", () => {
 });
 
 describe("owed sync lanes", () => {
-  it("owes history and media without a latest row", () => {
+  it("owes history during backfill and live polling when steady", () => {
     assert.deepEqual(
       owedSyncLanes({ phase: "history", media_pending: true }),
       ["history", "media"],
     );
-    assert.deepEqual(owedSyncLanes({ phase: "steady", media_pending: false }), []);
+    assert.deepEqual(
+      owedSyncLanes({ phase: "steady", media_pending: false }),
+      ["live"],
+    );
   });
 
   it("keeps a pending due time and lets interactive cover latest", () => {
@@ -497,14 +503,14 @@ describe("owed sync lanes", () => {
       state: { phase: "steady", media_pending: false },
       existing: [{ lane: "interactive", status: "pending", run_id: null }],
     });
-    assert.deepEqual(covered, { enqueue: [], cancel: ["interactive"] });
+    assert.deepEqual(covered, { enqueue: [], cancel: [] });
 
     const stale = syncWorkEnsurePlan({
       state: { phase: "live", media_pending: false },
       existing: [{ lane: "interactive", status: "pending", run_id: null }],
       preferred: false,
     });
-    assert.deepEqual(stale, { enqueue: [], cancel: ["interactive"] });
+    assert.deepEqual(stale, { enqueue: ["live"], cancel: ["interactive"] });
     assert.equal(
       shouldReleaseInteractiveWork({
         lane: "interactive",
@@ -542,7 +548,7 @@ describe("owed sync lanes", () => {
           { lane: "media", status: "pending", run_id: null },
         ],
       }),
-      { enqueue: [], cancel: ["history", "live", "media"] },
+      { enqueue: [], cancel: ["history", "media"] },
     );
   });
 
@@ -641,6 +647,7 @@ describe("owed sync lanes", () => {
     const planned = planSyncWorkGaps({
       installation_id: "install-1",
       now: "2026-09-21T00:00:05.000Z",
+      live_via: "push",
       coldIdleMs: 3_600_000,
       preferredThreadId: "thread-open",
       gaps: [
