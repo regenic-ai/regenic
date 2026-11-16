@@ -221,14 +221,20 @@ export async function enqueueDueWorkFromCatalog(
   plane: "steady" | "bootstrap",
   options?: { reconcileBootstrap?: boolean },
 ): Promise<number> {
+  // Catalog members have no sync row yet, so the gap index labels them
+  // missing "live". Backfill turns that into a history seed. Steady only
+  // catches up attachments and does not spend the first-seed budget.
+  const seedLimit = plane === "bootstrap"
+    ? state.syncSettings?.first_seed_limit ?? firstSeedHeadFromEnv()
+    : 0;
   if (plane === "bootstrap" && options?.reconcileBootstrap) {
-    return enqueueSyncWorkGaps(state, store, installationId);
+    return enqueueSyncWorkGaps(state, store, installationId, {
+      unseededLimit: seedLimit,
+    });
   }
   return enqueueSyncWorkGaps(state, store, installationId, {
-    lanes: plane === "steady" ? ["media"] : ["history"],
-    unseededLimit: plane === "steady"
-      ? state.syncSettings?.first_seed_limit ?? firstSeedHeadFromEnv()
-      : 0,
+    lanes: plane === "steady" ? ["media"] : ["history", "live"],
+    unseededLimit: seedLimit,
   });
 }
 
@@ -563,7 +569,12 @@ async function pollClaimedDueWorkStreams(
       if (item.lane === "history") {
         const prior = await store.getSyncState(installation.id, item.stream_key);
         const policy = historyPolicyFromConfig(installation.config);
-        if (messageDuty(prior?.phase, policy) !== "history") {
+        const phase = prior?.phase ?? "unseeded";
+        // messageDuty stays "live" until a page has been read. The first
+        // backfill page is still this history row; closing it leaves the
+        // catalog discovered and the inbox empty.
+        const seedsBackfill = phase === "unseeded" && policy === "backfill";
+        if (!seedsBackfill && messageDuty(phase, policy) !== "history") {
           const now = new Date().toISOString();
           if (prior) {
             await store.putSyncState({ ...prior, updated_at: now });

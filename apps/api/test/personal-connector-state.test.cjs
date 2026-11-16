@@ -360,13 +360,86 @@ describe("owned connector coordination state", () => {
   it("passes the user's new-conversation seed limit to the indexed gap planner", async () => {
     const state = createService().connectorState();
     state.syncSettings = { ...defaultSyncSettings(), first_seed_limit: 37 };
-    let options;
-    await enqueueDueWorkFromCatalog(state, {
+    const seen = [];
+    const store = {
       async getSyncCatalogHead() { return { member_count: 5000 }; },
-      async listSyncWorkGaps(_id, input) { options = input; return []; },
+      async listSyncWorkGaps(_id, input) { seen.push(input); return []; },
       async findInstallation() { return { config: {} }; },
-    }, "installation", "steady");
-    assert.equal(options.unseeded_limit, 37);
+    };
+    await enqueueDueWorkFromCatalog(state, store, "installation", "bootstrap");
+    await enqueueDueWorkFromCatalog(state, store, "installation", "bootstrap", {
+      reconcileBootstrap: true,
+    });
+    await enqueueDueWorkFromCatalog(state, store, "installation", "steady");
+    assert.deepEqual(seen.map((input) => input.unseeded_limit), [37, 37, 0]);
+  });
+
+  it("seeds a discovered chat as history work", async () => {
+    const state = createService().connectorState();
+    const enqueued = [];
+    await enqueueDueWorkFromCatalog(state, {
+      async getSyncCatalogHead() { return { member_count: 50 }; },
+      async listSyncWorkGaps() {
+        return [{
+          stream_key: "chat:oc_1",
+          phase: "unseeded",
+          media_pending: false,
+          generation: 1,
+          missing_lane: "live",
+        }];
+      },
+      async findInstallation() { return { config: {} }; },
+      async enqueueSyncWorkMany(rows) {
+        enqueued.push(...rows);
+        return rows.length;
+      },
+    }, "installation", "bootstrap", { reconcileBootstrap: true });
+    assert.equal(enqueued.length, 1);
+    assert.equal(enqueued[0].stream_key, "chat:oc_1");
+    assert.equal(enqueued[0].lane, "history");
+  });
+
+  it("reads the first page of an unseeded history seed", async () => {
+    const state = createService().connectorState();
+    state.kernelRuntime.pressureView = () => ({ level: "ok" });
+    state.catalogSizeByInstall.set("installation", 50);
+    const settled = [];
+    let resolved = 0;
+    const installation = {
+      id: "installation",
+      org_id: "org-one",
+      connector_type: "test",
+      status: "enabled",
+      config: {},
+    };
+    const store = {
+      async getSyncState() { return null; },
+      async settleSyncWork(input) { settled.push(input); },
+      async getSyncCatalog() { return { members: [], catalog: null }; },
+      async listSyncPhaseHeads() { return []; },
+      async latestAttempt() { return null; },
+      async listHiddenExecutorThreadIds() { return []; },
+    };
+    state.runtime.requireHost = () => ({ get: () => store });
+    state.requireInstallation = async () => installation;
+    state.drivers.get = () => ({
+      source: "test",
+      capabilities: () => ({ sync: true, reply: false, create: false }),
+      async resolveThreadStream() {
+        resolved += 1;
+        throw new Error("seed reached the connector");
+      },
+    });
+    const result = await executeClaimedDueWork(state, store, [{
+      id: "seed",
+      installation_id: "installation",
+      stream_key: "chat:oc_1",
+      lane: "history",
+      attempts: 1,
+    }], { plane: "bootstrap", allowHistory: true });
+    assert.equal(resolved, 1);
+    assert.equal(result.retry_count, 1);
+    assert.equal(settled[0].outcome, "retry");
   });
 
   it("owns a stable context rather than exposing the service instance", () => {
