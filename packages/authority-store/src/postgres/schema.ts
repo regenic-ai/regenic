@@ -1,4 +1,4 @@
-export const PG_SCHEMA_VERSION = 77;
+export const PG_SCHEMA_VERSION = 78;
 
 /** Applied when an existing postgres authority DB is already at a prior baseline. */
 export const PG_MIGRATIONS = [
@@ -913,6 +913,24 @@ ON CONFLICT DO NOTHING;
   {
     version: 77,
     sql: `ALTER TABLE work_runs ADD COLUMN hide_on_success BOOLEAN;`,
+  },
+  {
+    version: 78,
+    sql: `
+      UPDATE work_items SET current_run_id = (
+        SELECT r.id FROM work_runs r
+        WHERE r.org_id = work_items.org_id AND r.work_item_id = work_items.id
+          AND r.recipe_id = work_items.recipe_id
+          AND r.status IN ('running', 'waiting_human')
+      )
+      WHERE current_run_id IS NULL AND version = 0 AND status IN ('running', 'waiting_human')
+        AND 1 = (
+          SELECT COUNT(*) FROM work_runs r
+          WHERE r.org_id = work_items.org_id AND r.work_item_id = work_items.id
+            AND r.recipe_id = work_items.recipe_id
+            AND r.status IN ('running', 'waiting_human')
+        );
+    `,
   },
 ] as const;
 

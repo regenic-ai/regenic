@@ -178,6 +178,7 @@ import {
   LATEST_SCHEMA_VERSION,
   MIGRATIONS,
   OUTBOUND_REJECTION_MIGRATION_SQL,
+  PRE_MERGE_LIFECYCLE_REPAIR_SQL,
   RECIPE_CLOCK_COLUMN_SQL,
   RECIPE_DESTINATION_COLUMN_SQL,
 } from "./migrations";
@@ -1940,6 +1941,9 @@ export class SqliteAuthorityStore
           }
         } else if (migration.version === 57) {
           this.applyRecipeDestinationColumn();
+        } else if (migration.version === 78) {
+          this.repairPreMergeLifecycleSchema();
+          this.database.exec(migration.sql);
         } else {
           this.database.exec(migration.sql);
         }
@@ -1959,6 +1963,28 @@ export class SqliteAuthorityStore
         }
       }
     }
+  }
+
+  private repairPreMergeLifecycleSchema(): void {
+    const required = [
+      ["work_items", "current_run_id"], ["work_items", "version"],
+      ["work_runs", "version"], ["work_runs", "trigger_kind"],
+      ["work_runs", "write_back_required"], ["work_runs", "write_back_target_json"],
+      ["work_deliveries", "run_id"], ["work_deliveries", "target_json"],
+    ] as const;
+    const missing = required.filter(([table, column]) => !this.columnExists(table, column));
+    if (missing.length === 0) return;
+    const markers = [
+      ["work_items", "visibility_intent_version"], ["work_items", "acknowledged_run_id"],
+      ["work_runs", "executor_config_json"], ["work_runs", "include_context"],
+      ["work_runs", "completion_policy_version"], ["work_runs", "hide_on_success"],
+      ["work_deliveries", "lease_owner"], ["work_deliveries", "claim_token"],
+      ["work_deliveries", "cancel_requested_at"], ["work_deliveries", "version"],
+    ] as const;
+    if (missing.length !== required.length || !markers.every(([table, column]) => this.columnExists(table, column))) {
+      throw new Error("Unrecognized lifecycle schema; migration 78 cannot safely repair missing columns");
+    }
+    this.database.exec(PRE_MERGE_LIFECYCLE_REPAIR_SQL);
   }
 
   /**

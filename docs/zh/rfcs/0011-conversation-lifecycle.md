@@ -152,7 +152,9 @@
 | `connector_sync_work` | UNIQUE `(installation_id, stream_key, lane, generation)`；状态、优先权、租约等 | 执行器同步资源；其 run_id 指同步运行，不是 WorkRun |
 | `context_projection_outbox` | 消息 event_id 唯一；状态、租约、重试等 | 消息上下文投影；不复用作生命周期队列 |
 
-当前 schema 为 77。合并主干后保留已发布的 56（搜索 scope）、57（Recipe 固定回写目标）、58（Recipe 隐藏开关）；本 PR 尚未发布的迁移从 59 起重排，历史验收记录中的旧编号不代表已发布数据库需要改号。
+当前 schema 为 78。合并主干后保留已发布的 56（搜索 scope）、57（Recipe 固定回写目标）、58（Recipe 隐藏开关）；生命周期迁移从 59 起重排，历史验收记录中的旧编号不代表已发布数据库需要改号。
+
+Schema 78 修复两种升级路径：对缺少当前指针且版本仍为 0 的活跃工单，仅当同组织、同工单、同规则下有唯一活跃 Run 时回填，不受已终态历史尝试影响，不覆盖已有指针或猜测多个活跃 Run。SQLite 另识别一种已标记 77、但同时缺失迁移 59／60 字段的合并前开发库，在同一事务补齐工单／Run 版本与关联字段、重建投递账本关联和索引；保留原投递负载、租约、幂等键及版本，历史义务和目的地仍为 NULL。不匹配该已知结构的部分缺列库明确拒绝升级；失败不改变 schema 版本或留下部分写入。正常已发布迁移不改号、不重放，不直接修改运行中的用户数据库。
 
 当前 `work_runs.work_item_id` 和 `work_deliveries.work_item_id` 引用 WorkItem；`head_event_id` 引用消息 Event。对话通过 `(org_id, thread_id)` 逻辑关联，没有独立 Conversation 表。自 SQLite／PostgreSQL schema 57 起，Recipe 固定回写目标已覆盖保存、读取及两种数据库映射，既有导入导出继续保留该字段。Schema 59 增加 WorkItem 的 `current_run_id` 与 WorkItem／WorkRun 行版本；历史行从版本 0 起。只有活跃工单恰好只有一条同租户运行，且该运行仍活跃、规则归属一致时才恢复运行指针；其余保留 NULL，不按时间或最新运行猜测。设置页现可查看当前活跃工单的身份异常及可能匹配的 Run ID；该入口只读、不自动修复或推断历史关联。Item 与 Run 分别读取，诊断可能与并发生命周期转换短暂不一致，须刷新核实后再采取其他操作。
 
