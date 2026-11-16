@@ -97,6 +97,142 @@ for (const driver of drivers) {
 }
 
 describe("recipe destination migrations", () => {
+  for (const driver of drivers.filter((entry) => entry.name.startsWith("sqlite"))) {
+    for (const schema of [58, 77, "pre-merge-77"]) {
+      it(`${driver.name} repairs ${schema} active retries without guessing ambiguous runs or delivery obligations`, async (t) => {
+        const root = await mkdtemp(join(tmpdir(), "regenic-lifecycle-upgrade-"));
+        const path = join(root, "authority.db");
+        let store;
+        t.after(async () => {
+          try { await store?.close(); }
+          finally { await rm(root, { recursive: true, force: true }); }
+        });
+        const db = new Database(path);
+        const preMerge = schema === "pre-merge-77";
+        const cases = [
+          { id: "retry", status: "running", runs: ["failed", "running"], expected: "retry-1" },
+          { id: "waiting", status: "waiting_human", runs: ["failed", "waiting_human"], expected: "waiting-1" },
+          { id: "ambiguous", status: "running", runs: ["running", "running"] },
+          { id: "terminal", status: "done", runs: ["failed", "completed"] },
+        ];
+        try {
+          db.function("conversation_id", (source, externalId, fallbackId) =>
+            conversationId(source, externalId, fallbackId));
+          for (const migration of MIGRATIONS.filter(({ version }) =>
+            version <= (schema === 58 ? 58 : 77) && (!preMerge || ![59, 60].includes(version)))) {
+            db.exec(migration.sql);
+          }
+          db.prepare(`INSERT INTO recipes (
+            id, org_id, name, match_json, executor_type, executor_config_json,
+            can_write_back, hide_on_success, created_at, updated_at
+          ) VALUES ('rule', ?, 'Historical rule', '{}', 'test', '{}', 0, 0, ?, ?)`).run(ORG, NOW, NOW);
+          const item = db.prepare(`INSERT INTO work_items (
+            id, org_id, thread_id, unit_key, record_class, thread_facet, status, recipe_id, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, 'task', 'ticket', ?, 'rule', ?, ?)`);
+          const run = db.prepare(`INSERT INTO work_runs (
+            id, org_id, work_item_id, recipe_id, executor_type, status, start_state, external_run_id, created_at, updated_at
+          ) VALUES (?, ?, ?, 'rule', 'test', ?, 'submitted', ?, ?, ?)`);
+          for (const entry of cases) {
+            item.run(entry.id, ORG, `source:${entry.id}`, entry.id, entry.status, NOW, NOW);
+            entry.runs.forEach((status, index) =>
+              run.run(`${entry.id}-${index}`, ORG, entry.id, status, `external-${entry.id}-${index}`, NOW, NOW));
+          }
+          if (schema === 77) {
+            item.run("bound", ORG, "source:bound", "bound", "running", NOW, NOW);
+            run.run("bound-run", ORG, "bound", "running", "external-bound", NOW, NOW);
+            db.prepare("UPDATE work_items SET current_run_id = 'bound-run', version = 4 WHERE id = 'bound'").run();
+            item.run("changed", ORG, "source:changed", "changed", "running", NOW, NOW);
+            run.run("changed-run", ORG, "changed", "running", "external-changed", NOW, NOW);
+            db.prepare("UPDATE work_items SET version = 4 WHERE id = 'changed'").run();
+          }
+          db.prepare(`INSERT INTO work_deliveries (
+            id, org_id, work_item_id, recipe_id, kind, unit_key, status, write_back,
+            attempts, payload_json, idempotency_key, created_at, updated_at
+          ) VALUES ('delivery', ?, 'retry', 'rule', 'result', 'retry', 'queued', 'pending',
+            2, '{"text":"Preserve payload"}', 'stable-delivery', ?, ?)`).run(ORG, NOW, NOW);
+          if (schema !== 58) {
+            db.prepare(`UPDATE work_deliveries SET version = 3, lease_owner = 'existing-owner',
+              claim_token = 'existing-token', lease_expires_at = '2026-11-10T00:00:00.000Z',
+              cancel_requested_at = ? WHERE id = 'delivery'`).run(NOW);
+          }
+          db.pragma(`user_version = ${schema === 58 ? 58 : 77}`);
+        } finally { db.close(); }
+        if (preMerge) {
+          const blocked = new Database(path);
+          try { blocked.exec("CREATE TABLE work_deliveries_repaired (id TEXT)"); }
+          finally { blocked.close(); }
+          await assert.rejects(async () => { store = await driver.open(t, path); }, /already exists/);
+          const rolledBack = new Database(path);
+          try {
+            assert.equal(rolledBack.pragma("user_version", { simple: true }), 77);
+            assert.equal(rolledBack.pragma("table_info(work_items)")
+              .some((column) => column.name === "current_run_id"), false);
+            assert.equal(rolledBack.prepare("SELECT COUNT(*) AS count FROM work_deliveries").get().count, 1);
+            rolledBack.exec("DROP TABLE work_deliveries_repaired");
+          } finally { rolledBack.close(); }
+        }
+        store = await driver.open(t, path);
+        for (const entry of cases) {
+          assert.equal((await store.getWorkItem(ORG, entry.id)).current_run_id, entry.expected);
+          assert.equal((await store.getActiveWorkRun(ORG, entry.id))?.id, entry.expected);
+          for (const run of await store.listWorkRuns(ORG, entry.id)) {
+            assert.equal(run.completion_policy_version, undefined);
+            assert.equal(run.hide_on_success, undefined);
+            assert.equal(run.write_back_required, undefined);
+            assert.equal(run.trigger_kind, undefined);
+          }
+        }
+        await store.summarizeInbox(ORG);
+        await store.listInbox(ORG, { heads: true });
+        const inspect = new Database(path, { readonly: true });
+        try {
+          assert.equal(inspect.pragma("user_version", { simple: true }), LATEST_SCHEMA_VERSION);
+          assert.deepEqual(inspect.pragma("foreign_key_check"), []);
+          const delivery = inspect.prepare("SELECT * FROM work_deliveries WHERE id = 'delivery'").get();
+          assert.equal(delivery.payload_json, '{"text":"Preserve payload"}');
+          assert.equal(delivery.idempotency_key, "stable-delivery");
+          assert.equal(delivery.attempts, 2);
+          assert.equal(delivery.run_id, null);
+          assert.equal(delivery.target_json, null);
+          assert.equal(delivery.version, schema === 58 ? 0 : 3);
+          if (schema !== 58) {
+            assert.equal(delivery.lease_owner, "existing-owner");
+            assert.equal(delivery.claim_token, "existing-token");
+            assert.equal(delivery.cancel_requested_at, NOW);
+          }
+          if (schema === 77) {
+            assert.equal((await store.getWorkItem(ORG, "bound")).current_run_id, "bound-run");
+            assert.equal((await store.getWorkItem(ORG, "changed")).current_run_id, undefined);
+          }
+        } finally { inspect.close(); }
+        await store.close();
+        store = await driver.open(t, path);
+        assert.equal((await store.getActiveWorkRun(ORG, "retry")).id, "retry-1");
+        await store.summarizeInbox(ORG);
+      });
+    }
+  }
+
+  it("rejects unrecognized partial lifecycle schemas without stamping a successful upgrade", async (t) => {
+    const root = await mkdtemp(join(tmpdir(), "regenic-partial-lifecycle-"));
+    const path = join(root, "authority.db");
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const db = new Database(path);
+    try {
+      db.function("conversation_id", (source, externalId, fallbackId) =>
+        conversationId(source, externalId, fallbackId));
+      for (const migration of MIGRATIONS.filter(({ version }) => version <= 77)) db.exec(migration.sql);
+      db.exec("ALTER TABLE work_items DROP COLUMN current_run_id");
+      db.pragma("user_version = 77");
+    } finally { db.close(); }
+    assert.throws(() => new SqliteAuthorityStore(path), /Unrecognized lifecycle schema/);
+    const inspect = new Database(path, { readonly: true });
+    try {
+      assert.equal(inspect.pragma("user_version", { simple: true }), 77);
+      assert.equal(inspect.pragma("table_info(work_items)").some((column) => column.name === "current_run_id"), false);
+    } finally { inspect.close(); }
+  });
+
   it("upgrades shipped SQLite schema 58 without losing its hide setting or active run", async (t) => {
     const root = await mkdtemp(join(tmpdir(), "regenic-shipped-schema-"));
     const path = join(root, "authority.db");

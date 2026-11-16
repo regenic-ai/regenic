@@ -1,4 +1,58 @@
-export const LATEST_SCHEMA_VERSION = 77;
+export const LATEST_SCHEMA_VERSION = 78;
+
+export const PRE_MERGE_LIFECYCLE_REPAIR_SQL = `
+  ALTER TABLE work_items ADD COLUMN current_run_id TEXT REFERENCES work_runs(id);
+  ALTER TABLE work_items ADD COLUMN version INTEGER NOT NULL DEFAULT 0 CHECK (version >= 0);
+  ALTER TABLE work_runs ADD COLUMN version INTEGER NOT NULL DEFAULT 0 CHECK (version >= 0);
+  ALTER TABLE work_runs ADD COLUMN trigger_kind TEXT CHECK (trigger_kind IN ('push', 'pull', 'manual'));
+  ALTER TABLE work_runs ADD COLUMN write_back_required INTEGER CHECK (write_back_required IN (0, 1));
+  ALTER TABLE work_runs ADD COLUMN write_back_target_json TEXT CHECK (write_back_target_json IS NULL OR json_valid(write_back_target_json));
+  CREATE UNIQUE INDEX work_runs_org_id_idx ON work_runs (org_id, id);
+  CREATE TABLE work_deliveries_repaired (
+    id TEXT PRIMARY KEY,
+    org_id TEXT NOT NULL,
+    work_item_id TEXT NOT NULL REFERENCES work_items(id),
+    recipe_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    unit_key TEXT NOT NULL,
+    event_id TEXT,
+    status TEXT NOT NULL,
+    write_back TEXT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT,
+    next_retry_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    payload_json TEXT,
+    lease_expires_at TEXT,
+    idempotency_key TEXT,
+    channel_receipt_json TEXT,
+    run_id TEXT,
+    target_json TEXT CHECK (target_json IS NULL OR json_valid(target_json)),
+    lease_owner TEXT,
+    claim_token TEXT,
+    cancel_requested_at TEXT,
+    version INTEGER NOT NULL DEFAULT 0 CHECK (version >= 0),
+    FOREIGN KEY (org_id, run_id) REFERENCES work_runs(org_id, id)
+  );
+  INSERT INTO work_deliveries_repaired (
+    id, org_id, work_item_id, recipe_id, kind, unit_key, event_id,
+    status, write_back, attempts, last_error, next_retry_at, created_at, updated_at,
+    payload_json, lease_expires_at, idempotency_key, channel_receipt_json,
+    lease_owner, claim_token, cancel_requested_at, version
+  ) SELECT
+    id, org_id, work_item_id, recipe_id, kind, unit_key, event_id,
+    status, write_back, attempts, last_error, next_retry_at, created_at, updated_at,
+    payload_json, lease_expires_at, idempotency_key, channel_receipt_json,
+    lease_owner, claim_token, cancel_requested_at, version
+  FROM work_deliveries;
+  DROP TABLE work_deliveries;
+  ALTER TABLE work_deliveries_repaired RENAME TO work_deliveries;
+  CREATE UNIQUE INDEX work_deliveries_run_idx ON work_deliveries (org_id, run_id) WHERE run_id IS NOT NULL;
+  CREATE UNIQUE INDEX work_deliveries_legacy_item_idx ON work_deliveries (org_id, work_item_id) WHERE run_id IS NULL;
+  CREATE INDEX work_deliveries_item_idx ON work_deliveries (org_id, work_item_id, created_at, id);
+  CREATE INDEX work_deliveries_org_status_idx ON work_deliveries (org_id, status, next_retry_at);
+`;
 
 export const RECIPE_DESTINATION_COLUMN_SQL =
   "ALTER TABLE recipes ADD COLUMN write_back_thread_id TEXT";
@@ -1512,5 +1566,23 @@ export const MIGRATIONS = [
   {
     version: 77,
     sql: `ALTER TABLE work_runs ADD COLUMN hide_on_success INTEGER CHECK (hide_on_success IS NULL OR hide_on_success IN (0, 1));`,
+  },
+  {
+    version: 78,
+    sql: `
+      UPDATE work_items SET current_run_id = (
+        SELECT r.id FROM work_runs r
+        WHERE r.org_id = work_items.org_id AND r.work_item_id = work_items.id
+          AND r.recipe_id = work_items.recipe_id
+          AND r.status IN ('running', 'waiting_human')
+      )
+      WHERE current_run_id IS NULL AND version = 0 AND status IN ('running', 'waiting_human')
+        AND 1 = (
+          SELECT COUNT(*) FROM work_runs r
+          WHERE r.org_id = work_items.org_id AND r.work_item_id = work_items.id
+            AND r.recipe_id = work_items.recipe_id
+            AND r.status IN ('running', 'waiting_human')
+        );
+    `,
   },
 ] as const;

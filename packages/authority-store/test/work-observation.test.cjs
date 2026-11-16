@@ -388,7 +388,7 @@ for (const driver of drivers.filter((entry) => entry.name.startsWith("sqlite")))
     assert.deepEqual(await f.store.getDisposition(item.head_event_id), disposition);
     const inspect = new Database(f.path, { readonly: true });
     try {
-      assert.equal(inspect.pragma("user_version", { simple: true }), 77);
+      assert.equal(inspect.pragma("user_version", { simple: true }), LATEST_SCHEMA_VERSION);
       assert.equal(inspect.prepare("SELECT completion_policy_version FROM work_runs WHERE id = ?")
         .get(run.id).completion_policy_version, null);
       assert.deepEqual(inspect.pragma("foreign_key_check"), []);
