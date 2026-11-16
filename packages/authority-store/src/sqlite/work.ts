@@ -807,10 +807,10 @@ export async function dismissWorkItem(db: Database.Database, input: WorkDismissa
         );
     }
     const savedAnswer = result.search_answer
-      ? db.prepare(`UPDATE search_answers SET outcome = 'timed_out', updated_at = ?
+      ? db.prepare(`UPDATE search_answers SET outcome = ?, updated_at = ?
         WHERE org_id = ? AND id = ? RETURNING *`)
-        .get(input.now, orgId, result.search_answer.id) as SearchAnswerRow | undefined : undefined;
-    if (result.search_answer && !savedAnswer) throw new Error("Timed out search answer disappeared inside its transaction");
+        .get(result.search_answer.outcome, input.now, orgId, result.search_answer.id) as SearchAnswerRow | undefined : undefined;
+    if (result.search_answer && !savedAnswer) throw new Error("Terminal search answer disappeared inside its transaction");
     if (result.run) {
       enqueueCancellationJob(db, {
         run: result.run,

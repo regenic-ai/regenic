@@ -951,10 +951,12 @@ export async function dismissWorkItem(db: PgSql, input: WorkDismissal): Promise<
       ], client);
     }
     const savedAnswer = result.search_answer ? await db.queryOne<SearchAnswerRow>(
-      `UPDATE search_answers SET outcome = 'timed_out', updated_at = $1
-        WHERE org_id = $2 AND id = $3 RETURNING *`, [input.now, orgId, result.search_answer.id], client,
+      `UPDATE search_answers SET outcome = $1, updated_at = $2
+        WHERE org_id = $3 AND id = $4 RETURNING *`,
+      [result.search_answer.outcome, input.now, orgId, result.search_answer.id],
+      client,
     ) : null;
-    if (result.search_answer && !savedAnswer) throw new Error("Timed out search answer disappeared inside its transaction");
+    if (result.search_answer && !savedAnswer) throw new Error("Terminal search answer disappeared inside its transaction");
     if (result.run) {
       await enqueueCancellationJob(db, result.run, savedWorkItem.thread_id, input.now, client);
     }

@@ -633,6 +633,7 @@ export class PersonalWorkService implements OnModuleDestroy {
     const items = await authority.listWorkItems(orgId, {
       statuses: [...ACTIVE_WORK_STATUSES],
     });
+    const byAnswer = new Map<string, WorkItem[]>();
     for (const item of items) {
       const answerId = searchAnswerIdFromWorkItem(item.id);
       if (
@@ -642,30 +643,46 @@ export class PersonalWorkService implements OnModuleDestroy {
       ) {
         continue;
       }
+      const related = byAnswer.get(answerId) ?? [];
+      related.push(item);
+      byAnswer.set(answerId, related);
+    }
+    for (const [answerId, related] of byAnswer) {
       try {
-        const [latest, active, record] = await Promise.all([
-          authority.getWorkItem(orgId, item.id),
-          authority.getActiveWorkRun(orgId, item.id),
-          authority.getSearchAnswer(orgId, answerId),
-        ]);
+        const record = await authority.getSearchAnswer(orgId, answerId);
         if (
-          !latest ||
-          !active ||
           !record ||
           record.outcome ||
-          now - Date.parse(record.created_at) <= SEARCH_ANSWER_TIMEOUT_MS ||
-          !isActiveWorkStatus(latest.status)
+          now - Date.parse(record.created_at) <= SEARCH_ANSWER_TIMEOUT_MS
         ) {
           continue;
         }
-        await this.cancelAuxiliaryItem(item, {
-          timeout: { record, now: new Date(now).toISOString() },
-        });
+        let terminalized = false;
+        let firstError: unknown;
+        for (const item of related) {
+          try {
+            const latest = await authority.getWorkItem(orgId, item.id);
+            if (!latest || !isActiveWorkStatus(latest.status)) continue;
+            await this.cancelAuxiliaryItem(item, terminalized
+              ? {}
+              : {
+                  searchAnswerTerminal: {
+                    record,
+                    now: new Date(now).toISOString(),
+                    outcome: "timed_out",
+                  },
+                });
+            terminalized = true;
+          } catch (error) {
+            firstError ??= error;
+          }
+        }
+        if (firstError) throw firstError;
       } catch (error) {
         if (!isWorkTickShutdown(error)) {
           console.error("search answer timeout failed", {
             answer_id: answerId,
-            work_item_id: item.id,
+            work_item_ids: related.map((item) => item.id),
           }, error);
         }
       }
@@ -890,7 +907,14 @@ export class PersonalWorkService implements OnModuleDestroy {
 
   async cancelAuxiliaryExecution(
     workItemId: string,
-    options: { emit?: boolean } = {},
+    options: {
+      emit?: boolean;
+      searchAnswerTerminal?: {
+        record: SearchAnswerRecord;
+        now?: string;
+        outcome: "timed_out" | "cancelled";
+      };
+    } = {},
   ): Promise<WorkRunView> {
     await this.executors.ensureMounted();
     const host = this.runtime.requireHost();
@@ -904,11 +928,25 @@ export class PersonalWorkService implements OnModuleDestroy {
 
   private async cancelAuxiliaryItem(
     item: WorkItem,
-    options: { emit?: boolean; timeout?: { record: SearchAnswerRecord; now: string } },
+    options: {
+      emit?: boolean;
+      searchAnswerTerminal?: {
+        record: SearchAnswerRecord;
+        now?: string;
+        outcome: "timed_out" | "cancelled";
+      };
+    },
   ): Promise<WorkRunView> {
     const host = this.runtime.requireHost();
     const authority = host.get("authority");
     if (!isActiveWorkStatus(item.status)) {
+      if (options.searchAnswerTerminal) {
+        throw new PersonalConnectorError(
+          "work_dismissal_conflict",
+          "Search answer terminal transition requires active work. Refresh the execution.",
+          409,
+        );
+      }
       return {
         work_item: item,
         run: item.current_run_id
@@ -916,10 +954,13 @@ export class PersonalWorkService implements OnModuleDestroy {
           : undefined,
       };
     }
-    const now = options.timeout?.now ?? new Date().toISOString();
+    const now = options.searchAnswerTerminal?.now ?? new Date().toISOString();
     const dismissed = await authority.dismissWorkItem({
       expected_item: item, now, fold_visibility: false,
-      ...(options.timeout ? { search_answer_timeout: options.timeout.record } : {}),
+      ...(options.searchAnswerTerminal ? {
+        search_answer_timeout: options.searchAnswerTerminal.record,
+        search_answer_outcome: options.searchAnswerTerminal.outcome,
+      } : {}),
     });
     if (dismissed.outcome === "replayed") {
       return { work_item: dismissed.item };

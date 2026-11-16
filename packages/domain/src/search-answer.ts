@@ -1,4 +1,4 @@
-export type SearchAnswerOutcome = "timed_out";
+export type SearchAnswerOutcome = "timed_out" | "cancelled";
 export type SearchAnswerIntent = "lookup" | "aggregate" | "list";
 export type SearchAnswerIncompleteReason =
   | "missing_time_range"
@@ -17,6 +17,25 @@ export interface SearchAnswerFact {
   event_ids: string[];
 }
 
+export type SearchAnswerMapBatchStatus =
+  | "pending"
+  | "running"
+  | "completed"
+  | "failed";
+
+export interface SearchAnswerMapBatch {
+  index: number;
+  start_offset: number;
+  end_offset: number;
+  status: SearchAnswerMapBatchStatus;
+  /** Zero-based attempt. One retry is allowed. */
+  attempt: number;
+  /** Deterministic for this batch and attempt. Never exposed by public APIs. */
+  work_item_id?: string;
+  /** Parsed facts only; message bodies remain in the authorized snapshot. */
+  facts?: SearchAnswerFact[];
+}
+
 export interface SearchAnswerMapReduce {
   strategy: "map_reduce";
   phase: "mapping" | "reducing";
@@ -26,7 +45,14 @@ export interface SearchAnswerMapReduce {
   /** Retained for resumability of records created before adaptive batches. */
   batch_size?: number;
   total_batches: number;
+  /** Durable per-batch state. Missing on records created by the serial implementation. */
+  batches?: SearchAnswerMapBatch[];
+  max_parallelism?: number;
+  /** Legacy serial progress, retained only for migration. */
   completed_batches: number;
+  /** Legacy serial attempt, retained only for migration. */
+  batch_attempt: number;
+  /** Legacy accumulated facts, retained only for migration. */
   facts: SearchAnswerFact[];
 }
 
@@ -36,10 +62,28 @@ export interface SearchAnswerScope {
   total_count: number | null;
   included_count: number;
   omitted_count: number | null;
+  /** Number of conflicting canonical fact identities, capped by the reducer. */
+  conflict_count?: number;
   occurred_after?: string;
   occurred_before?: string;
   incomplete_reason?: SearchAnswerIncompleteReason;
   map_reduce?: SearchAnswerMapReduce;
+}
+
+export interface SearchAnswerProgress {
+  phase: "mapping" | "reducing";
+  completed_batches: number;
+  total_batches: number;
+  processed_messages: number;
+  total_messages: number;
+  current_attempt: number;
+  max_attempts: number;
+  active_batches: number;
+  pending_batches: number;
+  retrying_batches: number;
+  max_parallelism: number;
+  /** Number of conflicting canonical fact identities, capped by the reducer. */
+  conflict_count?: number;
 }
 
 /**

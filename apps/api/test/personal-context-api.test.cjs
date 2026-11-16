@@ -238,13 +238,21 @@ async function startExecutorStub(summary) {
     const text = Buffer.concat(chunks).toString("utf8");
     requests.push({ method: request.method, url: request.url, body: text ? JSON.parse(text) : undefined });
     const done = request.method === "GET" && summary !== undefined;
+    const starts = requests.filter((entry) =>
+      entry.method === "POST" && entry.url === "/v1/runs");
+    const requestedRunId = request.url?.match(/^\/v1\/runs\/([^/]+)$/)?.[1];
+    const runNumber = requestedRunId
+      ? Number(requestedRunId.replace(/^run-/, ""))
+      : starts.length;
+    const runStart = starts[runNumber - 1];
+    const externalRunId = `run-${Math.max(1, runNumber)}`;
     const resolvedSummary = typeof summary === "function"
-      ? summary(requests)
+      ? summary(requests, runStart, externalRunId)
       : summary;
     response.setHeader("content-type", "application/json");
     response.end(JSON.stringify(done
-      ? { status: "completed", external_run_id: "run-1", agent_thread_id: "dsh:answer-1", result: { summary: resolvedSummary } }
-      : { status: "running", external_run_id: "run-1", agent_thread_id: "dsh:answer-1" }));
+      ? { status: "completed", external_run_id: externalRunId, agent_thread_id: "dsh:answer-1", result: { summary: resolvedSummary } }
+      : { status: "running", external_run_id: externalRunId, agent_thread_id: "dsh:answer-1" }));
   });
   await listenServer(server);
   servers.push(server);
@@ -1304,13 +1312,15 @@ describe("personal context API", () => {
   });
   it("maps large authorized scopes in resumable batches before reducing", async () => {
     const root = await createRoot();
-    const executor = await startExecutorStub((requests) => {
+    const executor = await startExecutorStub((requests, runStart) => {
       const starts = requests.filter((request) =>
         request.method === "POST" && request.url === "/v1/runs");
-      const latest = starts.at(-1);
+      const latest = runStart ?? starts.at(-1);
+      const batchIndex = latest?.body?.work_item_id?.match(/:(\d+):\d+$/)?.[1]
+        ?? starts.length;
       return latest?.body?.executor_config?.prompt?.includes("Extract atomic facts")
         ? JSON.stringify([{
-            dedupe_key: `batch-${starts.length}`,
+            dedupe_key: `batch-${batchIndex}`,
             group: "all owners",
             metric: "completed tasks",
             value: 1,
@@ -1352,7 +1362,9 @@ describe("personal context API", () => {
     );
     assert.equal(started.response.status, 202, started.text);
     let answer = JSON.parse(started.text);
-    assert.equal(answer.progress.completed_batches, 0);
+    assert.ok(answer.progress.completed_batches <= 1);
+    assert.ok(answer.progress.active_batches <= 3);
+    assert.equal(answer.progress.max_parallelism, 3);
     assert.ok(answer.progress.total_batches > 11);
     const ledger = new SqliteAuthorityStore(join(root, "authority.db"));
     let persistedOffsets;
@@ -1364,12 +1376,26 @@ describe("personal context API", () => {
     } finally {
       ledger.close();
     }
-    const resumed = await fetch(`${origin}/v1/me/context/search/answers/${answer.answer_id}`);
-    assert.equal(resumed.status, 200, await resumed.clone().text());
-    answer = await resumed.json();
+    const work = app.get(PersonalWorkService);
+    const startPrepared = work.startPreparedAuxiliaryExecution.bind(work);
+    let interrupted = false;
+    let restarts = 0;
+    work.startPreparedAuxiliaryExecution = async (prepared, evidenceText) => {
+      if (
+        !interrupted &&
+        prepared.work_item.id === `search-answer:${answer.answer_id}`
+      ) {
+        interrupted = true;
+        throw new Error("Simulated interruption before reduce startup");
+      }
+      return startPrepared(prepared, evidenceText);
+    };
+    let response = await fetch(
+      `${origin}/v1/me/context/search/answers/${answer.answer_id}`,
+    );
+    answer = await response.json();
     const startsAfterResume = executor.requests.filter((request) =>
       request.method === "POST" && request.url === "/v1/runs");
-    assert.equal(startsAfterResume.length, 2, JSON.stringify(answer));
     assert.match(
       startsAfterResume[1].body.evidence_text,
       new RegExp(`bulk-task-${persistedOffsets[1]} completed`),
@@ -1378,29 +1404,26 @@ describe("personal context API", () => {
       startsAfterResume[1].body.evidence_text,
       new RegExp(`bulk-task-${persistedOffsets[1] - 1} completed`),
     );
-    const work = app.get(PersonalWorkService);
-    const startPrepared = work.startPreparedAuxiliaryExecution.bind(work);
-    let interrupted = false;
-    let restarts = 0;
-    work.startPreparedAuxiliaryExecution = async (prepared, evidenceText) => {
-      if (!interrupted && prepared.search_answer?.scope?.map_reduce?.phase === "reducing") {
-        interrupted = true;
-        throw new Error("Simulated interruption before reduce startup");
-      }
-      return startPrepared(prepared, evidenceText);
-    };
-    for (let index = 1; index < answer.progress.total_batches + 1; index += 1) {
-      let response = await fetch(`${origin}/v1/me/context/search/answers/${answer.answer_id}`);
+    let pollingRounds = 1;
+    while (answer.status !== "completed" && pollingRounds < 20) {
+      response = await fetch(
+        `${origin}/v1/me/context/search/answers/${answer.answer_id}`,
+      );
       if (response.status === 500) {
         assert.equal(interrupted, true, await response.text());
         restarts += 1;
         assert.equal(restarts, 1);
         const pendingLedger = new SqliteAuthorityStore(join(root, "authority.db"));
         try {
-          const record = await pendingLedger.getSearchAnswer("local-owner", answer.answer_id);
-          const item = await pendingLedger.getWorkItem("local-owner", record.work_item_id);
+          const record = await pendingLedger.getSearchAnswer(
+            "local-owner",
+            answer.answer_id,
+          );
+          const item = await pendingLedger.getWorkItem(
+            "local-owner",
+            record.work_item_id,
+          );
           assert.equal(record.scope.map_reduce.phase, "reducing");
-          assert.equal(record.scope.map_reduce.completed_batches, persistedOffsets.length - 1);
           assert.equal(item.status, "open");
           assert.equal(item.current_run_id, undefined);
         } finally {
@@ -1409,16 +1432,30 @@ describe("personal context API", () => {
         await app.close();
         apps.splice(apps.indexOf(app), 1);
         ({ origin } = await startApi(root, { driver: "none" }, undefined, null));
-        response = await fetch(`${origin}/v1/me/context/search/answers/${answer.answer_id}`);
+        response = await fetch(
+          `${origin}/v1/me/context/search/answers/${answer.answer_id}`,
+        );
       }
       assert.equal(response.status, 200, await response.clone().text());
       answer = await response.json();
+      pollingRounds += 1;
+      assert.ok(answer.progress.active_batches <= 3);
     }
     assert.equal(restarts, 1);
     assert.equal(answer.status, "completed");
+    assert.ok(pollingRounds < answer.progress.total_batches);
     assert.deepEqual(answer.progress, {
+      phase: "reducing",
       completed_batches: persistedOffsets.length - 1,
       total_batches: persistedOffsets.length - 1,
+      processed_messages: 1_001,
+      total_messages: 1_001,
+      current_attempt: 1,
+      max_attempts: 1,
+      active_batches: 1,
+      pending_batches: 0,
+      retrying_batches: 0,
+      max_parallelism: 1,
     });
     const starts = executor.requests.filter((request) =>
       request.method === "POST" && request.url === "/v1/runs");
@@ -1544,6 +1581,7 @@ describe("personal context API", () => {
     const polled = JSON.parse(await fetch(`${origin}/v1/me/context/search/answers/${job.answer_id}`).then((r) => r.text()));
     assert.equal(polled.status, "running");
     const cancelled = await postJson(`${origin}/v1/me/context/search/answers/${job.answer_id}/cancel`, {});
+    assert.equal(cancelled.response.status, 200, cancelled.text);
     assert.equal(JSON.parse(cancelled.text).status, "cancelled");
     let authority = new SqliteAuthorityStore(database);
     try {
