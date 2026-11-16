@@ -27,6 +27,8 @@ export interface SearchAnswerMapReduce {
   batch_size?: number;
   total_batches: number;
   completed_batches: number;
+  /** Zero-based attempt for the current batch. One retry is allowed. */
+  batch_attempt: number;
   facts: SearchAnswerFact[];
 }
 
