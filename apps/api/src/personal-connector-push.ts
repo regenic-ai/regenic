@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   PushIngestBackpressureError,
   PushIngestRejectedError,
@@ -31,6 +32,7 @@ import type { ConnectorPushState, ConnectorState, PushReconcileNote } from "./pe
 import { ingestTokenMatches } from "./personal-ingest-token";
 import { applyPullOutcome } from "./personal-pull-status";
 import { safeErrorCode } from "./personal-connector-poll";
+import { persistPushBackpressure } from "./personal-push-backpressure";
 
 const MAINTENANCE_RETRY_AFTER_MS = 5_000;
 
@@ -74,6 +76,11 @@ export async function ingestPush(
     });
   } catch (error) {
     if (error instanceof PushIngestBackpressureError) {
+      persistPushBackpressure(
+        state.runtime.requireHost().get("authority"),
+        installation.org_id,
+        error.retry_after_ms,
+      );
       throw new PersonalConnectorError(
         "throttled",
         error.message,
@@ -372,6 +379,26 @@ export async function ensureConnectorLivePush(
       return rows[0]?.watermark;
     },
     pressure: () => host.pushPressure?.() ?? "ok",
+  });
+}
+
+/** Persist an interactive wake so the background owner can refresh this stream. */
+export async function enqueueInteractiveWake(
+  state: Pick<ConnectorPushState, "runtime">,
+  installationId: string,
+  streamKey: string,
+): Promise<void> {
+  const store = state.runtime.requireHost().get("authority");
+  const prior = await store.getSyncState(installationId, streamKey);
+  const now = new Date().toISOString();
+  await store.enqueueSyncWork({
+    id: `push-nudge:${randomUUID()}`,
+    installation_id: installationId,
+    stream_key: streamKey,
+    lane: "interactive",
+    next_due_at: now,
+    generation: prior?.generation ?? 1,
+    now,
   });
 }
 

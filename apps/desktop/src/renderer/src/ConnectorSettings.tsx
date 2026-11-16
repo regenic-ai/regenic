@@ -24,6 +24,7 @@ import {
 import {
   attemptSummary,
   connectorActionError,
+  formatTime,
   installationStatusLabel,
   syncProgressSummary,
 } from "./format";
@@ -710,9 +711,23 @@ function ConnectorRow({
   const attemptSourceMode = installation.last_attempt
     ? installation.source_mode
     : activeSourceMode;
-  const activity = !installation.last_attempt && receivesPush && activeSourceMode === "poll"
-    ? t("connector.push.waiting")
-    : attemptSummary(installation.last_attempt, attemptSourceMode ?? "poll");
+  const pushIsLatest = Boolean(
+    receivesPush &&
+      installation.last_push_at &&
+      (!installation.last_attempt ||
+        Date.parse(installation.last_push_at) >=
+          Date.parse(
+            installation.last_attempt.finished_at ??
+              installation.last_attempt.started_at,
+          )),
+  );
+  const activity = pushIsLatest && installation.last_push_at
+    ? t("connector.push.lastUpdateWhen", {
+        when: formatTime(installation.last_push_at),
+      })
+    : !installation.last_attempt && receivesPush && activeSourceMode === "poll"
+      ? t("connector.push.waiting")
+      : attemptSummary(installation.last_attempt, attemptSourceMode ?? "poll");
   return (
     <div id={id} className="install-block">
       <div className="install install-instance">
@@ -740,7 +755,7 @@ function ConnectorRow({
           <div className={receivesPush ? "connector-activity" : "muted"}>
             {activity}
           </div>
-          {!installation.last_attempt && receivesPush ? (
+          {!installation.last_attempt && !installation.last_push_at && receivesPush ? (
             <p className="muted connector-next">
               {t(
                 activeSourceMode === "hybrid"

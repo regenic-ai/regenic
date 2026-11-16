@@ -31,6 +31,9 @@ export function connectorActionError(error: unknown): string {
   if (text.includes("not found")) {
     return t("error.connector.notFound");
   }
+  if (text.includes("teardown has not completed")) {
+    return t("error.connector.stillStopping");
+  }
   return message;
 }
 

@@ -21,7 +21,10 @@ import { shouldHydrateOpenedInbox } from "./personal-inbox-query";
 import { shouldPullOlderFocus } from "./personal-conversation-focus";
 
 import type { ConnectorLiveState as ConnectorState } from "./personal-connector-state";
-import { ensureConnectorLivePush } from "./personal-connector-push";
+import {
+  enqueueInteractiveWake,
+  ensureConnectorLivePush,
+} from "./personal-connector-push";
 import {
   wrapDriverError,
   pollStream,
@@ -516,9 +519,15 @@ async function runRecentLiveForThread(
     }
     const key = streamPaceKey(installation.id, stream.stream_key);
     state.rememberStreamMeta(key, stream);
-    state.streamPulling.add(key);
-    state.publishStreams();
     try {
+      if (!state.ownsLiveRuntime()) {
+        await enqueueInteractiveWake(state, installation.id, stream.stream_key);
+        state.hydrateCooldown.set(threadId, Date.now() + options.cooldownMs);
+        state.liveKickCooldown.set(threadId, Date.now() + options.cooldownMs);
+        return;
+      }
+      state.streamPulling.add(key);
+      state.publishStreams();
       await ensureConnectorLivePush(state, installation.id);
       const nudged = await state.exclusiveStream(
         installation.id,

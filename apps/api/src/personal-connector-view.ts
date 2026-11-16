@@ -333,6 +333,7 @@ export interface EngineInstallationView {
   source_mode: "poll" | "webhook" | "hybrid";
   /** New messages are pushed by the connector. History can still be pulled. */
   pushes: boolean;
+  last_push_at?: string;
   last_attempt: IngestAttempt | null;
   pairing_code?: string;
   sync?: SyncProgressView;
@@ -343,7 +344,7 @@ export function toInstallationView(
   lastAttempt: IngestAttempt | null,
   drivers: { get(connectorType: string): ChannelDriver | undefined },
   locale: CopyLocale = DEFAULT_COPY_LOCALE,
-  extras?: { sync?: SyncProgressView | null },
+  extras?: { sync?: SyncProgressView | null; lastPushAt?: string },
 ): EngineInstallationView {
   const driver = drivers.get(installation.connector_type);
   const { label, detail } = connectorPresentation(
@@ -383,6 +384,7 @@ export function toInstallationView(
     ),
     source_mode: driver?.source_mode ?? "poll",
     pushes: enabled && capabilities.push === true,
+    ...(extras?.lastPushAt ? { last_push_at: extras.lastPushAt } : {}),
     last_attempt: lastAttempt,
     ...(extras?.sync ? { sync: extras.sync } : {}),
   };

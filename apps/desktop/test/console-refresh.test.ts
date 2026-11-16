@@ -142,6 +142,36 @@ describe("engineRevision", () => {
     assert.notEqual(before, after);
   });
 
+  it("changes when a connector receives a new push", () => {
+    const installation = {
+      id: "push-1",
+      connector_type: "dsh-session",
+      status: "enabled",
+      label: "DSH",
+      detail: null,
+      syncable: true,
+      can_reply: true,
+      can_create: false,
+      last_attempt: null,
+    } as NonNullable<PersonalEngineView["installations"]>[number];
+    const base = engineWithCatalog("DSH", "Connect DSH");
+    const before = engineRevision(
+      { ...base, installations: [installation] },
+      false,
+    );
+    const after = engineRevision(
+      {
+        ...base,
+        installations: [{
+          ...installation,
+          last_push_at: "2026-11-16T00:00:00.000Z",
+        }],
+      },
+      false,
+    );
+    assert.notEqual(before, after);
+  });
+
   it("changes when freshness or ETA changes", () => {
     const base = engineWithCatalog("Feishu", "Install lark-cli");
     const before = engineRevision(

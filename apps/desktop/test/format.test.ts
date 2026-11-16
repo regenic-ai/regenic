@@ -301,6 +301,15 @@ describe("connector action errors", () => {
         ),
         "本机网络看起来被拦住了。检查 VPN 或防火墙后再试。",
       );
+      assert.equal(
+        connectorActionError(
+          new KernelRequestError(
+            "Connector teardown has not completed; retry stopping first",
+            "lifecycle_failed",
+          ),
+        ),
+        "连接器仍在关闭，请稍后重试。",
+      );
     } finally {
       setActiveLocale("en");
     }

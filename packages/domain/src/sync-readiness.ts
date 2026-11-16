@@ -9,6 +9,7 @@ import type { SyncProgressView } from "./sync-progress";
 
 /** Default Personal live tick. Used only as the optimistic ETA cadence. */
 export const DEFAULT_SYNC_TICK_MS = 10_000;
+export const SYNC_THROTTLE_VISIBLE_MS = 60_000;
 
 export type SyncThrottleReason = "source_429" | "throttled" | "writer_wait";
 export type SyncFreshnessSource = "poll" | "push" | "none";
@@ -113,6 +114,7 @@ export function estimateSyncReadiness(input: {
   hot_idle_ms?: number;
   cold_idle_ms?: number;
   writer_wait_pressure_ms?: number;
+  now_ms?: number;
 }): SyncReadinessView {
   const metrics = input.metrics ?? [];
   const remaining = remainingSyncStreams(input.progress);
@@ -125,6 +127,7 @@ export function estimateSyncReadiness(input: {
     throttle_reason: selectThrottleReason(
       metrics,
       input.writer_wait_pressure_ms ?? WRITE_WAIT_PRESSURE_MS,
+      input.now_ms ?? Date.now(),
     ),
     eta: estimateSyncEta({
       remaining_streams: remaining,
@@ -220,18 +223,67 @@ function selectFreshnessMs(metrics: readonly SyncMetricAggregate[]): number | nu
 function selectThrottleReason(
   metrics: readonly SyncMetricAggregate[],
   writerWaitPressureMs: number,
+  nowMs: number,
 ): SyncThrottleReason | null {
-  if (sumMetric(metrics, "source_429") > 0) {
+  if (hasRecentMetric(metrics, "source_429", nowMs, SYNC_THROTTLE_VISIBLE_MS)) {
     return "source_429";
   }
-  if (sumMetric(metrics, "throttled") > 0) {
+  if (hasRecentMetric(metrics, "throttled", nowMs, SYNC_THROTTLE_VISIBLE_MS)) {
     return "throttled";
   }
-  const writerWait = lastMetric(metrics, "writer_wait_ms");
+  if (hasRecentMetric(metrics, "push_backpressure", nowMs, SYNC_THROTTLE_VISIBLE_MS)) {
+    return "throttled";
+  }
+  const writerWait = lastRecentMetric(
+    metrics,
+    "writer_wait_ms",
+    nowMs,
+    SYNC_THROTTLE_VISIBLE_MS,
+  );
   if (writerWait != null && writerWait >= writerWaitPressureMs) {
     return "writer_wait";
   }
   return null;
+}
+
+function hasRecentMetric(
+  metrics: readonly SyncMetricAggregate[],
+  name: SyncMetricName,
+  nowMs: number,
+  windowMs: number,
+): boolean {
+  return metrics.some((item) => {
+    if (item.name !== name || item.last <= 0) {
+      return false;
+    }
+    const recordedAt = Date.parse(item.recorded_at);
+    const ageMs = nowMs - recordedAt;
+    return Number.isFinite(recordedAt) && ageMs >= 0 && ageMs <= windowMs;
+  });
+}
+
+function lastRecentMetric(
+  metrics: readonly SyncMetricAggregate[],
+  name: SyncMetricName,
+  nowMs: number,
+  windowMs: number,
+): number | null {
+  let found: SyncMetricAggregate | undefined;
+  for (const item of metrics) {
+    if (item.name !== name) {
+      continue;
+    }
+    const ageMs = nowMs - Date.parse(item.recorded_at);
+    if (
+      Number.isFinite(ageMs) &&
+      ageMs >= 0 &&
+      ageMs <= windowMs &&
+      (!found || item.recorded_at > found.recorded_at)
+    ) {
+      found = item;
+    }
+  }
+  return found?.last ?? null;
 }
 
 function lastMetric(

@@ -301,15 +301,19 @@ async function viewOf(
   const fallbackMembers = catalogMembersFromStreams(installation.id, streams);
   const hidden = await host.get("authority")
     .listHiddenExecutorThreadIds(state.runtime.orgId());
-  const [attempt, sync] = await Promise.all([
+  const [attempt, sync, pushWatermarks] = await Promise.all([
     store.latestAttempt(installation.id),
     loadSyncProgress(store, installation.id, {
       mountedStreamKeys: new Set(streams.map((stream) => stream.stream_key)),
       fallbackMembers,
       hiddenThreadIds: new Set(hidden),
     }),
+    store.summarizePushWatermarks(installation.id),
   ]);
   return toInstallationView(installation, attempt, state.drivers, DEFAULT_COPY_LOCALE, {
     sync,
+    ...(pushWatermarks.last_updated_at
+      ? { lastPushAt: pushWatermarks.last_updated_at }
+      : {}),
   });
 }

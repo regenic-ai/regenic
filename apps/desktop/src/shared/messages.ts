@@ -1357,6 +1357,8 @@ export const en = {
   "sync.catchingNamed": "Catching up · {label}",
   "sync.catching": "Catching up",
   "sync.retry": "Connection dropped · retrying",
+  "sync.workPending":
+    "The connector has not completed this refresh yet. Background sync will keep retrying.",
   "sync.idle": "Idle",
   "sync.every": "Every {seconds}s",
 
@@ -1400,6 +1402,7 @@ export const en = {
   "connector.push.waiting": "Waiting for the first update",
   "connector.push.waitingHint":
     "New information from the connected service syncs to your inbox automatically—no manual sync needed.",
+  "connector.push.lastUpdateWhen": "Latest update received · {when}",
   "connector.push.receivingWhen": "Receiving updates · {when}",
   "connector.push.failedWhen": "Could not receive updates{code} · {when}",
   "connector.push.receivedOneWhen": "1 update received · {when}",
@@ -1513,6 +1516,7 @@ export const en = {
   "error.connector.disabled": "Turn this connector on before syncing.",
   "error.connector.missingEnv": "Missing channel credentials",
   "error.connector.notFound": "Connector not found",
+  "error.connector.stillStopping": "The connector is still stopping. Try again shortly.",
   "error.connector.slackChannel": "Slack requires a channel ID",
   "error.connector.dshSession": "DSH web requires a session ID",
   "error.connector.feishuConversation":
@@ -2846,6 +2850,7 @@ export const zh: Record<MessageKey, string> = {
   "sync.catchingNamed": "正在追上 · {label}",
   "sync.catching": "正在追上",
   "sync.retry": "连接中断，正在重试",
+  "sync.workPending": "连接器尚未完成本次刷新，后台同步将继续自动重试。",
   "sync.idle": "空闲",
   "sync.every": "每 {seconds} 秒",
 
@@ -2888,6 +2893,7 @@ export const zh: Record<MessageKey, string> = {
   "connector.mode.hybrid": "自动接收 + 手动同步",
   "connector.push.waiting": "等待首次更新",
   "connector.push.waitingHint": "连接的服务有新内容时，会自动同步到收件箱，无需手动同步。",
+  "connector.push.lastUpdateWhen": "最近收到更新 · {when}",
   "connector.push.receivingWhen": "正在接收更新 · {when}",
   "connector.push.failedWhen": "接收更新失败{code} · {when}",
   "connector.push.receivedOneWhen": "已接收更新 · 1 条 · {when}",
@@ -3000,6 +3006,7 @@ export const zh: Record<MessageKey, string> = {
   "error.connector.disabled": "先启用这个连接器，再同步。",
   "error.connector.missingEnv": "缺少渠道凭证",
   "error.connector.notFound": "找不到这个连接器",
+  "error.connector.stillStopping": "连接器仍在关闭，请稍后重试。",
   "error.connector.slackChannel": "Slack 需要填写频道 ID",
   "error.connector.dshSession": "DSH 网页版需要填写 session ID",
   "error.connector.feishuConversation": "至少选一个会话，或改为同步全部。",

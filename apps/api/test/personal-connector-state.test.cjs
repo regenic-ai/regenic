@@ -1,7 +1,11 @@
 const assert = require("node:assert/strict");
 const { afterEach, describe, it } = require("node:test");
 const { setImmediate } = require("node:timers/promises");
-const { ChannelDriverRegistry, connectorPollTimeoutMs } = require("@regenic/domain");
+const {
+  asConnectorHost,
+  ChannelDriverRegistry,
+  connectorPollTimeoutMs,
+} = require("@regenic/domain");
 const { PersonalConnectorService } = require("../dist/personal-connector.service");
 const { pullStatus, resetPullStatus } = require("../dist/personal-pull-status");
 const { defaultSyncSettings } = require("../dist/personal-sync-settings");
@@ -29,6 +33,42 @@ describe("owned connector coordination state", () => {
     assert.equal(state.ownsLiveRuntime(), true);
     service.maintenanceHold = true;
     assert.equal(state.ownsLiveRuntime(), false);
+  });
+
+  it("persists an interactive wake when the opened thread lands on a follower", async () => {
+    const service = createService();
+    const state = service.connectorState();
+    const enqueued = [];
+    const installation = {
+      id: "installation",
+      org_id: "org-one",
+      connector_type: "test",
+      status: "enabled",
+      config: {},
+    };
+    const store = {
+      async listInstallations() { return [installation]; },
+      async getSyncState() { return { generation: 7 }; },
+      async enqueueSyncWork(input) { enqueued.push(input); },
+    };
+    state.runtime.requireHost = () => ({ get: () => store });
+    state.drivers.get = () => ({
+      source: "test",
+      capabilities: () => ({ sync: true, reply: false, create: false, push: true }),
+      matchesThread: () => true,
+      async resolveThreadStream() {
+        return { stream_key: "test:room", label: "Room" };
+      },
+    });
+
+    await service.kickInteractiveLive("test:room");
+
+    assert.equal(enqueued.length, 1);
+    assert.equal(enqueued[0].installation_id, "installation");
+    assert.equal(enqueued[0].stream_key, "test:room");
+    assert.equal(enqueued[0].lane, "interactive");
+    assert.equal(enqueued[0].generation, 7);
+    assert.equal(state.streamPulling.size, 0);
   });
 
   it("reloads settings saved by another replica before claiming background work", async () => {
@@ -194,8 +234,12 @@ describe("owned connector coordination state", () => {
       live_concurrency: 3,
     };
     const settled = [];
+    const phasesWhileSettling = [];
     const store = {
-      async settleSyncWork(input) { settled.push(input); },
+      async settleSyncWork(input) {
+        phasesWhileSettling.push(pullStatus.phase);
+        settled.push(input);
+      },
       async getSyncCatalog() { return { members: [], catalog: null }; },
       async listSyncPhaseHeads() { return []; },
       async latestAttempt() { return null; },
@@ -230,6 +274,87 @@ describe("owned connector coordination state", () => {
     assert.equal(polls, 0);
     assert.equal(settled.length, work.length);
     assert.equal(settled.every((item) => item.outcome === "succeeded"), true);
+    assert.deepEqual(phasesWhileSettling, work.map(() => "idle"));
+  });
+
+  it("routes interactive work to a pure-push driver on the background owner", async () => {
+    const service = createService();
+    service.backgroundStarted = true;
+    const state = service.connectorState();
+    const settled = [];
+    let nudges = 0;
+    let nudgeReady = true;
+    const installation = {
+      id: "installation",
+      org_id: "org-one",
+      connector_type: "test",
+      status: "enabled",
+      config: {},
+      updated_at: "2026-11-16T00:00:00.000Z",
+    };
+    const store = {
+      async settleSyncWork(input) { settled.push(input); },
+      async findInstallation() { return installation; },
+      async listPushWatermarks() { return []; },
+      async getSyncCatalog() { return { members: [], catalog: null }; },
+      async listSyncPhaseHeads() { return []; },
+      async latestAttempt() { return null; },
+      async listHiddenExecutorThreadIds() { return []; },
+    };
+    const host = {
+      get(name) {
+        if (name === "authority") return store;
+        if (name === "connectors") return { listStreams: () => [] };
+        throw new Error(`unexpected host service: ${name}`);
+      },
+      async push() {},
+      livePush: {
+        has: () => true,
+        generation: () => installation.updated_at,
+        start() {},
+        stop() {},
+        async nudge() { nudges += 1; return nudgeReady; },
+      },
+    };
+    const connectorHostMarker = Reflect.ownKeys(asConnectorHost(host))
+      .find((key) => typeof key === "symbol");
+    Object.defineProperty(host, connectorHostMarker, { value: true });
+    state.runtime.requireHost = () => host;
+    state.kernelRuntime.pressureView = () => ({ level: "ok" });
+    state.requireInstallation = async () => installation;
+    state.catalogSizeByInstall.set(installation.id, 1);
+    state.drivers.get = () => ({
+      source: "test",
+      capabilities: () => ({ sync: true, reply: false, create: false, push: true }),
+      async resolveThreadStream() {
+        return { stream_key: "test:room", label: "Room" };
+      },
+    });
+
+    const succeeded = await executeClaimedDueWork(state, store, [{
+      id: "interactive",
+      installation_id: installation.id,
+      stream_key: "test:room",
+      lane: "interactive",
+      attempts: 1,
+    }], { plane: "steady", allowHistory: false });
+
+    assert.equal(nudges, 1, JSON.stringify(settled));
+    assert.equal(settled.length, 1);
+    assert.equal(settled[0].outcome, "succeeded");
+    assert.equal(succeeded.retry_count, 0);
+    assert.equal(pullStatus.phase, "idle");
+
+    nudgeReady = false;
+    const deferred = await executeClaimedDueWork(state, store, [{
+      id: "interactive-retry",
+      installation_id: installation.id,
+      stream_key: "test:room",
+      lane: "interactive",
+      attempts: 1,
+    }], { plane: "steady", allowHistory: false });
+    assert.equal(deferred.retry_count, 1);
+    assert.equal(settled[1].outcome, "retry");
   });
 
   it("passes the user's new-conversation seed limit to the indexed gap planner", async () => {

@@ -123,9 +123,8 @@ extra 类型可以热发现（目录 watch，或 `POST /v1/me/plugins/reload`）
   进程重启后从最近一次
   确认的 watermark 继续，并按页往前补，不会只拿最新一页把中间漏掉。
   只有后台 leader 副本拥有进程内 tail；follower 可以接收幂等 HTTP ingest，但交互请求
-  不会在 follower 上启动 tail。目录 tick 会核对安装修订并替换陈旧 tail。DSH discover
-  默认一次最多挂载 128 个 session（`REGENIC_DSH_DISCOVER_MOUNT_LIMIT`，硬上限 1000），
-  完整目录元数据不受该挂载上限影响。
+  不会在 follower 上启动 tail。目录 tick 会核对安装修订并替换陈旧 tail。
+  DSH 的完整 session 目录保存在持久化 catalog 中，运行时 stream 仅在打开会话或领取任务时按需挂载。
   打开会话会立刻推这一条流，核心不再为它拉最新页。
   历史和附件拉取仍由核心负责。
   驱动拿到的宿主只属于当前安装：别的安装的流、推送、watermark 和凭据都会被拒绝。

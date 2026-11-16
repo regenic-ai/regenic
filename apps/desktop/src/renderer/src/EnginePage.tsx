@@ -277,7 +277,11 @@ export function EnginePage({
                       </span>
                     </div>
                     {run.last_error ? (
-                      <p className="action-error">{run.last_error}</p>
+                      <p className="action-error">
+                        {run.last_error === "sync_work_pending"
+                          ? t("sync.workPending")
+                          : run.last_error}
+                      </p>
                     ) : null}
                   </div>
                   <div className="install-actions">

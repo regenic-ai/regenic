@@ -160,9 +160,8 @@ Each connector must:
   Only the background-leader replica owns in-process tails. Followers may
   accept idempotent HTTP ingest but never start a tail from an interactive
   request. The catalog tick reconciles installation revisions and replaces a
-  stale tail. DSH discovery mounts at most 128 sessions at once by default
-  (`REGENIC_DSH_DISCOVER_MOUNT_LIMIT`, capped at 1000); catalog metadata can
-  still cover the complete directory.
+  stale tail. DSH keeps the complete session directory in the durable catalog
+  and mounts runtime streams lazily when a conversation is opened or claimed.
   A driver host is limited to that installation: another installation's
   streams, push, watermark, and credentials are rejected. Each installation
   has its own push queue and its own new-message tail. A poll that exceeds

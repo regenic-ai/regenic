@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   type ConnectorRuntimeStore,
+  driverPushes,
   type IngestQuarantine,
   firstSeedHeadFromEnv,
   MAX_DUE_WORK_CLAIM_LIMIT,
@@ -25,6 +26,7 @@ import {
   safeErrorCode,
   DEFAULT_MAX_PAGES,
 } from "./personal-connector-poll";
+import { enqueueInteractiveWake } from "./personal-connector-push";
 import {
   recordClaimedWorkLag,
   dueWorkClaimLimitFor,
@@ -253,6 +255,18 @@ async function executeDurableSyncRun(state: ConnectorState, runId: string): Prom
     if (latest?.status === "cancelled") {
       return;
     }
+    if (result.retry_count > 0) {
+      const now = new Date().toISOString();
+      await store.settleSyncWork({
+        id: work.id,
+        owner,
+        now,
+        outcome: "failed",
+        accepted_count: result.accepted_count,
+        error_code: "sync_work_pending",
+      });
+      return;
+    }
     await store.settleSyncWork({
       id: work.id,
       owner,
@@ -298,7 +312,7 @@ async function executeSyncRunDueWork(
   store: ConnectorRuntimeStore,
   run: SyncRun,
   settings: PersonalSyncSettings | undefined,
-): Promise<{ accepted_count: number }> {
+): Promise<{ accepted_count: number; retry_count: number }> {
   const plane = syncRunWorkPlane(run.mode);
   const lanes = syncRunWorkLanes(run.mode);
   const allowHistory = run.mode === "archive";
@@ -328,6 +342,18 @@ async function executeSyncRunDueWork(
     streamKeys: run.options.stream_keys,
     limit: settings?.first_seed_limit ?? firstSeedHeadFromEnv(),
   });
+  const installation = await state.requireInstallation(
+    store,
+    run.installation_id,
+  );
+  const driver = state.drivers.get(installation.connector_type);
+  const pushWakeKeys =
+    driver && driverPushes(driver, installation) ? wakeKeys : [];
+  if (pushWakeKeys.length > 0) {
+    for (const streamKey of wakeKeys) {
+      await enqueueInteractiveWake(state, run.installation_id, streamKey);
+    }
+  }
   if (wakeKeys.length > 0) {
     await store.wakeUnassignedSyncWork({
       installation_id: run.installation_id,
@@ -337,7 +363,7 @@ async function executeSyncRunDueWork(
   }
   const latest = await store.getSyncRun(run.id, run.org_id);
   if (!latest || (latest.status !== "queued" && latest.status !== "running")) {
-    return { accepted_count: 0 };
+    return { accepted_count: 0, retry_count: 0 };
   }
   const limit = settings
     ? dueWorkClaimLimitFor(state.dueWorkLimiters, plane, settings)
@@ -362,7 +388,14 @@ async function executeSyncRunDueWork(
     });
   let claimed = await claim();
   let accepted = 0;
+  let retries = 0;
+  const claimedInteractiveKeys = new Set<string>();
   if (claimed.length > 0) {
+    for (const item of claimed) {
+      if (item.lane === "interactive") {
+        claimedInteractiveKeys.add(item.stream_key);
+      }
+    }
     recordClaimedWorkLag(claimed);
     const executed = await executeClaimedDueWork(state, store, claimed, {
       plane,
@@ -371,18 +404,29 @@ async function executeSyncRunDueWork(
       execution: { settings },
     });
     accepted += executed.accepted_count;
+    retries += executed.retry_count;
     if (claimed.some((item) => item.lane === "catalog")) {
       const followUp = await claim();
       if (followUp.length > 0) {
+        for (const item of followUp) {
+          if (item.lane === "interactive") {
+            claimedInteractiveKeys.add(item.stream_key);
+          }
+        }
         recordClaimedWorkLag(followUp);
-        accepted += (
-          await executeClaimedDueWork(state, store, followUp, {
+        const followUpResult = await executeClaimedDueWork(
+          state,
+          store,
+          followUp,
+          {
             plane,
             allowHistory,
             syncRunId: run.id,
             execution: { settings },
-          })
-        ).accepted_count;
+          },
+        );
+        accepted += followUpResult.accepted_count;
+        retries += followUpResult.retry_count;
       }
     }
   } else if (wakeKeys.length > 0) {
@@ -395,7 +439,10 @@ async function executeSyncRunDueWork(
       );
     }
   }
-  return { accepted_count: accepted };
+  retries += pushWakeKeys.filter(
+    (streamKey) => !claimedInteractiveKeys.has(streamKey),
+  ).length;
+  return { accepted_count: accepted, retry_count: retries };
 }
 
 function syncRunWorkId(runId: string): string {

@@ -172,16 +172,10 @@ export const dshSessionDriver: ChannelDriver = {
     if (!options?.discover) {
       return [];
     }
-    const access_token = await dshAccessToken(installation, env, {
-      secrets: host.secrets,
-    });
-    const listed = await dshWebRpcClient(installation, env, {
-      access_token,
-    }).listAllSessionIds();
-    const mountLimit = dshDiscoverMountLimit(env);
-    return mountDshSessions(host, installation, env, listed.slice(0, mountLimit), {
-      access_token,
-    });
+    // bindSyncSource owns complete catalog discovery. Runtime streams stay
+    // lazy so a 10k-session directory does not allocate 10k connectors and
+    // egress adapters on the Core event loop.
+    return host.get("connectors").listStreams(installation.id);
   },
 
   async bindSyncSource(installation, host, env): Promise<SyncSource> {
@@ -441,14 +435,6 @@ export const dshSessionDriver: ChannelDriver = {
     return `dsh:${installation.id}:${dshPromptStoreFor(installation.id).generation()}`;
   },
 };
-
-function dshDiscoverMountLimit(env: NodeJS.ProcessEnv): number {
-  const raw = Number(env.REGENIC_DSH_DISCOVER_MOUNT_LIMIT ?? 128);
-  if (!Number.isFinite(raw) || raw <= 0) {
-    return 128;
-  }
-  return Math.max(1, Math.min(1_000, Math.floor(raw)));
-}
 
 /** Test and host overrides for the DSH web transport. */
 export interface DshClientExtras {

@@ -260,8 +260,11 @@ describe("connector catalog hints", () => {
           return { ...feishuChatDriver, source_mode: "webhook" };
         },
       },
+      "en",
+      { lastPushAt: "2026-08-22T00:01:00.000Z" },
     );
     assert.equal(view.source_mode, "webhook");
+    assert.equal(view.last_push_at, "2026-08-22T00:01:00.000Z");
   });
 
   it("attaches sync coverage when the store has started a catalog", () => {
