@@ -662,10 +662,12 @@ export interface PersonalSearchAnswer {
     included_count: number;
     omitted_count: number | null;
     incomplete_reason?: string;
+    conflict_count?: number;
   };
   progress?: {
     completed_batches: number;
     total_batches: number;
+    conflict_count?: number;
   };
 }
 

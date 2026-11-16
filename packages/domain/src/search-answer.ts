@@ -38,6 +38,8 @@ export interface SearchAnswerScope {
   total_count: number | null;
   included_count: number;
   omitted_count: number | null;
+  /** Number of conflicting canonical fact identities, capped by the reducer. */
+  conflict_count?: number;
   occurred_after?: string;
   occurred_before?: string;
   incomplete_reason?: SearchAnswerIncompleteReason;
