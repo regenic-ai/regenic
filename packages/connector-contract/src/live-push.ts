@@ -292,14 +292,27 @@ async function pushStream(
     }
   }
   const timeoutMs = session.pollTimeoutMs;
-  const timeout = timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : undefined;
+  const timeout = timeoutMs > 0 ? new AbortController() : undefined;
+  const timeoutTimer = timeout
+    ? setTimeout(
+        () => timeout.abort(new Error("connector poll timed out")),
+        timeoutMs,
+      )
+    : undefined;
   const signal = timeout
-    ? AbortSignal.any([session.abort.signal, timeout])
+    ? AbortSignal.any([session.abort.signal, timeout.signal])
     : session.abort.signal;
-  const result = await pollWithin(stream.connector.poll(
-    cursor ? { value: cursor } : null,
-    { latest: true, media: false, signal },
-  ), signal);
+  let result;
+  try {
+    result = await pollWithin(stream.connector.poll(
+      cursor ? { value: cursor } : null,
+      { latest: true, media: false, signal },
+    ), signal);
+  } finally {
+    if (timeoutTimer) {
+      clearTimeout(timeoutTimer);
+    }
+  }
   const records = result.batch?.records ?? [];
   // An empty page has nothing to retry. A page with records moves only after
   // core echoes the watermark, so a retryable failure is polled again.
