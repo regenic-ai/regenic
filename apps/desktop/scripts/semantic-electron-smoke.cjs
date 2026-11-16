@@ -695,11 +695,19 @@ async function main() {
         "recovered in-flight acknowledgment inbox tabs");
       await click(`.list-views button:nth-child(${recoveredSource.hidden ? 2 : 1})`);
       const recoveredRow = `[...document.querySelectorAll(".item")].find(item => item.textContent.includes(${JSON.stringify(fixture.marker)}))`;
-      await waitFor(() => evaluate(`Boolean(${recoveredRow})`), `${fixture.marker} row after desktop crash`);
-      await evaluate(`${recoveredRow}.click()`);
-      await waitFor(() => evaluate(`Boolean(document.querySelector(${JSON.stringify(button)}))`),
+      await waitFor(() => evaluate(`(() => {
+        const row = ${recoveredRow};
+        if (!row) return false;
+        row.click();
+        return true;
+      })()`), `${fixture.marker} row after desktop crash`);
+      await waitFor(() => evaluate(`(() => {
+        const action = document.querySelector(${JSON.stringify(button)});
+        if (!action || action.disabled) return false;
+        action.click();
+        return true;
+      })()`),
         `${fixture.marker} acknowledgment action after desktop crash`);
-      await click(button);
       await waitFor(async () => (await readState()).item.acknowledged_run_id === fixture.run.id,
         `${fixture.marker} result acknowledged after desktop restart`);
       const recovered = await readState();
