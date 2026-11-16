@@ -647,6 +647,17 @@ export type PersonalSearchAnswerStatus =
   | "timed_out"
   | "cancelled";
 
+export interface PersonalSearchAnswerProgress {
+  phase: "mapping" | "reducing";
+  completed_batches: number;
+  total_batches: number;
+  processed_messages: number;
+  total_messages: number;
+  current_attempt: number;
+  max_attempts: number;
+  conflict_count?: number;
+}
+
 export interface PersonalSearchAnswer {
   answer_id: string;
   work_item_id: string;
@@ -664,11 +675,7 @@ export interface PersonalSearchAnswer {
     incomplete_reason?: string;
     conflict_count?: number;
   };
-  progress?: {
-    completed_batches: number;
-    total_batches: number;
-    conflict_count?: number;
-  };
+  progress?: PersonalSearchAnswerProgress;
 }
 
 export interface PersonalExpandedSearchResult extends PersonalContextSearchResult {

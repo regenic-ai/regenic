@@ -5,6 +5,7 @@ import {
   type SearchAnswerRecord,
   type SearchAnswerFact,
   type SearchAnswerMapReduce,
+  type SearchAnswerProgress,
   type SearchAnswerScope,
   type WorkRun,
 } from "@regenic/domain";
@@ -72,11 +73,7 @@ export interface SearchAnswerView {
   answer?: string;
   citations?: Array<{ ref: number; event_id: string }>;
   scope?: SearchAnswerScope;
-  progress?: {
-    completed_batches: number;
-    total_batches: number;
-    conflict_count?: number;
-  };
+  progress?: SearchAnswerProgress;
 }
 
 /** Structured executor evidence wins; bracket references are a compatibility fallback. */
@@ -416,10 +413,7 @@ export class PersonalSearchAnswerService {
       status: "failed" as const,
       executor_type: run?.executor_type ?? "",
       scope: publicScope(scope),
-      progress: {
-        completed_batches: scope.map_reduce!.completed_batches,
-        total_batches: scope.map_reduce!.total_batches,
-      },
+      progress: searchAnswerProgress(failed),
     };
   }
 }
@@ -615,13 +609,7 @@ function view(
     ...(record.scope ? {
       scope: publicScope(record.scope),
       ...(record.scope.map_reduce ? {
-        progress: {
-          completed_batches: record.scope.map_reduce.completed_batches,
-          total_batches: record.scope.map_reduce.total_batches,
-          ...(record.scope.conflict_count !== undefined
-            ? { conflict_count: record.scope.conflict_count }
-            : {}),
-        },
+        progress: searchAnswerProgress(record),
       } : {}),
     } : {}),
     ...(status === "completed" && answer
@@ -637,10 +625,63 @@ function view(
   };
 }
 
+export function searchAnswerProgress(
+  record: SearchAnswerRecord,
+): SearchAnswerProgress {
+  const map = record.scope?.map_reduce;
+  if (!map) {
+    throw new Error("Aggregate progress requires map-reduce state");
+  }
+  const totalMessages = record.event_ids.length;
+  const completedBatches = Math.max(
+    0,
+    Math.min(map.completed_batches, map.total_batches),
+  );
+  const persistedBoundary = map.batch_offsets?.[completedBatches];
+  const legacyBoundary = completedBatches * (map.batch_size ?? 100);
+  const processedMessages = map.phase === "reducing"
+    ? totalMessages
+    : Math.max(
+        0,
+        Math.min(totalMessages, persistedBoundary ?? legacyBoundary),
+      );
+  const mapping = map.phase === "mapping";
+  return {
+    phase: map.phase,
+    completed_batches: completedBatches,
+    total_batches: map.total_batches,
+    processed_messages: processedMessages,
+    total_messages: totalMessages,
+    current_attempt: mapping ? Math.min((map.batch_attempt ?? 0) + 1, 2) : 1,
+    max_attempts: mapping ? 2 : 1,
+    ...(record.scope?.conflict_count !== undefined
+      ? {
+          conflict_count: Math.max(
+            0,
+            Math.min(
+              SEARCH_ANSWER_CONFLICT_COUNT_MAX,
+              Math.trunc(record.scope.conflict_count),
+            ),
+          ),
+        }
+      : {}),
+  };
+}
+
 function publicScope(scope: SearchAnswerScope): SearchAnswerScope {
-  if (!scope.map_reduce) return scope;
   const { map_reduce: _mapReduce, ...publicValue } = scope;
   return {
     ...publicValue,
+    ...(scope.conflict_count !== undefined
+      ? {
+          conflict_count: Math.max(
+            0,
+            Math.min(
+              SEARCH_ANSWER_CONFLICT_COUNT_MAX,
+              Math.trunc(scope.conflict_count),
+            ),
+          ),
+        }
+      : {}),
   };
 }
