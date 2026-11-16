@@ -551,7 +551,7 @@ export function reduceFactsWithDiagnostics(
         category ? ` category=${JSON.stringify(category)}` : ""
       } total=${aggregate.value} ${citations}${
         additionalEvidence > 0
-          ? ` additional_evidence=${additionalEvidence}`
+          ? ` +${additionalEvidence} additional evidence`
           : ""
       }`.trimEnd();
     }).join("\n") || "(no relevant facts)";

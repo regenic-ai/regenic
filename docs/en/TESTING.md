@@ -9,6 +9,14 @@ pnpm test:ci
 
 `test:ci` is the pull-request gate: package-boundary checks, workspace build and typecheck, the existing package test suites, and a production-only packed SDK consumer check. The API keeps its existing serial `personal-api*.test.cjs` group and runs the remaining test files separately. The build, typecheck, test and boundary failures block the job. Dependency inventory and audit findings are emitted as sanitized evidence under ignored `coverage/test-evidence/`; known dependency advisories are reported, not silently waived or used as a pre-existing, permanently-red gate. Audit transport/schema failures still fail reporting.
 
+The API package suite includes a deterministic aggregate scale regression. It
+generates 2,000 authorized mixed-size messages, requires multiple adaptive map
+batches, and checks per-batch event and character budgets without wall-clock
+limits. The same scenario covers bounded map retry, persisted-boundary restart,
+cross-batch deduplication and conflict diagnostics, order-invariant reduction,
+and bounded citations. It runs through the normal `pnpm test` command used by
+the Core pull-request lane and makes no external model or network calls.
+
 The workflow runs stable `Core / Node 22.14.0` and `Core / Node 24.12.0` checks and a `Desktop / <OS>` check on Linux and macOS. Nightly runs the same full PR regressions, ten deterministic host lifecycle repetitions, and external connector source compatibility. Manual workflow dispatch adds the SDK candidate matrix and packed consumer verification. A published GitHub release runs the packed core consumer lane against the released source SHA. All jobs use read-only repository permissions and upload short-lived JSON evidence containing source SHAs, lock/tarball SHA-512 hashes, package versions, and sanitized lane results.
 
 Useful focused commands:

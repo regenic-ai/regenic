@@ -24,9 +24,9 @@ const COMPLETE_ANSWER_MESSAGES_MAX = 1_000;
 const COMPLETE_ANSWER_MESSAGE_CHARS = 1_000;
 const COMPLETE_ANSWER_TRANSCRIPT_CHARS = 160_000;
 const MAP_REDUCE_THRESHOLD = 1_000;
-const MAP_REDUCE_BATCH_EVENTS = 100;
-const MAP_REDUCE_BATCH_EVIDENCE_CHARS = 120_000;
-const MAP_REDUCE_MESSAGE_CHARS = 4_000;
+export const MAP_REDUCE_BATCH_EVENTS = 100;
+export const MAP_REDUCE_BATCH_EVIDENCE_CHARS = 120_000;
+export const MAP_REDUCE_MESSAGE_CHARS = 4_000;
 const COMPLETE_SCOPE_DAYS_MAX = 365;
 
 export interface ConversationMessage {
@@ -263,6 +263,7 @@ export class PersonalConversationContextService {
       ) {
         const batchOffsets = adaptiveMapBatchOffsets(
           conversations.flatMap((conversation) => conversation.messages),
+          query,
         );
         const clipped = conversations.some((conversation) =>
           conversation.messages.some((message) =>
@@ -621,7 +622,19 @@ export function mapBatchMessageLine(
 
 export function adaptiveMapBatchOffsets(
   messages: readonly MapBatchMessage[],
+  query = "",
 ): number[] {
+  const envelopeCharacters = [
+    "QUESTION",
+    query,
+    "",
+    "BATCH MESSAGES",
+    "",
+  ].join("\n").length;
+  const messageBudget = MAP_REDUCE_BATCH_EVIDENCE_CHARS - envelopeCharacters;
+  if (messageBudget < 1) {
+    throw new Error("Aggregate question exceeds the batch character budget");
+  }
   const offsets = [0];
   let batchEvents = 0;
   let batchCharacters = 0;
@@ -632,7 +645,7 @@ export function adaptiveMapBatchOffsets(
       batchEvents > 0
       && (
         batchEvents >= MAP_REDUCE_BATCH_EVENTS
-        || batchCharacters + additionalCharacters > MAP_REDUCE_BATCH_EVIDENCE_CHARS
+        || batchCharacters + additionalCharacters > messageBudget
       )
     ) {
       offsets.push(index);
@@ -641,7 +654,7 @@ export function adaptiveMapBatchOffsets(
       line = mapBatchMessageLine(messages[index], batchEvents);
       additionalCharacters = line.length;
     }
-    if (additionalCharacters > MAP_REDUCE_BATCH_EVIDENCE_CHARS) {
+    if (additionalCharacters > messageBudget) {
       throw new Error("A single aggregate evidence message exceeds the batch character budget");
     }
     batchCharacters += additionalCharacters;
