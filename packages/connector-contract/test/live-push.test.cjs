@@ -103,6 +103,88 @@ describe("connector live push", () => {
     }
   });
 
+  it("retries the same cursor when the ack does not echo a watermark", async () => {
+    const seen = [];
+    const stream = {
+      stream_key: "chat:9",
+      connector: {
+        source: "fake",
+        async poll(cursor) {
+          seen.push(cursor?.value);
+          return {
+            batch: {
+              records: [{
+                operation: "create",
+                source: "fake",
+                external_id: "m-1",
+                occurred_at: "2026-11-16T00:00:00.000Z",
+                actor: { id: "user" },
+                scope: { id: "personal" },
+                type: "message",
+                content: [{ role: "body", media_type: "text/plain", text: "hi" }],
+              }],
+            },
+            next_cursor: "cursor-2",
+          };
+        },
+      },
+    };
+    startConnectorLivePush({
+      installationId: "install-retry",
+      intervalMs: 0,
+      listStreams: () => [stream],
+      push: async () => ({ watermark: undefined }),
+    });
+    try {
+      assert.equal(await nudgeConnectorLivePush("install-retry", "chat:9"), true);
+      assert.equal(await nudgeConnectorLivePush("install-retry", "chat:9"), true);
+      assert.deepEqual(seen, [undefined, undefined]);
+    } finally {
+      stopAllConnectorLivePushes();
+    }
+  });
+
+  it("advances after core echoes the watermark", async () => {
+    const seen = [];
+    const stream = {
+      stream_key: "chat:9",
+      connector: {
+        source: "fake",
+        async poll(cursor) {
+          seen.push(cursor?.value);
+          return {
+            batch: {
+              records: [{
+                operation: "create",
+                source: "fake",
+                external_id: "m-1",
+                occurred_at: "2026-11-16T00:00:00.000Z",
+                actor: { id: "user" },
+                scope: { id: "personal" },
+                type: "message",
+                content: [{ role: "body", media_type: "text/plain", text: "hi" }],
+              }],
+            },
+            next_cursor: "cursor-2",
+          };
+        },
+      },
+    };
+    startConnectorLivePush({
+      installationId: "install-acked",
+      intervalMs: 0,
+      listStreams: () => [stream],
+      push: async (batch) => ({ watermark: batch.watermark }),
+    });
+    try {
+      assert.equal(await nudgeConnectorLivePush("install-acked", "chat:9"), true);
+      assert.equal(await nudgeConnectorLivePush("install-acked", "chat:9"), true);
+      assert.deepEqual(seen, [undefined, "cursor-2"]);
+    } finally {
+      stopAllConnectorLivePushes();
+    }
+  });
+
   it("releases a hung poll so the next nudge still runs", async () => {
     let calls = 0;
     const stream = {

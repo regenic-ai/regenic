@@ -1,11 +1,11 @@
-import type { PushIngestBatch } from "./push";
+import type { PushIngestAck, PushIngestBatch } from "./push";
 import type { ConnectorStream } from "./driver";
 
 interface LivePushSession {
   abort: AbortController;
   cursors: Map<string, string>;
   listStreams: () => readonly ConnectorStream[];
-  push: (batch: PushIngestBatch) => Promise<unknown>;
+  push: (batch: PushIngestBatch) => Promise<Pick<PushIngestAck, "watermark"> | void>;
   resumeCursor?: (streamKey: string) => Promise<string | undefined>;
   pollTimeoutMs: number;
   inflight: Map<string, Promise<void>>;
@@ -39,7 +39,7 @@ export function livePushIntervalMs(): number {
 export function startConnectorLivePush(input: {
   installationId: string;
   listStreams: () => readonly ConnectorStream[];
-  push: (batch: PushIngestBatch) => Promise<unknown>;
+  push: (batch: PushIngestBatch) => Promise<Pick<PushIngestAck, "watermark"> | void>;
   /** Last acked watermark when this process has not polled the stream yet. */
   resumeCursor?: (streamKey: string) => Promise<string | undefined>;
   /** Streams polled on each pass. The rest wait for a later pass. */
@@ -179,17 +179,31 @@ async function pushStream(
     { latest: true, media: false, signal },
   ), signal);
   const records = result.batch?.records ?? [];
-  if (records.length > 0) {
-    await session.push({
-      stream_key: stream.stream_key,
-      events: records,
-      ...(result.next_cursor ? { watermark: result.next_cursor } : {}),
-      ...(result.media_pending !== undefined ? { media_pending: result.media_pending } : {}),
-    });
+  // An empty page has nothing to retry. A page with records moves only after
+  // core echoes the watermark, so a retryable failure is polled again.
+  if (records.length === 0) {
+    if (result.next_cursor) {
+      session.cursors.set(stream.stream_key, result.next_cursor);
+    }
+    return;
   }
-  if (result.next_cursor) {
-    session.cursors.set(stream.stream_key, result.next_cursor);
+  const ack = await session.push({
+    stream_key: stream.stream_key,
+    events: records,
+    ...(result.next_cursor ? { watermark: result.next_cursor } : {}),
+    ...(result.media_pending !== undefined ? { media_pending: result.media_pending } : {}),
+  });
+  const acked = echoedWatermark(ack);
+  if (acked) {
+    session.cursors.set(stream.stream_key, acked);
   }
+}
+
+function echoedWatermark(
+  ack: Pick<PushIngestAck, "watermark"> | void,
+): string | undefined {
+  const watermark = ack?.watermark?.trim();
+  return watermark ? watermark : undefined;
 }
 
 function pollWithin<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
