@@ -39,8 +39,8 @@ export function sameSyncSettings(left: PersonalSyncSettings, right: PersonalSync
 
 export function fasterSyncSettings(view: Pick<PersonalSyncSettingsView, "defaults" | "ranges">): PersonalSyncSettings {
   const settings = { ...view.defaults };
-  // Favor first pulls and fresh messages; do not make history or attachment work compete harder.
-  for (const key of ["quota_tokens", "live_concurrency", "first_seed_limit", "steady_claim_limit"] as const) {
+  // New messages are pushed. Faster catch-up spends capacity on history and first seeds.
+  for (const key of ["quota_tokens", "history_concurrency", "first_seed_limit", "bootstrap_claim_limit"] as const) {
     if (key === "quota_tokens" && settings[key] === 0) continue;
     const [min, max] = view.ranges[key];
     settings[key] = Math.min(max, Math.max(min, 1, settings[key] * 2));

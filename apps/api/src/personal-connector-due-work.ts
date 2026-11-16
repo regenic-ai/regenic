@@ -3,6 +3,7 @@ import {
   asConnectorHost,
   connectorSyncTimeoutMs,
   driverPolls,
+  fairSelectSyncWork,
   runInSyncLane,
   SyncEngine,
   buildSyncProgressSnapshot,
@@ -17,7 +18,7 @@ import {
   catalogDueWork,
   classifyDueWorkHeat,
   coldIdleMsForCatalogSize,
-  conversationThreadFromStreamKey,
+  threadForSyncStream,
   dueWorkCoverageLanes,
   firstSeedHeadFromEnv,
   looksLikeSyncPressure,
@@ -25,7 +26,6 @@ import {
   historyPolicyFromConfig,
   historySyncClaimLanes,
   messageDuty,
-  liveWorkAfterInteractiveRelease,
   nextDueAfterPoll,
   planSyncWorkGaps,
   sameLaneContinues,
@@ -55,6 +55,7 @@ import { catalogMembersFromStreams } from "./connector-sync-members";
 
 import type { ConnectorDueWorkState as ConnectorState } from "./personal-connector-state";
 import type { PersonalSyncSettings } from "./personal-sync-settings";
+import { ensureConnectorLivePush, reconcilePush } from "./personal-connector-push";
 import {
   pollStream,
   mapLimit,
@@ -92,12 +93,17 @@ export async function runDueWorkPlane(
   const settings = state.syncSettings;
   const now = new Date().toISOString();
   const limit = dueWorkClaimLimitFor(state.dueWorkLimiters, input.plane, settings);
-  const claim = (at: string) =>
+  if (input.allowHistory && state.pushGate.pressured()) {
+    return false;
+  }
+  const historyClaim = input.plane === "bootstrap" || input.lanes.includes("history");
+  const claimLimit = historyClaim ? Math.min(limit * 2, 128) : limit;
+  const claim = (at: string, size = claimLimit) =>
     store.claimSyncWork({
       owner: state.dueWorkOwner,
       now: at,
-      lease_ms: dueWorkClaimLeaseMs(limit, settings),
-      limit,
+      lease_ms: dueWorkClaimLeaseMs(size, settings),
+      limit: size,
       lanes: input.lanes,
       unassigned: true,
       ...(input.installationId
@@ -119,11 +125,24 @@ export async function runDueWorkPlane(
       return true;
     }
   }
+  if (historyClaim && claimed.length > limit) {
+    const fair = fairSelectSyncWork(claimed, limit);
+    const keepIds = new Set(fair.map((item) => item.id));
+    const releasedAt = new Date().toISOString();
+    for (const item of claimed) {
+      if (keepIds.has(item.id)) continue;
+      await settleDueWork(state, store, item, {
+        now: releasedAt,
+        nextDueAt: releasedAt,
+      });
+    }
+    claimed = fair;
+  }
   recordClaimedWorkLag(claimed);
   let pressure = (await executeClaimedDueWork(state, store, claimed, { ...input, execution: { settings } }))
     .pressure;
   if (claimed.some((item) => item.lane === "catalog")) {
-    const followUp = await claim(new Date().toISOString());
+    const followUp = await claim(new Date().toISOString(), limit);
     if (followUp.length > 0) {
       recordClaimedWorkLag(followUp);
       pressure =
@@ -146,7 +165,6 @@ async function planDueWorkForInstallations(
       installationId ? installation.id === installationId : true,
     );
   let planned = 0;
-  const coverageLanes = dueWorkCoverageLanes(plane);
   for (const installation of installations) {
     const driver = state.drivers.get(installation.connector_type);
     if (
@@ -159,7 +177,7 @@ async function planDueWorkForInstallations(
     const head = await store.getSyncCatalogHead(installation.id);
     const queueHasWork = await store.hasUnassignedSyncWork({
       installation_id: installation.id,
-      lanes: coverageLanes,
+      lanes: dueWorkCoverageLanes(plane),
     });
     if (
       !queueHasWork &&
@@ -207,7 +225,7 @@ export async function enqueueDueWorkFromCatalog(
     return enqueueSyncWorkGaps(state, store, installationId);
   }
   return enqueueSyncWorkGaps(state, store, installationId, {
-    lanes: plane === "steady" ? ["live", "media"] : ["history"],
+    lanes: plane === "steady" ? ["media"] : ["history"],
     unseededLimit: plane === "steady"
       ? state.syncSettings?.first_seed_limit ?? firstSeedHeadFromEnv()
       : 0,
@@ -261,7 +279,7 @@ export async function executeClaimedDueWork(
     syncRunId?: string;
     execution?: { settings: PersonalSyncSettings | undefined };
   },
-): Promise<{ pressure: boolean; accepted_count: number }> {
+): Promise<{ pressure: boolean; accepted_count: number; retry_count: number }> {
   const { settings } = input.execution ?? { settings: state.syncSettings };
   const groups = new Map<string, SyncWorkRecord[]>();
   for (const work of claimed) {
@@ -272,6 +290,7 @@ export async function executeClaimedDueWork(
   const errors: unknown[] = [];
   let pressure = false;
   let acceptedCount = 0;
+  let retryCount = 0;
   await mapLimit([...groups.entries()], settings?.installation_concurrency ?? installationConcurrency(), async ([installationId, work]) => {
     const now = new Date().toISOString();
     const catalogWork = work.filter((item) => item.lane === "catalog");
@@ -316,8 +335,10 @@ export async function executeClaimedDueWork(
         pressure = true;
       }
       acceptedCount += polled.accepted;
+      retryCount += polled.retry_count;
     } catch (error) {
       errors.push(error);
+      retryCount += work.length;
       if (looksLikeSyncPressure(error)) {
         pressure = true;
       }
@@ -343,7 +364,7 @@ export async function executeClaimedDueWork(
   if (errors.length > 0) {
     await applyPullOutcome(errors);
   }
-  return { pressure, accepted_count: acceptedCount };
+  return { pressure, accepted_count: acceptedCount, retry_count: retryCount };
 }
 
 /** Claimed stream work polls that stream only — never re-plans the installation. */
@@ -362,11 +383,11 @@ async function pollClaimedDueWorkStreams(
     humanIdle: boolean;
     concurrency: ReturnType<typeof dueWorkConcurrency>;
   },
-): Promise<{ pressure: boolean; accepted: number }> {
+): Promise<{ pressure: boolean; accepted: number; retry_count: number }> {
   const host = state.runtime.requireHost();
   const installation = await state.requireInstallation(store, installationId);
   const driver = state.drivers.get(installation.connector_type);
-  if (!driver || !driverPolls(driver) || installation.status !== "enabled") {
+  if (!driver || installation.status !== "enabled") {
     const now = new Date().toISOString();
     for (const item of streamWork) {
       await settleDueWork(state, store, item, {
@@ -375,7 +396,7 @@ async function pollClaimedDueWorkStreams(
         errorCode: "unsupported_connector",
       });
     }
-    return { pressure: false, accepted: 0 };
+    return { pressure: false, accepted: 0, retry_count: 0 };
   }
   const engine = new SyncEngine(store);
   const { humanIdle, kernelPressure, concurrency } = budget;
@@ -389,8 +410,15 @@ async function pollClaimedDueWorkStreams(
   let accepted = 0;
   let pages = 0;
   let claimPressure = false;
-  beginPull();
-  state.publishStreams();
+  let retryCount = 0;
+  const reportsPull = streamWork.some(
+    (item) =>
+      item.lane !== "live" && item.lane !== "interactive",
+  );
+  if (reportsPull) {
+    beginPull();
+    state.publishStreams();
+  }
   try {
     const pollItem = async (item: SyncWorkRecord): Promise<void> => {
       if (input.syncRunId) {
@@ -410,13 +438,80 @@ async function pollClaimedDueWorkStreams(
         }
       }
       if (state.maintenanceHold) {
+        retryCount += 1;
         await settleDueWork(state, store, item, {
           now: new Date().toISOString(),
           nextDueAt: new Date().toISOString(),
         });
         return;
       }
+      if (item.lane === "live" || item.lane === "interactive") {
+        if (item.lane === "interactive") {
+          const thread = threadForSyncStream({
+            source: driver.source,
+            streamKey: item.stream_key,
+            allowOpaqueTarget: true,
+          });
+          try {
+            if (!thread) {
+              throw new Error("Interactive push stream has no conversation");
+            }
+            const stream = await driver.resolveThreadStream(
+              installation,
+              thread,
+              asConnectorHost(host),
+              process.env,
+            );
+            state.rememberStreamMeta(
+              streamPaceKey(installation.id, stream.stream_key),
+              stream,
+            );
+            await ensureConnectorLivePush(state, installation.id);
+            const nudged = await asConnectorHost(host).livePush?.nudge(
+              installation.id,
+              stream.stream_key,
+            );
+            if (!nudged) {
+              throw new Error("Connector live tail is not ready");
+            }
+            await store.settleSyncWork({
+              id: item.id,
+              owner: state.dueWorkOwner,
+              now: new Date().toISOString(),
+              outcome: "succeeded",
+            });
+          } catch (error) {
+            retryCount += 1;
+            const now = new Date().toISOString();
+            await settleDueWork(state, store, item, {
+              now,
+              nextDueAt: nextDueAfterFailure(item.attempts, now),
+              errorCode: safeErrorCode(error),
+            });
+          }
+        } else {
+          // New messages are pushed. Cancel leftover background latest rows.
+          await store.settleSyncWork({
+            id: item.id,
+            owner: state.dueWorkOwner,
+            now: new Date().toISOString(),
+            outcome: "succeeded",
+          });
+        }
+        return;
+      }
+      if (!driverPolls(driver)) {
+        retryCount += 1;
+        const now = new Date().toISOString();
+        await settleDueWork(state, store, item, {
+          now,
+          nextDueAt: nextDueAfterFailure(item.attempts, now),
+          errorCode: "unsupported_connector",
+        });
+        return;
+      }
       if (!input.allowHistory && item.lane === "history") {
+        retryCount += 1;
         await settleDueWork(state, store, item, {
           now: new Date().toISOString(),
           nextDueAt: deferWrongPlaneDueAt(),
@@ -424,6 +519,7 @@ async function pollClaimedDueWorkStreams(
         return;
       }
       if (item.lane === "media" && input.plane === "bootstrap") {
+        retryCount += 1;
         await settleDueWork(state, store, item, {
           now: new Date().toISOString(),
           nextDueAt: deferWrongPlaneDueAt(),
@@ -435,6 +531,7 @@ async function pollClaimedDueWorkStreams(
         kernelPressure.throttle_history &&
         input.plane !== "bootstrap"
       ) {
+        retryCount += 1;
         await settleDueWork(state, store, item, {
           now: new Date().toISOString(),
           nextDueAt: deferWrongPlaneDueAt(),
@@ -447,9 +544,19 @@ async function pollClaimedDueWorkStreams(
           !humanIdle ||
           state.kernelRuntime.shouldDeferHistorySync())
       ) {
+        retryCount += 1;
         await settleDueWork(state, store, item, {
           now: new Date().toISOString(),
           nextDueAt: deferWrongPlaneDueAt(),
+        });
+        return;
+      }
+      if (item.lane === "history" && state.pushGate.installationBusy(installation.id)) {
+        retryCount += 1;
+        const now = new Date().toISOString();
+        await settleDueWork(state, store, item, {
+          now,
+          nextDueAt: now,
         });
         return;
       }
@@ -470,11 +577,13 @@ async function pollClaimedDueWorkStreams(
           return;
         }
       }
-      const thread = conversationThreadFromStreamKey(
-        driver.source,
-        item.stream_key,
-      );
+      const thread = threadForSyncStream({
+        source: driver.source,
+        streamKey: item.stream_key,
+        allowOpaqueTarget: true,
+      });
       if (!thread) {
+        retryCount += 1;
         const now = new Date().toISOString();
         await settleDueWork(state, store, item, {
           now,
@@ -491,7 +600,7 @@ async function pollClaimedDueWorkStreams(
           preferredThreadId: preferredThreadId(),
         })
       ) {
-        await releaseStaleInteractiveClaim(state, store, item, catalogSize);
+        await releaseStaleInteractiveClaim(state, store, item);
         return;
       }
       let stream: ConnectorStream;
@@ -503,6 +612,7 @@ async function pollClaimedDueWorkStreams(
           process.env,
         );
       } catch (error) {
+        retryCount += 1;
         if (looksLikeSyncPressure(error)) {
           claimPressure = true;
         }
@@ -537,6 +647,8 @@ async function pollClaimedDueWorkStreams(
       if (older) {
         state.streamCatchingUp.add(key);
         state.streamPullingHistory.add(key);
+      } else if (media) {
+        state.streamPullingMedia.add(key);
       }
       state.publishStreams();
       try {
@@ -555,9 +667,10 @@ async function pollClaimedDueWorkStreams(
                 state.quota,
               ),
             ),
-          { skipIfBusy: item.lane !== "interactive" },
+          { skipIfBusy: true },
         );
         if (polled === undefined) {
+          retryCount += 1;
           await settleDueWork(state, store, item, {
             now: new Date().toISOString(),
             nextDueAt: new Date().toISOString(),
@@ -629,7 +742,7 @@ async function pollClaimedDueWorkStreams(
             preferredThreadId: preferredThreadId(),
           })
         ) {
-          await releaseStaleInteractiveClaim(state, store, item, catalogSize);
+          await releaseStaleInteractiveClaim(state, store, item);
           return;
         }
         const syncState = await store.getSyncState(
@@ -660,6 +773,7 @@ async function pollClaimedDueWorkStreams(
           acceptedCount: summary.accepted_count,
         });
       } catch (error) {
+        retryCount += 1;
         if (looksLikeSyncPressure(error)) {
           claimPressure = true;
         }
@@ -685,6 +799,7 @@ async function pollClaimedDueWorkStreams(
       } finally {
         state.streamPulling.delete(key);
         state.streamPullingHistory.delete(key);
+        state.streamPullingMedia.delete(key);
         state.publishStreams();
       }
     };
@@ -696,6 +811,7 @@ async function pollClaimedDueWorkStreams(
     if (mediaConcurrency <= 0) {
       const deferredAt = deferWrongPlaneDueAt();
       for (const item of mediaItems) {
+        retryCount += 1;
         await settleDueWork(state, store, item, {
           now: new Date().toISOString(),
           nextDueAt: deferredAt,
@@ -708,14 +824,16 @@ async function pollClaimedDueWorkStreams(
       await state.inbox.publishInboxDigest();
     }
     void refreshSyncSnapshot(state, installation.id);
-    return { pressure: claimPressure, accepted };
+    return { pressure: claimPressure, accepted, retry_count: retryCount };
   } finally {
-    finishPull({
-      accepted,
-      pages,
-      catchingUp: state.streamCatchingUp.size,
-    });
-    state.publishStreams();
+    if (reportsPull) {
+      finishPull({
+        accepted,
+        pages,
+        catchingUp: state.streamCatchingUp.size,
+      });
+      state.publishStreams();
+    }
   }
 }
 
@@ -737,7 +855,6 @@ async function releaseStaleInteractiveClaim(
   state: ConnectorState,
   store: ConnectorRuntimeStore,
   item: SyncWorkRecord,
-  catalogSize: number,
 ): Promise<void> {
   const now = new Date().toISOString();
   await store.settleSyncWork({
@@ -746,18 +863,6 @@ async function releaseStaleInteractiveClaim(
     now,
     outcome: "cancelled",
   });
-  await store.enqueueSyncWork(
-    liveWorkAfterInteractiveRelease({
-      installation_id: item.installation_id,
-      stream_key: item.stream_key,
-      generation: item.generation,
-      now,
-      coldIdleMs: coldIdleMsForCatalogSize(
-        catalogSize,
-        streamIdleTiersFromEnv().coldIdleMs,
-      ),
-    }),
-  );
 }
 
 async function settleDueWork(
@@ -864,8 +969,16 @@ export async function catchUp(state: ConnectorState, installationId: string): Pr
 }
 
 async function catchUpDueWork(state: ConnectorState, installationId: string): Promise<void> {
+  await ensureConnectorLivePush(state, installationId);
   await state.refreshSyncSettings();
   const store = state.runtime.requireHost().get("authority");
+  const installation = await store.findInstallation(installationId);
+  const driver = installation
+    ? state.drivers.get(installation.connector_type)
+    : undefined;
+  if (installation && driver?.reconcilePush) {
+    await reconcilePush(state, installationId);
+  }
   await discoverCatalogDueWork(state, store, installationId, "bootstrap");
   await runDueWorkPlane(state, store, {
     plane: "bootstrap",

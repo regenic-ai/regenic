@@ -16,7 +16,13 @@ export type SyncMetricName =
   | "lease_conflicts"
   | "lease_renewal_errors"
   | "throttled"
-  | "source_429";
+  | "source_429"
+  | "push_ack_latency_ms"
+  | "push_backlog"
+  | "push_lag_ms"
+  | "push_backpressure"
+  | "push_tail_errors"
+  | "push_reconcile_ms";
 
 export interface SyncMetricLabels {
   installation_id?: string;
@@ -51,6 +57,8 @@ export interface SyncMetricsSink {
 export class SyncMetricsRegistry implements SyncMetricsSink {
   private readonly aggregates = new Map<string, SyncMetricAggregate>();
 
+  constructor(private readonly maxSeries = 4_096) {}
+
   record(point: SyncMetricPoint): void {
     if (!Number.isFinite(point.value)) {
       return;
@@ -60,6 +68,11 @@ export class SyncMetricsRegistry implements SyncMetricsSink {
     const recordedAt = point.recorded_at ?? new Date().toISOString();
     const current = this.aggregates.get(key);
     if (!current) {
+      while (this.aggregates.size >= Math.max(1, this.maxSeries)) {
+        const oldest = this.aggregates.keys().next().value;
+        if (oldest === undefined) break;
+        this.aggregates.delete(oldest);
+      }
       this.aggregates.set(key, {
         name: point.name,
         labels,
@@ -172,6 +185,27 @@ export function recordPollFreshness(
   sink.record({
     name: "freshness_ms",
     value: Math.max(0, idleMs),
+    labels,
+  });
+}
+
+/** Age since the last clean push ack; omit when the install has never acked. */
+export function recordPushLag(
+  sink: SyncMetricsSink,
+  lastAckAt: string | undefined,
+  labels?: Omit<SyncMetricLabels, "stream_key">,
+  nowMs = Date.now(),
+): void {
+  if (!lastAckAt) {
+    return;
+  }
+  const ackMs = Date.parse(lastAckAt);
+  if (!Number.isFinite(ackMs)) {
+    return;
+  }
+  sink.record({
+    name: "push_lag_ms",
+    value: Math.max(0, nowMs - ackMs),
     labels,
   });
 }

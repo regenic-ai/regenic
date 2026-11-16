@@ -9,7 +9,7 @@ import {
 
 export type PullPhase = "idle" | "pulling";
 export type PullStreamPhase = "idle" | "pulling" | "catching_up" | "error";
-export type PullStreamWork = "live" | "history";
+export type PullStreamWork = "live" | "history" | "media";
 
 export interface PullStreamStatus {
   stream_key: string;

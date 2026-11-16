@@ -1,15 +1,62 @@
 import type { Host, HostContext, Plugin } from "@regenic/plugin-host";
-import type { ConnectorHost, ConnectorSecrets } from "@regenic/connector-contract";
+import {
+  installSecretRef,
+  connectorLivePushGeneration,
+  hasConnectorLivePush,
+  nudgeConnectorLivePush,
+  startConnectorLivePush,
+  stopConnectorLivePush,
+  type ConnectorHost,
+  type ConnectorInstallation,
+  type ConnectorSecrets,
+  type KeychainSecretRef,
+  type PushIngestAck,
+  type PushIngestBatch,
+} from "@regenic/connector-contract";
 import type { ConnectorRegistry } from "./connector-registry";
 import type { EgressRegistry } from "./egress";
 import {
   readInstallSecret,
   writeKeychainSecret,
 } from "./keychain";
+import { processSyncMetrics } from "./sync-observability";
 
 export type { ConnectorHost, ConnectorSecrets };
 
 const WRAPPED = Symbol("regenic.connectorHost");
+
+type ConnectorPushSubmit = (
+  installation: Pick<ConnectorInstallation, "id" | "org_id">,
+  batch: PushIngestBatch,
+) => Promise<PushIngestAck>;
+
+let pushSubmit: ConnectorPushSubmit | undefined;
+
+type ConnectorWatermarkLookup = (
+  installation: Pick<ConnectorInstallation, "id">,
+  streamKey: string,
+) => Promise<string | undefined>;
+
+let watermarkLookup: ConnectorWatermarkLookup | undefined;
+
+type ConnectorPushPressureLookup = () => "ok" | "elevated" | "critical";
+
+let pushPressureLookup: ConnectorPushPressureLookup | undefined;
+
+/** API binds the ingest gate. Drivers only see `ConnectorHost.push`. */
+export function bindConnectorPush(submit: ConnectorPushSubmit): void {
+  pushSubmit = submit;
+}
+
+/** API binds the durable watermark read. Drivers resume a tail from it. */
+export function bindConnectorWatermark(lookup: ConnectorWatermarkLookup): void {
+  watermarkLookup = lookup;
+}
+
+/** API binds core pressure so connector-owned tails can yield to interaction. */
+export function bindConnectorPushPressure(lookup: ConnectorPushPressureLookup): void {
+  pushPressureLookup = lookup;
+}
 const DRIVER_SERVICES = new Set(["connectors", "egress"]);
 const KERNEL_SERVICES = new Set([
   "authority",
@@ -48,8 +95,59 @@ export function asConnectorHost(host: Host | ConnectorHost): ConnectorHost {
       read: readInstallSecret,
       write: writeKeychainSecret,
     },
+    push(installation, batch) {
+      if (!pushSubmit) {
+        throw new Error("Connector push is not bound");
+      }
+      return pushSubmit(installation, batch);
+    },
+    ackedWatermark(installation, streamKey) {
+      if (!watermarkLookup) {
+        return Promise.resolve(undefined);
+      }
+      return watermarkLookup(installation, streamKey);
+    },
+    pushPressure() {
+      return pushPressureLookup?.() ?? "ok";
+    },
+    livePush: {
+      start(input) {
+        startConnectorLivePush({
+          ...input,
+          onError(error, streamKey) {
+            processSyncMetrics.record({
+              name: "push_tail_errors",
+              value: 1,
+              labels: {
+                installation_id: input.installationId,
+                operation: "push",
+                status: connectorErrorCode(error),
+              },
+            });
+            input.onError?.(error, streamKey);
+          },
+        });
+      },
+      stop: stopConnectorLivePush,
+      nudge: nudgeConnectorLivePush,
+      has: hasConnectorLivePush,
+      generation: connectorLivePushGeneration,
+    },
   };
   return wrapped;
+}
+
+function connectorErrorCode(error: unknown): string {
+  if (!error || typeof error !== "object") {
+    return "unknown";
+  }
+  for (const key of ["code", "name"] as const) {
+    const value = Reflect.get(error, key);
+    if (typeof value === "string" && value.trim()) {
+      return value.trim().slice(0, 64);
+    }
+  }
+  return "unknown";
 }
 
 export function isConnectorHost(value: unknown): value is ConnectorHost {
@@ -64,6 +162,268 @@ function narrowDriverPlugin<C>(plugin: Plugin<C>): Plugin<C> {
       return plugin.apply(asDriverPluginContext(ctx), config);
     },
   };
+}
+
+type InstallationScope = Pick<ConnectorInstallation, "id" | "connector_type">;
+
+/**
+ * Host a driver may use for one installation. Registry, push, watermark, and
+ * credential calls for any other installation fail. Kernel services stay hidden
+ * by `asConnectorHost`.
+ */
+export function scopeConnectorInstallation(
+  host: ConnectorHost,
+  installation: InstallationScope,
+): ConnectorHost {
+  return scopeConnectorInstallations(host, [installation]);
+}
+
+/** Same boundary for a driver call that already holds several of its own installs. */
+export function scopeConnectorInstallations(
+  host: ConnectorHost,
+  installations: readonly InstallationScope[],
+): ConnectorHost {
+  const allowed = new Map<string, string>();
+  for (const installation of installations) {
+    const id = installation.id.trim();
+    const type = installation.connector_type.trim();
+    if (id && type) {
+      allowed.set(id, type);
+    }
+  }
+  if (allowed.size === 0) {
+    return host;
+  }
+  const scoped = {
+    [WRAPPED]: true,
+    get: ((name: "connectors" | "egress") =>
+      scopeRegistry(
+        name === "connectors" ? host.get("connectors") : host.get("egress"),
+        allowed,
+      )) as ConnectorHost["get"],
+    plugin(plugin, config) {
+      return host.plugin(narrowPluginToInstallations(plugin, allowed), config);
+    },
+    now: () => host.now(),
+    secrets: scopeSecrets(host.secrets, allowed),
+    ...(host.push
+      ? {
+          push: (installation, batch) => {
+            assertInstallationId(allowed, installation.id);
+            return host.push!(installation, batch);
+          },
+        }
+      : {}),
+    ...(host.ackedWatermark
+      ? {
+          ackedWatermark: (installation, streamKey) => {
+            assertInstallationId(allowed, installation.id);
+            return host.ackedWatermark!(installation, streamKey);
+          },
+        }
+        : {}),
+    ...(host.pushPressure
+      ? { pushPressure: () => host.pushPressure!() }
+      : {}),
+    ...(host.livePush
+      ? {
+          livePush: {
+            start(input) {
+              assertInstallationId(allowed, input.installationId);
+              return host.livePush!.start(input);
+            },
+            stop(installationId) {
+              assertInstallationId(allowed, installationId);
+              return host.livePush!.stop(installationId);
+            },
+            nudge(installationId, streamKey) {
+              assertInstallationId(allowed, installationId);
+              return host.livePush!.nudge(installationId, streamKey);
+            },
+            has(installationId) {
+              assertInstallationId(allowed, installationId);
+              return host.livePush!.has(installationId);
+            },
+            generation(installationId) {
+              assertInstallationId(allowed, installationId);
+              return host.livePush!.generation(installationId);
+            },
+          },
+        }
+      : {}),
+  } as ConnectorHost;
+  return scoped;
+}
+
+export function scopeDriverArguments(
+  driver: { connector_type: string },
+  method: string,
+  args: unknown[],
+): unknown[] {
+  const next = args.slice();
+  if (method === "install") {
+    const input = asRecord(next[0]);
+    if (input && typeof input.id === "string" && isSecrets(input.secrets)) {
+      next[0] = {
+        ...input,
+        secrets: scopeSecrets(input.secrets, new Map([[input.id, driver.connector_type]])),
+      };
+    }
+    return next;
+  }
+  if (method === "onStoreClear" && Array.isArray(next[0]) && isConnectorHost(next[1])) {
+    const owned = next[0].filter(isInstallationScope);
+    if (owned.length > 0) {
+      next[1] = scopeConnectorInstallations(next[1], owned);
+    }
+    return next;
+  }
+  const installation = next.find(isInstallationScope);
+  if (!installation) {
+    return next;
+  }
+  const allowed = new Map([[installation.id, installation.connector_type]]);
+  for (let index = 0; index < next.length; index += 1) {
+    const value = next[index];
+    if (isConnectorHost(value)) {
+      next[index] = scopeConnectorInstallation(value, installation);
+      continue;
+    }
+    if (isSecrets(value)) {
+      next[index] = scopeSecrets(value, allowed);
+      continue;
+    }
+    const record = asRecord(value);
+    if (record && isSecrets(record.secrets)) {
+      next[index] = {
+        ...record,
+        secrets: scopeSecrets(record.secrets, allowed),
+      };
+    }
+  }
+  return next;
+}
+
+function scopeSecrets(
+  secrets: ConnectorSecrets,
+  allowed: ReadonlyMap<string, string>,
+): ConnectorSecrets {
+  return {
+    read(connectorType, installationId, field) {
+      assertInstallation(allowed, installationId, connectorType);
+      return secrets.read(connectorType, installationId, field);
+    },
+    write(ref, secret) {
+      assertSecretRef(allowed, ref);
+      return secrets.write(ref, secret);
+    },
+  };
+}
+
+function scopeRegistry<T extends object>(
+  registry: T,
+  allowed: ReadonlyMap<string, string>,
+): T {
+  return new Proxy(registry, {
+    get(target, key) {
+      const member = Reflect.get(target, key);
+      if (typeof member !== "function") {
+        return member;
+      }
+      return (installationId: string, ...args: unknown[]) => {
+        assertInstallationId(allowed, installationId);
+        return Reflect.apply(member, target, [installationId, ...args]);
+      };
+    },
+  });
+}
+
+function narrowPluginToInstallations<C>(
+  plugin: Plugin<C>,
+  allowed: ReadonlyMap<string, string>,
+): Plugin<C> {
+  return {
+    name: plugin.name,
+    inject: plugin.inject,
+    apply(ctx, config) {
+      const scoped: HostContext = {
+        ...ctx,
+        get: ((name: string) => {
+          const value = ctx.get(name);
+          if (name === "connectors" || name === "egress") {
+            return scopeRegistry(value as object, allowed);
+          }
+          return value;
+        }) as HostContext["get"],
+        plugin(child, input) {
+          return ctx.plugin(narrowPluginToInstallations(child, allowed), input);
+        },
+      };
+      return plugin.apply(scoped, config);
+    },
+  };
+}
+
+function assertInstallationId(
+  allowed: ReadonlyMap<string, string>,
+  installationId: string,
+): void {
+  if (!allowed.has(installationId.trim())) {
+    throw new Error("Connector cannot access another installation");
+  }
+}
+
+function assertInstallation(
+  allowed: ReadonlyMap<string, string>,
+  installationId: string,
+  connectorType: string,
+): void {
+  const id = installationId.trim();
+  const expected = allowed.get(id);
+  if (!expected || (connectorType.trim() && expected !== connectorType.trim())) {
+    throw new Error("Connector cannot access another installation");
+  }
+}
+
+function assertSecretRef(
+  allowed: ReadonlyMap<string, string>,
+  ref: KeychainSecretRef,
+): void {
+  for (const [id, type] of allowed) {
+    const owned = installSecretRef(type, id, "field");
+    const account = ref.account.trim();
+    const prefix = `${id}:`;
+    if (ref.service.trim() === owned.service && account.startsWith(prefix) && account.length > prefix.length) {
+      return;
+    }
+  }
+  throw new Error("Connector cannot access another installation");
+}
+
+function isInstallationScope(value: unknown): value is InstallationScope & { org_id: string } {
+  const record = asRecord(value);
+  return Boolean(
+    record &&
+    typeof record.id === "string" &&
+    record.id.trim() &&
+    typeof record.connector_type === "string" &&
+    record.connector_type.trim() &&
+    typeof record.org_id === "string",
+  );
+}
+
+function isSecrets(value: unknown): value is ConnectorSecrets {
+  const record = asRecord(value);
+  return Boolean(
+    record &&
+    typeof record.read === "function" &&
+    typeof record.write === "function" &&
+    !("get" in record),
+  );
+}
+
+function asRecord(value: unknown): Record<string, any> | undefined {
+  return value && typeof value === "object" ? value as Record<string, any> : undefined;
 }
 
 function asDriverPluginContext(ctx: HostContext): HostContext {

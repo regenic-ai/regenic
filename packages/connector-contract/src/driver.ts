@@ -22,7 +22,14 @@ import type {
   ConnectorSourceMode,
 } from "./ingest";
 import type { KeychainSecretRef } from "./credentials";
+import type { ConnectorLivePushHost } from "./live-push";
 import type { SyncCatalogMember, SyncSource } from "./sync";
+import type {
+  PushIngestAck,
+  PushIngestBatch,
+  PushReconcileContext,
+  PushReconcileReport,
+} from "./push";
 
 export interface UnitKindEntry {
   id: string;
@@ -53,6 +60,7 @@ export type RegisteredConnector = Pick<ChannelConnector, "source"> & {
   poll: NonNullable<ChannelConnector["poll"]>;
   source_mode?: ChannelConnector["source_mode"];
   quota?: ChannelConnector["quota"];
+  limits?: ChannelConnector["limits"];
 };
 
 export interface ConnectorRegistry {
@@ -79,6 +87,23 @@ export interface ConnectorHost {
   plugin<C>(plugin: Plugin<C>, config?: C): Promise<PluginHandle>;
   now(): string;
   secrets: ConnectorSecrets;
+  /**
+   * Submit one batch of new records. Core dedupes and acks. Drivers must not
+   * write Events themselves.
+   */
+  push?(
+    installation: Pick<ConnectorInstallation, "id" | "org_id">,
+    batch: PushIngestBatch,
+  ): Promise<PushIngestAck>;
+  /** Last watermark this installation acked for one stream. Opaque to core. */
+  ackedWatermark?(
+    installation: Pick<ConnectorInstallation, "id">,
+    streamKey: string,
+  ): Promise<string | undefined>;
+  /** Current core pressure so connector-owned tails yield before UI stalls. */
+  pushPressure?(): "ok" | "elevated" | "critical";
+  /** Host-owned live tail registry; avoids one registry per plugin dependency tree. */
+  livePush?: ConnectorLivePushHost;
 }
 
 export interface ConversationThread {
@@ -350,6 +375,7 @@ export interface ConnectorStream {
     poll: NonNullable<ChannelConnector["poll"]>;
     source_mode?: ChannelConnector["source_mode"];
     quota?: ChannelConnector["quota"];
+    limits?: ChannelConnector["limits"];
   };
   pace?: ConnectorStreamPace;
   thread_id?: string;
@@ -387,8 +413,8 @@ export interface ChannelDriverCore {
   readonly connector_type: string;
   readonly source: string;
   /**
-   * Declared pull/push mode for this driver. Omit for poll-only.
-   * Tick skips webhook-only installs instead of calling poll.
+   * Declared upstream acquisition mode for history/catalog work. Omit when
+   * polling is available. New-message delivery always uses push ingest.
    */
   readonly source_mode?: ConnectorSourceMode;
   /** Contract version. Omit for 1.0. Newer values are skipped at load. */
@@ -481,7 +507,7 @@ export interface ChannelSinkPort {
 
 export type WebhookConnector = Pick<
   ChannelConnector,
-  "source" | "source_mode" | "quota" | "verifyWebhook" | "handleWebhook"
+  "source" | "source_mode" | "quota" | "limits" | "verifyWebhook" | "handleWebhook"
 >;
 
 export type ConnectorStopReason =
@@ -535,6 +561,16 @@ export interface ChannelDriver
    * stays in the desktop catalog.
    */
   locales?(): readonly PluginLocaleTable[];
+  /**
+   * Low-frequency, per-installation gap check: compare
+   * `context.listWatermarks()` with the channel and re-push what is missing.
+   * The kernel never substitutes a latest-message poll.
+   */
+  reconcilePush?(
+    installation: ConnectorInstallation,
+    host: ConnectorHost,
+    context: PushReconcileContext,
+  ): Promise<PushReconcileReport | void>;
   /**
    * Install card. Absent means this driver does not appear in Engine.
    */

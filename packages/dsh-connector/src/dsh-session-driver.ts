@@ -116,6 +116,25 @@ export const dshSessionDriver: ChannelDriver = {
     };
   },
 
+  async startInstallation(installation, host) {
+    if (!host.push || !host.livePush) {
+      return;
+    }
+    host.livePush.start({
+      installationId: installation.id,
+      generation: installation.updated_at,
+      listStreams: () => host.get("connectors").listStreams(installation.id),
+      push: (batch) => host.push!(installation, batch),
+      resumeCursor: (streamKey) =>
+        host.ackedWatermark?.(installation, streamKey) ?? Promise.resolve(undefined),
+      pressure: () => host.pushPressure?.() ?? "ok",
+    });
+  },
+
+  async stopInstallation(installation, host) {
+    host.livePush?.stop(installation.id);
+  },
+
   async createThread(installation, host, env, options) {
     const access_token = await dshAccessToken(installation, env, {
       secrets: host.secrets,
@@ -151,15 +170,10 @@ export const dshSessionDriver: ChannelDriver = {
     if (!options?.discover) {
       return [];
     }
-    const access_token = await dshAccessToken(installation, env, {
-      secrets: host.secrets,
-    });
-    const listed = await dshWebRpcClient(installation, env, {
-      access_token,
-    }).listAllSessionIds();
-    return mountDshSessions(host, installation, env, listed, {
-      access_token,
-    });
+    // bindSyncSource owns complete catalog discovery. Runtime streams stay
+    // lazy so a 10k-session directory does not allocate 10k connectors and
+    // egress adapters on the Core event loop.
+    return host.get("connectors").listStreams(installation.id);
   },
 
   async bindSyncSource(installation, host, env): Promise<SyncSource> {

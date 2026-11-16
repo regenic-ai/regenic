@@ -35,6 +35,7 @@ import type {
   MembershipBatch,
   NewConnectorInstallation,
   PollResult,
+  PushWatermark,
   VerifiedWebhook,
   WebhookRequest,
   WeightHints,
@@ -49,6 +50,7 @@ export type {
   ConnectorCursor,
   ConnectorInstallation,
   ConnectorInstallationStatus,
+  ConnectorLimits,
   ConnectorPollOptions,
   ConnectorQuotaHint,
   ConnectorSourceMode,
@@ -69,6 +71,8 @@ export type {
   MembershipBatch,
   NewConnectorInstallation,
   PollResult,
+  PushWatermark,
+  PushWatermarkPage,
   VerifiedWebhook,
   WebhookRequest,
   WeightHints,
@@ -962,7 +966,29 @@ export function ingestAttemptQuarantines(
     }));
 }
 
-export interface ConnectorRuntimeStore extends SyncStore, SyncWorkStore {
+export interface ListPushWatermarksQuery {
+  stream_keys?: readonly string[];
+  /** Exclusive `stream_key` cursor; pages are ordered by `stream_key`. */
+  after?: string;
+  limit?: number;
+}
+
+export interface PushWatermarkSummary {
+  stream_count: number;
+  last_updated_at?: string;
+}
+
+/** Per-stream push positions, O(installations) to summarize. */
+export interface PushWatermarkStore {
+  recordPushWatermark(input: PushWatermark): Promise<void>;
+  listPushWatermarks(
+    installationId: string,
+    query?: ListPushWatermarksQuery,
+  ): Promise<PushWatermark[]>;
+  summarizePushWatermarks(installationId: string): Promise<PushWatermarkSummary>;
+}
+
+export interface ConnectorRuntimeStore extends SyncStore, SyncWorkStore, PushWatermarkStore {
   /** commitSyncPage atomically commits Authority data and runtime settlement in this store. */
   readonly atomicSyncPage?: true;
   createInstallation(input: NewConnectorInstallation): Promise<ConnectorInstallation>;

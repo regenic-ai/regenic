@@ -17,13 +17,13 @@ import type { PersonalSyncSettings, PersonalSyncSettingsView } from "./types";
 const fields = [
   ["quota_tokens", "syncSettings.quotaTokens", "syncSettings.requests", "syncSettings.quotaTokensHelp"],
   ["quota_window_ms", "syncSettings.quotaWindow", "syncSettings.seconds", "syncSettings.quotaWindowHelp"],
-  ["installation_concurrency", "syncSettings.installations", "syncSettings.connections", "syncSettings.installationsHelp"],
-  ["live_concurrency", "syncSettings.live", "syncSettings.conversations", "syncSettings.liveHelp"],
   ["history_concurrency", "syncSettings.history", "syncSettings.conversations", "syncSettings.historyHelp"],
-  ["media_concurrency", "syncSettings.media", "syncSettings.conversations", "syncSettings.mediaHelp"],
   ["first_seed_limit", "syncSettings.firstSeed", "syncSettings.conversations", "syncSettings.firstSeedHelp"],
-  ["steady_claim_limit", "syncSettings.steady", "syncSettings.tasks", "syncSettings.steadyHelp"],
   ["bootstrap_claim_limit", "syncSettings.bootstrap", "syncSettings.tasks", "syncSettings.bootstrapHelp"],
+  ["media_concurrency", "syncSettings.media", "syncSettings.conversations", "syncSettings.mediaHelp"],
+  ["installation_concurrency", "syncSettings.installations", "syncSettings.connections", "syncSettings.installationsHelp"],
+  ["steady_claim_limit", "syncSettings.steady", "syncSettings.tasks", "syncSettings.steadyHelp"],
+  ["live_concurrency", "syncSettings.live", "syncSettings.conversations", "syncSettings.liveHelp"],
 ] as const;
 
 type Field = (typeof fields)[number];
@@ -199,16 +199,22 @@ export function SyncSettings() {
                 <div className="sync-settings-fields">{fields.slice(0, 2).map(renderField)}</div>
               </fieldset>
               <fieldset className="sync-settings-group" disabled={busy}>
-                <legend><span className="settings-label">{t("syncSettings.concurrencyGroup")}
-                  <InfoTip label={t("syncSettings.concurrencyGroup")}>{t("syncSettings.concurrencyHint")}</InfoTip>
+                <legend><span className="settings-label">{t("syncSettings.catchUpGroup")}
+                  <InfoTip label={t("syncSettings.catchUpGroup")}>{t("syncSettings.catchUpHint")}</InfoTip>
                 </span></legend>
-                <div className="sync-settings-fields">{fields.slice(2, 6).map(renderField)}</div>
+                <div className="sync-settings-fields">{fields.slice(2, 5).map(renderField)}</div>
               </fieldset>
               <fieldset className="sync-settings-group" disabled={busy}>
-                <legend><span className="settings-label">{t("syncSettings.batchGroup")}
-                  <InfoTip label={t("syncSettings.batchGroup")}>{t("syncSettings.batchHint")}</InfoTip>
+                <legend><span className="settings-label">{t("syncSettings.attachmentGroup")}
+                  <InfoTip label={t("syncSettings.attachmentGroup")}>{t("syncSettings.attachmentHint")}</InfoTip>
                 </span></legend>
-                <div className="sync-settings-fields">{fields.slice(6).map(renderField)}</div>
+                <div className="sync-settings-fields">{fields.slice(5, 8).map(renderField)}</div>
+              </fieldset>
+              <fieldset className="sync-settings-group" disabled={busy}>
+                <legend><span className="settings-label">{t("syncSettings.live")}
+                  <InfoTip label={t("syncSettings.live")}>{t("syncSettings.liveHelp")}</InfoTip>
+                </span></legend>
+                <div className="sync-settings-fields">{fields.slice(8).map(renderField)}</div>
               </fieldset>
             </div>
           </details>

@@ -133,42 +133,9 @@ export function shouldReleaseInteractiveWork(input: {
 }
 
 /**
- * Live row to enqueue after cancelling a stale interactive claim.
- * Cold due time so finished DSH sessions do not immediately refill the queue.
- */
-export function liveWorkAfterInteractiveRelease(input: {
-  installation_id: string;
-  stream_key: string;
-  generation: number;
-  now: string;
-  coldIdleMs?: number;
-}): EnqueueSyncWork {
-  return {
-    id: dueSyncWorkId(
-      input.installation_id,
-      input.stream_key,
-      "live",
-      input.generation,
-    ),
-    installation_id: input.installation_id,
-    stream_key: input.stream_key,
-    lane: "live",
-    priority: syncWorkPriority("live"),
-    next_due_at: nextDueAtForDueWork({
-      now: input.now,
-      heat: "cold",
-      coldIdleMs: input.coldIdleMs,
-    }),
-    generation: input.generation,
-    now: input.now,
-  };
-}
-
-/**
  * Repair rows for lanes the phase write should already have inserted.
- * History and media are due now. A live row during history is not repaired.
- * A steady live row waits for `idle_until`, then the cold idle. The preferred
- * thread's latest row is interactive.
+ * History and media are due now. Latest rows are never repaired because every
+ * connector delivers new messages through push ingest.
  */
 export function planSyncWorkGaps(input: {
   installation_id: string;
@@ -183,6 +150,12 @@ export function planSyncWorkGaps(input: {
   const planned: EnqueueSyncWork[] = [];
   for (const gap of input.gaps) {
     if (
+      (gap.missing_lane === "live" || gap.missing_lane === "interactive") &&
+      gap.phase !== "unseeded"
+    ) {
+      continue;
+    }
+    if (
       policy === "backfill" &&
       gap.phase === "history" &&
       (gap.missing_lane === "live" || gap.missing_lane === "interactive")
@@ -196,8 +169,12 @@ export function planSyncWorkGaps(input: {
     if (focused && gap.missing_lane === "media") {
       continue;
     }
+    const seed = seedLaneForGap({ gap, policy });
+    if (seed === null) {
+      continue;
+    }
     const lane =
-      focused && gap.missing_lane === "live" ? "interactive" : gap.missing_lane;
+      focused && seed === "live" ? "interactive" : seed;
     const heat = classifyDueWorkHeat({
       preferred: focused && lane === "interactive",
       eager: syncGapRepairIsEager(gap),
@@ -288,10 +265,60 @@ export function needsCatalogDueWork(view: {
 }
 
 /** Lanes that mean this plane already has durable work and must not re-plan. */
-export function dueWorkCoverageLanes(plane: DueWorkPlane): SyncLane[] {
-  return plane === "bootstrap"
-    ? ["history"]
-    : ["interactive", "live", "media"];
+export function dueWorkCoverageLanes(
+  plane: DueWorkPlane,
+): SyncLane[] {
+  if (plane === "bootstrap") {
+    return ["history"];
+  }
+  return ["media"];
+}
+
+/**
+ * Unseeded catalog members seed through history backfill. Incremental
+ * installs wait for the connector's first push. Core does not seed with a
+ * latest poll.
+ */
+export function seedLaneForGap(input: {
+  gap: Pick<SyncWorkGap, "phase" | "missing_lane">;
+  policy?: HistoryPolicy;
+}): SyncLane | null {
+  if (input.gap.phase !== "unseeded" || input.gap.missing_lane !== "live") {
+    return input.gap.missing_lane;
+  }
+  return (input.policy ?? DEFAULT_HISTORY_POLICY) === "backfill" ? "history" : null;
+}
+
+/**
+ * Round-robin across installations so one chatty install cannot monopolize a
+ * history claim. Prefer rows that already arrived earliest within each install.
+ */
+export function fairSelectSyncWork<T extends { installation_id: string }>(
+  claimed: readonly T[],
+  limit: number,
+): T[] {
+  const capped = Math.max(0, Math.floor(limit));
+  if (claimed.length <= capped) {
+    return [...claimed];
+  }
+  const byInstall = new Map<string, T[]>();
+  for (const item of claimed) {
+    const group = byInstall.get(item.installation_id) ?? [];
+    group.push(item);
+    byInstall.set(item.installation_id, group);
+  }
+  const queues = [...byInstall.values()];
+  const selected: T[] = [];
+  let index = 0;
+  while (selected.length < capped && queues.some((queue) => queue.length > 0)) {
+    const queue = queues[index % queues.length];
+    index += 1;
+    if (!queue || queue.length === 0) {
+      continue;
+    }
+    selected.push(queue.shift()!);
+  }
+  return selected;
 }
 
 export function syncWorkCoverageKey(

@@ -409,11 +409,13 @@ describe("FeishuChatPollConnector", () => {
     assert.deepEqual(calls[0], {
       chat_id: "oc_1",
       page_size: 50,
-      sort_type: "ByCreateTimeDesc",
+      page_token: undefined,
+      start_time: "1723500000",
+      sort_type: "ByCreateTimeAsc",
       timeout_ms: 8000,
     });
     assert.match(live.next_cursor ?? "", /"history_token":"older-5"/);
-    assert.equal(live.has_more, false);
+    assert.equal(live.has_more, true);
     assert.equal(live.poll_hint.history_pending, true);
     const older = await connector.poll({ value: live.next_cursor }, { older: true });
     assert.equal(calls[1].page_token, "older-5");
@@ -438,8 +440,40 @@ describe("FeishuChatPollConnector", () => {
     });
     const live = await connector.poll({ value: caughtUp }, { latest: true });
     assert.equal(/history_token/.test(live.next_cursor ?? ""), false);
-    assert.equal(live.has_more, false);
+    assert.equal(live.has_more, true);
     assert.equal(live.poll_hint.history_pending, false);
+  });
+
+  it("pages forward from the watermark instead of skipping to the newest page", async () => {
+    const calls = [];
+    const connector = createConnector({
+      async listMessages(input) {
+        calls.push(input);
+        if (input.page_token === "forward-2") {
+          return {
+            items: [textItem({ message_id: "om_tip", create_time: "1723600000000" })],
+            has_more: false,
+          };
+        }
+        return {
+          items: [textItem({ message_id: "om_gap", create_time: "1723550000000" })],
+          has_more: true,
+          page_token: "forward-2",
+        };
+      },
+    });
+    const seeded = JSON.stringify({
+      start_time: "1723500000",
+      recent_seeded: true,
+    });
+    const first = await connector.poll({ value: seeded }, { latest: true });
+    assert.equal(first.batch.records[0].external_id, "oc_1:om_gap");
+    assert.equal(first.has_more, true);
+    const second = await connector.poll({ value: first.next_cursor }, { latest: true });
+    assert.equal(calls[1].page_token, "forward-2");
+    assert.equal(calls[1].sort_type, "ByCreateTimeAsc");
+    assert.equal(second.batch.records[0].external_id, "oc_1:om_tip");
+    assert.equal(second.has_more, false);
   });
 
   it("loads messages before the on-screen anchor without moving the history token", async () => {

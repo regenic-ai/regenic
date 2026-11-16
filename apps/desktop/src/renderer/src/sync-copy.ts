@@ -120,7 +120,7 @@ export function syncReadinessTone(
   if (readiness?.eta && readiness.remaining_streams > 0) {
     return "warn";
   }
-  if (readiness?.freshness_source === "poll") {
+  if (readiness?.freshness_source === "poll" || readiness?.freshness_source === "push") {
     return "ok";
   }
   return undefined;

@@ -34,6 +34,7 @@ import type {
   SyncCatalogView,
   SyncCatalogHead,
   ApplySyncCatalogPageInput,
+  NoteSyncCatalogStreamInput,
   SyncPhaseHead,
   SyncStreamState,
   SyncWorkGap,
@@ -46,6 +47,7 @@ import {
   SYNC_CATALOG_STREAM,
   applySyncCatalogMembers,
   catalogStreamKeysLeft,
+  syncStateNotedWith,
   historyPolicyFromConfig,
   DEFAULT_HISTORY_POLICY,
   releaseHistoryPhase,
@@ -309,6 +311,9 @@ export async function deleteInstallation(db: Database.Database, id: string, orgI
         .run(id);
       db
         .prepare(`DELETE FROM connector_sync_state WHERE installation_id = ?`)
+        .run(id);
+      db
+        .prepare(`DELETE FROM connector_push_watermarks WHERE installation_id = ?`)
         .run(id);
       db
         .prepare(`DELETE FROM connector_sync_work WHERE installation_id = ?`)
@@ -1537,6 +1542,51 @@ export async function applySyncCatalogPage(db: Database.Database, input: ApplySy
     return apply.immediate();
   }
 
+export async function noteSyncCatalogStream(db: Database.Database, input: NoteSyncCatalogStreamInput): Promise<void> {
+    const streamKey = input.stream_key.trim();
+    if (!streamKey || streamKey === SYNC_CATALOG_STREAM) {
+      return;
+    }
+    const write = db.transaction(() => {
+      db.prepare(
+        `
+          INSERT INTO connector_catalog_cursors (
+            installation_id, cursor_value, complete, generation, updated_at
+          ) VALUES (?, NULL, 0, 1, ?)
+          ON CONFLICT(installation_id) DO NOTHING
+        `,
+      ).run(input.installation_id, input.now);
+      const cursor = db.prepare(
+        `SELECT generation FROM connector_catalog_cursors WHERE installation_id = ?`,
+      ).get(input.installation_id) as { generation: number };
+      db.prepare(
+        `
+          INSERT INTO connector_stream_members (
+            installation_id, stream_key, thread_id, label, kind,
+            generation, discovered_at, last_seen_at
+          ) VALUES (?, ?, ?, ?, NULL, ?, ?, ?)
+          ON CONFLICT(installation_id, stream_key) DO UPDATE SET
+            thread_id = COALESCE(excluded.thread_id, connector_stream_members.thread_id),
+            label = COALESCE(excluded.label, connector_stream_members.label),
+            last_seen_at = excluded.last_seen_at
+        `,
+      ).run(
+        input.installation_id,
+        streamKey,
+        input.thread_id ?? null,
+        input.label ?? null,
+        cursor.generation,
+        input.now,
+        input.now,
+      );
+      const syncState = syncStateNotedWith(input);
+      if (syncState) {
+        applySyncStateUnlocked(db, syncState);
+      }
+    });
+    write.immediate();
+  }
+
 export async function listSyncPhaseHeads(db: Database.Database, installationId: string): Promise<SyncPhaseHead[]> {
     const rows = db
       .prepare(
@@ -1592,56 +1642,58 @@ export async function getSyncState(db: Database.Database, installationId: string
   }
 
 export async function putSyncState(db: Database.Database, state: SyncStreamState): Promise<SyncStreamState> {
+    const write = db.transaction(() => applySyncStateUnlocked(db, state));
+    return { ...write.immediate() };
+  }
+
+function applySyncStateUnlocked(db: Database.Database, state: SyncStreamState): SyncStreamState {
     const stored = releaseHistoryPhase(
       state,
       historyPolicyForInstall(db, state.installation_id),
     );
-    const write = db.transaction(() => {
-      if (
-        streamOutsideCompleteCatalog(db, 
-          stored.installation_id,
-          stored.stream_key,
-        )
-      ) {
-        dropStreamsLeftCatalog(db, 
-          stored.installation_id,
-          [stored.stream_key],
-          stored.updated_at,
-        );
-        return;
-      }
-      db
-        .prepare(
-          `
-            INSERT INTO connector_sync_state (
-              installation_id, stream_key, phase, live_cursor, history_cursor,
-              media_pending, idle_until, generation, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(installation_id, stream_key) DO UPDATE SET
-              phase = excluded.phase,
-              live_cursor = excluded.live_cursor,
-              history_cursor = excluded.history_cursor,
-              media_pending = excluded.media_pending,
-              idle_until = excluded.idle_until,
-              generation = excluded.generation,
-              updated_at = excluded.updated_at
-          `,
-        )
-        .run(
-          stored.installation_id,
-          stored.stream_key,
-          stored.phase,
-          stored.live_cursor ?? null,
-          stored.history_cursor ?? null,
-          stored.media_pending ? 1 : 0,
-          stored.idle_until ?? null,
-          stored.generation,
-          stored.updated_at,
-        );
-      ensureOwedSyncWorkUnlocked(db, stored);
-    });
-    write.immediate();
-    return { ...stored };
+    if (
+      streamOutsideCompleteCatalog(db, 
+        stored.installation_id,
+        stored.stream_key,
+      )
+    ) {
+      dropStreamsLeftCatalog(db, 
+        stored.installation_id,
+        [stored.stream_key],
+        stored.updated_at,
+      );
+      return stored;
+    }
+    db
+      .prepare(
+        `
+          INSERT INTO connector_sync_state (
+            installation_id, stream_key, phase, live_cursor, history_cursor,
+            media_pending, idle_until, generation, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(installation_id, stream_key) DO UPDATE SET
+            phase = excluded.phase,
+            live_cursor = excluded.live_cursor,
+            history_cursor = excluded.history_cursor,
+            media_pending = excluded.media_pending,
+            idle_until = excluded.idle_until,
+            generation = excluded.generation,
+            updated_at = excluded.updated_at
+        `,
+      )
+      .run(
+        stored.installation_id,
+        stored.stream_key,
+        stored.phase,
+        stored.live_cursor ?? null,
+        stored.history_cursor ?? null,
+        stored.media_pending ? 1 : 0,
+        stored.idle_until ?? null,
+        stored.generation,
+        stored.updated_at,
+      );
+    ensureOwedSyncWorkUnlocked(db, stored);
+    return stored;
   }
 
 function streamOutsideCompleteCatalog(db: Database.Database, installationId: string, streamKey: string): boolean {
@@ -1699,22 +1751,27 @@ function dropStreamsLeftCatalog(db: Database.Database, installationId: string, s
     }
   }
 
-function historyPolicyForInstall(db: Database.Database, installationId: string) {
+function installationConfig(db: Database.Database, installationId: string): Record<string, unknown> {
   const row = db
     .prepare(
       `SELECT config_json FROM connector_installations WHERE id = ?`,
     )
     .get(installationId) as { config_json: string } | undefined;
   if (!row?.config_json) {
-    return DEFAULT_HISTORY_POLICY;
+    return {};
   }
   try {
-    return historyPolicyFromConfig(
-      JSON.parse(row.config_json) as Record<string, unknown>,
-    );
+    const parsed = JSON.parse(row.config_json);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : {};
   } catch {
-    return DEFAULT_HISTORY_POLICY;
+    return {};
   }
+}
+
+function historyPolicyForInstall(db: Database.Database, installationId: string) {
+  return historyPolicyFromConfig(installationConfig(db, installationId));
 }
 
 function ensureOwedSyncWorkUnlocked(db: Database.Database, state: SyncStreamState): void {
@@ -1731,10 +1788,11 @@ function ensureOwedSyncWorkUnlocked(db: Database.Database, state: SyncStreamStat
       status: "pending" | "running" | "succeeded" | "failed" | "cancelled";
       run_id: string | null;
     }>;
+    const config = installationConfig(db, state.installation_id);
     const plan = syncWorkEnsurePlan({
       state,
       existing,
-      policy: historyPolicyForInstall(db, state.installation_id),
+      policy: historyPolicyFromConfig(config),
     });
     for (const lane of plan.enqueue) {
       enqueueSyncWorkUnlocked(db, {

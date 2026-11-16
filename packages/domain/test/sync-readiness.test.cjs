@@ -58,8 +58,36 @@ describe("sync readiness", () => {
     assert.equal(readiness.freshness_source, "poll");
   });
 
+  it("prefers a fresher push ack over a poll sample", () => {
+    const readiness = estimateSyncReadiness({
+      metrics: [
+        {
+          name: "freshness_ms",
+          labels: { lane: "history", status: "hot" },
+          count: 1,
+          sum: 15_000,
+          max: 15_000,
+          last: 15_000,
+          recorded_at: "2026-09-21T00:00:00.000Z",
+        },
+        {
+          name: "push_lag_ms",
+          labels: { operation: "push" },
+          count: 1,
+          sum: 2_000,
+          max: 2_000,
+          last: 2_000,
+          recorded_at: "2026-09-21T00:00:00.000Z",
+        },
+      ],
+    });
+    assert.equal(readiness.freshness_ms, 2_000);
+    assert.equal(readiness.freshness_source, "push");
+  });
+
   it("surfaces 429 before writer wait", () => {
     const readiness = estimateSyncReadiness({
+      now_ms: Date.parse("2026-09-21T00:00:30.000Z"),
       metrics: [
         {
           name: "source_429",
@@ -82,6 +110,56 @@ describe("sync readiness", () => {
       ],
     });
     assert.equal(readiness.throttle_reason, "source_429");
+  });
+
+  it("surfaces only recent push backpressure", () => {
+    const now = Date.parse("2026-09-21T00:01:00.000Z");
+    const metric = {
+      name: "push_backpressure",
+      labels: { operation: "push" },
+      count: 1,
+      sum: 1,
+      max: 1,
+      last: 1,
+      recorded_at: "2026-09-21T00:00:30.000Z",
+    };
+    assert.equal(
+      estimateSyncReadiness({ metrics: [metric], now_ms: now }).throttle_reason,
+      "throttled",
+    );
+    assert.equal(
+      estimateSyncReadiness({
+        metrics: [{ ...metric, recorded_at: "2026-09-20T23:59:00.000Z" }],
+        now_ms: now,
+      }).throttle_reason,
+      null,
+    );
+  });
+
+  it("does not keep an old writer wait visible forever", () => {
+    const metric = {
+      name: "writer_wait_ms",
+      labels: {},
+      count: 1,
+      sum: 900,
+      max: 900,
+      last: 900,
+      recorded_at: "2026-09-21T00:00:00.000Z",
+    };
+    assert.equal(
+      estimateSyncReadiness({
+        metrics: [metric],
+        now_ms: Date.parse("2026-09-21T00:00:30.000Z"),
+      }).throttle_reason,
+      "writer_wait",
+    );
+    assert.equal(
+      estimateSyncReadiness({
+        metrics: [metric],
+        now_ms: Date.parse("2026-09-21T00:02:00.000Z"),
+      }).throttle_reason,
+      null,
+    );
   });
 
   it("gives a 10k unseeded catalog an hour-scale range, not 10k times live idle", () => {

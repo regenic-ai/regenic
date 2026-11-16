@@ -17,6 +17,7 @@ import {
 } from "@regenic/config";
 import { PersonalConnectorService } from "./personal-connector.service";
 import { PersonalApiKeyService } from "./personal-api-key.service";
+import { INGEST_TOKEN_HEADER } from "./personal-ingest-token";
 
 @Injectable()
 export class PersonalApiGuard implements CanActivate {
@@ -46,6 +47,13 @@ export class PersonalApiGuard implements CanActivate {
     if (expected) {
       const provided = request.get("x-regenic-personal-key")?.trim();
       if (provided && sameSecret(expected, provided)) {
+        return true;
+      }
+      const ingestToken = request.get(INGEST_TOKEN_HEADER)?.trim();
+      if (
+        ingestToken &&
+        await this.connectors.allowsIngestTokenRequest(request.path, ingestToken, expected)
+      ) {
         return true;
       }
       const liveKey = request.get("x-regenic-live-key")?.trim();

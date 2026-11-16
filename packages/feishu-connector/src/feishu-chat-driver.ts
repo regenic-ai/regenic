@@ -247,6 +247,25 @@ export const feishuChatDriver: ChannelDriver = {
     };
   },
 
+  async startInstallation(installation, host) {
+    if (!host.push || !host.livePush) {
+      return;
+    }
+    host.livePush.start({
+      installationId: installation.id,
+      generation: installation.updated_at,
+      listStreams: () => host.get("connectors").listStreams(installation.id),
+      push: (batch) => host.push!(installation, batch),
+      resumeCursor: (streamKey) =>
+        host.ackedWatermark?.(installation, streamKey) ?? Promise.resolve(undefined),
+      pressure: () => host.pushPressure?.() ?? "ok",
+    });
+  },
+
+  async stopInstallation(installation, host) {
+    host.livePush?.stop(installation.id);
+  },
+
   writeBackLabels(label) {
     return feishuWriteBackLabels(label);
   },

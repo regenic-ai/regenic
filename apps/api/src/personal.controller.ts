@@ -13,13 +13,15 @@ import {
   NotFoundException,
   Param,
   Post,
+  Put,
   Query,
   Req,
+  Res,
   Sse,
   UseGuards,
   forwardRef,
 } from "@nestjs/common";
-import type { Request } from "express";
+import type { Request, Response } from "express";
 import { Observable } from "rxjs";
 import { PersonalApiGuard } from "./personal-api.guard";
 import { requestLocale } from "./request-locale";
@@ -63,6 +65,8 @@ import {
 import { PersonalEventsService } from "./personal-events.service";
 import { ConnectorMarketService } from "./connector-market.service";
 import { ConnectorMarketInstaller } from "./connector-market-installer";
+import { PersonalApiKeyService } from "./personal-api-key.service";
+import { INGEST_TOKEN_HEADER } from "./personal-ingest-token";
 
 const EVENTS_HEARTBEAT_MS = 30_000;
 
@@ -92,6 +96,8 @@ export class PersonalController {
     private readonly connectorMarket: ConnectorMarketService,
     @Inject(ConnectorMarketInstaller)
     private readonly connectorMarketInstaller: ConnectorMarketInstaller,
+    @Inject(PersonalApiKeyService)
+    private readonly keys: PersonalApiKeyService,
   ) {}
 
   @Sse("events")
@@ -911,6 +917,92 @@ export class PersonalController {
     );
   }
 
+  @Post("connectors/:id/ingest")
+  @HttpCode(HttpStatus.OK)
+  ingestConnectorPush(
+    @Param("id") id: string,
+    @Body() body: unknown,
+    @Res({ passthrough: true }) res: Response,
+    @Headers(INGEST_TOKEN_HEADER) token?: string,
+  ) {
+    return this.guard(
+      () => this.connectors.ingestPush(id, body, this.ingestAuth(token)),
+      res,
+    );
+  }
+
+  @Get("connectors/:id/limits")
+  connectorLimits(
+    @Param("id") id: string,
+    @Headers(INGEST_TOKEN_HEADER) token?: string,
+  ) {
+    return this.guard(() => this.connectors.connectorLimits(id, this.ingestAuth(token)));
+  }
+
+  @Get("connectors/:id/watermarks")
+  listConnectorWatermarks(
+    @Param("id") id: string,
+    @Query("after") after?: string,
+    @Query("limit") limit?: string,
+    @Query("stream_key") streamKey?: string | string[],
+    @Headers(INGEST_TOKEN_HEADER) token?: string,
+  ) {
+    const stream_keys = streamKey === undefined
+      ? undefined
+      : (Array.isArray(streamKey) ? streamKey : [streamKey]).map((value) => value.trim()).filter(Boolean);
+    const parsedLimit = limit === undefined ? undefined : Number(limit);
+    return this.guard(() =>
+      this.connectors.listPushWatermarks(id, this.ingestAuth(token), {
+        ...(stream_keys?.length ? { stream_keys } : {}),
+        ...(after ? { after } : {}),
+        ...(parsedLimit !== undefined && Number.isFinite(parsedLimit) ? { limit: parsedLimit } : {}),
+      }),
+    );
+  }
+
+  @Get("connectors/:id/watermarks/summary")
+  summarizeConnectorWatermarks(
+    @Param("id") id: string,
+    @Headers(INGEST_TOKEN_HEADER) token?: string,
+  ) {
+    return this.guard(() =>
+      this.connectors.summarizePushWatermarks(id, this.ingestAuth(token)),
+    );
+  }
+
+  @Get("connectors/:id/ingest-stats")
+  connectorIngestStats(
+    @Param("id") id: string,
+    @Headers(INGEST_TOKEN_HEADER) token?: string,
+  ) {
+    return this.guard(() => this.connectors.ingestStats(id, this.ingestAuth(token)));
+  }
+
+  @Post("connectors/:id/reconcile-push")
+  @HttpCode(HttpStatus.OK)
+  reconcileConnectorPush(@Param("id") id: string) {
+    return this.guard(() => this.connectors.reconcilePush(id));
+  }
+
+  @Put("connectors/:id/limits")
+  adjustConnectorLimits(
+    @Param("id") id: string,
+    @Body() body: unknown,
+    @Headers(INGEST_TOKEN_HEADER) token?: string,
+  ) {
+    return this.guard(() =>
+      this.connectors.adjustConnectorLimits(id, body, this.ingestAuth(token)),
+    );
+  }
+
+  @Post("connectors/:id/ingest-token")
+  @HttpCode(HttpStatus.OK)
+  issueConnectorIngestToken(@Param("id") id: string) {
+    return this.guard(() =>
+      this.connectors.issueIngestToken(id, this.keys.expectedKey()),
+    );
+  }
+
   @Get("connectors/:id/egress")
   listConnectorEgress(
     @Param("id") id: string,
@@ -953,7 +1045,14 @@ export class PersonalController {
     return this.guard(() => this.connectors.revealPairingCode(id));
   }
 
-  private async guard<T>(run: () => Promise<T>): Promise<T> {
+  private ingestAuth(token?: string) {
+    return {
+      ...(token === undefined ? {} : { token }),
+      personalKey: this.keys.expectedKey(),
+    };
+  }
+
+  private async guard<T>(run: () => Promise<T>, res?: Response): Promise<T> {
     try {
       return await run();
     } catch (error) {
@@ -969,8 +1068,17 @@ export class PersonalController {
         );
       }
       if (error instanceof PersonalConnectorError) {
+        if (res && error.retryAfterMs !== undefined) {
+          res.setHeader("Retry-After", String(Math.max(1, Math.ceil(error.retryAfterMs / 1000))));
+        }
         throw new HttpException(
-          { error: { code: error.code, message: error.message } },
+          {
+            error: {
+              code: error.code,
+              message: error.message,
+              ...(error.retryAfterMs === undefined ? {} : { retry_after_ms: error.retryAfterMs }),
+            },
+          },
           error.httpStatus,
         );
       }

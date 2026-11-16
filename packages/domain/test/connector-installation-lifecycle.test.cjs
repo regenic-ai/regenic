@@ -62,9 +62,9 @@ function fixture(overrides = {}) {
   return { registry, driver: registry.get("managed"), host, connectors, egress, raw, calls };
 }
 
-test("legacy driver identity and synchronous catalog behavior are unchanged", async () => {
-  const { registry, raw, driver, calls } = fixture({ stopInstallation: undefined });
-  assert.equal(driver, raw);
+test("legacy driver catalog behavior stays synchronous", async () => {
+  const { registry, driver, calls } = fixture({ stopInstallation: undefined });
+  assert.equal(driver.connector_type, "managed");
   assert.equal(driver.installCatalog().title, "Managed");
   await registry.stopInstallation(installation, {}, "delete");
   assert.deepEqual(calls, []);
@@ -78,6 +78,19 @@ test("catalog, probes and uninstalled/disabled reads never activate a sidecar", 
   assert.deepEqual(calls, []);
   assert.throws(() => driver.resolveStreams({ ...installation, status: "disabled" }, {}, {}), /stopped/);
   assert.deepEqual(calls, []);
+});
+
+test("explicit installation start uses the lifecycle and coalesces", async () => {
+  const { registry, host, calls } = fixture();
+  await Promise.all([
+    registry.startInstallation(installation, host),
+    registry.startInstallation(installation, host),
+  ]);
+  assert.deepEqual(calls, ["start"]);
+  await registry.startInstallation(installation, host, { restart: true });
+  assert.deepEqual(calls, ["start", "start"]);
+  await registry.stopInstallation(installation, host, "disable");
+  assert.deepEqual(calls, ["start", "start", "disable"]);
 });
 
 test("concurrent first operations start once, stop once, and old resources stay fenced after resume", async () => {

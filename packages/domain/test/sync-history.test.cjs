@@ -10,6 +10,7 @@ const {
   historySyncClaimLanes,
   messageDuty,
   owedSyncLanes,
+  explicitPollCursor,
   pollCursorValue,
   releaseHistoryPhase,
   sameLaneContinues,
@@ -59,20 +60,16 @@ describe("one message duty", () => {
       owedSyncLanes({ phase: "history", media_pending: true }, "backfill"),
       ["history", "media"],
     );
-    assert.deepEqual(owedSyncLanes({ phase: "unseeded", media_pending: false }), [
-      "live",
-    ]);
-    assert.deepEqual(owedSyncLanes({ phase: "live", media_pending: false }), ["live"]);
-    assert.deepEqual(owedSyncLanes({ phase: "steady", media_pending: false }), [
-      "live",
-    ]);
+    assert.deepEqual(owedSyncLanes({ phase: "unseeded", media_pending: false }), []);
+    assert.deepEqual(owedSyncLanes({ phase: "live", media_pending: false }), []);
+    assert.deepEqual(owedSyncLanes({ phase: "steady", media_pending: false }), []);
   });
 
   it("never owes history for an incremental install", () => {
     assert.equal(messageDuty("history", "incremental"), "live");
     assert.deepEqual(
       owedSyncLanes({ phase: "history", media_pending: false }, "incremental"),
-      ["live"],
+      [],
     );
     assert.deepEqual(
       syncWorkEnsurePlan({
@@ -80,7 +77,7 @@ describe("one message duty", () => {
         existing: [{ lane: "history", status: "pending", run_id: null }],
         policy: "incremental",
       }),
-      { enqueue: ["live"], cancel: ["history"] },
+      { enqueue: [], cancel: ["history"] },
     );
   });
 
@@ -98,7 +95,7 @@ describe("one message duty", () => {
   });
 
   it("claims live and history on separate ticks and leaves catalog out", () => {
-    assert.deepEqual(steadySyncClaimLanes(), ["interactive", "live", "media"]);
+    assert.deepEqual(steadySyncClaimLanes(), ["media"]);
     assert.deepEqual(historySyncClaimLanes(), ["history"]);
     assert.equal(steadySyncClaimLanes().includes("history"), false);
     assert.equal(steadySyncClaimLanes().includes("catalog"), false);
@@ -234,6 +231,20 @@ describe("cursor commit", () => {
       pollCursorValue({ kind: "history", leaseCursor: "lease-blob" }),
       "lease-blob",
     );
+    assert.equal(
+      explicitPollCursor({ selected: "history-blob", history: true, pushWatermark: "wm" }),
+      "history-blob",
+    );
+    assert.equal(
+      explicitPollCursor({ history: true, pushWatermark: "wm" }),
+      "",
+    );
+    assert.equal(explicitPollCursor({ history: true }), undefined);
+    assert.equal(
+      explicitPollCursor({ history: false, pushWatermark: "wm" }),
+      undefined,
+    );
+    assert.equal(explicitPollCursor({ selected: "live-blob" }), "live-blob");
   });
 
   it("keeps the other cursor when remembering a page", () => {

@@ -11,6 +11,13 @@ export * from "./content-resolution";
 export * from "./channel-driver";
 export * from "./copy-catalog";
 export * from "./connector-host";
+export {
+  livePushIntervalMs,
+  nudgeConnectorLivePush,
+  startConnectorLivePush,
+  stopAllConnectorLivePushes,
+  stopConnectorLivePush,
+} from "@regenic/connector-contract";
 export * from "./credentials";
 export * from "./keychain";
 export * from "./local-probe";
@@ -34,6 +41,9 @@ export * from "./connector-invoker";
 export * from "./deadline";
 export * from "./source-mode";
 export * from "./quota";
+export * from "./push-ingest";
+export * from "./push-reconcile";
+export * from "./push-watermark";
 export * from "./sync-contracts";
 export * from "./sync-work";
 export * from "./sync-work-planner";

@@ -373,7 +373,7 @@ describe("dshSessionPlugin", () => {
         { discover: true },
       );
       assert.deepEqual(discovered, []);
-      assert.equal(listed, 1);
+      assert.equal(listed, 0);
       listed = 0;
       const eligible = await dshSessionDriver.resolveStreams(
         installation,

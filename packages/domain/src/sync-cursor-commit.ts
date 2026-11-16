@@ -80,6 +80,29 @@ export function shouldSeedHistoryCursor(input: {
 }
 
 /**
+ * Cursor argument for the first page of a poll.
+ * A stored cursor is passed through. A background history walk that has not
+ * started, but has a push watermark, passes `""` so the runner does not reuse
+ * a leftover live lease cursor; the connector starts from `push_watermark`.
+ * An anchored scroll is not that walk. `undefined` lets the runner use the lease.
+ */
+export function explicitPollCursor(input: {
+  selected?: string;
+  /** Background history (`older` without `before`). Not a user scroll. */
+  history?: boolean;
+  pushWatermark?: string;
+}): string | undefined {
+  const selected = input.selected?.trim();
+  if (selected) {
+    return selected;
+  }
+  if (input.history === true && input.pushWatermark?.trim()) {
+    return "";
+  }
+  return undefined;
+}
+
+/**
  * Cursor handed to the connector. Regenic does not parse it.
  * Missing value means "use the lease".
  */

@@ -93,4 +93,58 @@ describe("installation quota", () => {
     assert.equal(book.tryConsume("a", hint), true);
     assert.equal(book.tryConsume("a", hint), false);
   });
+
+  it("prefers declared limits.rate over the quota hint", () => {
+    const book = new InstallationQuotaBook({ tokens: 60, window_ms: 60_000 }, () => 1_000);
+    book.declare("a", { rate: { tokens: 1, window_ms: 60_000 } });
+    assert.equal(book.tryConsume("a", { tokens: 10, window_ms: 60_000 }), true);
+    assert.equal(book.tryConsume("a", { tokens: 10, window_ms: 60_000 }), false);
+    assert.deepEqual(book.limits("a").effective.rate, { tokens: 1, window_ms: 60_000 });
+  });
+
+  it("lets a runtime adjustment tighten but never loosen a user quota", () => {
+    const book = new InstallationQuotaBook({ tokens: 60, window_ms: 60_000 }, () => 1_000);
+    book.configure({ tokens: 3, window_ms: 60_000 });
+    book.adjust("a", { rate: { tokens: 1, window_ms: 60_000 } });
+    assert.equal(book.tryConsume("a"), true);
+    assert.equal(book.tryConsume("a"), false);
+    book.adjust("b", { rate: { tokens: 100, window_ms: 60_000 } });
+    assert.deepEqual(book.limits("b").effective.rate, { tokens: 3, window_ms: 60_000 });
+    book.configure({ tokens: 0, window_ms: 60_000 });
+    assert.deepEqual(book.limits("b").effective.rate, { tokens: 100, window_ms: 60_000 });
+  });
+
+  it("gates concurrency per installation and restores the declaration on clear", () => {
+    const book = new InstallationQuotaBook({ tokens: 0, window_ms: 60_000 });
+    book.declare("a", { max_concurrency: 1, page_size: 50 });
+    const release = book.tryAcquireSlot("a");
+    assert.equal(typeof release, "function");
+    assert.equal(book.tryAcquireSlot("a"), undefined);
+    assert.equal(typeof book.tryAcquireSlot("b"), "function");
+    release();
+    release();
+    assert.equal(book.limits("a").inflight, 0);
+    book.adjust("a", { page_size: 5 });
+    assert.equal(book.pageSize("a"), 5);
+    assert.deepEqual(book.limits("a").effective, {
+      max_concurrency: 1,
+      page_size: 5,
+      rate: { tokens: 0, window_ms: 60_000 },
+    });
+    book.adjust("a", { max_concurrency: 64, page_size: 1_000 });
+    assert.deepEqual(book.limits("a").effective, {
+      max_concurrency: 1,
+      page_size: 50,
+      rate: { tokens: 0, window_ms: 60_000 },
+    });
+    book.adjust("a");
+    assert.equal(book.pageSize("a"), 50);
+  });
+
+  it("drops out-of-range declared limits instead of failing the connector", () => {
+    const book = new InstallationQuotaBook({ tokens: 0, window_ms: 60_000 });
+    book.declare("a", { max_concurrency: 0, page_size: 1.5, rate: { tokens: 5, window_ms: 1 } });
+    assert.equal(book.limits("a").declared, undefined);
+    assert.equal(typeof book.tryAcquireSlot("a"), "function");
+  });
 });

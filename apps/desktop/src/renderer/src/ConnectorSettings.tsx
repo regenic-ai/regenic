@@ -24,6 +24,7 @@ import {
 import {
   attemptSummary,
   connectorActionError,
+  formatTime,
   installationStatusLabel,
   syncProgressSummary,
 } from "./format";
@@ -702,26 +703,44 @@ function ConnectorRow({
     : undefined;
   const activeSourceMode =
     installation.status === "enabled" ? installation.source_mode : "poll";
+  const receivesPush = installation.status === "enabled";
   const attemptSourceMode = installation.last_attempt
     ? installation.source_mode
     : activeSourceMode;
+  const pushIsLatest = Boolean(
+    receivesPush &&
+      installation.last_push_at &&
+      (!installation.last_attempt ||
+        Date.parse(installation.last_push_at) >=
+          Date.parse(
+            installation.last_attempt.finished_at ??
+              installation.last_attempt.started_at,
+          )),
+  );
+  const activity = pushIsLatest && installation.last_push_at
+    ? t("connector.push.lastUpdateWhen", {
+        when: formatTime(installation.last_push_at),
+      })
+    : !installation.last_attempt && receivesPush && activeSourceMode === "poll"
+      ? t("connector.push.waiting")
+      : attemptSummary(installation.last_attempt, attemptSourceMode ?? "poll");
   return (
     <div id={id} className="install-block">
       <div className="install install-instance">
-        <div>
+        <div className="install-copy">
           <strong title={installation.id}>
-            {kind.title} · {installation.label}
+            {installation.label}
           </strong>
           <div className="install-meta">
             <span className={`chip ${statusChip}`.trim()}>
               {installationStatusLabel(installation.status)}
             </span>
-            {activeSourceMode === "webhook" || activeSourceMode === "hybrid" ? (
+            {receivesPush ? (
               <span className="connector-mode-chip">
                 {t(
-                  activeSourceMode === "webhook"
-                    ? "connector.mode.push"
-                    : "connector.mode.hybrid",
+                  activeSourceMode === "hybrid"
+                    ? "connector.mode.hybrid"
+                    : "connector.mode.push",
                 )}
               </span>
             ) : null}
@@ -729,20 +748,23 @@ function ConnectorRow({
               <span className="muted">{installation.detail}</span>
             ) : null}
           </div>
-          <div className={activeSourceMode === "webhook" ? "connector-activity" : "muted"}>
-            {attemptSummary(installation.last_attempt, attemptSourceMode)}
+          <div className={receivesPush ? "connector-activity" : "muted"}>
+            {activity}
           </div>
-          {!installation.last_attempt && activeSourceMode === "webhook" ? (
-            <p className="muted connector-next">{t("connector.push.waitingHint")}</p>
-          ) : null}
-          {!installation.last_attempt && activeSourceMode === "hybrid" ? (
-            <p className="muted connector-next">{t("connector.hybrid.waitingHint")}</p>
+          {!installation.last_attempt && !installation.last_push_at && receivesPush ? (
+            <p className="muted connector-next">
+              {t(
+                activeSourceMode === "hybrid"
+                  ? "connector.hybrid.waitingHint"
+                  : "connector.push.waitingHint",
+              )}
+            </p>
           ) : null}
           {syncUnavailableHint ? (
             <p className="muted connector-next">{syncUnavailableHint}</p>
           ) : null}
           {installation.sync ? (
-            <div className="muted">{syncProgressSummary(installation.sync)}</div>
+            <div className="muted connector-next">{syncProgressSummary(installation.sync)}</div>
           ) : null}
           {installation.can_pair ? (
             <PairingCodeCard
@@ -754,8 +776,9 @@ function ConnectorRow({
         </div>
         <div className="install-actions">
           {syncUnavailableHint ? null : (
-            <>
+            <div className="connector-sync">
               <select
+                className="connector-sync-mode"
                 value={syncMode}
                 disabled={busy || !installation.syncable}
                 aria-label={t("sync.mode")}
@@ -769,13 +792,13 @@ function ConnectorRow({
               </select>
               <button
                 type="button"
-                className="primary"
+                className={receivesPush ? "ghost" : "primary"}
                 disabled={busy || !installation.syncable}
                 onClick={() => onSync(syncMode)}
               >
-                {busy ? t("engine.syncing") : t("connector.sync")}
+                {busy ? t("engine.syncing") : t(receivesPush ? "connector.syncCatchUp" : "connector.sync")}
               </button>
-            </>
+            </div>
           )}
           {(installation.last_attempt?.quarantined_count ?? 0) > 0 ? (
             <button

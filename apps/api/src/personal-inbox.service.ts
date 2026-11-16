@@ -79,6 +79,10 @@ import { preferThread, pullStatus, type PullStatusView } from "./personal-pull-s
 import { noteInteractiveReadFinished } from "./personal-interactive-gate";
 import { processMemoryView } from "./process-memory";
 import { currentSyncReadiness } from "./sync-metrics-view";
+import {
+  PUSH_BACKPRESSURE_PREF_KEY,
+  pushBackpressureIsActive,
+} from "./personal-push-backpressure";
 import { KernelRuntimeService } from "./kernel-runtime.service";
 import {
   PersonalKernelStoppedError,
@@ -1085,13 +1089,20 @@ export class PersonalInboxService {
     }
     const host = this.runtime.requireHost();
     const authority = host.get("authority");
-    const [inbox, installations, syncRuns, hiddenThreads] = await Promise.all([
+    const [
+      inbox,
+      installations,
+      syncRuns,
+      hiddenThreads,
+      pushBackpressureUntil,
+    ] = await Promise.all([
       this.summarizeInboxCached(orgId, authority),
       authority.listInstallations(orgId),
       authority.listSyncRuns({ org_id: orgId, limit: 50 }),
       tier.sync_progress === "live"
         ? authority.listHiddenExecutorThreadIds(orgId)
         : Promise.resolve([]),
+      authority.getUiPref(orgId, PUSH_BACKPRESSURE_PREF_KEY),
     ]);
     const hiddenThreadIds = new Set(hiddenThreads);
     const views = await Promise.all(
@@ -1099,18 +1110,21 @@ export class PersonalInboxService {
         const store = authority as SyncStore & {
           latestAttempt(id: string): Promise<IngestAttempt | null>;
         };
-        let sync = null;
-        if (tier.sync_progress === "live") {
-          sync = await loadSyncProgress(store, installation.id, {
-            hiddenThreadIds,
-          });
-        } else if (tier.sync_progress === "snapshot") {
-          sync = this.kernelRuntime.syncSnapshots.peekProgress(installation.id);
-        }
-        const attempt =
+        const driver = this.drivers.get(installation.connector_type);
+        const [liveSync, attempt, pushWatermarks] = await Promise.all([
+          tier.sync_progress === "live"
+            ? loadSyncProgress(store, installation.id, { hiddenThreadIds })
+            : Promise.resolve(null),
           tier.include_install_attempts
-            ? await store.latestAttempt(installation.id)
-            : null;
+            ? store.latestAttempt(installation.id)
+            : Promise.resolve(null),
+          driver
+            ? authority.summarizePushWatermarks(installation.id)
+            : Promise.resolve(null),
+        ]);
+        const sync = tier.sync_progress === "snapshot"
+          ? this.kernelRuntime.syncSnapshots.peekProgress(installation.id)
+          : liveSync;
         if (attempt) {
           this.kernelRuntime.publishInstallAttempt(installation.id, attempt);
         }
@@ -1119,7 +1133,12 @@ export class PersonalInboxService {
           attempt,
           this.drivers,
           query.locale,
-          { sync },
+          {
+            sync,
+            ...(pushWatermarks?.last_updated_at
+              ? { lastPushAt: pushWatermarks.last_updated_at }
+              : {}),
+          },
         );
       }),
     );
@@ -1129,6 +1148,19 @@ export class PersonalInboxService {
           this.executors.creatableConnectorOptions(query.locale),
         ])
       : [[], [] as Awaited<ReturnType<PersonalExecutorService["creatableConnectorOptions"]>>];
+    const syncReadiness = currentSyncReadiness(
+      aggregateSyncProgress(
+        views
+          .map((item) => item.sync)
+          .filter((item): item is NonNullable<typeof item> => item != null),
+      ),
+    );
+    if (
+      !syncReadiness.throttle_reason &&
+      pushBackpressureIsActive(pushBackpressureUntil)
+    ) {
+      syncReadiness.throttle_reason = "throttled";
+    }
     return {
       kernel: "running",
       org_id: orgId,
@@ -1144,13 +1176,7 @@ export class PersonalInboxService {
       pull: { ...pullStatus },
       installations: views,
       sync_runs: syncRuns,
-      sync_readiness: currentSyncReadiness(
-        aggregateSyncProgress(
-          views
-            .map((item) => item.sync)
-            .filter((item): item is NonNullable<typeof item> => item != null),
-        ),
-      ),
+      sync_readiness: syncReadiness,
       catalog: catalogReady(views),
       executor_installations: executorInstallations,
       executor_catalog: tier.include_executor_catalog

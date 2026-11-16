@@ -59,7 +59,7 @@ export type {
 } from "@regenic/connector-contract";
 
 import type { Host } from "@regenic/plugin-host";
-import { asConnectorHost, type ConnectorHost } from "./connector-host";
+import { asConnectorHost, scopeDriverArguments, type ConnectorHost } from "./connector-host";
 import {
   DEFAULT_COPY_LOCALE,
   resolveCopyText,
@@ -216,7 +216,10 @@ export class ChannelDriverRegistry {
     if (this.drivers.has(driver.connector_type) || this.retired.has(driver.connector_type)) {
       return this;
     }
-    this.drivers.set(driver.connector_type, this.installationLifecycle.guard(driver));
+    this.drivers.set(
+      driver.connector_type,
+      bindInstallationScope(this.installationLifecycle.guard(driver)),
+    );
     return this;
   }
 
@@ -238,6 +241,23 @@ export class ChannelDriverRegistry {
     return this.get(installation.connector_type)?.stopInstallation
       ? this.installationLifecycle.runInstallation(installation, work)
       : work();
+  }
+
+  async startInstallation(
+    installation: ConnectorInstallation,
+    host: Host | ConnectorHost,
+    options: { restart?: boolean } = {},
+  ): Promise<void> {
+    const driver = this.get(installation.connector_type);
+    if (!driver?.startInstallation) {
+      return;
+    }
+    await this.installationLifecycle.ensureStarted(
+      driver,
+      installation,
+      asConnectorHost(host),
+      options.restart === true,
+    );
   }
 
   async stopInstallation(
@@ -888,6 +908,19 @@ export class ChannelDriverRegistry {
   }
 }
 
+function bindInstallationScope(driver: ChannelDriver): ChannelDriver {
+  return new Proxy(driver, {
+    get(target, key, receiver) {
+      const value = Reflect.get(target, key, receiver);
+      if (typeof key !== "string" || typeof value !== "function") {
+        return value;
+      }
+      return (...args: unknown[]) =>
+        Reflect.apply(value, target, scopeDriverArguments(target, key, args));
+    },
+  });
+}
+
 function uniqueThreads<T extends ConversationThread>(threads: T[]): T[] {
   const seen = new Map<string, T>();
   for (const thread of threads) {
@@ -937,6 +970,32 @@ export function conversationThreadFromStreamKey(
     return target ? { source, target } : null;
   }
   return null;
+}
+
+/**
+ * Thread a due-work row should poll. Catalog prefixes win. Push installs may
+ * use the native conversation id as `stream_key`, with no `chat:` prefix.
+ */
+export function threadForSyncStream(input: {
+  source: string;
+  streamKey: string;
+  threadId?: string | null;
+  allowOpaqueTarget?: boolean;
+}): ConversationThread | null {
+  const parsed = conversationThreadFromStreamKey(
+    input.source,
+    input.streamKey,
+    input.threadId,
+  );
+  if (parsed || !input.allowOpaqueTarget) {
+    return parsed;
+  }
+  const source = input.source.trim();
+  const target = input.streamKey.trim();
+  if (!source || !target) {
+    return null;
+  }
+  return { source, target };
 }
 
 /** Candidate stream_keys for a thread_id without loading the catalog. */

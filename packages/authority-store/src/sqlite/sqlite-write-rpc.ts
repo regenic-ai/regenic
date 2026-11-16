@@ -68,6 +68,8 @@ export const AUTHORITY_READ_METHODS = [
   "hasUnassignedSyncWork",
   "listUnassignedSyncWorkIdentities",
   "listSyncWorkGaps",
+  "listPushWatermarks",
+  "summarizePushWatermarks",
   "summarizeStore",
   "listRecipes",
   "getRecipe",
@@ -204,7 +206,9 @@ export const AUTHORITY_WRITE_METHODS = [
   "wakeUnassignedSyncWork",
   "releaseFinishedExecutorPolls",
   "applySyncCatalogPage",
+  "noteSyncCatalogStream",
   "putSyncState",
+  "recordPushWatermark",
   "pruneIngestAttempts",
   "checkpointWal",
 ] as const;

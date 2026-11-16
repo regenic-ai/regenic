@@ -5,6 +5,7 @@ const {
   SyncEngine,
   SyncSlotPool,
   applySyncCatalogMembers,
+  noteSyncCatalogStream,
   currentSyncLane,
   deriveSyncPhase,
   emptySyncCatalog,
@@ -51,6 +52,82 @@ function stateMap(entries) {
     ]),
   );
 }
+
+describe("push catalog notes", () => {
+  it("adds a stream without opening a new census or dropping members", () => {
+    const finished = applySyncCatalogMembers(emptySyncCatalog("feishu-1"), {
+      installation_id: "feishu-1",
+      members: [{ stream_key: "chat:old", thread_id: "feishu:old" }],
+      now: "2026-11-16T00:00:00.000Z",
+      complete: true,
+    });
+    const noted = noteSyncCatalogStream(finished, {
+      installation_id: "feishu-1",
+      stream_key: "room-9",
+      thread_id: "feishu:room-9",
+      now: "2026-11-16T00:01:00.000Z",
+    });
+    assert.equal(noted.catalog?.complete, true);
+    assert.equal(noted.catalog?.generation, finished.catalog?.generation);
+    assert.deepEqual(
+      noted.members.map((item) => item.stream_key),
+      ["chat:old", "room-9"],
+    );
+    const again = noteSyncCatalogStream(noted, {
+      installation_id: "feishu-1",
+      stream_key: "room-9",
+      now: "2026-11-16T00:02:00.000Z",
+    });
+    assert.equal(again.members.find((item) => item.stream_key === "room-9")?.thread_id, "feishu:room-9");
+    assert.equal(
+      again.members.find((item) => item.stream_key === "room-9")?.discovered_at,
+      "2026-11-16T00:01:00.000Z",
+    );
+  });
+
+  it("stores sync state with the catalog note and ignores a different stream", async () => {
+    const store = new MemorySyncStore();
+    await store.applySyncCatalogPage({
+      installation_id: "feishu-1",
+      members: [{ stream_key: "chat:old", thread_id: "feishu:old" }],
+      now: "2026-11-16T00:00:00.000Z",
+      complete: true,
+    });
+    await store.noteSyncCatalogStream({
+      installation_id: "feishu-1",
+      stream_key: "room-9",
+      now: "2026-11-16T00:01:00.000Z",
+      sync_state: {
+        installation_id: "feishu-1",
+        stream_key: "room-9",
+        phase: "history",
+        media_pending: false,
+        generation: 1,
+        updated_at: "2026-11-16T00:01:00.000Z",
+      },
+    });
+    assert.equal((await store.getSyncState("feishu-1", "room-9"))?.phase, "history");
+    await store.noteSyncCatalogStream({
+      installation_id: "feishu-1",
+      stream_key: "room-8",
+      now: "2026-11-16T00:02:00.000Z",
+      sync_state: {
+        installation_id: "other",
+        stream_key: "room-8",
+        phase: "live",
+        media_pending: false,
+        generation: 1,
+        updated_at: "2026-11-16T00:02:00.000Z",
+      },
+    });
+    assert.equal(await store.getSyncState("feishu-1", "room-8"), null);
+    const catalog = await store.getSyncCatalog("feishu-1");
+    assert.equal(
+      catalog.members.some((item) => item.stream_key === "room-8"),
+      true,
+    );
+  });
+});
 
 describe("sync catalog apply", () => {
   it("does not prune the previous generation until a census completes", () => {

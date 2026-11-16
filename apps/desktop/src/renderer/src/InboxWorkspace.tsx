@@ -685,7 +685,7 @@ function WorkRow({
                 {syncing ? (
                   <span
                     className="item-syncing"
-                    title={syncLabel ?? t("thread.syncLatest")}
+                    title={syncLabel ?? t("thread.syncingShort")}
                   >
                     <span className="item-sync" aria-hidden="true" />
                     {t("thread.syncingShort")}

@@ -162,7 +162,10 @@ export function EnginePage({
             label={t("engine.freshness")}
             value={syncFreshnessSummary(engine.sync_readiness)}
             tone={
-              engine.sync_readiness?.freshness_source === "poll" ? "ok" : undefined
+              engine.sync_readiness?.freshness_source === "poll" ||
+              engine.sync_readiness?.freshness_source === "push"
+                ? "ok"
+                : undefined
             }
           />
           <EngineStat
@@ -274,7 +277,11 @@ export function EnginePage({
                       </span>
                     </div>
                     {run.last_error ? (
-                      <p className="action-error">{run.last_error}</p>
+                      <p className="action-error">
+                        {run.last_error === "sync_work_pending"
+                          ? t("sync.workPending")
+                          : run.last_error}
+                      </p>
                     ) : null}
                   </div>
                   <div className="install-actions">

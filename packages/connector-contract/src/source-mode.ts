@@ -1,4 +1,7 @@
-import type { ChannelConnector, ConnectorSourceMode } from "./ingest";
+import type {
+  ChannelConnector,
+  ConnectorSourceMode,
+} from "./ingest";
 
 export function connectorSourceMode(
   connector?: Pick<ChannelConnector, "source_mode"> | null,

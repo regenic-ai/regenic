@@ -20,6 +20,7 @@ const {
   dueWorkClaimLeaseMs,
   dueWorkConcurrency,
   observeDueWorkPressure,
+  pushReconcileIntervalMs,
 } = require("../dist/personal-connector-rhythm");
 const { DueWorkClaimLimiter, connectorPollTimeoutMs, connectorSyncTimeoutMs } = require("@regenic/domain");
 
@@ -383,5 +384,27 @@ describe("capSelectedStreams", () => {
       selected.map((item) => item.key),
       ["live-a", "live-b", "hist-a"],
     );
+  });
+});
+
+describe("push reconcile interval", () => {
+  it("defaults to five minutes and clamps or disables an override", () => {
+    const previous = process.env.REGENIC_PUSH_RECONCILE_MS;
+    try {
+      delete process.env.REGENIC_PUSH_RECONCILE_MS;
+      assert.equal(pushReconcileIntervalMs(), 5 * 60_000);
+      process.env.REGENIC_PUSH_RECONCILE_MS = "0";
+      assert.equal(pushReconcileIntervalMs(), 0);
+      process.env.REGENIC_PUSH_RECONCILE_MS = "1";
+      assert.equal(pushReconcileIntervalMs(), 30_000);
+      process.env.REGENIC_PUSH_RECONCILE_MS = "999999999";
+      assert.equal(pushReconcileIntervalMs(), 60 * 60_000);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.REGENIC_PUSH_RECONCILE_MS;
+      } else {
+        process.env.REGENIC_PUSH_RECONCILE_MS = previous;
+      }
+    }
   });
 });

@@ -860,6 +860,7 @@ export interface EngineInstallationView {
   channel?: string;
   channel_label?: string;
   source_mode?: "poll" | "webhook" | "hybrid";
+  last_push_at?: string;
   last_attempt: IngestAttempt | null;
   pairing_code?: string;
   sync?: SyncProgressView;
@@ -929,7 +930,7 @@ export type SyncThrottleReason = "source_429" | "throttled" | "writer_wait";
 export interface SyncReadinessView {
   remaining_streams: number;
   freshness_ms: number | null;
-  freshness_source: "poll" | "none";
+  freshness_source: "poll" | "push" | "none";
   accepted_count: number;
   throttle_reason: SyncThrottleReason | null;
   eta: SyncEtaRange | null;
@@ -971,7 +972,7 @@ export interface LocalNetworkWatch {
 
 export type PullPhase = "idle" | "pulling";
 export type PullStreamPhase = "idle" | "pulling" | "catching_up" | "error";
-export type PullStreamWork = "live" | "history";
+export type PullStreamWork = "live" | "history" | "media";
 
 export interface PullStreamStatus {
   stream_key: string;

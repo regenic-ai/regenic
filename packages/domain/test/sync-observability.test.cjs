@@ -1,8 +1,29 @@
 const assert = require("node:assert/strict");
 const { describe, it } = require("node:test");
-const { SyncMetricsRegistry, recordPollFreshness, recordWorkQueueLag, syncMetricDeltas } = require("../dist");
+const {
+  SyncMetricsRegistry,
+  recordPollFreshness,
+  recordPushLag,
+  recordWorkQueueLag,
+  syncMetricDeltas,
+} = require("../dist");
 
 describe("sync observability", () => {
+  it("bounds metric series cardinality", () => {
+    const metrics = new SyncMetricsRegistry(2);
+    for (const stream_key of ["s1", "s2", "s3"]) {
+      metrics.record({
+        name: "source_poll_ms",
+        value: 1,
+        labels: { stream_key },
+      });
+    }
+    assert.deepEqual(
+      metrics.snapshot().map((row) => row.labels.stream_key),
+      ["s2", "s3"],
+    );
+  });
+
   it("aggregates metrics by stable labels", () => {
     const metrics = new SyncMetricsRegistry();
     metrics.record({
@@ -56,6 +77,21 @@ describe("sync observability", () => {
     assert.equal(aggregate.last, 3_600_000);
     assert.equal(aggregate.labels.stream_key, undefined);
     assert.equal(aggregate.labels.status, "cold");
+  });
+
+  it("records push lag from last_ack_at without inventing a sample", () => {
+    const metrics = new SyncMetricsRegistry();
+    recordPushLag(
+      metrics,
+      "2026-09-21T00:00:00.000Z",
+      { installation_id: "install-1", operation: "push" },
+      Date.parse("2026-09-21T00:00:08.000Z"),
+    );
+    recordPushLag(metrics, undefined, { installation_id: "install-1" });
+    const [aggregate] = metrics.snapshot();
+    assert.equal(aggregate.name, "push_lag_ms");
+    assert.equal(aggregate.last, 8_000);
+    assert.equal(aggregate.labels.operation, "push");
   });
 
   it("returns only samples recorded between two snapshots", () => {

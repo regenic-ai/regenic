@@ -9,6 +9,7 @@ import {
   connectorPollTimeoutMs,
   cursorKindFromPoll,
   cursorWriteFor,
+  explicitPollCursor,
   historyPolicyFromConfig,
   pollCursorValue,
   sameLaneContinues,
@@ -96,6 +97,20 @@ export function historyPendingFromRuns(pages: ConnectorPollRunResult[]): boolean
   return completed.some((page) => "has_more" in page && page.has_more === true);
 }
 
+/** Opaque tail for a history poll. Blank and missing watermarks stay omitted. */
+async function historyPushWatermark(
+  store: ConnectorRuntimeStore,
+  installationId: string,
+  streamKey: string,
+): Promise<string | undefined> {
+  const rows = await store.listPushWatermarks(installationId, {
+    stream_keys: [streamKey],
+    limit: 1,
+  });
+  const watermark = rows.find((row) => row.stream_key === streamKey)?.watermark.trim();
+  return watermark || undefined;
+}
+
 export async function pollStream(
   host: Host,
   store: ConnectorRuntimeStore,
@@ -131,7 +146,18 @@ export async function pollStream(
     historyCursor: syncState?.history_cursor,
   });
   const write = cursorWriteFor({ kind, seedHistory: false });
+  const history = kind === "history";
+  const pushWatermark = history
+    ? await historyPushWatermark(store, installation.id, stream.stream_key)
+    : undefined;
   for (let page = 0; page < maxPages; page += 1) {
+    const cursor = page === 0
+      ? explicitPollCursor({
+        selected,
+        history,
+        pushWatermark,
+      })
+      : undefined;
     const run = await runner.poll({
       installation_id: installation.id,
       stream_key: stream.stream_key,
@@ -142,7 +168,8 @@ export async function pollStream(
       media: options?.media,
       before: options?.before,
       before_external_id: options?.before_external_id,
-      ...(page === 0 && selected ? { cursor: selected } : {}),
+      ...(pushWatermark ? { push_watermark: pushWatermark } : {}),
+      ...(cursor !== undefined ? { cursor } : {}),
       commit_cursor: write.lease,
       timeout_ms: connectorPollTimeoutMs(),
     });

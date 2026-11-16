@@ -3,6 +3,8 @@ export class PersonalConnectorError extends Error {
     readonly code: string,
     message: string,
     readonly httpStatus: number,
+    /** Sent as `Retry-After` when the caller should back off. */
+    readonly retryAfterMs?: number,
   ) {
     super(message);
     this.name = "PersonalConnectorError";

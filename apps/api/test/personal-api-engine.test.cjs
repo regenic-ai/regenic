@@ -7,8 +7,59 @@ const {
   ingestActionable,
   startPersonalApi,
 } = require("./personal-api-harness.cjs");
+const { SqliteAuthorityStore } = require("@regenic/authority-store/sqlite");
+const {
+  PUSH_BACKPRESSURE_PREF_KEY,
+} = require("../dist/personal-push-backpressure");
 
 describe("personal /v1/me", { concurrency: 1 }, () => {
+  it("includes durable push activity in the main engine view", async () => {
+    const root = await createRoot();
+    const database = join(root, "authority.db");
+    const blobRoot = join(root, "blobs");
+    await ingestActionable(database, blobRoot);
+    const authority = new SqliteAuthorityStore(database);
+    await authority.createInstallation({
+      id: "dsh-push",
+      org_id: "local-owner",
+      connector_type: "dsh-session",
+      status: "enabled",
+      config: { transport: "web", base_url: "http://127.0.0.1:3080" },
+      created_at: "2026-11-16T00:00:00.000Z",
+    });
+    await authority.recordPushWatermark({
+      installation_id: "dsh-push",
+      stream_key: "session:one",
+      watermark: "cursor-1",
+      batch_id: "batch-1",
+      updated_at: "2026-11-16T00:01:00.000Z",
+    });
+    const now = new Date().toISOString();
+    await authority.putUiPref(
+      "local-owner",
+      PUSH_BACKPRESSURE_PREF_KEY,
+      new Date(Date.now() + 60_000).toISOString(),
+      now,
+    );
+    authority.close();
+    const { app, origin } = await startPersonalApi(database, blobRoot, {
+      REGENIC_CONNECTOR_MARKET_INDEX_URL: "off",
+    });
+    try {
+      const engine = await (await fetch(`${origin}/v1/me/engine`)).json();
+      const installation = engine.installations.find(
+        (item) => item.id === "dsh-push",
+      );
+      assert.equal(
+        installation.last_push_at,
+        "2026-11-16T00:01:00.000Z",
+      );
+      assert.equal(engine.sync_readiness.throttle_reason, "throttled");
+    } finally {
+      await app.close();
+    }
+  });
+
   it("reports engine status without connector credentials", async () => {
     const root = await createRoot();
     const database = join(root, "authority.db");

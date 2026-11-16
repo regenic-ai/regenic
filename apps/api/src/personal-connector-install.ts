@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
+  asConnectorHost,
   DEFAULT_COPY_LOCALE,
   persistInstallSecrets,
   readInstallSecret,
@@ -24,6 +25,7 @@ import {
   wrapDriverError,
 } from "./personal-connector-poll";
 import { prepareConnectorForm } from "./personal-connector-form";
+import { forgetPushInstallation } from "./personal-connector-push";
 
 export async function install(state: ConnectorState, input: ConnectorInstallInput): Promise<EngineInstallationView> {
   const store = state.runtime.requireHost().get("authority");
@@ -90,6 +92,7 @@ export async function updateConfig(
   } catch (error) {
     throw wrapDriverError(error, "invalid_config");
   }
+  asConnectorHost(state.runtime.requireHost()).livePush?.stop(current.id);
   await state.drivers.stopInstallation(current, state.runtime.requireHost(), "reconfigure");
   try {
     for (const key of Object.keys(form.credentialChanges)) {
@@ -154,6 +157,7 @@ export async function uninstall(state: ConnectorState, installationId: string): 
   await state.drivers.stopInstallation(current, state.runtime.requireHost(), "delete");
   await store.deleteInstallation(current.id, state.runtime.orgId());
   state.kernelRuntime.clearInstallationSnapshots(current.id);
+  forgetPushInstallation(state, current.id);
   return { id: current.id, removed: true };
 }
 
@@ -173,6 +177,7 @@ export async function setStatus(
     }
   }
   if (status === "disabled") {
+    asConnectorHost(state.runtime.requireHost()).livePush?.stop(current.id);
     await state.drivers.stopInstallation(current, state.runtime.requireHost(), "disable");
   }
   const updated = await store.setInstallationStatus({
@@ -222,7 +227,11 @@ function buildInstallation(
       now,
       secrets: state.installSecrets(),
     });
-    return { drafted, catalog, credentialChanges: form.credentialChanges };
+    const persisted = {
+      ...drafted,
+      config: drafted.config ?? {},
+    };
+    return { drafted: persisted, catalog, credentialChanges: form.credentialChanges };
   } catch (error) {
     throw wrapDriverError(error, "invalid_config");
   }
@@ -282,15 +291,19 @@ async function viewOf(
   const fallbackMembers = catalogMembersFromStreams(installation.id, streams);
   const hidden = await host.get("authority")
     .listHiddenExecutorThreadIds(state.runtime.orgId());
-  const [attempt, sync] = await Promise.all([
+  const [attempt, sync, pushWatermarks] = await Promise.all([
     store.latestAttempt(installation.id),
     loadSyncProgress(store, installation.id, {
       mountedStreamKeys: new Set(streams.map((stream) => stream.stream_key)),
       fallbackMembers,
       hiddenThreadIds: new Set(hidden),
     }),
+    store.summarizePushWatermarks(installation.id),
   ]);
   return toInstallationView(installation, attempt, state.drivers, DEFAULT_COPY_LOCALE, {
     sync,
+    ...(pushWatermarks.last_updated_at
+      ? { lastPushAt: pushWatermarks.last_updated_at }
+      : {}),
   });
 }

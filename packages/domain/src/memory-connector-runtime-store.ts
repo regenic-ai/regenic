@@ -17,16 +17,21 @@ import type {
   SettleIngestAttempt,
   CommitSyncPage,
   CommitSyncPageResult,
+  ListPushWatermarksQuery,
+  PushWatermark,
+  PushWatermarkSummary,
 } from "./ingestion";
-import { catalogStreamKeysLeft } from "./sync-catalog";
+import { catalogStreamKeysLeft, syncStateNotedWith } from "./sync-catalog";
 import {
   assertAttemptInstallationBinding,
   assertAttemptSettlementBinding,
   assertSyncPageAttemptBinding,
 } from "./ingestion";
 import { MemorySyncStore } from "./sync-engine";
+import { pushWatermarkPageLimit } from "./push-watermark";
 import type {
   ApplySyncCatalogPageInput,
+  NoteSyncCatalogStreamInput,
   SyncCatalogHead,
   SyncCatalogView,
   SyncStreamState,
@@ -78,6 +83,39 @@ export class MemoryConnectorRuntimeStore implements ConnectorRuntimeStore {
   private readonly syncWork = new Map<string, SyncWorkRecord>();
   private readonly syncWorkKeys = new Map<string, string>();
   private readonly sync = new MemorySyncStore();
+  private readonly pushWatermarks = new Map<string, Map<string, PushWatermark>>();
+
+  async recordPushWatermark(input: PushWatermark): Promise<void> {
+    if (!this.installations.has(input.installation_id)) {
+      throw new Error("Connector installation not found");
+    }
+    const streams = this.pushWatermarks.get(input.installation_id) ?? new Map();
+    streams.set(input.stream_key, { ...input });
+    this.pushWatermarks.set(input.installation_id, streams);
+  }
+
+  async listPushWatermarks(
+    installationId: string,
+    query: ListPushWatermarksQuery = {},
+  ): Promise<PushWatermark[]> {
+    const wanted = query.stream_keys ? new Set(query.stream_keys) : undefined;
+    return [...(this.pushWatermarks.get(installationId)?.values() ?? [])]
+      .filter((item) =>
+        (!wanted || wanted.has(item.stream_key)) &&
+        (query.after === undefined || item.stream_key > query.after))
+      .sort((left, right) => left.stream_key < right.stream_key ? -1 : 1)
+      .slice(0, pushWatermarkPageLimit(query.limit))
+      .map((item) => ({ ...item }));
+  }
+
+  async summarizePushWatermarks(installationId: string): Promise<PushWatermarkSummary> {
+    const items = [...(this.pushWatermarks.get(installationId)?.values() ?? [])];
+    const last = items.reduce<string | undefined>(
+      (latest, item) => !latest || item.updated_at > latest ? item.updated_at : latest,
+      undefined,
+    );
+    return { stream_count: items.length, ...(last ? { last_updated_at: last } : {}) };
+  }
 
   async createInstallation(
     input: NewConnectorInstallation,
@@ -143,6 +181,7 @@ export class MemoryConnectorRuntimeStore implements ConnectorRuntimeStore {
     }
     this.installations.delete(id);
     this.sync.clear(id);
+    this.pushWatermarks.delete(id);
     for (const key of [...this.cursors.keys()]) {
       const cursor = this.cursors.get(key);
       if (cursor?.installation_id === id) {
@@ -728,12 +767,11 @@ export class MemoryConnectorRuntimeStore implements ConnectorRuntimeStore {
     for (const state of states) {
       const existing = this.workForStream(state);
       const threadId = threadByKey.get(state.stream_key);
+      const config = this.installations.get(state.installation_id)?.config;
       for (const lane of syncWorkEnsurePlan({
         state,
         existing,
-        policy: historyPolicyFromConfig(
-          this.installations.get(state.installation_id)?.config,
-        ),
+        policy: historyPolicyFromConfig(config),
       }).enqueue) {
         gaps.push({
           stream_key: state.stream_key,
@@ -853,6 +891,16 @@ export class MemoryConnectorRuntimeStore implements ConnectorRuntimeStore {
     return this.applyCatalogPage(input);
   }
 
+  async noteSyncCatalogStream(input: NoteSyncCatalogStreamInput): Promise<void> {
+    const syncState = syncStateNotedWith(input);
+    await this.sync.noteSyncCatalogStream(
+      syncState ? { ...input, sync_state: undefined } : input,
+    );
+    if (syncState) {
+      await this.putSyncState(syncState);
+    }
+  }
+
   listSyncStates(installationId: string): Promise<SyncStreamState[]> {
     return this.sync.listSyncStates(installationId);
   }
@@ -961,12 +1009,11 @@ export class MemoryConnectorRuntimeStore implements ConnectorRuntimeStore {
   }
 
   private async ensureOwedSyncWork(state: SyncStreamState): Promise<void> {
+    const config = this.installations.get(state.installation_id)?.config;
     const plan = syncWorkEnsurePlan({
       state,
       existing: this.workForStream(state),
-      policy: historyPolicyFromConfig(
-        this.installations.get(state.installation_id)?.config,
-      ),
+      policy: historyPolicyFromConfig(config),
     });
     for (const lane of plan.enqueue) {
       await this.enqueueSyncWork({

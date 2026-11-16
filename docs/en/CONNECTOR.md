@@ -121,14 +121,97 @@ Each connector must:
   constants. Poll acquires the lease before spending a token; a missed
   lease spends nothing. Exhaustion releases the lease and returns
   `throttled`, not a pull error.
-- Settings > Conversation sync lets the user persist an explicit per-installation
-  quota, installation/live/history/media concurrency, batch limits, and new-conversation
-  seeding limit. `GET /v1/me/sync-settings` returns effective settings, defaults and
+- Declare upstream limits in `ChannelConnector.limits`:
+  `max_concurrency` (core pulls in flight per installation), `rate`
+  (token bucket, preferred over `quota`) and `page_size` (forwarded as
+  `ConnectorPollOptions.page_size`). Out-of-range fields are dropped.
+  `PUT /v1/me/connectors/:id/limits` adjusts them at runtime (`{}` clears
+  the adjustment); `GET` returns declared, runtime and effective values.
+  A user quota still wins over declared rates, but a runtime `rate` can only
+  tighten it. Runtime adjustments are in memory; re-assert them on reconnect.
+  A pull over `max_concurrency` releases the lease and returns `throttled`.
+- To push new records instead of being polled, declare
+  `capabilities(installation).push` and send
+  `POST /v1/me/connectors/:id/ingest` with
+  `{ stream_key, batch_id?, events: IngestRecord[], watermark?, media_pending? }` (at most
+  500 events). Every event's `source` must equal the driver's `source`
+  (`403 connector_mismatch` otherwise). Delivery is at-least-once: core
+  dedupes on (`source`, `external_id`), so replaying a batch returns
+  `duplicate`. The ack (`PushIngestAck`) is returned only after the events are
+  durable; it echoes `watermark` only when no event is `retryable_failure`, so
+  keep the batch in your outbox until then. Each installation has a bounded
+  queue (8 pending, 1 in flight; 64 / 4 globally). Overflow returns `429` with
+  `Retry-After`; back off and retry. Store maintenance returns `503` with
+  `Retry-After`. Authenticate with `x-regenic-ingest-token`, minted by the
+  owner via `POST /v1/me/connectors/:id/ingest-token`. The token is derived
+  from the personal API key and only reaches that installation's `ingest`,
+  `limits`, `watermarks`, and `ingest-stats` routes. Core does not schedule
+  latest-message polls. The connector discovers new activity and pushes it.
+  Feishu, DSH, and Cursor do that from `startInstallation` through
+  `ConnectorHost.livePush.start`; `stopInstallation` calls
+  `ConnectorHost.livePush.stop`. Use the host service rather than importing a
+  private tail registry. Each pass polls a few streams concurrently with
+  `latest` and submits `ConnectorHost.push`. Critical core pressure pauses the
+  tail, elevated pressure reduces its width, empty streams honor `idle_ms`, and
+  `429` / `503` retry hints pause the next pass. A restarted tail resumes from the last acked
+  watermark and pages forward from it, so a downtime gap is not replaced by
+  the newest page alone. Opening a thread nudges that stream's push; core does not poll
+  it. History and media pulls stay on the core.
+  Only the background-leader replica owns in-process tails. Followers may
+  accept idempotent HTTP ingest but never start a tail from an interactive
+  request. The catalog tick reconciles installation revisions and replaces a
+  stale tail. DSH keeps the complete session directory in the durable catalog
+  and mounts runtime streams lazily when a conversation is opened or claimed.
+  A driver host is limited to that installation: another installation's
+  streams, push, watermark, and credentials are rejected. Each installation
+  has its own push queue and its own new-message tail. A poll that exceeds
+  `REGENIC_CONNECTOR_POLL_TIMEOUT_MS` (default 20s) is dropped so the next
+  pass can run. History claims rotate across installations. Connectors stay
+  in this process; they do not receive kernel stores or another channel's
+  credentials.
+  Declaring `push` stamps `config.live_via = "push"`.
+  The first push of a stream on a hybrid install with history backfill opens
+  that stream in the history phase, so the core pulls older messages; a later
+  push does not reset the phase. Those history polls include `push_watermark`,
+  the last acked watermark for that stream, when one exists. Core does not
+  interpret it. The history cursor still resumes the walk. Until that cursor
+  exists, core does not hand the connector a leftover live lease cursor, so
+  the watermark can start the older walk. A scroll anchored with `before`
+  is not that walk and does not receive the watermark. A push `stream_key` without a `chat:` /
+  `session:` / `channel:` / `agent:` prefix is the thread target for that
+  history poll.   The stream is added to the current directory without starting a
+  new census, including when that directory is already complete. That membership
+  and the stream's sync state commit together. A later completed census that
+  omits the stream still removes it. Webhook-only
+  and incremental installs stay live. Optional `media_pending` says the
+  connector still has attachment downloads queued: `true` opens the media
+  lane and `false` clears it, only on an install that can be polled, only
+  when the ack has no retryable failure, and only when at least one event was
+  accepted or a duplicate. Omitting it leaves the stored flag.
+  Webhook-only installs ignore it. On install/enable, and on a low-frequency
+  background tick (`REGENIC_PUSH_RECONCILE_MS`, default 5m; `0` disables),
+  core calls optional `reconcilePush` so the connector can compare
+  `GET .../watermarks` and re-push gaps. Each tick checks two installs and
+  resumes at the next one; a second reconcile for the same install waits, and
+  the call aborts at the sync timeout. `POST .../reconcile-push` forces one
+  pass. Successful acks persist the watermark before returning. History claims
+  yield only when the push gate is full (in-flight cap, a batch waiting, or the
+  global pending bound). One in-flight ack does not freeze backfill. An
+  installation with its own push queued or persisting skips that tick's history
+  polls; other installations continue, and claims rotate fairly.
+  `GET .../ingest-stats` and `/metrics` expose per-install push backlog, in-memory
+  ack lag, durable watermark age, the last reconcile result, ack latency,
+  backpressure, reconcile duration, and backfill counts when a sync snapshot
+  exists. Uninstall drops the in-memory push stats for that installation.
+- Settings > Catch-up pace lets the user persist an explicit per-installation
+  quota, installation/history/media concurrency, batch limits, and new-conversation
+  seeding limit. New messages are pushed and are not paced here. `GET /v1/me/sync-settings` returns effective settings, defaults and
   ranges; `POST` with `{ "settings": { ... } }` applies a complete validated set to
   subsequent pulls without restarting. `{ "settings": null }` restores defaults,
   including environment overrides and connector quota hints. Without saved settings,
-  all existing defaults are unchanged (60 requests / 60s, 4 installations, 8 live,
-  4 history, 1 media, batch caps 32/16, and 16 new conversations per tick).
+  all existing defaults are unchanged (60 requests / 60s, 4 installations,
+  8 leftover update slots that push does not use, 4 history, 1 media, batch caps
+  32/16, and 16 new conversations per tick).
   An explicit user quota overrides connector hints, not source-side rate limits.
   Adaptive claim reduction and kernel-pressure protection remain enabled.
   Background, catalog and manual workers reload the shared preference at work
@@ -138,8 +221,8 @@ Each connector must:
   worst-case serial queueing across installations and lanes, including catalog work.
   The desktop shows two choices before any numeric controls: Everyday sync
   retains the existing defaults; Catch up faster doubles the request allowance,
-  live concurrency, first-seed limit and steady batch cap within the allowed ranges.
-  It does not increase history or attachment concurrency, and an unlimited default
+  history concurrency, first-seed limit and history batch cap within the allowed ranges.
+  It does not increase attachment concurrency, and an unlimited default
   quota stays unlimited. If automatic first pulls were disabled, this mode resumes
   them at one new conversation per cycle. Choosing a mode or restoring Everyday sync
   only edits the form until saved. Discard changes restores the last saved settings.
@@ -365,14 +448,14 @@ interface ChannelDriver extends ChannelDriverCore, ChannelSourcePort, Partial<Ch
 | `install` | Persist non-secret config. Feishu stores `selection=all` plus `kinds` (`group` and/or `p2p`, default both) or a picked `chat_ids` list. `POST /v1/me/connectors/:id/config` runs the same validation and overwrites config without dropping cursors. DSH web may omit `session_id` (follow every session). A hosted API ignores a public DSH URL and uses `REGENIC_DSH_BASE_URL`. |
 | `matchesThread` | True if this install can address the thread. |
 | `ownsThread` | True if this install is the preferred match. Used when more than one install matches. |
-| `capabilities` | `sync` / `reply` / `create`, plus optional `await_reply`, `list_title`, `hydrate_on_open`, `prompts`, `attention`, `receipts`, `create_with_task`, and `hold_while_working`. `await_reply`: DSH / Cursor set it; Feishu omits it. `list_title`: Feishu sets `conversation`; DSH / Cursor set `prompt` (first user message). `hydrate_on_open`: pull a recent page when opening a thread; Feishu sets it. `prompts`: DSH web sets it; CLI omits it. `attention`: Feishu sets it (source hint; every channel still has the local cursor). `receipts`: Feishu sets it; DSH / Cursor omit it. `create_with_task` / `hold_while_working`: Cursor sets them; DSH omits them. |
+| `capabilities` | `sync` / `reply` / `create`, plus optional `await_reply`, `list_title`, `hydrate_on_open`, `prompts`, `attention`, `receipts`, `create_with_task`, and `hold_while_working`. `await_reply`: DSH / Cursor set it; Feishu omits it. `list_title`: Feishu sets `conversation`; DSH / Cursor set `prompt` (first user message). `hydrate_on_open`: opening a thread asks the connector to push that stream; Feishu sets it. `prompts`: DSH web sets it; CLI omits it. `attention`: Feishu sets it (source hint; every channel still has the local cursor). `receipts`: Feishu sets it; DSH / Cursor omit it. `create_with_task` / `hold_while_working`: Cursor sets them; DSH omits them. |
 | `resolveConversationLabels` | Optional. Fills conversation names for older threads that lack `conversation_label`. Local names only: Feishu uses install `chat_names`. Must not call `listAllChats` or block opening a thread. |
 | `listPrompts` / `answerPrompt` | Optional. Live pending decisions. DSH web mounts mux, maps `question/requested` / `approval/requested` to a channel-agnostic Prompt, and answers on `/api/respond`. `not-pending` is treated as settled. |
 | `waitThread` | Optional. Wait fd for one inferior. DSH web subscribes to mux `session/event` (`turn/start` / `turn/end`) and prompt frames. The kernel follow/polls that stream so live pages ingest, then `status()` reaps. Drivers must not write Events. Channels without wait still catch up on history poll. |
 | `readAttention` / `ackAttention` | Optional. Source overlay for *my* unread of their inbound. Feishu calls user-identity `read_status` on the latest inbound `om_`. Failure or an official “read” must not hide a thread the PC has never opened. Ack writes the local cursor first. |
 | `readReceipts` | Optional. Peer read of my outbound. Feishu calls user-identity `read_users` on `:out:om_`. Empty items stay Sent. Do not reuse this as conversation unread. |
 | `surfaceGeneration` | Optional. Live surface generation, appended to `inbox_digest` as `&s=` so a new approval is visible to desktop polling. |
-| `resolveStreams` | One `ConnectorStream` per pull unit. Feishu: `chat:<id>` for picked chats; when `selection=all`, follow `options.threads` from the kernel (current work ∪ the open thread) plus new `chat_id`s from the latest directory page (cached about 2 minutes). Unmount streams outside that set. Must not read the inbox or call `listAllChats` on every tick. DSH web: `session:<id>` per listed session. Optional `pace`: `idle_ms` (skip after an empty tick) and `catch_up_pages` (max pages while catching up). Omit both to poll one page every tick. The kernel reads the declaration; it does not branch on channel name. |
+| `resolveStreams` | One `ConnectorStream` per pull unit. Feishu: `chat:<id>` for picked chats; when `selection=all`, follow `options.threads` from the kernel (current work ∪ the open thread) plus new `chat_id`s from the latest directory page (cached about 2 minutes). Unmount streams outside that set. Must not read the inbox or call `listAllChats` on every tick. DSH web: `session:<id>` per listed session. Optional `pace`: `idle_ms` (skip a history or attachment stream after an empty tick) and `catch_up_pages` (max pages while catching up). New messages are pushed and are not paced here. Omit both to take one history or attachment page per catch-up tick. The kernel reads the declaration; it does not branch on channel name. |
 | `createThread` | Optional. Required when `create` is true. Absent means the kernel returns 501. When `create_with_task` is set, it receives `options.text` and starts the run; otherwise it opens an empty session and the first user text is a normal send. |
 | `bindEgress` | Optional. Required when `reply` is true. Absent means the kernel returns 501. |
 | `outboundId` | Stable id for a console send. Includes `:out:`. |
@@ -402,7 +485,7 @@ interface ConnectorStream {
 }
 ```
 
-`pace` is declared per stream. The kernel only reads the fields: after an empty tick, a background tick may skip a stream that set `idle_ms`. Background ticks stay out of the human's way: while the PC is in use they only poll a few streams from the kernel-computed eligible set for recent/live messages (one page each), do not walk history, and do not census every Feishu chat. The kernel derives that set from current-work inbox threads and the open thread, and passes it as `options.threads`; new conversations come from the latest directory page on a TTL. Streams outside the set are unmounted. After the human is idle they backfill one older page at a time. Opening an empty thread seeds the latest page; scrolling up asks for one older page when the local store has none. An explicit Engine Sync may use `catch_up_pages` (kernel-capped). Omit `pace` to poll one page every tick. Feishu sets `{ idle_ms: 15_000, catch_up_pages: 5 }`; DSH and Slack omit it.
+`pace` is declared per stream and applies to history and attachment catch-up. New messages are pushed by the connector; the kernel does not schedule a latest-message poll, and `idle_ms` does not set how often new messages arrive. After an empty history or attachment tick, a background tick may skip a stream that set `idle_ms`. The kernel still passes `options.threads` (current work and the open thread) so the connector can mount those streams; new conversations come from the latest directory page on a TTL. Streams outside that set are unmounted. Opening a thread asks the connector to push that stream. Scrolling up asks for one older page when the local store has none. An explicit catch-up may use `catch_up_pages` (kernel-capped). Omit `pace` to take one history or attachment page per catch-up tick. Feishu sets `{ idle_ms: 15_000, catch_up_pages: 5 }`; DSH and Slack omit it.
 
 ## ChannelConnector
 
@@ -416,6 +499,7 @@ interface ChannelConnector {
   readonly source: string;
   readonly source_mode?: "poll" | "webhook" | "hybrid";
   readonly quota?: { tokens: number; window_ms: number };
+  readonly limits?: { max_concurrency?: number; rate?: { tokens: number; window_ms: number }; page_size?: number };
   poll?(cursor: ConnectorCursor | null, options?: ConnectorPollOptions): Promise<PollResult>;
   capabilities?(): ConnectorCapabilities;
   verifyWebhook?(request): Promise<VerifiedWebhook>;

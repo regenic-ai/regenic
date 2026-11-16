@@ -57,6 +57,8 @@ export interface RunConnectorPollInput {
   media?: boolean;
   before?: string;
   before_external_id?: string;
+  /** Last acked push watermark. Opaque; forwarded only, never parsed. */
+  push_watermark?: string;
   timeout_ms?: number;
   /**
    * Opaque cursor for this call. When omitted, the lease cursor is used.
@@ -106,8 +108,11 @@ export type ConnectorWebhookRunResult =
 
 export type RunnerConnector = Pick<
   ChannelConnector,
-  "source" | "source_mode" | "quota" | "poll" | "verifyWebhook" | "handleWebhook"
+  "source" | "source_mode" | "quota" | "limits" | "poll" | "verifyWebhook" | "handleWebhook"
 >;
+
+export type RunnerQuota = Pick<InstallationQuotaBook, "tryConsume"> &
+  Partial<Pick<InstallationQuotaBook, "declare" | "tryAcquireSlot" | "pageSize">>;
 
 export class ConnectorRunner {
   private readonly connector: ConnectorRuntimeInvoker;
@@ -117,7 +122,7 @@ export class ConnectorRunner {
     private readonly processor: IngestBatchProcessor,
     private readonly runtimeStore: ConnectorRuntimeStore,
     private readonly now: () => string = () => new Date().toISOString(),
-    private readonly quota?: Pick<InstallationQuotaBook, "tryConsume">,
+    private readonly quota?: RunnerQuota,
     private readonly metrics: SyncMetricsSink = processSyncMetrics,
   ) {
     this.connector = asConnectorRuntimeInvoker(connector);
@@ -153,7 +158,10 @@ export class ConnectorRunner {
         stream_key: input.stream_key,
       };
     }
-    if (!this.takeQuota(input.installation_id, this.connector.quota)) {
+    this.quota?.declare?.(input.installation_id, this.connector.limits);
+    const releaseSlot = this.takeSlot(input.installation_id);
+    if (!releaseSlot || !this.takeQuota(input.installation_id, this.connector.quota)) {
+      releaseSlot?.();
       await this.runtimeStore.releaseLease({
         installation_id: input.installation_id,
         stream_key: input.stream_key,
@@ -168,7 +176,21 @@ export class ConnectorRunner {
         stream_key: input.stream_key,
       };
     }
+    try {
+      return await this.pollLeased(input, poll, lease, leaseOwner, startedAt, labels);
+    } finally {
+      releaseSlot();
+    }
+  }
 
+  private async pollLeased(
+    input: RunConnectorPollInput,
+    poll: NonNullable<ConnectorRuntimeInvoker["poll"]>,
+    lease: ConnectorLease,
+    leaseOwner: string,
+    startedAt: string,
+    labels: SyncMetricLabels,
+  ): Promise<ConnectorPollRunResult> {
     const heartbeat = this.startLeaseHeartbeat(input, leaseOwner, lease);
     const expireLease = async (now: string): Promise<ConnectorPollRunResult> => {
       await heartbeat.stop();
@@ -205,7 +227,7 @@ export class ConnectorRunner {
           : null;
     try {
       const pollOperation = withDeadline(
-        poll(pollCursor, pollOptions(input, signal)),
+        poll(pollCursor, pollOptions(input, signal, this.quota?.pageSize?.(input.installation_id))),
         timeoutMs,
         `poll ${input.installation_id}:${input.stream_key}`,
       ).then(
@@ -554,6 +576,12 @@ export class ConnectorRunner {
     return this.quota?.tryConsume(installationId, quota) ?? true;
   }
 
+  private takeSlot(installationId: string): (() => void) | undefined {
+    return this.quota?.tryAcquireSlot
+      ? this.quota.tryAcquireSlot(installationId)
+      : () => {};
+  }
+
   private startLeaseHeartbeat(
     input: RunConnectorPollInput,
     leaseOwner: string,
@@ -642,7 +670,6 @@ export class ConnectorRunner {
   ): SyncMetricLabels {
     return {
       installation_id: input.installation_id,
-      stream_key: input.stream_key,
       source: this.connector.source,
       lane: currentSyncLane(),
     };
@@ -698,11 +725,19 @@ function webhookWakeThreadIds(batch: IngestBatch): string[] {
 function pollOptions(
   input: Pick<
     RunConnectorPollInput,
-    "older" | "latest" | "media" | "before" | "before_external_id"
+    "older" | "latest" | "media" | "before" | "before_external_id" | "push_watermark"
   >,
   signal?: AbortSignal,
+  pageSize?: number,
 ): ConnectorPollOptions | undefined {
   const options: ConnectorPollOptions = {};
+  if (pageSize !== undefined) {
+    options.page_size = pageSize;
+  }
+  const pushWatermark = input.push_watermark?.trim();
+  if (pushWatermark) {
+    options.push_watermark = pushWatermark;
+  }
   if (input.older === true) {
     options.older = true;
   }
@@ -727,7 +762,9 @@ function pollOptions(
     options.latest ||
     options.media === false ||
     options.signal ||
-    options.before
+    options.before ||
+    options.page_size !== undefined ||
+    options.push_watermark !== undefined
     ? options
     : undefined;
 }
