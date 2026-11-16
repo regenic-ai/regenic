@@ -62,6 +62,8 @@ export interface ConnectorState {
   readonly hydrateCooldown: Map<string, number>;
   readonly liveKickCooldown: Map<string, number>;
   readonly maintenanceHold: boolean;
+  /** Only the background owner may run in-process connector tails. */
+  ownsLiveRuntime(): boolean;
   readonly dueWorkOwner: string;
   readonly dueWorkLimiters: {
     steady: DueWorkClaimLimiter;
@@ -102,15 +104,16 @@ type ConnectorDependencies = Pick<ConnectorState,
   "runtime" | "inbox" | "drivers" | "kernelRuntime" | "exclusiveStream" |
   "publishStreams" | "rememberStreamMeta" | "rememberStreamPace" | "requireInstallation" | "installSecrets" | "catchUp" |
   "refreshSyncSettings"
-> & { maintenanceHeld(): boolean };
+> & { maintenanceHeld(): boolean; liveRuntimeOwned(): boolean };
 
 export function createConnectorState(input: ConnectorDependencies): ConnectorState {
-  const { maintenanceHeld, ...dependencies } = input;
+  const { maintenanceHeld, liveRuntimeOwned, ...dependencies } = input;
   return {
     ...dependencies,
     get maintenanceHold() {
       return maintenanceHeld();
     },
+    ownsLiveRuntime: liveRuntimeOwned,
     quota: new InstallationQuotaBook(),
     pushGate: new PushIngestGate(
       {
@@ -160,14 +163,14 @@ export type ConnectorEgressState = Pick<ConnectorState,
 export type ConnectorWebhookState = Pick<ConnectorState,
   "runtime" | "drivers" | "inbox" | "maintenanceHold" | "quota" | "requireInstallation">;
 export type ConnectorPushState = Pick<ConnectorState,
-  "runtime" | "drivers" | "inbox" | "kernelRuntime" | "maintenanceHold" | "quota" | "pushGate" | "pushReconcileInflight" | "pushReconcileNotes" | "requireInstallation">;
+  "runtime" | "drivers" | "inbox" | "kernelRuntime" | "maintenanceHold" | "ownsLiveRuntime" | "quota" | "pushGate" | "pushReconcileInflight" | "pushReconcileNotes" | "requireInstallation">;
 export type ConnectorDueWorkState = Pick<ConnectorState,
-  "runtime" | "drivers" | "inbox" | "kernelRuntime" | "quota" | "pushGate" | "pushReconcileInflight" | "pushReconcileNotes" | "syncSettings" | "refreshSyncSettings" | "maintenanceHold" |
+  "runtime" | "drivers" | "inbox" | "kernelRuntime" | "quota" | "pushGate" | "pushReconcileInflight" | "pushReconcileNotes" | "syncSettings" | "refreshSyncSettings" | "maintenanceHold" | "ownsLiveRuntime" |
   "catalogSizeByInstall" | "dueWorkLimiters" | "dueWorkOwner" | "exclusiveStream" |
   "publishStreams" | "rememberStreamMeta" | "rememberStreamPace" | "requireInstallation" |
   "streamCatchingUp" | "streamPulling" | "streamPullingHistory" | "streamPullingMedia">;
 export type ConnectorLiveState = Pick<ConnectorState,
-  "runtime" | "drivers" | "inbox" | "quota" | "maintenanceHold" | "exclusiveStream" |
+  "runtime" | "drivers" | "inbox" | "quota" | "maintenanceHold" | "ownsLiveRuntime" | "exclusiveStream" |
   "focusSlot" | "focusGeneration" | "hydrateCooldown" | "liveKickCooldown" |
   "publishStreams" | "rememberStreamMeta" | "rememberStreamPace" | "requireInstallation" |
   "streamMeta" | "streamPulling" | "streamPullingHistory" | "streamPullingMedia">;

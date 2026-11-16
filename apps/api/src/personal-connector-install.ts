@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
+  asConnectorHost,
   DEFAULT_COPY_LOCALE,
   persistInstallSecrets,
   readInstallSecret,
@@ -26,7 +27,6 @@ import {
 } from "./personal-connector-poll";
 import { prepareConnectorForm } from "./personal-connector-form";
 import { forgetPushInstallation } from "./personal-connector-push";
-import { stopConnectorLivePush } from "@regenic/domain";
 
 export async function install(state: ConnectorState, input: ConnectorInstallInput): Promise<EngineInstallationView> {
   const store = state.runtime.requireHost().get("authority");
@@ -93,7 +93,7 @@ export async function updateConfig(
   } catch (error) {
     throw wrapDriverError(error, "invalid_config");
   }
-  stopConnectorLivePush(current.id);
+  asConnectorHost(state.runtime.requireHost()).livePush?.stop(current.id);
   await state.drivers.stopInstallation(current, state.runtime.requireHost(), "reconfigure");
   try {
     for (const key of Object.keys(form.credentialChanges)) {
@@ -181,7 +181,7 @@ export async function setStatus(
     }
   }
   if (status === "disabled") {
-    stopConnectorLivePush(current.id);
+    asConnectorHost(state.runtime.requireHost()).livePush?.stop(current.id);
     await state.drivers.stopInstallation(current, state.runtime.requireHost(), "disable");
   }
   const updated = await store.setInstallationStatus({

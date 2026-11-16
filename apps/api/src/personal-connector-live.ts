@@ -2,7 +2,6 @@ import type { Host } from "@regenic/plugin-host";
 import {
   asConnectorHost,
   driverPolls,
-  nudgeConnectorLivePush,
   parseConversationThread,
   runInSyncLane,
   type ConnectorInstallation,
@@ -528,7 +527,10 @@ async function runRecentLiveForThread(
           if (!focusAlive(state, generation, signal)) {
             return Promise.resolve(false);
           }
-          return nudgeConnectorLivePush(installation.id, stream.stream_key);
+          return asConnectorHost(host).livePush?.nudge(
+            installation.id,
+            stream.stream_key,
+          ) ?? Promise.resolve(false);
         },
         { ahead: true },
       );

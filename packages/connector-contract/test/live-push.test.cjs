@@ -185,6 +185,226 @@ describe("connector live push", () => {
     }
   });
 
+  it("keeps the existing tail when start is called again", async () => {
+    const seen = [];
+    const first = {
+      stream_key: "chat:first",
+      connector: {
+        source: "fake",
+        async poll() {
+          seen.push("first");
+          return { batch: { records: [] } };
+        },
+      },
+    };
+    const replacement = {
+      stream_key: "chat:replacement",
+      connector: {
+        source: "fake",
+        async poll() {
+          seen.push("replacement");
+          return { batch: { records: [] } };
+        },
+      },
+    };
+    startConnectorLivePush({
+      installationId: "install-idempotent",
+      intervalMs: 0,
+      listStreams: () => [first],
+      push: async () => undefined,
+    });
+    startConnectorLivePush({
+      installationId: "install-idempotent",
+      intervalMs: 0,
+      listStreams: () => [replacement],
+      push: async () => undefined,
+    });
+    try {
+      assert.equal(
+        await nudgeConnectorLivePush("install-idempotent", "chat:first"),
+        true,
+      );
+      assert.equal(
+        await nudgeConnectorLivePush("install-idempotent", "chat:replacement"),
+        false,
+      );
+      assert.deepEqual(seen, ["first"]);
+    } finally {
+      stopAllConnectorLivePushes();
+    }
+  });
+
+  it("replaces a tail when its installation generation changes", async () => {
+    const seen = [];
+    const stream = (key) => ({
+      stream_key: key,
+      connector: {
+        source: "fake",
+        async poll() {
+          seen.push(key);
+          return { batch: { records: [] } };
+        },
+      },
+    });
+    startConnectorLivePush({
+      installationId: "install-generation",
+      generation: "v1",
+      intervalMs: 0,
+      listStreams: () => [stream("chat:v1")],
+      push: async () => undefined,
+    });
+    startConnectorLivePush({
+      installationId: "install-generation",
+      generation: "v2",
+      intervalMs: 0,
+      listStreams: () => [stream("chat:v2")],
+      push: async () => undefined,
+    });
+    try {
+      assert.equal(
+        await nudgeConnectorLivePush("install-generation", "chat:v1"),
+        false,
+      );
+      assert.equal(
+        await nudgeConnectorLivePush("install-generation", "chat:v2"),
+        true,
+      );
+      assert.deepEqual(seen, ["chat:v2"]);
+    } finally {
+      stopAllConnectorLivePushes();
+    }
+  });
+
+  it("polls a pass concurrently and yields while core pressure is critical", async () => {
+    let pressure = "critical";
+    let active = 0;
+    let peak = 0;
+    let release;
+    const gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    const streams = Array.from({ length: 4 }, (_, index) => ({
+      stream_key: `chat:${index}`,
+      connector: {
+        source: "fake",
+        async poll() {
+          active += 1;
+          peak = Math.max(peak, active);
+          await gate;
+          active -= 1;
+          return { batch: { records: [] } };
+        },
+      },
+    }));
+    startConnectorLivePush({
+      installationId: "install-concurrent",
+      intervalMs: 10,
+      batchSize: 4,
+      pressure: () => pressure,
+      listStreams: () => streams,
+      push: async () => undefined,
+    });
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      assert.equal(active, 0);
+      pressure = "ok";
+      const deadline = Date.now() + 500;
+      while (active < 4 && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      assert.equal(active, 4);
+      assert.equal(peak, 4);
+    } finally {
+      release();
+      stopAllConnectorLivePushes();
+    }
+  });
+
+  it("honors idle_ms after an empty page", async () => {
+    let polls = 0;
+    const stream = {
+      stream_key: "chat:idle",
+      pace: { idle_ms: 1_000 },
+      connector: {
+        source: "fake",
+        async poll() {
+          polls += 1;
+          return { batch: { records: [] } };
+        },
+      },
+    };
+    startConnectorLivePush({
+      installationId: "install-idle",
+      intervalMs: 10,
+      listStreams: () => [stream],
+      push: async () => undefined,
+    });
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      assert.equal(polls, 1);
+    } finally {
+      stopAllConnectorLivePushes();
+    }
+  });
+
+  it("honors retry-after backpressure before polling again", async () => {
+    let polls = 0;
+    let healthyPolls = 0;
+    const errors = [];
+    const stream = {
+      stream_key: "chat:backpressure",
+      connector: {
+        source: "fake",
+        async poll() {
+          polls += 1;
+          return {
+            batch: {
+              records: [{
+                operation: "create",
+                source: "fake",
+                external_id: "m-backpressure",
+                occurred_at: "2026-11-16T00:00:00.000Z",
+                actor: { id: "user" },
+                scope: { id: "personal" },
+                type: "message",
+                content: [{ role: "body", media_type: "text/plain", text: "hi" }],
+              }],
+            },
+          };
+        },
+      },
+    };
+    const healthy = {
+      stream_key: "chat:healthy",
+      connector: {
+        source: "fake",
+        async poll() {
+          healthyPolls += 1;
+          return { batch: { records: [] } };
+        },
+      },
+    };
+    startConnectorLivePush({
+      installationId: "install-backpressure",
+      intervalMs: 10,
+      listStreams: () => [stream, healthy],
+      onError: (error, streamKey) => errors.push([error.message, streamKey]),
+      push: async () => {
+        const error = new Error("busy");
+        error.retryAfterMs = 1_000;
+        throw error;
+      },
+    });
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      assert.equal(polls, 1);
+      assert.ok(healthyPolls > 1);
+      assert.deepEqual(errors, [["busy", "chat:backpressure"]]);
+    } finally {
+      stopAllConnectorLivePushes();
+    }
+  });
+
   it("releases a hung poll so the next nudge still runs", async () => {
     let calls = 0;
     const stream = {

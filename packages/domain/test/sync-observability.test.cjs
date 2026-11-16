@@ -9,6 +9,21 @@ const {
 } = require("../dist");
 
 describe("sync observability", () => {
+  it("bounds metric series cardinality", () => {
+    const metrics = new SyncMetricsRegistry(2);
+    for (const stream_key of ["s1", "s2", "s3"]) {
+      metrics.record({
+        name: "source_poll_ms",
+        value: 1,
+        labels: { stream_key },
+      });
+    }
+    assert.deepEqual(
+      metrics.snapshot().map((row) => row.labels.stream_key),
+      ["s2", "s3"],
+    );
+  });
+
   it("aggregates metrics by stable labels", () => {
     const metrics = new SyncMetricsRegistry();
     metrics.record({

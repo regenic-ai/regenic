@@ -21,6 +21,16 @@ function createService() {
 afterEach(() => resetPullStatus());
 
 describe("owned connector coordination state", () => {
+  it("allows live tails only on the active background owner", () => {
+    const service = createService();
+    const state = service.connectorState();
+    assert.equal(state.ownsLiveRuntime(), false);
+    service.backgroundStarted = true;
+    assert.equal(state.ownsLiveRuntime(), true);
+    service.maintenanceHold = true;
+    assert.equal(state.ownsLiveRuntime(), false);
+  });
+
   it("reloads settings saved by another replica before claiming background work", async () => {
     const leader = createService();
     const follower = createService();
@@ -199,6 +209,7 @@ describe("owned connector coordination state", () => {
     let polls = 0;
     state.drivers.get = () => ({
       source: "test",
+      capabilities: () => ({ sync: true, reply: false, create: false, push: true }),
       async resolveThreadStream() {
         polls += 1;
         throw new Error("should not poll");

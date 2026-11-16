@@ -131,6 +131,12 @@ describe("installation quota", () => {
       page_size: 5,
       rate: { tokens: 0, window_ms: 60_000 },
     });
+    book.adjust("a", { max_concurrency: 64, page_size: 1_000 });
+    assert.deepEqual(book.limits("a").effective, {
+      max_concurrency: 1,
+      page_size: 50,
+      rate: { tokens: 0, window_ms: 60_000 },
+    });
     book.adjust("a");
     assert.equal(book.pageSize("a"), 50);
   });

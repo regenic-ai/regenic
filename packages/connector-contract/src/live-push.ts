@@ -1,17 +1,58 @@
 import type { PushIngestAck, PushIngestBatch } from "./push";
 import type { ConnectorStream } from "./driver";
 
+export type LivePushPressureLevel = "ok" | "elevated" | "critical";
+
+export interface StartConnectorLivePushInput {
+  installationId: string;
+  /** Installation/config revision. A changed revision replaces the old tail. */
+  generation?: string;
+  listStreams: () => readonly ConnectorStream[];
+  push: (batch: PushIngestBatch) => Promise<Pick<PushIngestAck, "watermark"> | void>;
+  /** Last acked watermark when this process has not polled the stream yet. */
+  resumeCursor?: (streamKey: string) => Promise<string | undefined>;
+  /** Streams polled on each pass. The rest wait for a later pass. */
+  batchSize?: number;
+  intervalMs?: number;
+  /** Overrides `REGENIC_CONNECTOR_POLL_TIMEOUT_MS` for this tail. */
+  pollTimeoutMs?: number;
+  /** Core pressure. Critical pauses the tail; elevated halves this pass. */
+  pressure?: () => LivePushPressureLevel;
+  /** Observe a failed stream without stopping the rest of the pass. */
+  onError?: (error: unknown, streamKey: string) => void;
+}
+
+export interface ConnectorLivePushHost {
+  start(input: StartConnectorLivePushInput): void;
+  stop(installationId: string): void;
+  nudge(installationId: string, streamKey: string): Promise<boolean>;
+  has(installationId: string): boolean;
+  generation(installationId: string): string | undefined;
+}
+
 interface LivePushSession {
   abort: AbortController;
   cursors: Map<string, string>;
+  idleUntil: Map<string, number>;
   listStreams: () => readonly ConnectorStream[];
   push: (batch: PushIngestBatch) => Promise<Pick<PushIngestAck, "watermark"> | void>;
   resumeCursor?: (streamKey: string) => Promise<string | undefined>;
+  pressure?: () => LivePushPressureLevel;
+  onError?: (error: unknown, streamKey: string) => void;
   pollTimeoutMs: number;
   inflight: Map<string, Promise<void>>;
+  generation?: string;
+  streamRetryAfter: Map<string, number>;
+  streams: ConnectorStream[];
+  streamsLoadedAt: number;
 }
 
-const sessions = new Map<string, LivePushSession>();
+const sessionGlobal = globalThis as typeof globalThis & {
+  __regenicConnectorLivePushSessions?: Map<string, LivePushSession>;
+};
+const sessions =
+  sessionGlobal.__regenicConnectorLivePushSessions ??=
+    new Map<string, LivePushSession>();
 
 /** One upstream poll. `REGENIC_CONNECTOR_POLL_TIMEOUT_MS=0` waits without a limit. */
 export function livePushPollTimeoutMs(): number {
@@ -36,34 +77,36 @@ export function livePushIntervalMs(): number {
  * `REGENIC_CONNECTOR_PULL_MS=0` registers the tail but does not walk it;
  * an open thread can still nudge one stream.
  */
-export function startConnectorLivePush(input: {
-  installationId: string;
-  listStreams: () => readonly ConnectorStream[];
-  push: (batch: PushIngestBatch) => Promise<Pick<PushIngestAck, "watermark"> | void>;
-  /** Last acked watermark when this process has not polled the stream yet. */
-  resumeCursor?: (streamKey: string) => Promise<string | undefined>;
-  /** Streams polled on each pass. The rest wait for a later pass. */
-  batchSize?: number;
-  intervalMs?: number;
-  /** Overrides `REGENIC_CONNECTOR_POLL_TIMEOUT_MS` for this tail. */
-  pollTimeoutMs?: number;
-}): void {
-  stopConnectorLivePush(input.installationId);
+export function startConnectorLivePush(input: StartConnectorLivePushInput): void {
+  const current = sessions.get(input.installationId);
+  if (current && !current.abort.signal.aborted) {
+    if (current.generation === input.generation) {
+      return;
+    }
+    stopConnectorLivePush(input.installationId);
+  }
   const session: LivePushSession = {
     abort: new AbortController(),
     cursors: new Map(),
+    idleUntil: new Map(),
     listStreams: input.listStreams,
     push: input.push,
     ...(input.resumeCursor ? { resumeCursor: input.resumeCursor } : {}),
+    ...(input.pressure ? { pressure: input.pressure } : {}),
+    ...(input.onError ? { onError: input.onError } : {}),
     pollTimeoutMs: input.pollTimeoutMs ?? livePushPollTimeoutMs(),
     inflight: new Map(),
+    ...(input.generation ? { generation: input.generation } : {}),
+    streamRetryAfter: new Map(),
+    streams: [],
+    streamsLoadedAt: 0,
   };
   sessions.set(input.installationId, session);
   const intervalMs = input.intervalMs ?? livePushIntervalMs();
   if (intervalMs <= 0) {
     return;
   }
-  const batchSize = Math.max(1, Math.floor(input.batchSize ?? 4));
+  const batchSize = Math.max(1, Math.floor(input.batchSize ?? 8));
   let offset = 0;
   void runLivePush(session, batchSize, intervalMs, () => offset, (next) => {
     offset = next;
@@ -104,6 +147,17 @@ export function stopAllConnectorLivePushes(): void {
   }
 }
 
+export function hasConnectorLivePush(installationId: string): boolean {
+  const session = sessions.get(installationId);
+  return Boolean(session && !session.abort.signal.aborted);
+}
+
+export function connectorLivePushGeneration(
+  installationId: string,
+): string | undefined {
+  return sessions.get(installationId)?.generation;
+}
+
 async function runLivePush(
   session: LivePushSession,
   batchSize: number,
@@ -113,29 +167,97 @@ async function runLivePush(
 ): Promise<void> {
   const signal = session.abort.signal;
   while (!signal.aborted) {
-    const streams = session.listStreams().filter((stream) =>
-      stream.stream_key && stream.connector?.poll);
+    let nextSleepMs = intervalMs;
+    let pressure: LivePushPressureLevel;
+    let streams: ConnectorStream[];
+    try {
+      pressure = session.pressure?.() ?? "ok";
+      const now = Date.now();
+      if (session.streams.length === 0 || now - session.streamsLoadedAt >= 30_000) {
+        session.streams = session.listStreams().filter((stream) =>
+          stream.stream_key && stream.connector?.poll);
+        session.streamsLoadedAt = now;
+      }
+      streams = session.streams;
+    } catch (error) {
+      session.onError?.(error, "");
+      await sleep(intervalMs, signal);
+      continue;
+    }
+    if (pressure === "critical") {
+      await sleep(intervalMs, signal);
+      continue;
+    }
     if (streams.length > 0) {
       const start = readOffset() % streams.length;
-      const count = Math.min(batchSize, streams.length);
-      for (let index = 0; index < count; index += 1) {
-        if (signal.aborted) {
-          return;
-        }
-        const stream = streams[(start + index) % streams.length];
+      const limit = pressure === "elevated"
+        ? Math.max(1, Math.floor(batchSize / 2))
+        : batchSize;
+      const selected: ConnectorStream[] = [];
+      let scanned = 0;
+      const now = Date.now();
+      let earliestDue = Number.POSITIVE_INFINITY;
+      while (scanned < streams.length && selected.length < limit) {
+        const stream = streams[(start + scanned) % streams.length];
+        scanned += 1;
         if (!stream) {
           continue;
         }
-        try {
-          await pushStreamExclusive(session, stream);
-        } catch {
-          // One stream's upstream or backpressure error leaves the others moving.
+        const due = Math.max(
+          session.idleUntil.get(stream.stream_key) ?? 0,
+          session.streamRetryAfter.get(stream.stream_key) ?? 0,
+        );
+        if (due <= now) {
+          selected.push(stream);
+        } else {
+          earliestDue = Math.min(earliestDue, due);
         }
       }
-      writeOffset(start + count);
+      writeOffset(start + Math.max(1, scanned));
+      if (selected.length === 0 && Number.isFinite(earliestDue)) {
+        nextSleepMs = Math.max(
+          intervalMs,
+          Math.min(30_000, earliestDue - now),
+        );
+      }
+      const results = await Promise.allSettled(
+        selected.map((stream) => pushStreamExclusive(session, stream)),
+      );
+      for (const [index, result] of results.entries()) {
+        if (result.status !== "rejected") {
+          continue;
+        }
+        const stream = selected[index];
+        if (stream) {
+          session.onError?.(result.reason, stream.stream_key);
+        }
+        const retryMs = retryAfterMs(result.reason);
+        if (retryMs > 0) {
+          const stream = selected[index];
+          if (stream) {
+            session.streamRetryAfter.set(
+              stream.stream_key,
+              Date.now() + retryMs,
+            );
+          }
+        }
+      }
     }
-    await sleep(intervalMs, signal);
+    await sleep(nextSleepMs, signal);
   }
+}
+
+function retryAfterMs(error: unknown): number {
+  if (!error || typeof error !== "object") {
+    return 0;
+  }
+  const value = "retry_after_ms" in error
+    ? error.retry_after_ms
+    : "retryAfterMs" in error
+      ? error.retryAfterMs
+      : 0;
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : 0;
 }
 
 async function pushStreamExclusive(
@@ -182,11 +304,16 @@ async function pushStream(
   // An empty page has nothing to retry. A page with records moves only after
   // core echoes the watermark, so a retryable failure is polled again.
   if (records.length === 0) {
+    const idleMs = Math.max(0, stream.pace?.idle_ms ?? 0);
+    if (idleMs > 0) {
+      session.idleUntil.set(stream.stream_key, Date.now() + idleMs);
+    }
     if (result.next_cursor) {
       session.cursors.set(stream.stream_key, result.next_cursor);
     }
     return;
   }
+  session.idleUntil.delete(stream.stream_key);
   const ack = await session.push({
     stream_key: stream.stream_key,
     events: records,

@@ -22,6 +22,7 @@ import type {
   ConnectorSourceMode,
 } from "./ingest";
 import type { KeychainSecretRef } from "./credentials";
+import type { ConnectorLivePushHost } from "./live-push";
 import type { SyncCatalogMember, SyncSource } from "./sync";
 import type {
   PushIngestAck,
@@ -99,6 +100,10 @@ export interface ConnectorHost {
     installation: Pick<ConnectorInstallation, "id">,
     streamKey: string,
   ): Promise<string | undefined>;
+  /** Current core pressure so connector-owned tails yield before UI stalls. */
+  pushPressure?(): "ok" | "elevated" | "critical";
+  /** Host-owned live tail registry; avoids one registry per plugin dependency tree. */
+  livePush?: ConnectorLivePushHost;
 }
 
 export interface ConversationThread {

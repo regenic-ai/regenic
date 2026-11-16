@@ -147,12 +147,22 @@ Each connector must:
   from the personal API key and only reaches that installation's `ingest`,
   `limits`, `watermarks`, and `ingest-stats` routes. Core does not schedule
   latest-message polls. The connector discovers new activity and pushes it.
-  Feishu, DSH, and Cursor do that from `startInstallation`: each pass polls
-  a few of the connector's own streams with `latest` and submits
-  `ConnectorHost.push`. A restarted tail resumes from the last acked
+  Feishu, DSH, and Cursor do that from `startInstallation` through
+  `ConnectorHost.livePush.start`; `stopInstallation` calls
+  `ConnectorHost.livePush.stop`. Use the host service rather than importing a
+  private tail registry. Each pass polls a few streams concurrently with
+  `latest` and submits `ConnectorHost.push`. Critical core pressure pauses the
+  tail, elevated pressure reduces its width, empty streams honor `idle_ms`, and
+  `429` / `503` retry hints pause the next pass. A restarted tail resumes from the last acked
   watermark and pages forward from it, so a downtime gap is not replaced by
   the newest page alone. Opening a thread nudges that stream's push; core does not poll
   it. History and media pulls stay on the core.
+  Only the background-leader replica owns in-process tails. Followers may
+  accept idempotent HTTP ingest but never start a tail from an interactive
+  request. The catalog tick reconciles installation revisions and replaces a
+  stale tail. DSH discovery mounts at most 128 sessions at once by default
+  (`REGENIC_DSH_DISCOVER_MOUNT_LIMIT`, capped at 1000); catalog metadata can
+  still cover the complete directory.
   A driver host is limited to that installation: another installation's
   streams, push, watermark, and credentials are rejected. Each installation
   has its own push queue and its own new-message tail. A poll that exceeds

@@ -2,13 +2,13 @@ import {
   PushIngestBackpressureError,
   PushIngestRejectedError,
   advancePushReconcileCursor,
+  asConnectorHost,
   connectorSyncTimeoutMs,
   driverPolls,
   driverPushes,
   historyPolicyFromConfig,
   mediaPendingAfterPush,
   phaseAfterPush,
-  validatePushIngestBatch,
   processSyncMetrics,
   threadForSyncStream,
   threadIdOf,
@@ -25,11 +25,6 @@ import {
   type PushIngestSnapshot,
   type PushWatermarkPage,
   type PushWatermarkSummary,
-} from "@regenic/domain";
-import {
-  asConnectorHost,
-  startConnectorLivePush,
-  stopConnectorLivePush,
 } from "@regenic/domain";
 import { PersonalConnectorError } from "./personal-errors";
 import type { ConnectorPushState, ConnectorState, PushReconcileNote } from "./personal-connector-state";
@@ -63,11 +58,11 @@ export async function ingestPush(
   }
   const installation = await requirePushInstallation(state, installationId, auth);
   const driver = state.drivers.get(installation.connector_type);
-  if (!driver) {
+  if (!driver || !driverPushes(driver, installation)) {
     throw new PersonalConnectorError(
-      "unsupported_connector",
+      "unsupported_channel",
       `Connector type cannot ingest pushes: ${installation.connector_type}`,
-      400,
+      501,
     );
   }
   let ack: PushIngestAck;
@@ -338,13 +333,17 @@ export async function ingestStats(
 
 /** Connector-owned new-message tail. Core due-work does not poll latest. */
 export async function ensureConnectorLivePush(
-  state: Pick<ConnectorPushState, "runtime" | "drivers">,
+  state: Pick<ConnectorPushState, "runtime" | "drivers" | "ownsLiveRuntime">,
   installationId: string,
 ): Promise<void> {
+  if (!state.ownsLiveRuntime()) {
+    asConnectorHost(state.runtime.requireHost()).livePush?.stop(installationId);
+    return;
+  }
   const store = state.runtime.requireHost().get("authority");
   const installation = await store.findInstallation(installationId);
   if (!installation || installation.org_id !== state.runtime.orgId() || installation.status !== "enabled") {
-    stopConnectorLivePush(installationId);
+    asConnectorHost(state.runtime.requireHost()).livePush?.stop(installationId);
     return;
   }
   const driver = state.drivers.get(installation.connector_type);
@@ -353,11 +352,16 @@ export async function ensureConnectorLivePush(
     return;
   }
   if (driver?.startInstallation) {
-    await driver.startInstallation(installation, host);
+    await state.drivers.startInstallation(installation, host, {
+      restart:
+        host.livePush?.has(installation.id) === false ||
+        host.livePush?.generation(installation.id) !== installation.updated_at,
+    });
     return;
   }
-  startConnectorLivePush({
+  host.livePush?.start({
     installationId: installation.id,
+    generation: installation.updated_at,
     listStreams: () => host.get("connectors").listStreams(installation.id),
     push: (batch) => host.push!(installation, batch),
     resumeCursor: async (streamKey) => {
@@ -367,25 +371,26 @@ export async function ensureConnectorLivePush(
       });
       return rows[0]?.watermark;
     },
+    pressure: () => host.pushPressure?.() ?? "ok",
   });
 }
 
 export function forgetPushInstallation(
-  state: Pick<ConnectorState, "pushGate" | "pushReconcileInflight" | "pushReconcileNotes">,
+  state: Pick<ConnectorState, "runtime" | "pushGate" | "pushReconcileInflight" | "pushReconcileNotes">,
   installationId: string,
 ): void {
-  stopConnectorLivePush(installationId);
+  asConnectorHost(state.runtime.requireHost()).livePush?.stop(installationId);
   state.pushGate.forget(installationId);
   state.pushReconcileInflight.delete(installationId);
   state.pushReconcileNotes.delete(installationId);
 }
 
 function reportedMediaPending(body: unknown, retryable: number): boolean | undefined {
-  if (retryable > 0) {
+  if (retryable > 0 || !body || typeof body !== "object") {
     return undefined;
   }
-  const parsed = validatePushIngestBatch(body);
-  return parsed.success ? parsed.data.media_pending : undefined;
+  const value = Reflect.get(body, "media_pending");
+  return typeof value === "boolean" ? value : undefined;
 }
 
 async function markPushStreamLive(

@@ -131,7 +131,11 @@ describe("push ingest gate", () => {
     const a1 = submit("a", "1");
     const a2 = submit("a", "2");
     await assert.rejects(
-      submit("a", "3"),
+      gate.submit({
+        installation: { id: "a", org_id: "local-owner" },
+        source: "fake",
+        batch: { stream_key: "3", events: [] },
+      }),
       (error) =>
         error instanceof PushIngestBackpressureError &&
         error.scope === "installation" &&

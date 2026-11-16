@@ -6,6 +6,7 @@ import {
   isSyncSoftMiss,
   asConnectorHost,
   bindConnectorPush,
+  bindConnectorPushPressure,
   bindConnectorWatermark,
   stopAllConnectorLivePushes,
   type ChannelDriver,
@@ -137,6 +138,8 @@ export class PersonalConnectorService implements OnModuleDestroy, OnApplicationB
     this.state = createConnectorState({
       runtime, inbox, drivers, kernelRuntime,
       maintenanceHeld: () => this.maintenanceHold,
+      liveRuntimeOwned: () =>
+        this.backgroundStarted && !this.maintenanceHold,
       exclusiveStream: (installationId, streamKey, work, options) =>
         this.exclusiveStream(installationId, streamKey, work, options),
       publishStreams: () => this.publishStreams(),
@@ -160,6 +163,7 @@ export class PersonalConnectorService implements OnModuleDestroy, OnApplicationB
       );
       return rows[0]?.watermark;
     });
+    bindConnectorPushPressure(() => kernelRuntime.pressureView().level);
     runtime.beforeDispose(async () => {
       this.maintenanceHold = true;
       this.stopBackground();
@@ -250,7 +254,11 @@ export class PersonalConnectorService implements OnModuleDestroy, OnApplicationB
   }
 
   private async startLivePushes(): Promise<void> {
-    if (!this.runtime.isReady()) {
+    if (
+      !this.backgroundStarted ||
+      this.maintenanceHold ||
+      !this.runtime.isReady()
+    ) {
       return;
     }
     const installations = await this.runtime.requireHost().get("authority")
@@ -320,6 +328,7 @@ export class PersonalConnectorService implements OnModuleDestroy, OnApplicationB
 
   /** Drop poll timers so this process can become a follower, then a leader again. */
   stopBackground(): void {
+    stopAllConnectorLivePushes();
     if (this.startTimer) {
       clearTimeout(this.startTimer);
       this.startTimer = undefined;
@@ -361,6 +370,7 @@ export class PersonalConnectorService implements OnModuleDestroy, OnApplicationB
 
   async pauseForMaintenance(): Promise<void> {
     this.maintenanceHold = true;
+    stopAllConnectorLivePushes();
     try {
       await this.waitForQuiet();
       this.resetLivePullState();
@@ -392,6 +402,9 @@ export class PersonalConnectorService implements OnModuleDestroy, OnApplicationB
 
   resumeAfterMaintenance(): void {
     this.maintenanceHold = false;
+    if (this.backgroundStarted) {
+      void this.startLivePushes();
+    }
   }
 
   async startSyncRun(
@@ -795,6 +808,7 @@ export class PersonalConnectorService implements OnModuleDestroy, OnApplicationB
     }
     this.catalogTicking = true;
     try {
+      await this.startLivePushes();
       await runCatalogTick(this.connectorState());
     } catch (error) {
       await applyPullOutcome([error]);

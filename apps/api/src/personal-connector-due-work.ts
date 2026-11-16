@@ -448,7 +448,7 @@ async function pollClaimedDueWorkStreams(
         });
         return;
       }
-      if (item.lane === "live" || item.lane === "interactive") {
+      if (pushes && (item.lane === "live" || item.lane === "interactive")) {
         // New messages are pushed. Cancel leftover latest rows.
         await store.settleSyncWork({
           id: item.id,

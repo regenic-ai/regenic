@@ -115,9 +115,17 @@ extra 类型可以热发现（目录 watch，或 `POST /v1/me/plugins/reload`）
   `x-regenic-ingest-token`，由所有者调用 `POST /v1/me/connectors/:id/ingest-token`
   生成；token 由 personal API key 派生，只能访问该安装的 `ingest`、`limits`、
   `watermarks` 与 `ingest-stats`。核心不再排最新消息拉取。连接器自己发现新消息
-  再推上来。飞书、DSH 和 Cursor 在 `startInstallation` 里做这件事：每一轮用
-  `latest` 拉自己的几条流，再调用 `ConnectorHost.push`。进程重启后从最近一次
+  再推上来。飞书、DSH 和 Cursor 在 `startInstallation` 中调用
+  `ConnectorHost.livePush.start`，并在 `stopInstallation` 中调用
+  `ConnectorHost.livePush.stop`；不要由插件私自导入另一份尾部注册表。每一轮并发用
+  `latest` 拉自己的几条流，再调用 `ConnectorHost.push`。核心压力为 critical 时暂停，
+  elevated 时降低并发；空流遵守 `idle_ms`，收到 `429` / `503` 的重试提示时暂停下一轮。
+  进程重启后从最近一次
   确认的 watermark 继续，并按页往前补，不会只拿最新一页把中间漏掉。
+  只有后台 leader 副本拥有进程内 tail；follower 可以接收幂等 HTTP ingest，但交互请求
+  不会在 follower 上启动 tail。目录 tick 会核对安装修订并替换陈旧 tail。DSH discover
+  默认一次最多挂载 128 个 session（`REGENIC_DSH_DISCOVER_MOUNT_LIMIT`，硬上限 1000），
+  完整目录元数据不受该挂载上限影响。
   打开会话会立刻推这一条流，核心不再为它拉最新页。
   历史和附件拉取仍由核心负责。
   驱动拿到的宿主只属于当前安装：别的安装的流、推送、watermark 和凭据都会被拒绝。

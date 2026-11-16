@@ -243,6 +243,23 @@ export class ChannelDriverRegistry {
       : work();
   }
 
+  async startInstallation(
+    installation: ConnectorInstallation,
+    host: Host | ConnectorHost,
+    options: { restart?: boolean } = {},
+  ): Promise<void> {
+    const driver = this.get(installation.connector_type);
+    if (!driver?.startInstallation) {
+      return;
+    }
+    await this.installationLifecycle.ensureStarted(
+      driver,
+      installation,
+      asConnectorHost(host),
+      options.restart === true,
+    );
+  }
+
   async stopInstallation(
     installation: ConnectorInstallation,
     host: Host | ConnectorHost,

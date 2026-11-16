@@ -123,6 +123,33 @@ export class ConnectorInstallationLifecycle {
     return this.run(this.activation(installation.id), installation, work);
   }
 
+  ensureStarted(
+    driver: ChannelDriver,
+    installation: ConnectorInstallation,
+    host?: ConnectorHost,
+    restart = false,
+  ): Promise<void> {
+    const activation = this.activation(installation.id);
+    return this.run(activation, installation, async () => {
+      const wasReady = activation.ready;
+      await (activation.starting ?? this.start(driver, installation, activation, host));
+      if (restart && wasReady) {
+        host ??= typeof this.host === "function" ? this.host() : this.host;
+        if (!host) {
+          throw new ChannelDriverError(
+            "sync_failed",
+            "Connector lifecycle host is unavailable",
+            "lifecycle_failed",
+          );
+        }
+        await driver.startInstallation?.(
+          installation,
+          this.scopeHost(host, activation, installation),
+        );
+      }
+    });
+  }
+
   guardExecutor(
     driver: ChannelDriver,
     installation: ConnectorInstallation,
@@ -192,7 +219,12 @@ export class ConnectorInstallationLifecycle {
       } catch (error) {
         drainError = error;
       }
-      const hook = Promise.resolve().then(() => driver.stopInstallation!(installation, host, { reason, signal: abort.signal }));
+      const scopedHost = this.scopeHost(host, activation, installation);
+      const hook = Promise.resolve().then(() =>
+        driver.stopInstallation!(installation, scopedHost, {
+          reason,
+          signal: abort.signal,
+        }));
       activation.pendingStop = hook;
       const finished = () => {
         if (activation.pendingStop === hook) activation.pendingStop = undefined;

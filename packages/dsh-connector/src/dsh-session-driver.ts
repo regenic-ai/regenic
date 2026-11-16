@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import {
   CONNECTOR_PROTOCOL,
   ChannelDriverError,
-  startConnectorLivePush,
   envCredentialsRef,
   readEnvCredential,
   requireConnectorStream,
@@ -120,16 +119,22 @@ export const dshSessionDriver: ChannelDriver = {
   },
 
   async startInstallation(installation, host) {
-    if (!host.push) {
+    if (!host.push || !host.livePush) {
       return;
     }
-    startConnectorLivePush({
+    host.livePush.start({
       installationId: installation.id,
+      generation: installation.updated_at,
       listStreams: () => host.get("connectors").listStreams(installation.id),
       push: (batch) => host.push!(installation, batch),
       resumeCursor: (streamKey) =>
         host.ackedWatermark?.(installation, streamKey) ?? Promise.resolve(undefined),
+      pressure: () => host.pushPressure?.() ?? "ok",
     });
+  },
+
+  async stopInstallation(installation, host) {
+    host.livePush?.stop(installation.id);
   },
 
   async createThread(installation, host, env, options) {
@@ -173,7 +178,8 @@ export const dshSessionDriver: ChannelDriver = {
     const listed = await dshWebRpcClient(installation, env, {
       access_token,
     }).listAllSessionIds();
-    return mountDshSessions(host, installation, env, listed, {
+    const mountLimit = dshDiscoverMountLimit(env);
+    return mountDshSessions(host, installation, env, listed.slice(0, mountLimit), {
       access_token,
     });
   },
@@ -435,6 +441,14 @@ export const dshSessionDriver: ChannelDriver = {
     return `dsh:${installation.id}:${dshPromptStoreFor(installation.id).generation()}`;
   },
 };
+
+function dshDiscoverMountLimit(env: NodeJS.ProcessEnv): number {
+  const raw = Number(env.REGENIC_DSH_DISCOVER_MOUNT_LIMIT ?? 128);
+  if (!Number.isFinite(raw) || raw <= 0) {
+    return 128;
+  }
+  return Math.max(1, Math.min(1_000, Math.floor(raw)));
+}
 
 /** Test and host overrides for the DSH web transport. */
 export interface DshClientExtras {

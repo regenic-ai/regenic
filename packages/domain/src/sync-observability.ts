@@ -21,6 +21,7 @@ export type SyncMetricName =
   | "push_backlog"
   | "push_lag_ms"
   | "push_backpressure"
+  | "push_tail_errors"
   | "push_reconcile_ms";
 
 export interface SyncMetricLabels {
@@ -56,6 +57,8 @@ export interface SyncMetricsSink {
 export class SyncMetricsRegistry implements SyncMetricsSink {
   private readonly aggregates = new Map<string, SyncMetricAggregate>();
 
+  constructor(private readonly maxSeries = 4_096) {}
+
   record(point: SyncMetricPoint): void {
     if (!Number.isFinite(point.value)) {
       return;
@@ -65,6 +68,11 @@ export class SyncMetricsRegistry implements SyncMetricsSink {
     const recordedAt = point.recorded_at ?? new Date().toISOString();
     const current = this.aggregates.get(key);
     if (!current) {
+      while (this.aggregates.size >= Math.max(1, this.maxSeries)) {
+        const oldest = this.aggregates.keys().next().value;
+        if (oldest === undefined) break;
+        this.aggregates.delete(oldest);
+      }
       this.aggregates.set(key, {
         name: point.name,
         labels,

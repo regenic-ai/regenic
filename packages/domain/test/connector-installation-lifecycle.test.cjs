@@ -80,6 +80,19 @@ test("catalog, probes and uninstalled/disabled reads never activate a sidecar", 
   assert.deepEqual(calls, []);
 });
 
+test("explicit installation start uses the lifecycle and coalesces", async () => {
+  const { registry, host, calls } = fixture();
+  await Promise.all([
+    registry.startInstallation(installation, host),
+    registry.startInstallation(installation, host),
+  ]);
+  assert.deepEqual(calls, ["start"]);
+  await registry.startInstallation(installation, host, { restart: true });
+  assert.deepEqual(calls, ["start", "start"]);
+  await registry.stopInstallation(installation, host, "disable");
+  assert.deepEqual(calls, ["start", "start", "disable"]);
+});
+
 test("concurrent first operations start once, stop once, and old resources stay fenced after resume", async () => {
   const { registry, driver, host, calls } = fixture();
   const [streams, other] = await Promise.all([

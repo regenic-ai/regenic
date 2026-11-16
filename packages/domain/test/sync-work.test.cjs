@@ -383,7 +383,7 @@ describe("durable sync work", () => {
     });
     assert.deepEqual(
       identities.map((item) => item.lane).sort(),
-      ["live"],
+      [],
     );
   });
 

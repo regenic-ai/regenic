@@ -207,11 +207,32 @@ export class InstallationQuotaBook {
   }
 
   private mergedLimits(installationId: string): ConnectorLimits {
+    const declared = this.declared.get(installationId);
+    const runtime = this.runtime.get(installationId);
+    const maxConcurrency = tighterOptionalLimit(
+      declared?.max_concurrency,
+      runtime?.max_concurrency,
+    );
+    const pageSize = tighterOptionalLimit(
+      declared?.page_size,
+      runtime?.page_size,
+    );
+    const rate = runtime?.rate ?? declared?.rate;
     return {
-      ...this.declared.get(installationId),
-      ...this.runtime.get(installationId),
+      ...(maxConcurrency !== undefined ? { max_concurrency: maxConcurrency } : {}),
+      ...(pageSize !== undefined ? { page_size: pageSize } : {}),
+      ...(rate ? { rate } : {}),
     };
   }
+}
+
+function tighterOptionalLimit(
+  declared: number | undefined,
+  runtime: number | undefined,
+): number | undefined {
+  if (declared === undefined) return runtime;
+  if (runtime === undefined) return declared;
+  return Math.min(declared, runtime);
 }
 
 /** `tokens: 0` means unlimited, so any finite budget is tighter. */

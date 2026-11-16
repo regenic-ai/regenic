@@ -1,6 +1,11 @@
 import type { Host, HostContext, Plugin } from "@regenic/plugin-host";
 import {
   installSecretRef,
+  connectorLivePushGeneration,
+  hasConnectorLivePush,
+  nudgeConnectorLivePush,
+  startConnectorLivePush,
+  stopConnectorLivePush,
   type ConnectorHost,
   type ConnectorInstallation,
   type ConnectorSecrets,
@@ -14,6 +19,7 @@ import {
   readInstallSecret,
   writeKeychainSecret,
 } from "./keychain";
+import { processSyncMetrics } from "./sync-observability";
 
 export type { ConnectorHost, ConnectorSecrets };
 
@@ -33,6 +39,10 @@ type ConnectorWatermarkLookup = (
 
 let watermarkLookup: ConnectorWatermarkLookup | undefined;
 
+type ConnectorPushPressureLookup = () => "ok" | "elevated" | "critical";
+
+let pushPressureLookup: ConnectorPushPressureLookup | undefined;
+
 /** API binds the ingest gate. Drivers only see `ConnectorHost.push`. */
 export function bindConnectorPush(submit: ConnectorPushSubmit): void {
   pushSubmit = submit;
@@ -41,6 +51,11 @@ export function bindConnectorPush(submit: ConnectorPushSubmit): void {
 /** API binds the durable watermark read. Drivers resume a tail from it. */
 export function bindConnectorWatermark(lookup: ConnectorWatermarkLookup): void {
   watermarkLookup = lookup;
+}
+
+/** API binds core pressure so connector-owned tails can yield to interaction. */
+export function bindConnectorPushPressure(lookup: ConnectorPushPressureLookup): void {
+  pushPressureLookup = lookup;
 }
 const DRIVER_SERVICES = new Set(["connectors", "egress"]);
 const KERNEL_SERVICES = new Set([
@@ -92,8 +107,47 @@ export function asConnectorHost(host: Host | ConnectorHost): ConnectorHost {
       }
       return watermarkLookup(installation, streamKey);
     },
+    pushPressure() {
+      return pushPressureLookup?.() ?? "ok";
+    },
+    livePush: {
+      start(input) {
+        startConnectorLivePush({
+          ...input,
+          onError(error, streamKey) {
+            processSyncMetrics.record({
+              name: "push_tail_errors",
+              value: 1,
+              labels: {
+                installation_id: input.installationId,
+                operation: "push",
+                status: connectorErrorCode(error),
+              },
+            });
+            input.onError?.(error, streamKey);
+          },
+        });
+      },
+      stop: stopConnectorLivePush,
+      nudge: nudgeConnectorLivePush,
+      has: hasConnectorLivePush,
+      generation: connectorLivePushGeneration,
+    },
   };
   return wrapped;
+}
+
+function connectorErrorCode(error: unknown): string {
+  if (!error || typeof error !== "object") {
+    return "unknown";
+  }
+  for (const key of ["code", "name"] as const) {
+    const value = Reflect.get(error, key);
+    if (typeof value === "string" && value.trim()) {
+      return value.trim().slice(0, 64);
+    }
+  }
+  return "unknown";
 }
 
 export function isConnectorHost(value: unknown): value is ConnectorHost {
@@ -168,6 +222,35 @@ export function scopeConnectorInstallations(
           },
         }
         : {}),
+    ...(host.pushPressure
+      ? { pushPressure: () => host.pushPressure!() }
+      : {}),
+    ...(host.livePush
+      ? {
+          livePush: {
+            start(input) {
+              assertInstallationId(allowed, input.installationId);
+              return host.livePush!.start(input);
+            },
+            stop(installationId) {
+              assertInstallationId(allowed, installationId);
+              return host.livePush!.stop(installationId);
+            },
+            nudge(installationId, streamKey) {
+              assertInstallationId(allowed, installationId);
+              return host.livePush!.nudge(installationId, streamKey);
+            },
+            has(installationId) {
+              assertInstallationId(allowed, installationId);
+              return host.livePush!.has(installationId);
+            },
+            generation(installationId) {
+              assertInstallationId(allowed, installationId);
+              return host.livePush!.generation(installationId);
+            },
+          },
+        }
+      : {}),
   } as ConnectorHost;
   return scoped;
 }

@@ -670,7 +670,6 @@ export class ConnectorRunner {
   ): SyncMetricLabels {
     return {
       installation_id: input.installation_id,
-      stream_key: input.stream_key,
       source: this.connector.source,
       lane: currentSyncLane(),
     };

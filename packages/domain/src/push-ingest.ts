@@ -123,20 +123,6 @@ export class PushIngestGate {
     source: string;
     batch: unknown;
   }): Promise<PushIngestAck> {
-    const validation = validatePushIngestBatch(input.batch);
-    if (!validation.success) {
-      throw new PushIngestRejectedError(validation.error_code, validation.issues);
-    }
-    const push = validation.data;
-    const foreign = push.events.flatMap((event, index) =>
-      event.source === input.source
-        ? []
-        : [{ path: ["events", index, "source"], message: `source must be ${input.source}` }],
-    );
-    if (foreign.length > 0) {
-      throw new PushIngestRejectedError("connector_mismatch", foreign);
-    }
-
     const installationId = input.installation.id;
     const stats = this.statsFor(installationId);
     const labels = { installation_id: installationId, operation: "push" as const };
@@ -149,6 +135,20 @@ export class PushIngestGate {
       stats.backpressure_rejections += 1;
       this.metrics.record({ name: "push_backpressure", value: 1, labels: { ...labels, status: "global" } });
       throw new PushIngestBackpressureError("global", this.limits.retry_after_ms);
+    }
+
+    const validation = validatePushIngestBatch(input.batch);
+    if (!validation.success) {
+      throw new PushIngestRejectedError(validation.error_code, validation.issues);
+    }
+    const push = validation.data;
+    const foreign = push.events.flatMap((event, index) =>
+      event.source === input.source
+        ? []
+        : [{ path: ["events", index, "source"], message: `source must be ${input.source}` }],
+    );
+    if (foreign.length > 0) {
+      throw new PushIngestRejectedError("connector_mismatch", foreign);
     }
 
     const startedAt = this.now();
