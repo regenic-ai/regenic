@@ -244,7 +244,6 @@ export const feishuChatDriver: ChannelDriver = {
       hydrate_on_open: true,
       attention: true,
       receipts: true,
-      push: true,
     };
   },
 

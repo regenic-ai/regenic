@@ -217,8 +217,8 @@ export interface ConnectorQuotaHint {
 }
 
 /**
- * Upstream limits only the connector knows. Core pulls (history backfill and
- * legacy live polling) stay inside them. Every field is optional; a runtime
+ * Upstream limits only the connector knows. Connector live tails and Core
+ * history/media pulls stay inside them. Every field is optional; a runtime
  * adjustment replaces the declared value for that installation.
  */
 export interface ConnectorLimits {
@@ -233,7 +233,7 @@ export interface ConnectorLimits {
 export interface ChannelConnector {
   readonly source: string;
   /**
-   * Declared pull/push mode. Omit for poll-only.
+   * Declared upstream read mode. Omit when polling is available.
    * Undeclared methods must not exist; the kernel never infers them.
    */
   readonly source_mode?: ConnectorSourceMode;

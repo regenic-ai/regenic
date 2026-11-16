@@ -3,7 +3,6 @@ const { describe, it } = require("node:test");
 const {
   PUSH_INGEST_MAX_EVENTS,
   sanitizeConnectorLimits,
-  stampLiveViaConfig,
   validateConnectorLimits,
   validatePushIngestBatch,
 } = require("../dist");
@@ -72,15 +71,5 @@ describe("connector limits", () => {
     );
     assert.equal(sanitizeConnectorLimits({ page_size: -1 }), undefined);
     assert.equal(sanitizeConnectorLimits(undefined), undefined);
-  });
-
-  it("stamps live_via only for push installs", () => {
-    assert.deepEqual(stampLiveViaConfig({ room: "a" }, { push: true }), {
-      room: "a",
-      live_via: "push",
-    });
-    assert.deepEqual(stampLiveViaConfig({ room: "a", live_via: "push" }, {}), {
-      room: "a",
-    });
   });
 });

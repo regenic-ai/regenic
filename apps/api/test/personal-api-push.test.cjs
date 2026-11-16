@@ -119,12 +119,13 @@ describe("personal connector push ingest", { concurrency: 1 }, () => {
         "a token cannot mint tokens",
       );
 
-      const undeclared = await call(origin, `/v1/me/connectors/${silentId}/ingest`, {
+      const universal = await call(origin, `/v1/me/connectors/${silentId}/ingest`, {
         method: "POST",
         headers: owner,
         body: { stream_key: "room-1", events: [event("m-5", "silent")] },
       });
-      assert.equal(undeclared.status, 501);
+      assert.equal(universal.status, 200, JSON.stringify(universal.body));
+      assert.equal(universal.body.accepted_count, 1);
 
       const watermarks = await call(origin, `/v1/me/connectors/${pushId}/watermarks`, {
         headers: connector,

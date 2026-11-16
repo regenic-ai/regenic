@@ -249,7 +249,6 @@ describe("dshSessionPlugin", () => {
         await_reply: true,
         list_title: "prompt",
         prompts: true,
-        push: true,
       });
       assert.deepEqual(dshSessionDriver.capabilities(pinned), {
         sync: true,
@@ -258,7 +257,6 @@ describe("dshSessionPlugin", () => {
         await_reply: true,
         list_title: "prompt",
         prompts: true,
-        push: true,
       });
       assert.deepEqual(dshSessionDriver.capabilities(cli), {
         sync: true,
@@ -266,7 +264,6 @@ describe("dshSessionPlugin", () => {
         create: false,
         await_reply: true,
         list_title: "prompt",
-        push: true,
       });
       assert.equal(
         dshSessionDriver.waitThread(

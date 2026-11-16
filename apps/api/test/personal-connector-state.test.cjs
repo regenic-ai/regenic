@@ -54,7 +54,7 @@ describe("owned connector coordination state", () => {
     state.runtime.requireHost = () => ({ get: () => store });
     state.drivers.get = () => ({
       source: "test",
-      capabilities: () => ({ sync: true, reply: false, create: false, push: true }),
+      capabilities: () => ({ sync: true, reply: false, create: false }),
       matchesThread: () => true,
       async resolveThreadStream() {
         return { stream_key: "test:room", label: "Room" };
@@ -253,7 +253,7 @@ describe("owned connector coordination state", () => {
     let polls = 0;
     state.drivers.get = () => ({
       source: "test",
-      capabilities: () => ({ sync: true, reply: false, create: false, push: true }),
+      capabilities: () => ({ sync: true, reply: false, create: false }),
       async resolveThreadStream() {
         polls += 1;
         throw new Error("should not poll");
@@ -325,7 +325,7 @@ describe("owned connector coordination state", () => {
     state.catalogSizeByInstall.set(installation.id, 1);
     state.drivers.get = () => ({
       source: "test",
-      capabilities: () => ({ sync: true, reply: false, create: false, push: true }),
+      capabilities: () => ({ sync: true, reply: false, create: false }),
       async resolveThreadStream() {
         return { stream_key: "test:room", label: "Room" };
       },

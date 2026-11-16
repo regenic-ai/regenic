@@ -42,7 +42,6 @@ import {
   syncWorkEnsurePlan,
 } from "./sync-work-planner";
 import { historyPolicyFromConfig, releaseHistoryPhase } from "./sync-history";
-import { liveViaFromConfig } from "./source-mode";
 import {
   syncRunIsClaimable,
   syncWorkPriority,
@@ -773,7 +772,6 @@ export class MemoryConnectorRuntimeStore implements ConnectorRuntimeStore {
         state,
         existing,
         policy: historyPolicyFromConfig(config),
-        live_via: liveViaFromConfig(config),
       }).enqueue) {
         gaps.push({
           stream_key: state.stream_key,
@@ -1016,7 +1014,6 @@ export class MemoryConnectorRuntimeStore implements ConnectorRuntimeStore {
       state,
       existing: this.workForStream(state),
       policy: historyPolicyFromConfig(config),
-      live_via: liveViaFromConfig(config),
     });
     for (const lane of plan.enqueue) {
       await this.enqueueSyncWork({

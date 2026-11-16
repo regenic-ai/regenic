@@ -703,11 +703,7 @@ function ConnectorRow({
     : undefined;
   const activeSourceMode =
     installation.status === "enabled" ? installation.source_mode : "poll";
-  const receivesPush =
-    installation.status === "enabled" &&
-    (installation.pushes === true ||
-      activeSourceMode === "webhook" ||
-      activeSourceMode === "hybrid");
+  const receivesPush = installation.status === "enabled";
   const attemptSourceMode = installation.last_attempt
     ? installation.source_mode
     : activeSourceMode;

@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
   type ConnectorRuntimeStore,
-  driverPushes,
   type IngestQuarantine,
   firstSeedHeadFromEnv,
   MAX_DUE_WORK_CLAIM_LIMIT,
@@ -342,14 +341,7 @@ async function executeSyncRunDueWork(
     streamKeys: run.options.stream_keys,
     limit: settings?.first_seed_limit ?? firstSeedHeadFromEnv(),
   });
-  const installation = await state.requireInstallation(
-    store,
-    run.installation_id,
-  );
-  const driver = state.drivers.get(installation.connector_type);
-  const pushWakeKeys =
-    driver && driverPushes(driver, installation) ? wakeKeys : [];
-  if (pushWakeKeys.length > 0) {
+  if (wakeKeys.length > 0) {
     for (const streamKey of wakeKeys) {
       await enqueueInteractiveWake(state, run.installation_id, streamKey);
     }
@@ -439,7 +431,7 @@ async function executeSyncRunDueWork(
       );
     }
   }
-  retries += pushWakeKeys.filter(
+  retries += wakeKeys.filter(
     (streamKey) => !claimedInteractiveKeys.has(streamKey),
   ).length;
   return { accepted_count: accepted, retry_count: retries };

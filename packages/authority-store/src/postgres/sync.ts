@@ -48,7 +48,6 @@ import {
   catalogStreamKeysLeft,
   syncStateNotedWith,
   historyPolicyFromConfig,
-  liveViaFromConfig,
   DEFAULT_HISTORY_POLICY,
   releaseHistoryPhase,
   syncWorkEnsurePlan,
@@ -1717,7 +1716,6 @@ async function ensureOwedSyncWork(db: PgSql, client: PoolClient, state: SyncStre
       state,
       existing: existing.rows,
       policy: historyPolicyFromConfig(config),
-      live_via: liveViaFromConfig(config),
     });
     for (const lane of plan.enqueue) {
       await client.query(

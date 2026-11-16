@@ -238,7 +238,6 @@ describe("connector catalog hints", () => {
     assert.equal(view.channel, "feishu");
     assert.equal(view.channel_label, "Feishu");
     assert.equal(view.source_mode, "poll");
-    assert.equal(view.pushes, true);
     assert.deepEqual(view.settings.kinds, ["group", "p2p"]);
     assert.equal(view.sync, undefined);
   });

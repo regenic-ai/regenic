@@ -6,7 +6,6 @@ import {
   asConnectorHost,
   connectorSyncTimeoutMs,
   driverPolls,
-  driverPushes,
   historyPolicyFromConfig,
   mediaPendingAfterPush,
   phaseAfterPush,
@@ -60,7 +59,7 @@ export async function ingestPush(
   }
   const installation = await requirePushInstallation(state, installationId, auth);
   const driver = state.drivers.get(installation.connector_type);
-  if (!driver || !driverPushes(driver, installation)) {
+  if (!driver) {
     throw new PersonalConnectorError(
       "unsupported_channel",
       `Connector type cannot ingest pushes: ${installation.connector_type}`,
@@ -156,7 +155,7 @@ export async function reconcilePush(
   const store = state.runtime.requireHost().get("authority");
   const installation = await state.requireInstallation(store, installationId);
   const driver = state.drivers.get(installation.connector_type);
-  if (!driver?.reconcilePush || !driverPushes(driver, installation)) {
+  if (!driver?.reconcilePush) {
     return { installation_id: installation.id, repushed_batches: 0 };
   }
   if (state.pushReconcileInflight.has(installation.id)) {
@@ -246,9 +245,7 @@ export async function runPushReconcileTick(
         return false;
       }
       const driver = state.drivers.get(installation.connector_type);
-      return Boolean(
-        driver?.reconcilePush && driverPushes(driver, installation),
-      );
+      return Boolean(driver?.reconcilePush);
     })
     .sort((left, right) => left.id.localeCompare(right.id));
   if (candidates.length === 0) {
@@ -434,7 +431,7 @@ async function markPushStreamLive(
     ? threadForSyncStream({
       source: driver.source,
       streamKey,
-      allowOpaqueTarget: driverPushes(driver, installation),
+      allowOpaqueTarget: true,
     })
     : null;
   const polls = Boolean(driver) && driverPolls(driver);

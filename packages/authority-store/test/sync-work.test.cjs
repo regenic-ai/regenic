@@ -587,7 +587,7 @@ describePg("postgres concurrent sync work claim", () => {
 });
 
 describe("phase writes owe their lanes", () => {
-  it("owes history without a live row and does not refill live from the gap query", async () => {
+  it("owes history without ever creating a latest-poll row", async () => {
     const root = await createRoot();
     const store = new SqliteAuthorityStore(join(root, "authority.db"));
     await seedInstallation(store);
@@ -648,7 +648,7 @@ describe("phase writes owe their lanes", () => {
     });
     assert.deepEqual(
       pending.map((work) => work.lane).sort(),
-      ["live"],
+      [],
     );
     await store.putSyncState({
       installation_id: installation.id,
@@ -698,9 +698,7 @@ describe("phase writes owe their lanes", () => {
       installation_id: installation.id,
       unassigned: true,
     });
-    assert.ok(incremental.length > 0);
-    assert.ok(incremental.every((work) => work.lane === "live"));
-    assert.ok(incremental.some((work) => work.stream_key === "chat:3"));
+    assert.deepEqual(incremental, []);
     store.close();
   });
 

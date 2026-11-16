@@ -15,7 +15,7 @@ function event(externalId, source) {
   };
 }
 
-function pushDriver(connectorType, source, capabilities, hooks = {}, sourceMode = "webhook") {
+function pushDriver(connectorType, source, hooks = {}, sourceMode = "webhook") {
   return {
     connector_type: connectorType,
     source,
@@ -38,7 +38,7 @@ function pushDriver(connectorType, source, capabilities, hooks = {}, sourceMode 
       return false;
     },
     capabilities() {
-      return { sync: true, reply: false, create: false, ...capabilities };
+      return { sync: true, reply: false, create: false };
     },
     resolveStreams() {
       return Promise.resolve([]);
@@ -56,8 +56,8 @@ function pushDriver(connectorType, source, capabilities, hooks = {}, sourceMode 
 }
 
 module.exports = {
-  extraPushDriver: pushDriver("extra-push", "pushed", { push: true }),
-  extraReconcileDriver: pushDriver("extra-reconcile", "reconciled", { push: true }, {
+  extraPushDriver: pushDriver("extra-push", "pushed"),
+  extraReconcileDriver: pushDriver("extra-reconcile", "reconciled", {
     async reconcilePush(_installation, _host, context) {
       const page = await context.listWatermarks({ stream_keys: ["chat-gap"] });
       if (page.watermarks.some((row) => row.stream_key === "chat-gap")) {
@@ -72,6 +72,6 @@ module.exports = {
       return { repushed_batches: 1 };
     },
   }),
-  extraHybridDriver: pushDriver("extra-hybrid", "hybrid-pushed", { push: true }, {}, "hybrid"),
-  extraSilentDriver: pushDriver("extra-silent", "silent", {}),
+  extraHybridDriver: pushDriver("extra-hybrid", "hybrid-pushed", {}, "hybrid"),
+  extraSilentDriver: pushDriver("extra-silent", "silent"),
 };

@@ -9,7 +9,6 @@ const {
   membersMissingLane,
   membersMissingLatestWork,
   needsCatalogDueWork,
-  liveWorkAfterInteractiveRelease,
   fairSelectSyncWork,
   owedSyncLanes,
   mediaPendingAfterPush,
@@ -229,10 +228,7 @@ describe("due-work planner", () => {
   });
 
   it("skips members that already have unassigned work at this generation", () => {
-    assert.deepEqual(
-      dueWorkCoverageLanes("steady"),
-      ["interactive", "live", "media"],
-    );
+    assert.deepEqual(dueWorkCoverageLanes("steady"), ["media"]);
     assert.deepEqual(dueWorkCoverageLanes("bootstrap"), ["history"]);
     const uncovered = uncoveredCatalogMembers(
       [
@@ -478,15 +474,12 @@ describe("sync run due-work selection", () => {
 });
 
 describe("owed sync lanes", () => {
-  it("owes history during backfill and live polling when steady", () => {
+  it("owes history during backfill and never owes latest polling", () => {
     assert.deepEqual(
       owedSyncLanes({ phase: "history", media_pending: true }),
       ["history", "media"],
     );
-    assert.deepEqual(
-      owedSyncLanes({ phase: "steady", media_pending: false }),
-      ["live"],
-    );
+    assert.deepEqual(owedSyncLanes({ phase: "steady", media_pending: false }), []);
   });
 
   it("keeps a pending due time and lets interactive cover latest", () => {
@@ -503,14 +496,14 @@ describe("owed sync lanes", () => {
       state: { phase: "steady", media_pending: false },
       existing: [{ lane: "interactive", status: "pending", run_id: null }],
     });
-    assert.deepEqual(covered, { enqueue: [], cancel: [] });
+    assert.deepEqual(covered, { enqueue: [], cancel: ["interactive"] });
 
     const stale = syncWorkEnsurePlan({
       state: { phase: "live", media_pending: false },
       existing: [{ lane: "interactive", status: "pending", run_id: null }],
       preferred: false,
     });
-    assert.deepEqual(stale, { enqueue: ["live"], cancel: ["interactive"] });
+    assert.deepEqual(stale, { enqueue: [], cancel: ["interactive"] });
     assert.equal(
       shouldReleaseInteractiveWork({
         lane: "interactive",
@@ -527,14 +520,6 @@ describe("owed sync lanes", () => {
       }),
       false,
     );
-    const live = liveWorkAfterInteractiveRelease({
-      installation_id: "dsh-1",
-      stream_key: "session:done",
-      generation: 1,
-      now: "2026-09-21T00:00:00.000Z",
-    });
-    assert.equal(live.lane, "live");
-    assert.equal(live.next_due_at, "2026-09-21T01:00:00.000Z");
   });
 
   it("cancels pending history and media once the phase no longer owes them", () => {
@@ -548,13 +533,13 @@ describe("owed sync lanes", () => {
           { lane: "media", status: "pending", run_id: null },
         ],
       }),
-      { enqueue: [], cancel: ["history", "media"] },
+      { enqueue: [], cancel: ["history", "live", "media"] },
     );
   });
 
-  it("skips live for push installs and seeds unseeded through history", () => {
+  it("skips live for every install and seeds unseeded through history", () => {
     assert.deepEqual(
-      owedSyncLanes({ phase: "steady", media_pending: true }, "backfill", { live_via: "push" }),
+      owedSyncLanes({ phase: "steady", media_pending: true }, "backfill"),
       ["media"],
     );
     assert.deepEqual(
@@ -564,15 +549,13 @@ describe("owed sync lanes", () => {
           { lane: "live", status: "pending", run_id: null },
           { lane: "interactive", status: "pending", run_id: null },
         ],
-        live_via: "push",
       }),
       { enqueue: [], cancel: ["live", "interactive"] },
     );
-    assert.deepEqual(dueWorkCoverageLanes("steady", "push"), ["media"]);
+    assert.deepEqual(dueWorkCoverageLanes("steady"), ["media"]);
     const planned = planSyncWorkGaps({
       installation_id: "push-1",
       now: "2026-11-16T00:00:00.000Z",
-      live_via: "push",
       policy: "backfill",
       gaps: [
         {
@@ -647,7 +630,6 @@ describe("owed sync lanes", () => {
     const planned = planSyncWorkGaps({
       installation_id: "install-1",
       now: "2026-09-21T00:00:05.000Z",
-      live_via: "push",
       coldIdleMs: 3_600_000,
       preferredThreadId: "thread-open",
       gaps: [

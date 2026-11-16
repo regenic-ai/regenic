@@ -1118,7 +1118,7 @@ export class PersonalInboxService {
           tier.include_install_attempts
             ? store.latestAttempt(installation.id)
             : Promise.resolve(null),
-          driver?.capabilities(installation).push === true
+          driver
             ? authority.summarizePushWatermarks(installation.id)
             : Promise.resolve(null),
         ]);

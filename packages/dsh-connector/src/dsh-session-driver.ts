@@ -104,7 +104,6 @@ export const dshSessionDriver: ChannelDriver = {
         create: false,
         await_reply: true,
         list_title: "prompt",
-        push: true,
       };
     }
     return {
@@ -114,7 +113,6 @@ export const dshSessionDriver: ChannelDriver = {
       await_reply: true,
       list_title: "prompt",
       prompts: true,
-      push: true,
     };
   },
 

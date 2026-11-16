@@ -204,11 +204,6 @@ export interface ChannelCapabilities {
    * Requires `authorizeLiveAccess`.
    */
   browser_live?: boolean;
-  /**
-   * This install pushes new records through `ConnectorHost.push` or
-   * `POST .../ingest`. Core does not schedule latest-message polls.
-   */
-  push?: boolean;
 }
 
 export interface ConnectorCatalogServiceState {
@@ -418,8 +413,8 @@ export interface ChannelDriverCore {
   readonly connector_type: string;
   readonly source: string;
   /**
-   * Declared pull/push mode for this driver. Omit for poll-only.
-   * Tick skips webhook-only installs instead of calling poll.
+   * Declared upstream acquisition mode for history/catalog work. Omit when
+   * polling is available. New-message delivery always uses push ingest.
    */
   readonly source_mode?: ConnectorSourceMode;
   /** Contract version. Omit for 1.0. Newer values are skipped at load. */
@@ -567,9 +562,9 @@ export interface ChannelDriver
    */
   locales?(): readonly PluginLocaleTable[];
   /**
-   * Low-frequency, per-installation gap check for push installs: compare
+   * Low-frequency, per-installation gap check: compare
    * `context.listWatermarks()` with the channel and re-push what is missing.
-   * Push only; the kernel does not live-poll these installs.
+   * The kernel never substitutes a latest-message poll.
    */
   reconcilePush?(
     installation: ConnectorInstallation,

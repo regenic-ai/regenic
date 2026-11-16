@@ -5,7 +5,6 @@ import {
   persistInstallSecrets,
   readInstallSecret,
   loadSyncProgress,
-  stampLiveViaConfig,
   type ConnectorInstallation,
   type ConnectorRuntimeStore,
 } from "@regenic/domain";
@@ -99,16 +98,13 @@ export async function updateConfig(
     for (const key of Object.keys(form.credentialChanges)) {
       await driver.clearCatalogCredential?.(current, key);
     }
-    nextConfig = stampLiveViaConfig(
-      persistInstallSecrets({
-        connector_type: current.connector_type,
-        installation_id: current.id,
-        catalog,
-        incoming: form.credentialChanges,
-        stored: nextConfig,
-      }),
-      driver.capabilities({ ...current, config: nextConfig }),
-    );
+    nextConfig = persistInstallSecrets({
+      connector_type: current.connector_type,
+      installation_id: current.id,
+      catalog,
+      incoming: form.credentialChanges,
+      stored: nextConfig,
+    });
   } catch (error) {
     throw wrapDriverError(error, "invalid_config");
   }
@@ -231,17 +227,11 @@ function buildInstallation(
       now,
       secrets: state.installSecrets(),
     });
-    const stamped = {
+    const persisted = {
       ...drafted,
-      config: stampLiveViaConfig(
-        drafted.config ?? {},
-        driver.capabilities({
-          ...drafted,
-          updated_at: drafted.created_at,
-        }),
-      ),
+      config: drafted.config ?? {},
     };
-    return { drafted: stamped, catalog, credentialChanges: form.credentialChanges };
+    return { drafted: persisted, catalog, credentialChanges: form.credentialChanges };
   } catch (error) {
     throw wrapDriverError(error, "invalid_config");
   }

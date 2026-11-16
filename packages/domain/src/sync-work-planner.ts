@@ -84,12 +84,10 @@ export function syncWorkEnsurePlan(input: {
   existing: readonly OpenSyncWorkLane[];
   policy?: HistoryPolicy;
   preferred?: boolean;
-  live_via?: "poll" | "push";
 }): { enqueue: SyncLane[]; cancel: SyncLane[] } {
   const owed = owedSyncLanes(
     input.state,
     input.policy ?? DEFAULT_HISTORY_POLICY,
-    { live_via: input.live_via ?? "poll" },
   );
   const owedSet = new Set(owed);
   const cancel: SyncLane[] = [];
@@ -135,42 +133,9 @@ export function shouldReleaseInteractiveWork(input: {
 }
 
 /**
- * Live row to enqueue after cancelling a stale interactive claim.
- * Cold due time so finished DSH sessions do not immediately refill the queue.
- */
-export function liveWorkAfterInteractiveRelease(input: {
-  installation_id: string;
-  stream_key: string;
-  generation: number;
-  now: string;
-  coldIdleMs?: number;
-}): EnqueueSyncWork {
-  return {
-    id: dueSyncWorkId(
-      input.installation_id,
-      input.stream_key,
-      "live",
-      input.generation,
-    ),
-    installation_id: input.installation_id,
-    stream_key: input.stream_key,
-    lane: "live",
-    priority: syncWorkPriority("live"),
-    next_due_at: nextDueAtForDueWork({
-      now: input.now,
-      heat: "cold",
-      coldIdleMs: input.coldIdleMs,
-    }),
-    generation: input.generation,
-    now: input.now,
-  };
-}
-
-/**
  * Repair rows for lanes the phase write should already have inserted.
- * History and media are due now. A live row during history is not repaired.
- * A steady live row waits for `idle_until`, then the cold idle. The preferred
- * thread's latest row is interactive.
+ * History and media are due now. Latest rows are never repaired because every
+ * connector delivers new messages through push ingest.
  */
 export function planSyncWorkGaps(input: {
   installation_id: string;
@@ -179,15 +144,12 @@ export function planSyncWorkGaps(input: {
   coldIdleMs?: number;
   preferredThreadId?: string | null;
   policy?: HistoryPolicy;
-  live_via?: "poll" | "push";
 }): EnqueueSyncWork[] {
   const preferred = input.preferredThreadId?.trim() || null;
   const policy = input.policy ?? DEFAULT_HISTORY_POLICY;
-  const liveVia = input.live_via ?? "poll";
   const planned: EnqueueSyncWork[] = [];
   for (const gap of input.gaps) {
     if (
-      liveVia === "push" &&
       (gap.missing_lane === "live" || gap.missing_lane === "interactive") &&
       gap.phase !== "unseeded"
     ) {
@@ -207,7 +169,7 @@ export function planSyncWorkGaps(input: {
     if (focused && gap.missing_lane === "media") {
       continue;
     }
-    const seed = seedLaneForGap({ gap, liveVia, policy });
+    const seed = seedLaneForGap({ gap, policy });
     if (seed === null) {
       continue;
     }
@@ -305,14 +267,11 @@ export function needsCatalogDueWork(view: {
 /** Lanes that mean this plane already has durable work and must not re-plan. */
 export function dueWorkCoverageLanes(
   plane: DueWorkPlane,
-  liveVia: "poll" | "push" = "poll",
 ): SyncLane[] {
   if (plane === "bootstrap") {
     return ["history"];
   }
-  return liveVia === "push"
-    ? ["media"]
-    : ["interactive", "live", "media"];
+  return ["media"];
 }
 
 /**
@@ -322,13 +281,11 @@ export function dueWorkCoverageLanes(
  */
 export function seedLaneForGap(input: {
   gap: Pick<SyncWorkGap, "phase" | "missing_lane">;
-  liveVia?: "poll" | "push";
   policy?: HistoryPolicy;
 }): SyncLane | null {
   if (input.gap.phase !== "unseeded" || input.gap.missing_lane !== "live") {
     return input.gap.missing_lane;
   }
-  void input.liveVia;
   return (input.policy ?? DEFAULT_HISTORY_POLICY) === "backfill" ? "history" : null;
 }
 

@@ -49,7 +49,6 @@ import {
   catalogStreamKeysLeft,
   syncStateNotedWith,
   historyPolicyFromConfig,
-  liveViaFromConfig,
   DEFAULT_HISTORY_POLICY,
   releaseHistoryPhase,
   syncWorkEnsurePlan,
@@ -1794,7 +1793,6 @@ function ensureOwedSyncWorkUnlocked(db: Database.Database, state: SyncStreamStat
       state,
       existing,
       policy: historyPolicyFromConfig(config),
-      live_via: liveViaFromConfig(config),
     });
     for (const lane of plan.enqueue) {
       enqueueSyncWorkUnlocked(db, {
