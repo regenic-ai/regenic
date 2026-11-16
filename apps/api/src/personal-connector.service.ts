@@ -5,6 +5,9 @@ import {
   type CopyLocale,
   isSyncSoftMiss,
   asConnectorHost,
+  bindConnectorPush,
+  bindConnectorWatermark,
+  stopAllConnectorLivePushes,
   type ChannelDriver,
   type ConnectorInstallation,
   type ConnectorPollRunResult,
@@ -12,6 +15,7 @@ import {
   type ConnectorStream,
   type ConversationThread,
   type IngestQuarantine,
+  type PushIngestAck,
   type SyncRun,
   type WebhookRequest,
   historySyncClaimLanes,
@@ -43,6 +47,12 @@ import {
 } from "./personal-interactive-gate";
 import { PersonalRuntimeService } from "./personal-runtime.service";
 import { createConnectorState, type ConnectorState } from "./personal-connector-state";
+import {
+  INGEST_TOKEN_HEADER,
+  ingestTokenFor,
+  ingestTokenInstallationId,
+  ingestTokenMatches,
+} from "./personal-ingest-token";
 import type {
   ConnectorInstallInput,
   ConnectorWebhookView,
@@ -54,10 +64,12 @@ import {
   bootstrapPullIntervalMs,
   catalogPullIntervalMs,
   pullIntervalMs,
+  pushReconcileIntervalMs,
   streamPaceKey,
 } from "./personal-connector-rhythm";
 import * as connectorSyncRun from "./personal-connector-sync-run";
 import * as connectorWebhook from "./personal-connector-webhook";
+import * as connectorPush from "./personal-connector-push";
 import * as connectorEgress from "./personal-connector-egress";
 import * as connectorLive from "./personal-connector-live";
 import { delay } from "./personal-connector-live";
@@ -97,12 +109,15 @@ export class PersonalConnectorService implements OnModuleDestroy, OnApplicationB
   private timer: ReturnType<typeof setInterval> | undefined;
   private bootstrapTimer: ReturnType<typeof setInterval> | undefined;
   private catalogTimer: ReturnType<typeof setInterval> | undefined;
+  private pushReconcileTimer: ReturnType<typeof setInterval> | undefined;
   private startTimer: ReturnType<typeof setTimeout> | undefined;
   private bootstrapStartTimer: ReturnType<typeof setTimeout> | undefined;
   private catalogStartTimer: ReturnType<typeof setTimeout> | undefined;
+  private pushReconcileStartTimer: ReturnType<typeof setTimeout> | undefined;
   private steadyTicking = false;
   private bootstrapTicking = false;
   private catalogTicking = false;
+  private pushReconcileTicking = false;
   private backgroundStarted = false;
   private maintenanceHold = false;
   private syncSettingsAccess: Promise<void> = Promise.resolve();
@@ -133,9 +148,22 @@ export class PersonalConnectorService implements OnModuleDestroy, OnApplicationB
       refreshSyncSettings: async () => { await this.getSyncSettings(); },
     });
     drivers.installationLifecycle.setHost(() => asConnectorHost(runtime.requireHost()));
+    bindConnectorPush((installation, batch) =>
+      connectorPush.ingestPush(this.connectorState(), installation.id, batch, {}));
+    bindConnectorWatermark(async (installation, streamKey) => {
+      if (!runtime.isReady()) {
+        return undefined;
+      }
+      const rows = await runtime.requireHost().get("authority").listPushWatermarks(
+        installation.id,
+        { stream_keys: [streamKey], limit: 1 },
+      );
+      return rows[0]?.watermark;
+    });
     runtime.beforeDispose(async () => {
       this.maintenanceHold = true;
       this.stopBackground();
+      stopAllConnectorLivePushes();
       this.state.focusSlot?.abort.abort();
       drivers.installationLifecycle.close();
       if (!runtime.isReady()) return;
@@ -221,12 +249,31 @@ export class PersonalConnectorService implements OnModuleDestroy, OnApplicationB
     this.state.dueWorkLimiters.bootstrap = new DueWorkClaimLimiter(1, 128, next.bootstrap_claim_limit);
   }
 
+  private async startLivePushes(): Promise<void> {
+    if (!this.runtime.isReady()) {
+      return;
+    }
+    const installations = await this.runtime.requireHost().get("authority")
+      .listInstallations(this.runtime.orgId());
+    for (const installation of installations) {
+      if (installation.status !== "enabled") {
+        continue;
+      }
+      try {
+        await connectorPush.ensureConnectorLivePush(this.connectorState(), installation.id);
+      } catch {
+        // One install's upstream must not stop the others from pushing.
+      }
+    }
+  }
+
   startAfterListen(): void {
     if (this.backgroundStarted) {
       return;
     }
     this.backgroundStarted = true;
     markBackgroundListen();
+    void this.startLivePushes();
     const pullMs = pullIntervalMs();
     resetPullStatus();
     pullStatus.interval_ms = pullMs;
@@ -259,6 +306,16 @@ export class PersonalConnectorService implements OnModuleDestroy, OnApplicationB
         void this.catalogTick();
       }, catalogMs);
     }
+    const pushReconcileMs = pushReconcileIntervalMs();
+    if (pushReconcileMs > 0) {
+      this.pushReconcileStartTimer = setTimeout(() => {
+        this.pushReconcileStartTimer = undefined;
+        void this.pushReconcileTick();
+      }, START_PULL_DELAY_MS + pushReconcileMs);
+      this.pushReconcileTimer = setInterval(() => {
+        void this.pushReconcileTick();
+      }, pushReconcileMs);
+    }
   }
 
   /** Drop poll timers so this process can become a follower, then a leader again. */
@@ -275,6 +332,10 @@ export class PersonalConnectorService implements OnModuleDestroy, OnApplicationB
       clearTimeout(this.catalogStartTimer);
       this.catalogStartTimer = undefined;
     }
+    if (this.pushReconcileStartTimer) {
+      clearTimeout(this.pushReconcileStartTimer);
+      this.pushReconcileStartTimer = undefined;
+    }
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = undefined;
@@ -286,6 +347,10 @@ export class PersonalConnectorService implements OnModuleDestroy, OnApplicationB
     if (this.catalogTimer) {
       clearInterval(this.catalogTimer);
       this.catalogTimer = undefined;
+    }
+    if (this.pushReconcileTimer) {
+      clearInterval(this.pushReconcileTimer);
+      this.pushReconcileTimer = undefined;
     }
     this.backgroundStarted = false;
   }
@@ -376,6 +441,95 @@ export class PersonalConnectorService implements OnModuleDestroy, OnApplicationB
     request: WebhookRequest,
   ): Promise<ConnectorWebhookView> {
     return connectorWebhook.ingestWebhook(this.connectorState(), installationId, request);
+  }
+
+  async ingestPush(
+    installationId: string,
+    body: unknown,
+    auth: connectorPush.IngestAuth,
+  ): Promise<PushIngestAck> {
+    return connectorPush.ingestPush(this.connectorState(), installationId, body, auth);
+  }
+
+  async connectorLimits(
+    installationId: string,
+    auth: connectorPush.IngestAuth,
+  ): Promise<connectorPush.ConnectorLimitsView> {
+    return connectorPush.readLimits(this.connectorState(), installationId, auth);
+  }
+
+  async adjustConnectorLimits(
+    installationId: string,
+    body: unknown,
+    auth: connectorPush.IngestAuth,
+  ): Promise<connectorPush.ConnectorLimitsView> {
+    return connectorPush.adjustLimits(this.connectorState(), installationId, body, auth);
+  }
+
+  async listPushWatermarks(
+    installationId: string,
+    auth: connectorPush.IngestAuth,
+    query?: { stream_keys?: string[]; after?: string; limit?: number },
+  ) {
+    return connectorPush.listWatermarks(this.connectorState(), installationId, auth, query);
+  }
+
+  async summarizePushWatermarks(
+    installationId: string,
+    auth: connectorPush.IngestAuth,
+  ) {
+    return connectorPush.summarizeWatermarks(this.connectorState(), installationId, auth);
+  }
+
+  async reconcilePush(installationId: string) {
+    return connectorPush.reconcilePush(this.connectorState(), installationId);
+  }
+
+  async ingestStats(
+    installationId: string,
+    auth: connectorPush.IngestAuth,
+  ) {
+    return connectorPush.ingestStats(this.connectorState(), installationId, auth);
+  }
+
+  /** Requires the personal key; an ingest token cannot mint another. */
+  async issueIngestToken(
+    installationId: string,
+    personalKey: string | null,
+  ): Promise<{ installation_id: string; token: string; header: string }> {
+    const key = personalKey?.trim();
+    if (!key) {
+      throw new PersonalConnectorError(
+        "not_configured",
+        "Ingest tokens require a personal API key",
+        409,
+      );
+    }
+    const store = this.runtime.requireHost().get("authority");
+    const installation = await this.requireInstallation(store, installationId);
+    return {
+      installation_id: installation.id,
+      token: ingestTokenFor(key, installation.id),
+      header: INGEST_TOKEN_HEADER,
+    };
+  }
+
+  async allowsIngestTokenRequest(
+    path: string,
+    token: string,
+    personalKey: string | null,
+  ): Promise<boolean> {
+    const installationId = ingestTokenInstallationId(path);
+    if (!installationId || !ingestTokenMatches(personalKey, installationId, token)) {
+      return false;
+    }
+    try {
+      const installation = await this.runtime.requireHost().get("authority")
+        .findInstallation(installationId);
+      return installation?.org_id === this.runtime.orgId();
+    } catch {
+      return false;
+    }
   }
 
   async listEgressQueue(
@@ -508,6 +662,7 @@ export class PersonalConnectorService implements OnModuleDestroy, OnApplicationB
       this.steadyTicking ||
       this.bootstrapTicking ||
       this.catalogTicking ||
+      this.pushReconcileTicking ||
       this.streamLocks.size > 0 ||
       this.state.focusSlot != null
     ) {
@@ -531,6 +686,7 @@ export class PersonalConnectorService implements OnModuleDestroy, OnApplicationB
     this.streamErrors.clear();
     this.state.streamPulling.clear();
     this.state.streamPullingHistory.clear();
+    this.state.streamPullingMedia.clear();
     this.state.hydrateCooldown.clear();
     this.state.liveKickCooldown.clear();
     resetPullStatus();
@@ -543,6 +699,7 @@ export class PersonalConnectorService implements OnModuleDestroy, OnApplicationB
       this.steadyTicking ||
       this.bootstrapTicking ||
       this.catalogTicking ||
+      this.pushReconcileTicking ||
       !this.runtime.isReady()
     ) {
       return;
@@ -589,6 +746,7 @@ export class PersonalConnectorService implements OnModuleDestroy, OnApplicationB
       this.bootstrapTicking ||
       this.steadyTicking ||
       this.catalogTicking ||
+      this.pushReconcileTicking ||
       !this.runtime.isReady()
     ) {
       return;
@@ -624,6 +782,7 @@ export class PersonalConnectorService implements OnModuleDestroy, OnApplicationB
       this.catalogTicking ||
       this.steadyTicking ||
       this.bootstrapTicking ||
+      this.pushReconcileTicking ||
       !this.runtime.isReady()
     ) {
       return;
@@ -641,6 +800,31 @@ export class PersonalConnectorService implements OnModuleDestroy, OnApplicationB
       await applyPullOutcome([error]);
     } finally {
       this.catalogTicking = false;
+    }
+  }
+
+  /** Low-frequency push gap recovery; never shares a tick with live/history/media. */
+  private async pushReconcileTick(): Promise<void> {
+    if (
+      this.maintenanceHold ||
+      this.pushReconcileTicking ||
+      this.steadyTicking ||
+      this.bootstrapTicking ||
+      this.catalogTicking ||
+      !this.runtime.isReady()
+    ) {
+      return;
+    }
+    if (!backgroundSyncReleased()) {
+      return;
+    }
+    this.pushReconcileTicking = true;
+    try {
+      await connectorPush.runPushReconcileTick(this.connectorState());
+    } catch (error) {
+      await applyPullOutcome([error]);
+    } finally {
+      this.pushReconcileTicking = false;
     }
   }
 
@@ -741,6 +925,7 @@ export class PersonalConnectorService implements OnModuleDestroy, OnApplicationB
       ...this.streamErrors.keys(),
       ...this.state.streamPulling,
       ...this.state.streamPullingHistory,
+      ...this.state.streamPullingMedia,
     ]) {
       if (key.startsWith(prefix) && !live.has(key)) {
         this.streamIdleUntil.delete(key);
@@ -750,6 +935,7 @@ export class PersonalConnectorService implements OnModuleDestroy, OnApplicationB
         this.streamErrors.delete(key);
         this.state.streamPulling.delete(key);
         this.state.streamPullingHistory.delete(key);
+        this.state.streamPullingMedia.delete(key);
       }
     }
   }
@@ -793,7 +979,9 @@ export class PersonalConnectorService implements OnModuleDestroy, OnApplicationB
         work: this.state.streamPulling.has(key)
           ? this.state.streamPullingHistory.has(key)
             ? "history"
-            : "live"
+            : this.state.streamPullingMedia.has(key)
+              ? "media"
+              : "live"
           : null,
         last_error: error,
       };

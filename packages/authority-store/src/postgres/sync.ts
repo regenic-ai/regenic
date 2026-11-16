@@ -31,6 +31,7 @@ import type {
   SyncCatalogView,
   SyncCatalogHead,
   ApplySyncCatalogPageInput,
+  NoteSyncCatalogStreamInput,
   SyncPhaseHead,
   SyncStreamState,
   SyncWorkGap,
@@ -45,7 +46,9 @@ import {
   SYNC_CATALOG_STREAM,
   applySyncCatalogMembers,
   catalogStreamKeysLeft,
+  syncStateNotedWith,
   historyPolicyFromConfig,
+  liveViaFromConfig,
   DEFAULT_HISTORY_POLICY,
   releaseHistoryPhase,
   syncWorkEnsurePlan,
@@ -309,6 +312,11 @@ export async function deleteInstallation(db: PgSql, id: string, orgId: string): 
       );
       await db.execute(
         `DELETE FROM connector_sync_state WHERE installation_id = $1`,
+        [id],
+        client,
+      );
+      await db.execute(
+        `DELETE FROM connector_push_watermarks WHERE installation_id = $1`,
         [id],
         client,
       );
@@ -1449,6 +1457,56 @@ export async function applySyncCatalogPage(db: PgSql, input: ApplySyncCatalogPag
     });
   }
 
+export async function noteSyncCatalogStream(db: PgSql, input: NoteSyncCatalogStreamInput): Promise<void> {
+    const streamKey = input.stream_key.trim();
+    if (!streamKey || streamKey === SYNC_CATALOG_STREAM) {
+      return;
+    }
+    await db.withTx(async (client) => {
+      await db.execute(
+        `
+          INSERT INTO connector_catalog_cursors (
+            installation_id, cursor_value, complete, generation, updated_at
+          ) VALUES ($1, NULL, FALSE, 1, $2)
+          ON CONFLICT (installation_id) DO NOTHING
+        `,
+        [input.installation_id, input.now],
+        client,
+      );
+      const cursor = await client.query<{ generation: number }>(
+        `SELECT generation FROM connector_catalog_cursors WHERE installation_id = $1`,
+        [input.installation_id],
+      );
+      const generation = cursor.rows[0]?.generation ?? 1;
+      await db.execute(
+        `
+          INSERT INTO connector_stream_members (
+            installation_id, stream_key, thread_id, label, kind,
+            generation, discovered_at, last_seen_at
+          ) VALUES ($1, $2, $3, $4, NULL, $5, $6, $7)
+          ON CONFLICT (installation_id, stream_key) DO UPDATE SET
+            thread_id = COALESCE(EXCLUDED.thread_id, connector_stream_members.thread_id),
+            label = COALESCE(EXCLUDED.label, connector_stream_members.label),
+            last_seen_at = EXCLUDED.last_seen_at
+        `,
+        [
+          input.installation_id,
+          streamKey,
+          input.thread_id ?? null,
+          input.label ?? null,
+          generation,
+          input.now,
+          input.now,
+        ],
+        client,
+      );
+      const syncState = syncStateNotedWith(input);
+      if (syncState) {
+        await applySyncStateOn(db, client, syncState);
+      }
+    });
+  }
+
 export async function listSyncPhaseHeads(db: PgSql, installationId: string): Promise<SyncPhaseHead[]> {
     const rows = await db.query<{
       stream_key: string;
@@ -1501,57 +1559,59 @@ export async function getSyncState(db: PgSql, installationId: string, streamKey:
   }
 
 export async function putSyncState(db: PgSql, state: SyncStreamState): Promise<SyncStreamState> {
-    let stored = state;
-    await db.withTx(async (client) => {
-      stored = releaseHistoryPhase(
-        state,
-        await historyPolicyForInstall(client, state.installation_id),
-      );
-      if (
-        await streamOutsideCompleteCatalog(db, 
-          client,
-          stored.installation_id,
-          stored.stream_key,
-        )
-      ) {
-        await dropStreamsLeftCatalog(db, 
-          client,
-          stored.installation_id,
-          [stored.stream_key],
-          stored.updated_at,
-        );
-        return;
-      }
-      await client.query(
-        `
-          INSERT INTO connector_sync_state (
-            installation_id, stream_key, phase, live_cursor, history_cursor,
-            media_pending, idle_until, generation, updated_at
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-          ON CONFLICT (installation_id, stream_key) DO UPDATE SET
-            phase = EXCLUDED.phase,
-            live_cursor = EXCLUDED.live_cursor,
-            history_cursor = EXCLUDED.history_cursor,
-            media_pending = EXCLUDED.media_pending,
-            idle_until = EXCLUDED.idle_until,
-            generation = EXCLUDED.generation,
-            updated_at = EXCLUDED.updated_at
-        `,
-        [
-          stored.installation_id,
-          stored.stream_key,
-          stored.phase,
-          stored.live_cursor ?? null,
-          stored.history_cursor ?? null,
-          stored.media_pending,
-          stored.idle_until ?? null,
-          stored.generation,
-          stored.updated_at,
-        ],
-      );
-      await ensureOwedSyncWork(db, client, stored);
-    });
+    const stored = await db.withTx((client) => applySyncStateOn(db, client, state));
     return { ...stored };
+  }
+
+async function applySyncStateOn(db: PgSql, client: PoolClient, state: SyncStreamState): Promise<SyncStreamState> {
+    const stored = releaseHistoryPhase(
+      state,
+      await historyPolicyForInstall(client, state.installation_id),
+    );
+    if (
+      await streamOutsideCompleteCatalog(db, 
+        client,
+        stored.installation_id,
+        stored.stream_key,
+      )
+    ) {
+      await dropStreamsLeftCatalog(db, 
+        client,
+        stored.installation_id,
+        [stored.stream_key],
+        stored.updated_at,
+      );
+      return stored;
+    }
+    await client.query(
+      `
+        INSERT INTO connector_sync_state (
+          installation_id, stream_key, phase, live_cursor, history_cursor,
+          media_pending, idle_until, generation, updated_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        ON CONFLICT (installation_id, stream_key) DO UPDATE SET
+          phase = EXCLUDED.phase,
+          live_cursor = EXCLUDED.live_cursor,
+          history_cursor = EXCLUDED.history_cursor,
+          media_pending = EXCLUDED.media_pending,
+          idle_until = EXCLUDED.idle_until,
+          generation = EXCLUDED.generation,
+          updated_at = EXCLUDED.updated_at
+      `,
+      [
+        stored.installation_id,
+        stored.stream_key,
+        stored.phase,
+        stored.live_cursor ?? null,
+        stored.history_cursor ?? null,
+        stored.media_pending,
+        stored.idle_until ?? null,
+        stored.generation,
+        stored.updated_at,
+      ],
+    );
+    await ensureOwedSyncWork(db, client, stored);
+    return stored;
   }
 
 async function streamOutsideCompleteCatalog(db: PgSql, client: PoolClient, installationId: string, streamKey: string): Promise<boolean> {
@@ -1647,10 +1707,17 @@ async function ensureOwedSyncWork(db: PgSql, client: PoolClient, state: SyncStre
       `,
       [state.installation_id, state.stream_key, state.generation],
     );
+    const config = configRecord(
+      (await client.query<{ config_json: unknown }>(
+        `SELECT config_json FROM connector_installations WHERE id = $1`,
+        [state.installation_id],
+      )).rows[0]?.config_json,
+    ) ?? {};
     const plan = syncWorkEnsurePlan({
       state,
       existing: existing.rows,
-      policy: await historyPolicyForInstall(client, state.installation_id),
+      policy: historyPolicyFromConfig(config),
+      live_via: liveViaFromConfig(config),
     });
     for (const lane of plan.enqueue) {
       await client.query(

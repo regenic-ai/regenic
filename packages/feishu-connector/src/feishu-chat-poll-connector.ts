@@ -173,6 +173,9 @@ export class FeishuChatPollConnector {
     const historyBound = anchor ? null : feishuStoredHistoryBound(state);
     const interactiveTip =
       !anchor && options?.latest === true && options?.older !== true;
+    // A seeded watermark continues forward. Only a cursor with no live
+    // position takes the newest page, so a downtime gap is not skipped.
+    const newestPage = interactiveTip && !feishuLatestContinues(state);
     const request = anchor
       ? {
           chat_id: this.options.chat_id,
@@ -187,7 +190,7 @@ export class FeishuChatPollConnector {
             end_time: historyBound.endTime,
             sort_type: "ByCreateTimeDesc" as const,
           }
-      : interactiveTip
+      : newestPage
         ? {
             chat_id: this.options.chat_id,
             page_size: this.pageSize,
@@ -769,6 +772,11 @@ export function encodeFeishuCursor(state: FeishuCursorState): string | undefined
 
 export function needsRecentSeed(state: FeishuCursorState): boolean {
   return !state.recent_seeded && state.sort !== "desc";
+}
+
+/** Latest poll pages forward from a seeded watermark instead of jumping to the tip. */
+export function feishuLatestContinues(state: FeishuCursorState): boolean {
+  return state.recent_seeded === true && Boolean(state.start_time || state.page_token);
 }
 
 export interface FeishuHistoryAnchor {

@@ -11,7 +11,7 @@ import type { SyncProgressView } from "./sync-progress";
 export const DEFAULT_SYNC_TICK_MS = 10_000;
 
 export type SyncThrottleReason = "source_429" | "throttled" | "writer_wait";
-export type SyncFreshnessSource = "poll" | "none";
+export type SyncFreshnessSource = "poll" | "push" | "none";
 
 export interface SyncEtaRange {
   low_ms: number;
@@ -116,11 +116,11 @@ export function estimateSyncReadiness(input: {
 }): SyncReadinessView {
   const metrics = input.metrics ?? [];
   const remaining = remainingSyncStreams(input.progress);
-  const freshness = selectFreshnessMs(metrics);
+  const freshness = selectDisplayedFreshness(metrics);
   return {
     remaining_streams: remaining,
-    freshness_ms: freshness,
-    freshness_source: freshness == null ? "none" : "poll",
+    freshness_ms: freshness.ms,
+    freshness_source: freshness.source,
     accepted_count: sumMetric(metrics, "accepted_records"),
     throttle_reason: selectThrottleReason(
       metrics,
@@ -178,6 +178,28 @@ function soakMetricLastValues(
     report[name] = last == null ? 0 : last;
   }
   return report;
+}
+
+function selectDisplayedFreshness(
+  metrics: readonly SyncMetricAggregate[],
+): { ms: number | null; source: SyncFreshnessSource } {
+  const poll = selectFreshnessMs(metrics);
+  const push = selectPushLagMs(metrics);
+  if (push != null && (poll == null || push <= poll)) {
+    return { ms: push, source: "push" };
+  }
+  if (poll != null) {
+    return { ms: poll, source: "poll" };
+  }
+  return { ms: null, source: "none" };
+}
+
+function selectPushLagMs(metrics: readonly SyncMetricAggregate[]): number | null {
+  const samples = metrics.filter((item) => item.name === "push_lag_ms");
+  if (samples.length === 0) {
+    return null;
+  }
+  return Math.min(...samples.map((item) => item.last));
 }
 
 function selectFreshnessMs(metrics: readonly SyncMetricAggregate[]): number | null {

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import {
   CONNECTOR_PROTOCOL,
   ChannelDriverError,
+  startConnectorLivePush,
   envCredentialsRef,
   readEnvCredential,
   requireConnectorStream,
@@ -104,6 +105,7 @@ export const dshSessionDriver: ChannelDriver = {
         create: false,
         await_reply: true,
         list_title: "prompt",
+        push: true,
       };
     }
     return {
@@ -113,7 +115,21 @@ export const dshSessionDriver: ChannelDriver = {
       await_reply: true,
       list_title: "prompt",
       prompts: true,
+      push: true,
     };
+  },
+
+  async startInstallation(installation, host) {
+    if (!host.push) {
+      return;
+    }
+    startConnectorLivePush({
+      installationId: installation.id,
+      listStreams: () => host.get("connectors").listStreams(installation.id),
+      push: (batch) => host.push!(installation, batch),
+      resumeCursor: (streamKey) =>
+        host.ackedWatermark?.(installation, streamKey) ?? Promise.resolve(undefined),
+    });
   },
 
   async createThread(installation, host, env, options) {

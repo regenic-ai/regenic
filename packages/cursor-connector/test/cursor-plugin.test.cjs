@@ -106,6 +106,7 @@ describe("cursorAgentDriver", () => {
       create_with_task: true,
       create_mcp: true,
       hold_while_working: true,
+      push: true,
     });
     assert.equal(
       cursorAgentDriver.capabilities(installation({ model: "grok-4.6" })).create,

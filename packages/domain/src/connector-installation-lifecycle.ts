@@ -11,6 +11,7 @@ import {
   type TaskExecutor,
   type WorkRun,
 } from "@regenic/connector-contract";
+import { scopeConnectorInstallation } from "./connector-host";
 import { withDeadline } from "./deadline";
 
 interface Activation {
@@ -31,7 +32,7 @@ const RUNTIME_PORTS = new Set([
   "createThread", "bindWebhook", "listEgressQueue", "ackEgressQueue",
   "resolveConversationLabels", "listPrompts", "answerPrompt", "readAttention",
   "ackAttention", "readReceipts", "readPairingCode", "authorizeLiveAccess",
-  "waitThread",
+  "waitThread", "reconcilePush",
 ]);
 const RESOURCE_PORTS = new Set([
   "poll", "listDirectory", "send", "verifyWebhook", "handleWebhook",
@@ -383,7 +384,7 @@ export class ConnectorInstallationLifecycle {
         return plugin.apply(scoped, config);
       },
     });
-    return {
+    const narrowed: ConnectorHost = {
       ...host,
       get: ((name: "connectors" | "egress") => scopeRegistry(
         name === "connectors" ? host.get("connectors") : host.get("egress"),
@@ -393,5 +394,6 @@ export class ConnectorInstallationLifecycle {
         return host.plugin(scopePlugin(plugin), config);
       },
     };
+    return scopeConnectorInstallation(narrowed, installation);
   }
 }

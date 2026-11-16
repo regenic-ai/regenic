@@ -96,22 +96,74 @@ extra 类型可以热发现（目录 watch，或 `POST /v1/me/plugins/reload`）
   `REGENIC_CONNECTOR_QUOTA_WINDOW_MS`）。`0` 关闭。连接器可自报更紧的
   `quota`。内核不按来源名写限速常数。poll 先抢租约再扣配额；抢不到不扣。
   配额用尽放租约并返回 `throttled`，不当成拉取失败。
-- 设置页的“会话同步”允许用户持久化安装级配额、安装/最新/历史/附件并发、
+- 在 `ChannelConnector.limits` 声明上游限制：`max_concurrency`（每个安装同时
+  进行的核心拉取数）、`rate`（token bucket，优先于 `quota`）、`page_size`
+  （作为 `ConnectorPollOptions.page_size` 传给连接器）。越界字段直接丢弃。
+  `PUT /v1/me/connectors/:id/limits` 可在运行时调整（传 `{}` 清除调整）；
+  `GET` 返回声明值、运行时值和生效值。用户显式配额仍优先于声明速率，但运行时
+  `rate` 只能收紧。运行时调整只在内存里，连接器重连后需重新下发。超过
+  `max_concurrency` 的拉取放租约并返回 `throttled`。
+- 要改为推送新消息而不是被轮询，声明 `capabilities(installation).push`，并调用
+  `POST /v1/me/connectors/:id/ingest`，请求体
+  `{ stream_key, batch_id?, events: IngestRecord[], watermark?, media_pending? }`（最多 500 条）。
+  每条 `source` 必须等于驱动的 `source`，否则 `403 connector_mismatch`。投递语义
+  为至少一次：核心按（`source`, `external_id`）去重，重放同一批返回 `duplicate`。
+  ack（`PushIngestAck`）只在事件持久化后返回；只有没有 `retryable_failure` 时才回显
+  `watermark`，在此之前批次应留在连接器的 outbox。每个安装有有界队列（排队加
+  执行最多 8 批、同时执行 1 批；全局 64 / 4），超出返回 `429` 和 `Retry-After`，
+  需退避重试；存储维护期间返回 `503` 和 `Retry-After`。鉴权用
+  `x-regenic-ingest-token`，由所有者调用 `POST /v1/me/connectors/:id/ingest-token`
+  生成；token 由 personal API key 派生，只能访问该安装的 `ingest`、`limits`、
+  `watermarks` 与 `ingest-stats`。核心不再排最新消息拉取。连接器自己发现新消息
+  再推上来。飞书、DSH 和 Cursor 在 `startInstallation` 里做这件事：每一轮用
+  `latest` 拉自己的几条流，再调用 `ConnectorHost.push`。进程重启后从最近一次
+  确认的 watermark 继续，并按页往前补，不会只拿最新一页把中间漏掉。
+  打开会话会立刻推这一条流，核心不再为它拉最新页。
+  历史和附件拉取仍由核心负责。
+  驱动拿到的宿主只属于当前安装：别的安装的流、推送、watermark 和凭据都会被拒绝。
+  每个安装有自己的推送队列和自己的新消息尾部。单次拉取超过
+  `REGENIC_CONNECTOR_POLL_TIMEOUT_MS`（默认 20 秒）就放弃，下一轮还能继续。
+  历史任务在安装之间轮转。连接器留在本进程里，拿不到核心存储，也拿不到别的渠道的凭据。
+  声明 `push` 时会写入 `config.live_via = "push"`。
+  hybrid 且历史策略为 backfill 时，某条流的第一次 push 会把该流标成 history，
+  由核心拉取更早的消息；之后的 push 不改阶段。这些历史拉取会带上
+  `push_watermark`，即该流最近一次确认的 watermark（若有）。核心不解释它。
+  历史游标仍负责续走。在历史游标出现之前，核心不会把残留的实时租约游标交给
+  连接器，以便用 watermark 作为往旧处翻的起点。带 `before` 的上翻不是这次
+  历史爬取，也不会带上 watermark。没有 `chat:`、`session:`、
+  `channel:`、`agent:` 前缀的 `stream_key` 会作为该次历史拉取的线程目标。
+  该流会补进当前目录，不新开普查，目录已经完成时也保留。目录成员和这条流的
+  同步状态同一次提交。之后若完整普查不再包含它，仍会删掉。仅 webhook 或
+  incremental 的安装保持 live。批次上可选的 `media_pending` 表示连接器还有
+  附件待下载：`true` 打开附件通道，`false` 清掉；只对还能被轮询的安装生效，
+  ack 里不能有 retryable failure，且至少有一条被接受或判为重复。省略该字段则保留原标志。仅 webhook 的
+  安装忽略它。安装/启用时，以及低频后台对账
+  （`REGENIC_PUSH_RECONCILE_MS`，默认 5 分钟；`0` 关闭）会调用可选的
+  `reconcilePush`，连接器可对照 `GET .../watermarks` 并补推缺口。每轮检查两个
+  安装并从下一个继续；同一安装已有对账在飞时跳过，超时按同步时限中止。
+  `POST .../reconcile-push` 可强制跑一轮。ack 成功前会持久化 watermark。
+  只有推送门已满（在飞达到上限、有批次在排队，或全局排队已满）时，历史领取才整轮
+  让位。单独一批正在确认不会冻住回填。某个安装自己有 push 在排队或确认时，这一轮
+  跳过它的历史拉取，其他安装继续，领取在各安装间公平轮转。`GET .../ingest-stats` 与
+  `/metrics` 暴露每安装的 push 积压、内存中的 ack 滞后、持久化 watermark 年龄、
+  最近一次对账结果、ack 延迟、背压、对账耗时，以及已有同步快照时的回填计数。
+  卸载安装会清掉该安装在内存中的 push 统计。
+- 设置页的“补齐速度”允许用户持久化安装级配额、安装/历史/附件并发、
   每批任务上限和新会话首次拉取数量。`GET /v1/me/sync-settings` 返回当前值、
   默认值与范围；`POST` 传 `{ "settings": { ... } }` 保存完整且经过校验的配置，
   后续拉取直接生效，无需重启。传 `{ "settings": null }` 恢复默认值（含环境变量
   覆盖和连接器自报配额）。未保存配置时维持原默认：60 次 / 60s、4 个安装、
-  最新并发 8、历史并发 4、附件并发 1、每批上限 32/16、每轮首次拉取 16 个新会话。
+  闲置的更新名额 8（推送不用它）、历史并发 4、附件并发 1、每批上限 32/16、每轮首次拉取 16 个新会话。
   用户显式配额覆盖连接器自报配额，但不能绕过来源服务限流；自适应批量降速和
   内核压力保护继续生效。
   后台、目录与手动同步执行者会在任务边界重新读取共享配置；即使保存请求落到
   非后台主副本，下批任务也会读取新设置。一批已领取的任务保留领取时的并发配置，
   每个安装的执行与超时使用同一份压力降速后的并发预算。自定义租约覆盖跨安装、
   跨通道的最慢串行排队情况，也包含目录任务。
-  桌面端先展示“日常同步”和“加快同步”，数字参数统一收在“高级选项”中。
-  日常同步保留原默认配置；加快同步在允许范围内将请求额度、最新消息并发、
-  首次同步新会话数和最新同步每批上限加倍，不增加历史消息与附件的并发；
-  原本不限额的请求配置仍保持不限额。若自动首次同步原先被关闭，加快同步会将
+  桌面端先展示“日常同步”和“加快补齐”，数字参数统一收在“高级选项”中。
+  新消息由连接器推送，不由这里调速。日常同步保留原默认配置；加快补齐在允许范围内将请求额度、历史并发、
+  首次同步新会话数和历史每批上限加倍，不增加附件并发；
+  原本不限额的请求配置仍保持不限额。若自动首次同步原先被关闭，加快补齐会将
   其恢复为每轮 1 个新会话。选择模式或恢复日常同步只修改表单，保存后才会生效；
   “取消修改”会还原为上次保存的设置。
 - 要出现在引擎页就实现 `installCatalog()`。可选 `presentInstall` 写已装
@@ -274,14 +326,14 @@ interface ChannelDriver extends ChannelDriverCore, ChannelSourcePort, Partial<Ch
 | `install` | 只持久化非密钥配置。飞书存 `sync_mode`（默认 `conversation`：当前会话优先 / `balanced`：均衡 / `context`：后台慢慢检查）加 `selection=recent`（默认）加 `kinds`（`group` / `p2p`），`selection=all` 加 `kinds`，或勾选的 `chat_ids`。`sync_mode` 与收取范围独立；内核按通用键映射 idle 预设，不按渠道名分支。`POST /v1/me/connectors/:id/config` 走同一套校验，改配置不丢游标。DSH web 可以不填 `session_id`（跟全部会话）。托管 API 忽略公网 DSH URL，改用 `REGENIC_DSH_BASE_URL`。 |
 | `matchesThread` | 该安装能否处理这条线程。 |
 | `ownsThread` | 该安装是否优先匹配。多条安装都能匹配时使用。 |
-| `capabilities` | 该安装的 `sync` / `reply` / `create`，以及可选的 `await_reply`、`list_title`、`hydrate_on_open`、`prompts`、`attention`、`receipts`、`create_with_task`、`hold_while_working`。`await_reply`：DSH / Cursor 为 true；飞书不写。`list_title`：飞书为 `conversation`；DSH / Cursor 为 `prompt`（第一条用户消息）。`hydrate_on_open`：打开会话时拉最近一页；飞书为 true。`prompts`：DSH web 为 true，CLI 不写。`attention`：飞书为 true（来源 hint；本地游标所有渠道都有）。`receipts`：飞书为 true；DSH / Cursor 不写。`create_with_task` / `hold_while_working`：Cursor 为 true；DSH 不写。 |
+| `capabilities` | 该安装的 `sync` / `reply` / `create`，以及可选的 `await_reply`、`list_title`、`hydrate_on_open`、`prompts`、`attention`、`receipts`、`create_with_task`、`hold_while_working`。`await_reply`：DSH / Cursor 为 true；飞书不写。`list_title`：飞书为 `conversation`；DSH / Cursor 为 `prompt`（第一条用户消息）。`hydrate_on_open`：打开会话时让连接器推送这一条流；飞书为 true。`prompts`：DSH web 为 true，CLI 不写。`attention`：飞书为 true（来源 hint；本地游标所有渠道都有）。`receipts`：飞书为 true；DSH / Cursor 不写。`create_with_task` / `hold_while_working`：Cursor 为 true；DSH 不写。 |
 | `resolveConversationLabels` | 可选。给缺 `conversation_label` 的旧线程补会话名。只读本地已有名字：飞书用安装里的 `chat_names`。不得为了补名去 `listAllChats` 或挡住打开会话。 |
 | `listPrompts` / `answerPrompt` | 可选。活的待决决策。DSH web 挂 mux，把 `question/requested` / `approval/requested` 映射成渠道无关 Prompt，答题走 `/api/respond`。`not-pending` 视为已解决。 |
 | `waitThread` | 可选。该线程 inferior 的 wait fd。DSH web 订阅 mux 上的 `session/event`（`turn/start` / `turn/end`）和提问帧；内核 follow 该流把活页入库，再 `status()` reap。连接器不得写 Event。没有 wait 的渠道仍靠 history poll 兜底。 |
 | `readAttention` / `ackAttention` | 可选。来源已读覆盖（我看对方）。飞书对最新 inbound `om_` 调用户态 `read_status`；失败或官方已读都不消本机未读。ack 先写本地游标。 |
 | `readReceipts` | 可选。对端是否已读我的出站。飞书对 `:out:om_` 调用户态 `read_users`。空 items 是 Sent。不得用来源会话未读。 |
 | `surfaceGeneration` | 可选。活 surface 世代，拼进 `inbox_digest` 的 `&s=`，审批弹出时桌面轮询能看见。 |
-| `resolveStreams` | 每个拉取单元一条 `ConnectorStream`。飞书：勾选的 `chat:<id>`；`selection=recent` 或 `selection=all` 时只跟内核传入的 `options.threads`（当前工作 ∪ 打开中的会话）以及目录最近一页里新出现的 `chat_id`（约 2 分钟缓存）。`selection=recent` 的目录只列最近活跃一页；`selection=all` 才分页 census 全部会话。不在这个集合里的流要卸掉。不得读 inbox，也不得每个 tick `listAllChats`。DSH web：每个会话 `session:<id>`。可选 `pace`：`idle_ms`（空转提示）、`catch_up_pages`（追历史一轮最多几页）。不写则每 tick 扫 1 页（DSH 不写 `pace`，保持每 tick）。内核只读声明，不按渠道名分支；当流声明了 `idle_ms` 或安装配置了通用 `sync_mode` 时，内核套用活跃面 / 非活跃面 idle（`pacedStreamIdleMs` + 意图预设），连接器不得自行编码 active/inactive。 |
+| `resolveStreams` | 每个拉取单元一条 `ConnectorStream`。飞书：勾选的 `chat:<id>`；`selection=recent` 或 `selection=all` 时只跟内核传入的 `options.threads`（当前工作 ∪ 打开中的会话）以及目录最近一页里新出现的 `chat_id`（约 2 分钟缓存）。`selection=recent` 的目录只列最近活跃一页；`selection=all` 才分页 census 全部会话。不在这个集合里的流要卸掉。不得读 inbox，也不得每个 tick `listAllChats`。DSH web：每个会话 `session:<id>`。可选 `pace`：`idle_ms`（历史或附件空转后可跳过）、`catch_up_pages`（补齐一轮最多几页）。新消息由连接器推送，不由这里调速。不写则每次补齐扫 1 页（DSH 不写 `pace`，保持每次 1 页）。内核只读声明，不按渠道名分支；当流声明了 `idle_ms` 或安装配置了通用 `sync_mode` 时，内核套用活跃面 / 非活跃面 idle（`pacedStreamIdleMs` + 意图预设），连接器不得自行编码 active/inactive。 |
 | `createThread` | 可选。`create` 为 true 时必须实现。未声明则内核 501。声明了 `create_with_task` 时收 `options.text` 并开工；未声明则只建空会话，第一条用户文本走普通 send。 |
 | `bindEgress` | 可选。`reply` 为 true 时必须实现。未声明则内核 501。 |
 | `outboundId` | 控制台发送的稳定 id。含 `:out:`。 |
@@ -311,7 +363,7 @@ interface ConnectorStream {
 }
 ```
 
-`pace` 由连接器按流声明。内核只读字段：有 `idle_ms` 且本 tick 空转后，后台 tick 可跳过该流。后台 tick 先给人让路：人在操作时只从内核算出的资格集合里扫少量会话的最近/新消息（每流 1 页），不追历史，也不枚举飞书全部会话。资格集合由内核从收件箱当前工作和打开中的会话算出，经 `options.threads` 传给驱动；新会话靠最近一页目录按 TTL 发现，不等人空闲。不在集合里的流卸掉。人空闲后再每次补 1 页历史。打开空会话先种最近一批；本地没有更早消息时，上翻再要 1 页更早的。人点 Engine Sync 时才按 `catch_up_pages`（内核封顶）往前赶。不写 `pace` 则每 tick 扫 1 页。飞书写 `{ idle_ms: 15_000, catch_up_pages: 5 }`；DSH / Slack 不写。
+`pace` 由连接器按流声明，只用于历史和附件补齐。新消息由连接器推送；内核不再排最新消息拉取，`idle_ms` 也不决定新消息多久到一次。历史或附件这一轮空转后，后台任务可以跳过声明了 `idle_ms` 的流。内核仍把当前工作和打开中的会话经 `options.threads` 传给连接器，用来挂上这些流；新会话靠最近一页目录按 TTL 发现。不在集合里的流卸掉。打开会话会让连接器推送这一条流。本地没有更早消息时，上翻再要 1 页更早的。显式补齐才按 `catch_up_pages`（内核封顶）往前赶。不写 `pace` 则每次补齐扫 1 页。飞书写 `{ idle_ms: 15_000, catch_up_pages: 5 }`；DSH / Slack 不写。
 
 ## ChannelConnector
 
@@ -324,6 +376,7 @@ interface ChannelConnector {
   readonly source: string;
   readonly source_mode?: "poll" | "webhook" | "hybrid";
   readonly quota?: { tokens: number; window_ms: number };
+  readonly limits?: { max_concurrency?: number; rate?: { tokens: number; window_ms: number }; page_size?: number };
   poll?(cursor: ConnectorCursor | null, options?: ConnectorPollOptions): Promise<PollResult>;
   capabilities?(): ConnectorCapabilities;
   verifyWebhook?(request): Promise<VerifiedWebhook>;

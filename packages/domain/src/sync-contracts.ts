@@ -87,6 +87,19 @@ export interface ApplySyncCatalogPageInput {
   replaces?: boolean;
 }
 
+/**
+ * One stream learned from a push. Does not start a census or change completeness.
+ * `sync_state` is written in the same transaction when it names this stream.
+ */
+export interface NoteSyncCatalogStreamInput {
+  installation_id: string;
+  stream_key: string;
+  thread_id?: string;
+  label?: string;
+  now: string;
+  sync_state?: SyncStreamState;
+}
+
 export interface SyncPageOutcome {
   installation_id: string;
   stream_key: string;
@@ -131,6 +144,7 @@ export interface SyncStore {
   getSyncCatalog(installationId: string): Promise<SyncCatalogView>;
   getSyncCatalogHead(installationId: string): Promise<SyncCatalogHead>;
   applySyncCatalogPage(input: ApplySyncCatalogPageInput): Promise<SyncCatalogView>;
+  noteSyncCatalogStream(input: NoteSyncCatalogStreamInput): Promise<void>;
   listSyncStates(installationId: string): Promise<SyncStreamState[]>;
   listSyncPhaseHeads(installationId: string): Promise<SyncPhaseHead[]>;
   getSyncState(

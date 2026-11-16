@@ -25,9 +25,9 @@ export function historyPolicyFromConfig(
   return DEFAULT_HISTORY_POLICY;
 }
 
-/** Steady tick. Catalog stays on its own tick. */
+/** Steady tick. New messages are pushed. Catalog stays on its own tick. */
 export function steadySyncClaimLanes(): readonly SyncLane[] {
-  return ["interactive", "live", "media"];
+  return ["media"];
 }
 
 /** History tick. It does not share a claim with live or catalog. */
@@ -52,17 +52,16 @@ export function shouldRunHistoryTick(input: {
 /**
  * One background message duty. Media is a side lane on the steady tick.
  * Backfill owes history until the source says there is nothing older.
- * Incremental never owes history. Already-live phases owe live.
+ * Incremental never owes history. New messages are pushed, so no phase owes live.
  */
 export function owedSyncLanes(
   state: Pick<SyncStreamState, "phase" | "media_pending">,
   policy: HistoryPolicy = DEFAULT_HISTORY_POLICY,
+  _options?: { live_via?: "poll" | "push" },
 ): SyncLane[] {
   const lanes: SyncLane[] = [];
   if (messageDuty(state.phase, policy) === "history") {
     lanes.push("history");
-  } else {
-    lanes.push("live");
   }
   if (state.media_pending) {
     lanes.push("media");
@@ -78,6 +77,42 @@ export function messageDuty(
     return "history";
   }
   return "live";
+}
+
+/**
+ * Phase to store when a push is the first sign of a stream.
+ * `null` leaves an existing live or history phase alone.
+ * Hybrid installs that backfill start in history so the core pulls older
+ * messages; webhook-only and incremental installs stay on the push tail.
+ */
+export function phaseAfterPush(input: {
+  prior?: SyncPhase;
+  policy?: HistoryPolicy;
+  /** Driver accepts history polls (`poll` or `hybrid`). */
+  polls: boolean;
+}): SyncPhase | null {
+  if (input.prior && input.prior !== "unseeded") {
+    return null;
+  }
+  if ((input.policy ?? DEFAULT_HISTORY_POLICY) === "backfill" && input.polls) {
+    return "history";
+  }
+  return "live";
+}
+
+/**
+ * Media flag to store after a push. `null` leaves the existing flag.
+ * Webhook-only installs cannot drain downloads, so the report is ignored.
+ * An omitted report is not a clear.
+ */
+export function mediaPendingAfterPush(input: {
+  reported?: boolean;
+  polls: boolean;
+}): boolean | null {
+  if (!input.polls || input.reported === undefined) {
+    return null;
+  }
+  return input.reported;
 }
 
 /** Incremental installs do not stay in the history phase. */

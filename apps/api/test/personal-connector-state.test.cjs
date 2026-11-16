@@ -176,54 +176,49 @@ describe("owned connector coordination state", () => {
     }
   });
 
-  it("uses saved installation and live concurrency when dispatching claimed conversations", async () => {
-    for (const [installations, streams] of [[1, 2], [2, 3]]) {
-      const state = createService().connectorState();
-      state.syncSettings = {
-        ...defaultSyncSettings(),
-        installation_concurrency: installations,
-        live_concurrency: streams,
-      };
-      const settled = [];
-      const store = {
-        async settleSyncWork(input) { settled.push(input); },
-        async getSyncCatalog() { return { members: [], catalog: null }; },
-        async listSyncPhaseHeads() { return []; },
-        async latestAttempt() { return null; },
-        async listHiddenExecutorThreadIds() { return []; },
-      };
-      state.runtime.requireHost = () => ({ get: () => store });
-      state.kernelRuntime.pressureView = () => ({ level: "ok" });
-      state.requireInstallation = async (_store, id) => ({
-        id, org_id: "org-one", connector_type: "test", status: "enabled", config: {},
-      });
-      let active = 0;
-      let peak = 0;
-      state.drivers.get = () => ({
-        source: "test",
-        async resolveThreadStream() {
-          active++;
-          peak = Math.max(peak, active);
-          await setImmediate();
-          active--;
-          throw new Error("Source temporarily unavailable");
-        },
-      });
-      const work = [];
-      for (let installation = 0; installation < 3; installation++) {
-        const id = `install-${installation}`;
-        state.catalogSizeByInstall.set(id, 5);
-        for (let stream = 0; stream < 5; stream++) {
-          work.push({
-            id: `${id}-${stream}`, installation_id: id,
-            stream_key: `test:stream-${stream}`, lane: "live", attempts: 1,
-          });
-        }
+  it("settles leftover live claims without polling the source", async () => {
+    const state = createService().connectorState();
+    state.syncSettings = {
+      ...defaultSyncSettings(),
+      installation_concurrency: 2,
+      live_concurrency: 3,
+    };
+    const settled = [];
+    const store = {
+      async settleSyncWork(input) { settled.push(input); },
+      async getSyncCatalog() { return { members: [], catalog: null }; },
+      async listSyncPhaseHeads() { return []; },
+      async latestAttempt() { return null; },
+      async listHiddenExecutorThreadIds() { return []; },
+    };
+    state.runtime.requireHost = () => ({ get: () => store });
+    state.kernelRuntime.pressureView = () => ({ level: "ok" });
+    state.requireInstallation = async (_store, id) => ({
+      id, org_id: "org-one", connector_type: "test", status: "enabled", config: {},
+    });
+    let polls = 0;
+    state.drivers.get = () => ({
+      source: "test",
+      async resolveThreadStream() {
+        polls += 1;
+        throw new Error("should not poll");
+      },
+    });
+    const work = [];
+    for (let installation = 0; installation < 3; installation++) {
+      const id = `install-${installation}`;
+      state.catalogSizeByInstall.set(id, 5);
+      for (let stream = 0; stream < 5; stream++) {
+        work.push({
+          id: `${id}-${stream}`, installation_id: id,
+          stream_key: `test:stream-${stream}`, lane: "live", attempts: 1,
+        });
       }
-      await executeClaimedDueWork(state, store, work, { plane: "steady", allowHistory: false });
-      assert.equal(peak, installations * streams);
-      assert.equal(settled.length, work.length);
     }
+    await executeClaimedDueWork(state, store, work, { plane: "steady", allowHistory: false });
+    assert.equal(polls, 0);
+    assert.equal(settled.length, work.length);
+    assert.equal(settled.every((item) => item.outcome === "succeeded"), true);
   });
 
   it("passes the user's new-conversation seed limit to the indexed gap planner", async () => {
@@ -293,7 +288,7 @@ describe("owned connector coordination state", () => {
     const service = createService();
     const state = service.connectorState();
     const maps = ["streamMeta", "hydrateCooldown", "liveKickCooldown"];
-    const sets = ["streamCatchingUp", "streamPulling", "streamPullingHistory"];
+    const sets = ["streamCatchingUp", "streamPulling", "streamPullingHistory", "streamPullingMedia"];
     const containers = new Map([...maps, ...sets].map((name) => [name, state[name]]));
     state.streamMeta.set("stream-one", { thread_id: "thread-one", label: null });
     state.hydrateCooldown.set("stream-one", 1);

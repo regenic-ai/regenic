@@ -85,11 +85,11 @@ describe("engine chip and pull copy", () => {
     assert.equal(threadSyncTone("feishu:oc_1", view.pull), "syncing");
   });
 
-  it("does not call a live watermark pull older-message sync", () => {
+  it("does not call a push nudge new-message sync", () => {
     const view = engine({
       pull: pull({
         phase: "pulling",
-        catching_up_count: 1,
+        catching_up_count: 0,
         streams: [
           {
             stream_key: "feishu-1:chat:oc_1",
@@ -103,25 +103,35 @@ describe("engine chip and pull copy", () => {
       }),
     });
     assert.equal(engineChip(view), "running");
-    assert.equal(pullStatusLabel(view.pull), "New messages · Christy");
-    assert.equal(threadSyncLabel("feishu:oc_1", view.pull), "Syncing new messages");
-    assert.equal(threadSyncTone("feishu:oc_1", view.pull), "syncing");
-    assert.equal(threadIsSyncing("feishu:oc_1", view.pull), true);
+    assert.equal(pullStatusLabel(view.pull), "Syncing");
+    assert.equal(threadSyncLabel("feishu:oc_1", view.pull), null);
+    assert.equal(threadSyncTone("feishu:oc_1", view.pull), null);
+    assert.equal(threadIsSyncing("feishu:oc_1", view.pull), false);
+    assert.equal(namedPullProgress(view.pull, [{ id: "feishu:oc_1", title: "Christy" }]), null);
+    assert.equal(pullStatusLabel(pull({ interval_ms: 10_000 })), "Idle");
+  });
+
+  it("names an attachment download separately from older messages", () => {
+    const status = pull({
+      phase: "pulling",
+      streams: [
+        {
+          stream_key: "feishu-1:chat:oc_1",
+          thread_id: "feishu:oc_1",
+          label: "Christy",
+          phase: "pulling",
+          work: "media",
+          last_error: null,
+        },
+      ],
+    });
+    assert.equal(pullStatusLabel(status), "Attachments · Christy");
+    assert.equal(threadSyncLabel("feishu:oc_1", status), "Syncing attachments");
+    assert.equal(threadSyncTone("feishu:oc_1", status), "syncing");
+    assert.equal(threadIsSyncing("feishu:oc_1", status), true);
     assert.equal(
-      threadIsSyncing("feishu:oc_53d", pull({
-        phase: "pulling",
-        streams: [
-          {
-            stream_key: "feishu-1:chat:oc_53d",
-            thread_id: null,
-            label: "oc_53d",
-            phase: "pulling",
-            work: "live",
-            last_error: null,
-          },
-        ],
-      })),
-      true,
+      namedPullProgress(status, [{ id: "feishu:oc_1", title: "熊峰" }]),
+      "Attachments · 熊峰",
     );
   });
 
@@ -134,15 +144,15 @@ describe("engine chip and pull copy", () => {
           thread_id: "feishu:oc_1",
           label: null,
           phase: "pulling",
-          work: "live",
+          work: "history",
           last_error: null,
         },
       ],
     });
-    assert.equal(pullStatusLabel(status), "New messages");
+    assert.equal(pullStatusLabel(status), "Earlier messages");
     assert.equal(
       namedPullProgress(status, [{ id: "feishu:oc_1", title: "熊峰" }]),
-      "New messages · 熊峰",
+      "Earlier messages · 熊峰",
     );
   });
 
@@ -169,8 +179,8 @@ describe("engine chip and pull copy", () => {
       ],
     });
     const next = releaseOtherLivePulls(status, "feishu:oc_new");
-    assert.equal(threadIsSyncing("feishu:oc_old", next), false);
-    assert.equal(threadIsSyncing("feishu:oc_new", next), true);
+    assert.equal(next?.streams.find((item) => item.thread_id === "feishu:oc_old")?.phase, "idle");
+    assert.equal(next?.streams.find((item) => item.thread_id === "feishu:oc_new")?.phase, "pulling");
   });
 
   it("names a dropped sync so the open thread can show it", () => {

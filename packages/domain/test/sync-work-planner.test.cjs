@@ -10,7 +10,10 @@ const {
   membersMissingLatestWork,
   needsCatalogDueWork,
   liveWorkAfterInteractiveRelease,
+  fairSelectSyncWork,
   owedSyncLanes,
+  mediaPendingAfterPush,
+  phaseAfterPush,
   planDueSyncWork,
   planSyncWorkGaps,
   shouldReleaseInteractiveWork,
@@ -226,11 +229,7 @@ describe("due-work planner", () => {
   });
 
   it("skips members that already have unassigned work at this generation", () => {
-    assert.deepEqual(dueWorkCoverageLanes("steady"), [
-      "interactive",
-      "live",
-      "media",
-    ]);
+    assert.deepEqual(dueWorkCoverageLanes("steady"), ["media"]);
     assert.deepEqual(dueWorkCoverageLanes("bootstrap"), ["history"]);
     const uncovered = uncoveredCatalogMembers(
       [
@@ -481,9 +480,7 @@ describe("owed sync lanes", () => {
       owedSyncLanes({ phase: "history", media_pending: true }),
       ["history", "media"],
     );
-    assert.deepEqual(owedSyncLanes({ phase: "steady", media_pending: false }), [
-      "live",
-    ]);
+    assert.deepEqual(owedSyncLanes({ phase: "steady", media_pending: false }), []);
   });
 
   it("keeps a pending due time and lets interactive cover latest", () => {
@@ -500,14 +497,14 @@ describe("owed sync lanes", () => {
       state: { phase: "steady", media_pending: false },
       existing: [{ lane: "interactive", status: "pending", run_id: null }],
     });
-    assert.deepEqual(covered, { enqueue: [], cancel: [] });
+    assert.deepEqual(covered, { enqueue: [], cancel: ["interactive"] });
 
     const stale = syncWorkEnsurePlan({
       state: { phase: "live", media_pending: false },
       existing: [{ lane: "interactive", status: "pending", run_id: null }],
       preferred: false,
     });
-    assert.deepEqual(stale, { enqueue: ["live"], cancel: ["interactive"] });
+    assert.deepEqual(stale, { enqueue: [], cancel: ["interactive"] });
     assert.equal(
       shouldReleaseInteractiveWork({
         lane: "interactive",
@@ -545,7 +542,78 @@ describe("owed sync lanes", () => {
           { lane: "media", status: "pending", run_id: null },
         ],
       }),
-      { enqueue: [], cancel: ["history", "media"] },
+      { enqueue: [], cancel: ["history", "live", "media"] },
+    );
+  });
+
+  it("skips live for push installs and seeds unseeded through history", () => {
+    assert.deepEqual(
+      owedSyncLanes({ phase: "steady", media_pending: true }, "backfill", { live_via: "push" }),
+      ["media"],
+    );
+    assert.deepEqual(
+      syncWorkEnsurePlan({
+        state: { phase: "live", media_pending: false },
+        existing: [
+          { lane: "live", status: "pending", run_id: null },
+          { lane: "interactive", status: "pending", run_id: null },
+        ],
+        live_via: "push",
+      }),
+      { enqueue: [], cancel: ["live", "interactive"] },
+    );
+    assert.deepEqual(dueWorkCoverageLanes("steady", "push"), ["media"]);
+    const planned = planSyncWorkGaps({
+      installation_id: "push-1",
+      now: "2026-11-16T00:00:00.000Z",
+      live_via: "push",
+      policy: "backfill",
+      gaps: [
+        {
+          stream_key: "chat:old",
+          phase: "live",
+          media_pending: false,
+          generation: 1,
+          missing_lane: "live",
+        },
+        {
+          stream_key: "chat:new",
+          phase: "unseeded",
+          media_pending: false,
+          generation: 1,
+          missing_lane: "live",
+        },
+      ],
+    });
+    assert.deepEqual(planned.map((item) => [item.stream_key, item.lane]), [
+      ["chat:new", "history"],
+    ]);
+  });
+
+  it("opens history on the first push only when the driver can backfill", () => {
+    assert.equal(phaseAfterPush({ polls: true }), "history");
+    assert.equal(phaseAfterPush({ prior: "unseeded", polls: true }), "history");
+    assert.equal(phaseAfterPush({ polls: true, policy: "incremental" }), "live");
+    assert.equal(phaseAfterPush({ polls: false }), "live");
+    assert.equal(phaseAfterPush({ prior: "history", polls: true }), null);
+    assert.equal(phaseAfterPush({ prior: "live", polls: true }), null);
+    assert.equal(mediaPendingAfterPush({ reported: true, polls: true }), true);
+    assert.equal(mediaPendingAfterPush({ reported: false, polls: true }), false);
+    assert.equal(mediaPendingAfterPush({ polls: true }), null);
+    assert.equal(mediaPendingAfterPush({ reported: true, polls: false }), null);
+  });
+
+  it("fairly rotates claimed history across installations", () => {
+    const claimed = [
+      { id: "a1", installation_id: "a" },
+      { id: "a2", installation_id: "a" },
+      { id: "a3", installation_id: "a" },
+      { id: "b1", installation_id: "b" },
+      { id: "c1", installation_id: "c" },
+    ];
+    assert.deepEqual(
+      fairSelectSyncWork(claimed, 3).map((item) => item.id),
+      ["a1", "b1", "c1"],
     );
   });
 
@@ -569,11 +637,10 @@ describe("owed sync lanes", () => {
     assert.equal("live_cursor" in item, false);
   });
 
-  it("holds a steady live gap until idle and keeps history latest due now", () => {
-    const now = "2026-09-21T00:00:05.000Z";
+  it("does not plan a latest poll for a steady or history gap", () => {
     const planned = planSyncWorkGaps({
       installation_id: "install-1",
-      now,
+      now: "2026-09-21T00:00:05.000Z",
       coldIdleMs: 3_600_000,
       preferredThreadId: "thread-open",
       gaps: [
@@ -589,36 +656,19 @@ describe("owed sync lanes", () => {
           stream_key: "chat:open",
           phase: "steady",
           media_pending: false,
-          idle_until: "2026-09-21T01:00:00.000Z",
           generation: 1,
-          missing_lane: "live",
+          missing_lane: "interactive",
           thread_id: "thread-open",
         },
         {
           stream_key: "chat:history",
           phase: "history",
           media_pending: false,
-          idle_until: "2026-09-21T01:00:00.000Z",
           generation: 1,
           missing_lane: "live",
         },
       ],
     });
-    assert.equal(
-      planned.find((item) => item.stream_key === "chat:history"),
-      undefined,
-    );
-    assert.equal(
-      planned.find((item) => item.stream_key === "chat:cold").next_due_at,
-      "2026-09-21T01:00:00.000Z",
-    );
-    assert.equal(
-      planned.find((item) => item.stream_key === "chat:open").lane,
-      "interactive",
-    );
-    assert.equal(
-      planned.find((item) => item.stream_key === "chat:open").next_due_at,
-      now,
-    );
+    assert.deepEqual(planned, []);
   });
 });

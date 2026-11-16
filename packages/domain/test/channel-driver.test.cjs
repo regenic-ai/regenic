@@ -1,9 +1,11 @@
 const assert = require("node:assert/strict");
 const { describe, it } = require("node:test");
 const {
+  asConnectorHost,
   ChannelDriverError,
   ChannelDriverRegistry,
   conversationThreadFromStreamKey,
+  threadForSyncStream,
   driverCanReply,
   parseConversationThread,
   streamKeysForThreadId,
@@ -74,6 +76,29 @@ describe("channel driver registry", () => {
       target: "run-1",
     });
     assert.equal(conversationThreadFromStreamKey("slack", ""), null);
+  });
+
+  it("uses an opaque push stream key as the thread target", () => {
+    assert.equal(
+      threadForSyncStream({ source: "slack", streamKey: "room-9" }),
+      null,
+    );
+    assert.deepEqual(
+      threadForSyncStream({ source: "slack", streamKey: "room-9", allowOpaqueTarget: true }),
+      { source: "slack", target: "room-9" },
+    );
+    assert.deepEqual(
+      threadForSyncStream({
+        source: "slack",
+        streamKey: "channel:C123",
+        allowOpaqueTarget: true,
+      }),
+      { source: "slack", target: "C123" },
+    );
+    assert.equal(
+      threadForSyncStream({ source: "slack", streamKey: "  ", allowOpaqueTarget: true }),
+      null,
+    );
   });
 
   it("maps a thread_id to candidate stream_keys without a catalog scan", () => {
@@ -918,7 +943,7 @@ describe("channel driver registry", () => {
           }),
         }),
       );
-    assert.equal(drivers.get("slack-channel"), first);
+    assert.equal(drivers.get("slack-channel").installCatalog().title, "Slack");
     assert.equal(drivers.installCatalogs()[0].title, "Slack");
   });
 
@@ -1091,5 +1116,47 @@ describe("channel driver registry", () => {
       },
     });
     assert.equal(typeof requireWebhookPorts(extra).bindWebhook, "function");
+  });
+
+  it("scopes a driver to its own installation", async () => {
+    const listed = [];
+    const drivers = new ChannelDriverRegistry();
+    drivers.register(stubDriver({
+      connector_type: "scoped",
+      source: "scoped",
+      async startInstallation(_installation, host) {
+        host.get("connectors").listStreams("inst-a");
+        host.get("connectors").listStreams("inst-b");
+      },
+    }));
+    const host = asConnectorHost({
+      get(name) {
+        if (name === "connectors") {
+          return {
+            listStreams(id) {
+              listed.push(id);
+              return [];
+            },
+          };
+        }
+        return {};
+      },
+      async plugin() {
+        return { ready: async () => undefined, dispose: async () => undefined };
+      },
+    });
+    const installation = {
+      id: "inst-a",
+      org_id: "org",
+      connector_type: "scoped",
+      status: "enabled",
+      config: {},
+      created_at: "2026-01-01T00:00:00.000Z",
+    };
+    await assert.rejects(
+      () => drivers.get("scoped").startInstallation(installation, host),
+      /another installation/,
+    );
+    assert.deepEqual(listed, ["inst-a"]);
   });
 });

@@ -62,9 +62,9 @@ function fixture(overrides = {}) {
   return { registry, driver: registry.get("managed"), host, connectors, egress, raw, calls };
 }
 
-test("legacy driver identity and synchronous catalog behavior are unchanged", async () => {
-  const { registry, raw, driver, calls } = fixture({ stopInstallation: undefined });
-  assert.equal(driver, raw);
+test("legacy driver catalog behavior stays synchronous", async () => {
+  const { registry, driver, calls } = fixture({ stopInstallation: undefined });
+  assert.equal(driver.connector_type, "managed");
   assert.equal(driver.installCatalog().title, "Managed");
   await registry.stopInstallation(installation, {}, "delete");
   assert.deepEqual(calls, []);

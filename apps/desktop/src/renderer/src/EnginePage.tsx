@@ -162,7 +162,10 @@ export function EnginePage({
             label={t("engine.freshness")}
             value={syncFreshnessSummary(engine.sync_readiness)}
             tone={
-              engine.sync_readiness?.freshness_source === "poll" ? "ok" : undefined
+              engine.sync_readiness?.freshness_source === "poll" ||
+              engine.sync_readiness?.freshness_source === "push"
+                ? "ok"
+                : undefined
             }
           />
           <EngineStat

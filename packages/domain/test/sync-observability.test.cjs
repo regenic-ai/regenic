@@ -1,6 +1,12 @@
 const assert = require("node:assert/strict");
 const { describe, it } = require("node:test");
-const { SyncMetricsRegistry, recordPollFreshness, recordWorkQueueLag, syncMetricDeltas } = require("../dist");
+const {
+  SyncMetricsRegistry,
+  recordPollFreshness,
+  recordPushLag,
+  recordWorkQueueLag,
+  syncMetricDeltas,
+} = require("../dist");
 
 describe("sync observability", () => {
   it("aggregates metrics by stable labels", () => {
@@ -56,6 +62,21 @@ describe("sync observability", () => {
     assert.equal(aggregate.last, 3_600_000);
     assert.equal(aggregate.labels.stream_key, undefined);
     assert.equal(aggregate.labels.status, "cold");
+  });
+
+  it("records push lag from last_ack_at without inventing a sample", () => {
+    const metrics = new SyncMetricsRegistry();
+    recordPushLag(
+      metrics,
+      "2026-09-21T00:00:00.000Z",
+      { installation_id: "install-1", operation: "push" },
+      Date.parse("2026-09-21T00:00:08.000Z"),
+    );
+    recordPushLag(metrics, undefined, { installation_id: "install-1" });
+    const [aggregate] = metrics.snapshot();
+    assert.equal(aggregate.name, "push_lag_ms");
+    assert.equal(aggregate.last, 8_000);
+    assert.equal(aggregate.labels.operation, "push");
   });
 
   it("returns only samples recorded between two snapshots", () => {

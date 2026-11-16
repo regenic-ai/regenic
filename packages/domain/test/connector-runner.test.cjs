@@ -908,6 +908,95 @@ describe("ConnectorRunner", () => {
     assert.equal(run.status, "completed");
   });
 
+  it("honors declared max_concurrency and forwards page_size", async () => {
+    const runtime = await createRuntime();
+    const quota = new InstallationQuotaBook({ tokens: 0, window_ms: 60_000 });
+    const seenOptions = [];
+    let releasePoll;
+    const blocked = new Promise((resolve) => { releasePoll = resolve; });
+    const runner = new ConnectorRunner(
+      {
+        source: "fake",
+        limits: { max_concurrency: 1, page_size: 25 },
+        async poll(_cursor, options) {
+          seenOptions.push(options);
+          await blocked;
+          return { batch: batch([]), next_cursor: undefined };
+        },
+      },
+      { async ingest() { return validResult([]); } },
+      runtime,
+      () => "2026-08-12T00:00:00.000Z",
+      quota,
+    );
+    const first = runner.poll(input);
+    await new Promise((resolve) => setImmediate(resolve));
+    const second = await runner.poll({ ...input, stream_key: "other" });
+    assert.equal(second.status, "throttled");
+    assert.equal(quota.limits("installation-1").inflight, 1);
+    releasePoll();
+    assert.equal((await first).status, "completed");
+    assert.equal(quota.limits("installation-1").inflight, 0);
+    assert.equal(seenOptions.length, 1);
+    assert.equal(seenOptions[0].page_size, 25);
+
+    quota.adjust("installation-1", { max_concurrency: 2, page_size: 10 });
+    const again = await runner.poll({ ...input, stream_key: "other" });
+    assert.equal(again.status, "completed");
+    assert.equal(seenOptions[1].page_size, 10);
+  });
+
+  it("forwards an opaque push watermark on a history poll", async () => {
+    const runtime = await createRuntime();
+    const seen = [];
+    const runner = new ConnectorRunner(
+      {
+        source: "fake",
+        async poll(_cursor, options) {
+          seen.push(options);
+          return { batch: batch([]), next_cursor: undefined };
+        },
+      },
+      { async ingest() { return validResult([]); } },
+      runtime,
+      () => "2026-08-12T00:00:00.000Z",
+    );
+    const run = await runner.poll({
+      ...input,
+      older: true,
+      push_watermark: "  cursor-9  ",
+    });
+    assert.equal(run.status, "completed");
+    assert.equal(seen[0].older, true);
+    assert.equal(seen[0].push_watermark, "cursor-9");
+  });
+
+  it("does not reuse a live lease cursor when history starts from a push watermark", async () => {
+    const runtime = await createRuntime();
+    const seen = [];
+    const connector = {
+      async poll(cursor) {
+        seen.push(cursor?.value ?? null);
+        return { batch: batch([]), next_cursor: "cursor-2" };
+      },
+    };
+    const runner = new ConnectorRunner(
+      new InProcessConnectorInvoker(connector),
+      { async ingest() { return validResult([]); } },
+      runtime,
+      () => "2026-08-12T00:00:00.000Z",
+    );
+    await runner.poll(input);
+    const history = await runner.poll({
+      ...input,
+      older: true,
+      push_watermark: "wm-1",
+      cursor: "",
+    });
+    assert.equal(history.status, "completed");
+    assert.deepEqual(seen, [null, null]);
+  });
+
   it("verifies a webhook then ingests through the kernel", async () => {
     const runtime = await createRuntime();
     const seen = [];

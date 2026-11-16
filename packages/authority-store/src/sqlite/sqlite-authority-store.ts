@@ -1,4 +1,7 @@
 import type {
+  ListPushWatermarksQuery,
+  PushWatermark,
+  PushWatermarkSummary,
   AuthorityStore,
   ConnectorRuntimeStore,
   WorkStore,
@@ -148,12 +151,18 @@ import type {
   SyncCatalogView,
   SyncCatalogHead,
   ApplySyncCatalogPageInput,
+  NoteSyncCatalogStreamInput,
   SyncPhaseHead,
   SyncStreamState,
   ListSyncWorkGapsOptions,
   SyncWorkGap,
 } from "@regenic/domain";
 import Database from "better-sqlite3";
+import {
+  listPushWatermarks,
+  recordPushWatermark,
+  summarizePushWatermarks,
+} from "./push-watermarks";
 import {
   mkdirSync,
 } from "node:fs";
@@ -400,6 +409,7 @@ import {
   listSyncStates,
   listUnassignedSyncWorkIdentities,
   pruneIngestAttempts,
+  noteSyncCatalogStream,
   putSyncState,
   renewLease,
   releaseLease,
@@ -1175,6 +1185,16 @@ export class SqliteAuthorityStore
       this.database
         .prepare(
           `
+            DELETE FROM connector_push_watermarks
+            WHERE installation_id IN (
+              SELECT id FROM connector_installations WHERE org_id = ?
+            )
+          `,
+        )
+        .run(orgId);
+      this.database
+        .prepare(
+          `
             DELETE FROM connector_stream_members
             WHERE installation_id IN (
               SELECT id FROM connector_installations WHERE org_id = ?
@@ -1874,6 +1894,11 @@ export class SqliteAuthorityStore
     return applySyncCatalogPage(this.database, input);
   }
 
+  async noteSyncCatalogStream(input: NoteSyncCatalogStreamInput): Promise<void> {
+    this.assertWritable();
+    return noteSyncCatalogStream(this.database, input);
+  }
+
   async listSyncPhaseHeads(installationId: string): Promise<SyncPhaseHead[]> {
     return listSyncPhaseHeads(this.database, installationId);
   }
@@ -1892,6 +1917,22 @@ export class SqliteAuthorityStore
   async putSyncState(state: SyncStreamState): Promise<SyncStreamState> {
     this.assertWritable();
     return putSyncState(this.database, state);
+  }
+
+  async recordPushWatermark(input: PushWatermark): Promise<void> {
+    this.assertWritable();
+    return recordPushWatermark(this.database, input);
+  }
+
+  async listPushWatermarks(
+    installationId: string,
+    query?: ListPushWatermarksQuery,
+  ): Promise<PushWatermark[]> {
+    return listPushWatermarks(this.database, installationId, query);
+  }
+
+  async summarizePushWatermarks(installationId: string): Promise<PushWatermarkSummary> {
+    return summarizePushWatermarks(this.database, installationId);
   }
 
   async listSyncWorkGaps(

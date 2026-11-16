@@ -61,6 +61,85 @@ async function seedWork(store, extras = {}) {
 }
 
 describe("SQLite durable sync work", () => {
+  it("keeps a pushed stream that arrives after the directory is complete", async () => {
+    const root = await createRoot();
+    const store = new SqliteAuthorityStore(join(root, "authority.db"));
+    await seedInstallation(store);
+    await store.applySyncCatalogPage({
+      installation_id: installation.id,
+      members: [{ stream_key: "chat:old", thread_id: "fake-poll:old" }],
+      now: "2026-11-16T00:00:00.000Z",
+      complete: true,
+    });
+    await store.noteSyncCatalogStream({
+      installation_id: installation.id,
+      stream_key: "room-9",
+      thread_id: "fake-poll:room-9",
+      now: "2026-11-16T00:01:00.000Z",
+    });
+    const head = await store.getSyncCatalogHead(installation.id);
+    assert.equal(head.complete, true);
+    assert.equal(head.member_count, 2);
+    await store.putSyncState({
+      installation_id: installation.id,
+      stream_key: "room-9",
+      phase: "history",
+      media_pending: false,
+      generation: 1,
+      updated_at: "2026-11-16T00:01:00.000Z",
+    });
+    assert.equal((await store.getSyncState(installation.id, "room-9"))?.phase, "history");
+    const catalog = await store.getSyncCatalog(installation.id);
+    assert.deepEqual(
+      catalog.members.map((item) => item.stream_key).sort(),
+      ["chat:old", "room-9"],
+    );
+    store.close();
+  });
+
+  it("writes sync state in the same note and still drops a stream a later census omits", async () => {
+    const root = await createRoot();
+    const store = new SqliteAuthorityStore(join(root, "authority.db"));
+    await seedInstallation(store);
+    await store.applySyncCatalogPage({
+      installation_id: installation.id,
+      members: [{ stream_key: "chat:old", thread_id: "fake-poll:old" }],
+      now: "2026-11-16T00:00:00.000Z",
+      complete: true,
+    });
+    await store.noteSyncCatalogStream({
+      installation_id: installation.id,
+      stream_key: "room-9",
+      thread_id: "fake-poll:room-9",
+      now: "2026-11-16T00:01:00.000Z",
+      sync_state: {
+        installation_id: installation.id,
+        stream_key: "room-9",
+        phase: "history",
+        media_pending: false,
+        generation: 1,
+        updated_at: "2026-11-16T00:01:00.000Z",
+      },
+    });
+    assert.equal((await store.getSyncState(installation.id, "room-9"))?.phase, "history");
+    const owed = await store.listUnassignedSyncWorkIdentities({
+      installation_id: installation.id,
+    });
+    assert.equal(
+      owed.some((work) => work.stream_key === "room-9" && work.lane === "history"),
+      true,
+    );
+    await store.applySyncCatalogPage({
+      installation_id: installation.id,
+      members: [{ stream_key: "chat:old", thread_id: "fake-poll:old" }],
+      now: "2026-11-16T00:02:00.000Z",
+      complete: true,
+      replaces: true,
+    });
+    assert.equal(await store.getSyncState(installation.id, "room-9"), null);
+    store.close();
+  });
+
   it("claims by priority, completes a run, and survives restart", async () => {
     const root = await createRoot();
     const path = join(root, "authority.db");

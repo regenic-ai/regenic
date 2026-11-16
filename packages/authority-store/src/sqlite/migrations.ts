@@ -1,4 +1,4 @@
-export const LATEST_SCHEMA_VERSION = 78;
+export const LATEST_SCHEMA_VERSION = 79;
 
 export const PRE_MERGE_LIFECYCLE_REPAIR_SQL = `
   ALTER TABLE work_items ADD COLUMN current_run_id TEXT REFERENCES work_runs(id);
@@ -1583,6 +1583,19 @@ export const MIGRATIONS = [
             AND r.recipe_id = work_items.recipe_id
             AND r.status IN ('running', 'waiting_human')
         );
+    `,
+  },
+  {
+    version: 79,
+    sql: `
+      CREATE TABLE connector_push_watermarks (
+        installation_id TEXT NOT NULL REFERENCES connector_installations(id),
+        stream_key TEXT NOT NULL,
+        watermark TEXT NOT NULL,
+        batch_id TEXT,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (installation_id, stream_key)
+      );
     `,
   },
 ] as const;

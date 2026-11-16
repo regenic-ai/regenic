@@ -4,6 +4,7 @@ import {
   persistInstallSecrets,
   readInstallSecret,
   loadSyncProgress,
+  stampLiveViaConfig,
   type ConnectorInstallation,
   type ConnectorRuntimeStore,
 } from "@regenic/domain";
@@ -24,6 +25,8 @@ import {
   wrapDriverError,
 } from "./personal-connector-poll";
 import { prepareConnectorForm } from "./personal-connector-form";
+import { forgetPushInstallation } from "./personal-connector-push";
+import { stopConnectorLivePush } from "@regenic/domain";
 
 export async function install(state: ConnectorState, input: ConnectorInstallInput): Promise<EngineInstallationView> {
   const store = state.runtime.requireHost().get("authority");
@@ -90,18 +93,22 @@ export async function updateConfig(
   } catch (error) {
     throw wrapDriverError(error, "invalid_config");
   }
+  stopConnectorLivePush(current.id);
   await state.drivers.stopInstallation(current, state.runtime.requireHost(), "reconfigure");
   try {
     for (const key of Object.keys(form.credentialChanges)) {
       await driver.clearCatalogCredential?.(current, key);
     }
-    nextConfig = persistInstallSecrets({
-      connector_type: current.connector_type,
-      installation_id: current.id,
-      catalog,
-      incoming: form.credentialChanges,
-      stored: nextConfig,
-    });
+    nextConfig = stampLiveViaConfig(
+      persistInstallSecrets({
+        connector_type: current.connector_type,
+        installation_id: current.id,
+        catalog,
+        incoming: form.credentialChanges,
+        stored: nextConfig,
+      }),
+      driver.capabilities({ ...current, config: nextConfig }),
+    );
   } catch (error) {
     throw wrapDriverError(error, "invalid_config");
   }
@@ -154,6 +161,7 @@ export async function uninstall(state: ConnectorState, installationId: string): 
   await state.drivers.stopInstallation(current, state.runtime.requireHost(), "delete");
   await store.deleteInstallation(current.id, state.runtime.orgId());
   state.kernelRuntime.clearInstallationSnapshots(current.id);
+  forgetPushInstallation(state, current.id);
   return { id: current.id, removed: true };
 }
 
@@ -173,6 +181,7 @@ export async function setStatus(
     }
   }
   if (status === "disabled") {
+    stopConnectorLivePush(current.id);
     await state.drivers.stopInstallation(current, state.runtime.requireHost(), "disable");
   }
   const updated = await store.setInstallationStatus({
@@ -222,7 +231,17 @@ function buildInstallation(
       now,
       secrets: state.installSecrets(),
     });
-    return { drafted, catalog, credentialChanges: form.credentialChanges };
+    const stamped = {
+      ...drafted,
+      config: stampLiveViaConfig(
+        drafted.config ?? {},
+        driver.capabilities({
+          ...drafted,
+          updated_at: drafted.created_at,
+        }),
+      ),
+    };
+    return { drafted: stamped, catalog, credentialChanges: form.credentialChanges };
   } catch (error) {
     throw wrapDriverError(error, "invalid_config");
   }

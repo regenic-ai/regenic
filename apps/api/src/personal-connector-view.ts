@@ -331,6 +331,8 @@ export interface EngineInstallationView {
   channel: string;
   channel_label: string;
   source_mode: "poll" | "webhook" | "hybrid";
+  /** New messages are pushed by the connector. History can still be pulled. */
+  pushes: boolean;
   last_attempt: IngestAttempt | null;
   pairing_code?: string;
   sync?: SyncProgressView;
@@ -380,6 +382,7 @@ export function toInstallationView(
       locale,
     ),
     source_mode: driver?.source_mode ?? "poll",
+    pushes: enabled && capabilities.push === true,
     last_attempt: lastAttempt,
     ...(extras?.sync ? { sync: extras.sync } : {}),
   };

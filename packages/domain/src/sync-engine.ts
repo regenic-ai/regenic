@@ -1,4 +1,9 @@
-import { applySyncCatalogMembers, emptySyncCatalog } from "./sync-catalog";
+import {
+  applySyncCatalogMembers,
+  emptySyncCatalog,
+  noteSyncCatalogStream,
+  syncStateNotedWith,
+} from "./sync-catalog";
 import type {
   SyncCatalogHead,
   SyncCatalogMember,
@@ -339,6 +344,17 @@ export class MemorySyncStore implements SyncStore {
     const next = applySyncCatalogMembers(current, input);
     this.catalogs.set(input.installation_id, next);
     return cloneCatalog(next);
+  }
+
+  async noteSyncCatalogStream(
+    input: Parameters<SyncStore["noteSyncCatalogStream"]>[0],
+  ): Promise<void> {
+    const current = await this.getSyncCatalog(input.installation_id);
+    this.catalogs.set(input.installation_id, noteSyncCatalogStream(current, input));
+    const syncState = syncStateNotedWith(input);
+    if (syncState) {
+      await this.putSyncState(syncState);
+    }
   }
 
   async listSyncStates(installationId: string): Promise<SyncStreamState[]> {

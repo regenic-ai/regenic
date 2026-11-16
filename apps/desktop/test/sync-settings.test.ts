@@ -28,33 +28,33 @@ const view: PersonalSyncSettingsView = {
 };
 
 describe("beginner sync settings", () => {
-  it("speeds up new conversation pulls without increasing historical or attachment work", () => {
+  it("speeds up history catch-up without increasing attachment work", () => {
     const faster = fasterSyncSettings(view);
     assert.deepEqual(faster, {
       ...view.defaults,
-      quota_tokens: 120, live_concurrency: 16, first_seed_limit: 32, steady_claim_limit: 64,
+      quota_tokens: 120, history_concurrency: 8, first_seed_limit: 32, bootstrap_claim_limit: 32,
     });
     assert.equal(view.defaults.quota_tokens, 60);
     assert.equal(syncModeFor({ ...view, customized: true, settings: faster }), "faster");
   });
 
-  it("respects configured caps, preserves unlimited quotas, and can resume new conversation pulls", () => {
+  it("respects configured caps, preserves unlimited quotas, and can resume a paused first catch-up", () => {
     const nearCaps = fasterSyncSettings({
       ...view,
-      defaults: { ...view.defaults, quota_tokens: 8000, live_concurrency: 40, first_seed_limit: 40, steady_claim_limit: 100 },
+      defaults: { ...view.defaults, quota_tokens: 8000, history_concurrency: 40, first_seed_limit: 40, bootstrap_claim_limit: 100 },
     });
     assert.equal(nearCaps.quota_tokens, 10000);
-    assert.equal(nearCaps.live_concurrency, 64);
+    assert.equal(nearCaps.history_concurrency, 64);
     assert.equal(nearCaps.first_seed_limit, 64);
-    assert.equal(nearCaps.steady_claim_limit, 128);
+    assert.equal(nearCaps.bootstrap_claim_limit, 128);
     const limited = {
       ...view,
-      defaults: { ...view.defaults, quota_tokens: 0, live_concurrency: 64, first_seed_limit: 0, steady_claim_limit: 128 },
+      defaults: { ...view.defaults, quota_tokens: 0, history_concurrency: 64, first_seed_limit: 0, bootstrap_claim_limit: 128 },
     };
     const faster = fasterSyncSettings(limited);
     assert.equal(faster.quota_tokens, 0);
-    assert.equal(faster.live_concurrency, 64);
-    assert.equal(faster.steady_claim_limit, 128);
+    assert.equal(faster.history_concurrency, 64);
+    assert.equal(faster.bootstrap_claim_limit, 128);
     assert.equal(faster.first_seed_limit, 1);
     const capped = { ...view, defaults: { ...faster, first_seed_limit: 64 } };
     assert.equal(syncModeFor({ ...capped, settings: capped.defaults, customized: true }), "custom");

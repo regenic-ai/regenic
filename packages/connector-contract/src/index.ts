@@ -89,6 +89,8 @@ export interface ConnectorPollPayload {
   before?: string;
   /** Source external id of that record. Opaque to core. */
   before_external_id?: string;
+  /** Last acked push watermark for this stream. Opaque to core. */
+  push_watermark?: string;
 }
 
 export interface ConnectorPollResultPayload<TBatch extends ConnectorJson = ConnectorJson> {
@@ -287,10 +289,12 @@ export * from "./egress";
 export * from "./executor";
 export * from "./egress-queue";
 export * from "./ingest";
+export * from "./live-push";
 export * from "./ingest-schema";
 export * from "./local-network";
 export * from "./local-probe";
 export * from "./message";
+export * from "./push";
 import "./services";
 export * from "./source-mode";
 export * from "./sync";

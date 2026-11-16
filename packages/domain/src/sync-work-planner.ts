@@ -84,10 +84,12 @@ export function syncWorkEnsurePlan(input: {
   existing: readonly OpenSyncWorkLane[];
   policy?: HistoryPolicy;
   preferred?: boolean;
+  live_via?: "poll" | "push";
 }): { enqueue: SyncLane[]; cancel: SyncLane[] } {
   const owed = owedSyncLanes(
     input.state,
     input.policy ?? DEFAULT_HISTORY_POLICY,
+    { live_via: input.live_via ?? "poll" },
   );
   const owedSet = new Set(owed);
   const cancel: SyncLane[] = [];
@@ -177,11 +179,19 @@ export function planSyncWorkGaps(input: {
   coldIdleMs?: number;
   preferredThreadId?: string | null;
   policy?: HistoryPolicy;
+  live_via?: "poll" | "push";
 }): EnqueueSyncWork[] {
   const preferred = input.preferredThreadId?.trim() || null;
   const policy = input.policy ?? DEFAULT_HISTORY_POLICY;
+  const liveVia = input.live_via ?? "poll";
   const planned: EnqueueSyncWork[] = [];
   for (const gap of input.gaps) {
+    if (
+      (gap.missing_lane === "live" || gap.missing_lane === "interactive") &&
+      gap.phase !== "unseeded"
+    ) {
+      continue;
+    }
     if (
       policy === "backfill" &&
       gap.phase === "history" &&
@@ -196,8 +206,12 @@ export function planSyncWorkGaps(input: {
     if (focused && gap.missing_lane === "media") {
       continue;
     }
+    const seed = seedLaneForGap({ gap, liveVia, policy });
+    if (seed === null) {
+      continue;
+    }
     const lane =
-      focused && gap.missing_lane === "live" ? "interactive" : gap.missing_lane;
+      focused && seed === "live" ? "interactive" : seed;
     const heat = classifyDueWorkHeat({
       preferred: focused && lane === "interactive",
       eager: syncGapRepairIsEager(gap),
@@ -288,10 +302,64 @@ export function needsCatalogDueWork(view: {
 }
 
 /** Lanes that mean this plane already has durable work and must not re-plan. */
-export function dueWorkCoverageLanes(plane: DueWorkPlane): SyncLane[] {
-  return plane === "bootstrap"
-    ? ["history"]
-    : ["interactive", "live", "media"];
+export function dueWorkCoverageLanes(
+  plane: DueWorkPlane,
+  liveVia: "poll" | "push" = "poll",
+): SyncLane[] {
+  if (plane === "bootstrap") {
+    return ["history"];
+  }
+  void liveVia;
+  return ["media"];
+}
+
+/**
+ * Unseeded catalog members seed through history backfill. Incremental
+ * installs wait for the connector's first push. Core does not seed with a
+ * latest poll.
+ */
+export function seedLaneForGap(input: {
+  gap: Pick<SyncWorkGap, "phase" | "missing_lane">;
+  liveVia?: "poll" | "push";
+  policy?: HistoryPolicy;
+}): SyncLane | null {
+  if (input.gap.phase !== "unseeded" || input.gap.missing_lane !== "live") {
+    return input.gap.missing_lane;
+  }
+  void input.liveVia;
+  return (input.policy ?? DEFAULT_HISTORY_POLICY) === "backfill" ? "history" : null;
+}
+
+/**
+ * Round-robin across installations so one chatty install cannot monopolize a
+ * history claim. Prefer rows that already arrived earliest within each install.
+ */
+export function fairSelectSyncWork<T extends { installation_id: string }>(
+  claimed: readonly T[],
+  limit: number,
+): T[] {
+  const capped = Math.max(0, Math.floor(limit));
+  if (claimed.length <= capped) {
+    return [...claimed];
+  }
+  const byInstall = new Map<string, T[]>();
+  for (const item of claimed) {
+    const group = byInstall.get(item.installation_id) ?? [];
+    group.push(item);
+    byInstall.set(item.installation_id, group);
+  }
+  const queues = [...byInstall.values()];
+  const selected: T[] = [];
+  let index = 0;
+  while (selected.length < capped && queues.some((queue) => queue.length > 0)) {
+    const queue = queues[index % queues.length];
+    index += 1;
+    if (!queue || queue.length === 0) {
+      continue;
+    }
+    selected.push(queue.shift()!);
+  }
+  return selected;
 }
 
 export function syncWorkCoverageKey(

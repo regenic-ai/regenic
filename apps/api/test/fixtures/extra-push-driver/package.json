@@ -1,0 +1,10 @@
+{
+  "name": "extra-push-driver",
+  "main": "index.cjs",
+  "regenic": {
+    "plugin": true,
+    "contributes": {
+      "drivers": ["extraPushDriver", "extraReconcileDriver", "extraHybridDriver", "extraSilentDriver"]
+    }
+  }
+}

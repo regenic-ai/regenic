@@ -56,6 +56,20 @@ export function catalogPullIntervalMs(): number {
   return Math.max(15_000, Math.min(raw, 120_000));
 }
 
+const DEFAULT_PUSH_RECONCILE_MS = 5 * 60_000;
+
+/**
+ * Low-frequency gap check for push installs. 0 disables the core tick;
+ * connectors can still call `POST .../reconcile-push` or reconcile on catch-up.
+ */
+export function pushReconcileIntervalMs(): number {
+  const raw = Number(process.env.REGENIC_PUSH_RECONCILE_MS ?? DEFAULT_PUSH_RECONCILE_MS);
+  if (!Number.isFinite(raw) || raw <= 0) {
+    return 0;
+  }
+  return Math.max(30_000, Math.min(raw, 60 * 60_000));
+}
+
 export function dueWorkBatchTimeoutMs(
   work: readonly { lane: string }[],
   settings?: PersonalSyncSettings,

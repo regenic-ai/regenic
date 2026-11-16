@@ -103,6 +103,7 @@ describe("feishuChatDriver", () => {
       hydrate_on_open: true,
       attention: true,
       receipts: true,
+      push: true,
     });
     const picked = feishuChatDriver.install({
       id: "feishu-2",

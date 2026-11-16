@@ -995,10 +995,54 @@
 }
 
 .install-instance {
-  padding: 12px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+  padding: 14px 14px 12px;
   border: 1px solid var(--line-8);
   border-radius: var(--radius-row);
   background: var(--elevated);
+}
+
+.install-copy {
+  min-width: 0;
+}
+
+.install-copy > strong {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.install-instance .install-actions {
+  justify-content: flex-start;
+  align-items: center;
+  padding-top: 10px;
+  border-top: 1px solid var(--line-8);
+}
+
+.connector-sync {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.connector-sync-mode {
+  height: 30px;
+  max-width: 11rem;
+  padding: 0 28px 0 12px;
+  border: 1px solid var(--line-12);
+  border-radius: 999px;
+  background: var(--elevated);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.connector-sync-mode:focus-visible {
+  outline: none;
+  border-color: var(--focus);
+  box-shadow: 0 0 0 1px var(--focus);
 }
 
 .install-block {

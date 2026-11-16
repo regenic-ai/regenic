@@ -23,6 +23,12 @@ import type {
 } from "./ingest";
 import type { KeychainSecretRef } from "./credentials";
 import type { SyncCatalogMember, SyncSource } from "./sync";
+import type {
+  PushIngestAck,
+  PushIngestBatch,
+  PushReconcileContext,
+  PushReconcileReport,
+} from "./push";
 
 export interface UnitKindEntry {
   id: string;
@@ -53,6 +59,7 @@ export type RegisteredConnector = Pick<ChannelConnector, "source"> & {
   poll: NonNullable<ChannelConnector["poll"]>;
   source_mode?: ChannelConnector["source_mode"];
   quota?: ChannelConnector["quota"];
+  limits?: ChannelConnector["limits"];
 };
 
 export interface ConnectorRegistry {
@@ -79,6 +86,19 @@ export interface ConnectorHost {
   plugin<C>(plugin: Plugin<C>, config?: C): Promise<PluginHandle>;
   now(): string;
   secrets: ConnectorSecrets;
+  /**
+   * Submit one batch of new records. Core dedupes and acks. Drivers must not
+   * write Events themselves.
+   */
+  push?(
+    installation: Pick<ConnectorInstallation, "id" | "org_id">,
+    batch: PushIngestBatch,
+  ): Promise<PushIngestAck>;
+  /** Last watermark this installation acked for one stream. Opaque to core. */
+  ackedWatermark?(
+    installation: Pick<ConnectorInstallation, "id">,
+    streamKey: string,
+  ): Promise<string | undefined>;
 }
 
 export interface ConversationThread {
@@ -179,6 +199,11 @@ export interface ChannelCapabilities {
    * Requires `authorizeLiveAccess`.
    */
   browser_live?: boolean;
+  /**
+   * This install pushes new records through `ConnectorHost.push` or
+   * `POST .../ingest`. Core does not schedule latest-message polls.
+   */
+  push?: boolean;
 }
 
 export interface ConnectorCatalogServiceState {
@@ -350,6 +375,7 @@ export interface ConnectorStream {
     poll: NonNullable<ChannelConnector["poll"]>;
     source_mode?: ChannelConnector["source_mode"];
     quota?: ChannelConnector["quota"];
+    limits?: ChannelConnector["limits"];
   };
   pace?: ConnectorStreamPace;
   thread_id?: string;
@@ -481,7 +507,7 @@ export interface ChannelSinkPort {
 
 export type WebhookConnector = Pick<
   ChannelConnector,
-  "source" | "source_mode" | "quota" | "verifyWebhook" | "handleWebhook"
+  "source" | "source_mode" | "quota" | "limits" | "verifyWebhook" | "handleWebhook"
 >;
 
 export type ConnectorStopReason =
@@ -535,6 +561,16 @@ export interface ChannelDriver
    * stays in the desktop catalog.
    */
   locales?(): readonly PluginLocaleTable[];
+  /**
+   * Low-frequency, per-installation gap check for push installs: compare
+   * `context.listWatermarks()` with the channel and re-push what is missing.
+   * Push only; the kernel does not live-poll these installs.
+   */
+  reconcilePush?(
+    installation: ConnectorInstallation,
+    host: ConnectorHost,
+    context: PushReconcileContext,
+  ): Promise<PushReconcileReport | void>;
   /**
    * Install card. Absent means this driver does not appear in Engine.
    */

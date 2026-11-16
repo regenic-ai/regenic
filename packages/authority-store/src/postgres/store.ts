@@ -2,7 +2,15 @@ import {
   types,
   Pool,
 } from "pg";
+import {
+  listPushWatermarks,
+  recordPushWatermark,
+  summarizePushWatermarks,
+} from "./push-watermarks";
 import type {
+  ListPushWatermarksQuery,
+  PushWatermark,
+  PushWatermarkSummary,
   AuthorityStore,
   ConnectorRuntimeStore,
   WorkStore,
@@ -155,6 +163,7 @@ import type {
   SyncCatalogView,
   SyncCatalogHead,
   ApplySyncCatalogPageInput,
+  NoteSyncCatalogStreamInput,
   SyncPhaseHead,
   SyncStreamState,
   ListSyncWorkGapsOptions,
@@ -225,6 +234,7 @@ import {
   listSyncStates,
   listUnassignedSyncWorkIdentities,
   pruneIngestAttempts,
+  noteSyncCatalogStream,
   putSyncState,
   renewLease,
   releaseLease,
@@ -1155,6 +1165,16 @@ export class PostgresAuthorityStore
       );
       await this.execute(
         `
+          DELETE FROM connector_push_watermarks
+          WHERE installation_id IN (
+            SELECT id FROM connector_installations WHERE org_id = $1
+          )
+        `,
+        [orgId],
+        client,
+      );
+      await this.execute(
+        `
           DELETE FROM connector_stream_members
           WHERE installation_id IN (
             SELECT id FROM connector_installations WHERE org_id = $1
@@ -1909,6 +1929,10 @@ export class PostgresAuthorityStore
     return applySyncCatalogPage(this.sql, input);
   }
 
+  async noteSyncCatalogStream(input: NoteSyncCatalogStreamInput): Promise<void> {
+    return noteSyncCatalogStream(this.sql, input);
+  }
+
   async listSyncPhaseHeads(installationId: string): Promise<SyncPhaseHead[]> {
     return listSyncPhaseHeads(this.sql, installationId);
   }
@@ -1926,6 +1950,21 @@ export class PostgresAuthorityStore
 
   async putSyncState(state: SyncStreamState): Promise<SyncStreamState> {
     return putSyncState(this.sql, state);
+  }
+
+  async recordPushWatermark(input: PushWatermark): Promise<void> {
+    return recordPushWatermark(this.sql, input);
+  }
+
+  async listPushWatermarks(
+    installationId: string,
+    query?: ListPushWatermarksQuery,
+  ): Promise<PushWatermark[]> {
+    return listPushWatermarks(this.sql, installationId, query);
+  }
+
+  async summarizePushWatermarks(installationId: string): Promise<PushWatermarkSummary> {
+    return summarizePushWatermarks(this.sql, installationId);
   }
 
   async listSyncWorkGaps(

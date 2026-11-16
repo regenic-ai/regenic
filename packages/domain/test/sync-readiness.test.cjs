@@ -58,6 +58,33 @@ describe("sync readiness", () => {
     assert.equal(readiness.freshness_source, "poll");
   });
 
+  it("prefers a fresher push ack over a poll sample", () => {
+    const readiness = estimateSyncReadiness({
+      metrics: [
+        {
+          name: "freshness_ms",
+          labels: { lane: "history", status: "hot" },
+          count: 1,
+          sum: 15_000,
+          max: 15_000,
+          last: 15_000,
+          recorded_at: "2026-09-21T00:00:00.000Z",
+        },
+        {
+          name: "push_lag_ms",
+          labels: { operation: "push" },
+          count: 1,
+          sum: 2_000,
+          max: 2_000,
+          last: 2_000,
+          recorded_at: "2026-09-21T00:00:00.000Z",
+        },
+      ],
+    });
+    assert.equal(readiness.freshness_ms, 2_000);
+    assert.equal(readiness.freshness_source, "push");
+  });
+
   it("surfaces 429 before writer wait", () => {
     const readiness = estimateSyncReadiness({
       metrics: [

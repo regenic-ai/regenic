@@ -1,4 +1,4 @@
-export const PG_SCHEMA_VERSION = 78;
+export const PG_SCHEMA_VERSION = 79;
 
 /** Applied when an existing postgres authority DB is already at a prior baseline. */
 export const PG_MIGRATIONS = [
@@ -932,6 +932,19 @@ ON CONFLICT DO NOTHING;
         );
     `,
   },
+  {
+    version: 79,
+    sql: `
+      CREATE TABLE connector_push_watermarks (
+        installation_id TEXT NOT NULL REFERENCES connector_installations(id),
+        stream_key TEXT NOT NULL,
+        watermark TEXT NOT NULL,
+        batch_id TEXT,
+        updated_at TIMESTAMPTZ NOT NULL,
+        PRIMARY KEY (installation_id, stream_key)
+      );
+    `,
+  },
 ] as const;
 
 export const PG_BASELINE_SQL = `
@@ -1371,6 +1384,15 @@ CREATE INDEX connector_sync_state_gap_idx
   ON connector_sync_state (
     installation_id, phase, stream_key, generation, media_pending, idle_until
   );
+
+CREATE TABLE connector_push_watermarks (
+  installation_id TEXT NOT NULL REFERENCES connector_installations(id),
+  stream_key TEXT NOT NULL,
+  watermark TEXT NOT NULL,
+  batch_id TEXT,
+  updated_at TIMESTAMPTZ NOT NULL,
+  PRIMARY KEY (installation_id, stream_key)
+);
 
 CREATE TABLE context_artifact_segments (
   org_id TEXT NOT NULL,

@@ -159,6 +159,14 @@ export interface ConnectorPollOptions {
   before?: string;
   /** Source external id of that record. Connectors drop the boundary row. */
   before_external_id?: string;
+  /**
+   * Last watermark core acked for this stream. Opaque.
+   * History polls include it when one exists so the connector can start or
+   * bound the older walk. The history cursor still resumes that walk.
+   */
+  push_watermark?: string;
+  /** Records per page from the effective `ConnectorLimits.page_size`. Advisory. */
+  page_size?: number;
 }
 
 export interface PollResult {
@@ -208,6 +216,20 @@ export interface ConnectorQuotaHint {
   window_ms: number;
 }
 
+/**
+ * Upstream limits only the connector knows. Core pulls (history backfill and
+ * legacy live polling) stay inside them. Every field is optional; a runtime
+ * adjustment replaces the declared value for that installation.
+ */
+export interface ConnectorLimits {
+  /** Concurrent core-driven pulls per installation. */
+  max_concurrency?: number;
+  /** Install-level token bucket. Takes precedence over `quota`. */
+  rate?: ConnectorQuotaHint;
+  /** Records per pulled page. Forwarded as `ConnectorPollOptions.page_size`. */
+  page_size?: number;
+}
+
 export interface ChannelConnector {
   readonly source: string;
   /**
@@ -220,6 +242,7 @@ export interface ChannelConnector {
    * from env; a connector may declare a tighter budget. Not per-source.
    */
   readonly quota?: ConnectorQuotaHint;
+  readonly limits?: ConnectorLimits;
 
   poll?(
     cursor: ConnectorCursor | null,

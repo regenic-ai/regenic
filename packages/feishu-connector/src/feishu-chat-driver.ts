@@ -5,6 +5,7 @@ import {
   keychainCredentialsRef,
   parseSyncMode,
   requireConnectorStream,
+  startConnectorLivePush,
   type ChannelDriver,
   type ConnectorHost,
   type ConnectorInstallation,
@@ -244,7 +245,21 @@ export const feishuChatDriver: ChannelDriver = {
       hydrate_on_open: true,
       attention: true,
       receipts: true,
+      push: true,
     };
+  },
+
+  async startInstallation(installation, host) {
+    if (!host.push) {
+      return;
+    }
+    startConnectorLivePush({
+      installationId: installation.id,
+      listStreams: () => host.get("connectors").listStreams(installation.id),
+      push: (batch) => host.push!(installation, batch),
+      resumeCursor: (streamKey) =>
+        host.ackedWatermark?.(installation, streamKey) ?? Promise.resolve(undefined),
+    });
   },
 
   writeBackLabels(label) {

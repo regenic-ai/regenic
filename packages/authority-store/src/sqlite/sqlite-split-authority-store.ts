@@ -1,4 +1,7 @@
 import type {
+  ListPushWatermarksQuery,
+  PushWatermark,
+  PushWatermarkSummary,
   ArrangementDecision,
   AuthorityStore,
   BlobRecord,
@@ -84,6 +87,7 @@ import type {
   OutboundAttemptPut,
   OutboundAttemptRecord,
   ApplySyncCatalogPageInput,
+  NoteSyncCatalogStreamInput,
   SyncCatalogHead,
   SyncCatalogView,
   SyncPhaseHead,
@@ -754,6 +758,10 @@ export class SqliteSplitAuthorityStore
     return this.writer.call("applySyncCatalogPage", [input]);
   }
 
+  async noteSyncCatalogStream(input: NoteSyncCatalogStreamInput): Promise<void> {
+    return this.writer.call("noteSyncCatalogStream", [input]);
+  }
+
   async listSyncStates(installationId: string): Promise<SyncStreamState[]> {
     return this.reader.call("listSyncStates", [installationId]);
   }
@@ -771,6 +779,21 @@ export class SqliteSplitAuthorityStore
 
   async putSyncState(state: SyncStreamState): Promise<SyncStreamState> {
     return this.writer.call("putSyncState", [state]);
+  }
+
+  async recordPushWatermark(input: PushWatermark): Promise<void> {
+    return this.writer.call("recordPushWatermark", [input]);
+  }
+
+  async listPushWatermarks(
+    installationId: string,
+    query?: ListPushWatermarksQuery,
+  ): Promise<PushWatermark[]> {
+    return this.reader.call("listPushWatermarks", [installationId, query]);
+  }
+
+  async summarizePushWatermarks(installationId: string): Promise<PushWatermarkSummary> {
+    return this.reader.call("summarizePushWatermarks", [installationId]);
   }
 
   async append(input: NewEvent): Promise<EventRecord> {

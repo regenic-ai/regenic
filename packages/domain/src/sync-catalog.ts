@@ -1,9 +1,11 @@
 import type {
   ApplySyncCatalogPageInput,
+  NoteSyncCatalogStreamInput,
   SyncCatalogMember,
   SyncCatalogSnapshot,
   SyncCatalogView,
   SyncDirectoryMember,
+  SyncStreamState,
 } from "./sync-contracts";
 import { SYNC_CATALOG_STREAM } from "./sync-contracts";
 
@@ -63,6 +65,63 @@ export function applySyncCatalogMembers(
     updated_at: input.now,
   };
   return { members, catalog };
+}
+
+/**
+ * Remember one push stream on the current generation.
+ * A finished directory stays finished, and other members stay put.
+ */
+export function noteSyncCatalogStream(
+  current: SyncCatalogView,
+  input: NoteSyncCatalogStreamInput,
+): SyncCatalogView {
+  const streamKey = input.stream_key.trim();
+  if (!streamKey || streamKey === SYNC_CATALOG_STREAM) {
+    return current;
+  }
+  const generation = current.catalog?.generation ?? 1;
+  const prev = current.members.find((member) => member.stream_key === streamKey);
+  const nextMember: SyncCatalogMember = {
+    installation_id: input.installation_id,
+    stream_key: streamKey,
+    thread_id: input.thread_id ?? prev?.thread_id,
+    label: input.label ?? prev?.label,
+    kind: prev?.kind,
+    generation: prev?.generation ?? generation,
+    discovered_at: prev?.discovered_at ?? input.now,
+    last_seen_at: input.now,
+  };
+  const members = prev
+    ? current.members.map((member) => member.stream_key === streamKey ? nextMember : member)
+    : [...current.members, nextMember];
+  const catalog: SyncCatalogSnapshot = current.catalog ?? {
+    installation_id: input.installation_id,
+    complete: false,
+    generation,
+    updated_at: input.now,
+  };
+  return { members, catalog };
+}
+
+/**
+ * Sync state that belongs in the same write as this catalog note.
+ * A different installation or stream is ignored so the two rows cannot split.
+ */
+export function syncStateNotedWith(
+  input: NoteSyncCatalogStreamInput,
+): SyncStreamState | undefined {
+  const streamKey = input.stream_key.trim();
+  const state = input.sync_state;
+  if (
+    !state ||
+    !streamKey ||
+    streamKey === SYNC_CATALOG_STREAM ||
+    state.installation_id !== input.installation_id ||
+    state.stream_key.trim() !== streamKey
+  ) {
+    return undefined;
+  }
+  return { ...state, stream_key: streamKey };
 }
 
 /** Stream keys a completed directory page removed. Incomplete pages keep them. */

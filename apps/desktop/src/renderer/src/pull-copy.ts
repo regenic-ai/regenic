@@ -37,14 +37,12 @@ export function pullStatusLabel(pull?: PullStatusView | null): string {
     if (history) {
       return t("sync.history");
     }
-    const live = pull.streams.find(
-      (stream) => stream.phase === "pulling" && stream.work !== "history",
-    );
-    if (live?.label) {
-      return t("sync.latestNamed", { label: live.label });
+    const media = pullingMediaStream(pull);
+    if (media?.label) {
+      return t("sync.attachmentsNamed", { label: media.label });
     }
-    if (live) {
-      return t("sync.latest");
+    if (media) {
+      return t("sync.attachments");
     }
     return t("sync.pulling");
   }
@@ -62,10 +60,10 @@ export function pullStatusLabel(pull?: PullStatusView | null): string {
   if (pull.last_error) {
     return t("sync.retry");
   }
-  if (pull.interval_ms) {
-    return t("sync.every", { seconds: Math.round(pull.interval_ms / 1000) });
+  if (!pull.interval_ms) {
+    return t("sync.off");
   }
-  return t("sync.off");
+  return t("sync.idle");
 }
 
 /** Titlebar chip, with the inbox title of the stream that is actually pulling. */
@@ -77,19 +75,19 @@ export function namedPullProgress(
   if (!chip || !pull) {
     return chip;
   }
-  const stream = pullingLiveStream(pull) ?? pullingHistoryStream(pull);
+  const stream = pullingMediaStream(pull) ?? pullingHistoryStream(pull);
   const title = stream ? titleForStream(stream, titles) : null;
   if (stream && title) {
-    return isHistoryWork(stream) || stream.phase === "catching_up"
-      ? t("sync.historyNamed", { label: title })
-      : t("sync.latestNamed", { label: title });
+    return isMediaWork(stream)
+      ? t("sync.attachmentsNamed", { label: title })
+      : t("sync.historyNamed", { label: title });
   }
   return nameSyncLabel(chip, titles);
 }
 
-function pullingLiveStream(pull: PullStatusView) {
+function pullingMediaStream(pull: PullStatusView) {
   return pull.streams.find(
-    (stream) => stream.phase === "pulling" && stream.work !== "history",
+    (stream) => stream.phase === "pulling" && isMediaWork(stream),
   );
 }
 
@@ -141,7 +139,7 @@ export function nameSyncLabel(
   return named || null;
 }
 
-/** Compact titlebar chip: only when history backfill or live pull is active. */
+/** Compact titlebar chip: only while older messages or attachments are catching up. */
 export function pullProgressChip(pull?: PullStatusView | null): string | null {
   if (!pull) {
     return null;
@@ -151,12 +149,10 @@ export function pullProgressChip(pull?: PullStatusView | null): string | null {
     pull.streams.some(
       (stream) => isHistoryWork(stream) || stream.phase === "catching_up",
     );
-  const liveActive =
-    pull.phase === "pulling" &&
-    pull.streams.some(
-      (stream) => stream.phase === "pulling" && stream.work === "live",
-    );
-  if (!historyActive && !liveActive) {
+  const mediaActive = pull.streams.some(
+    (stream) => stream.phase === "pulling" && isMediaWork(stream),
+  );
+  if (!historyActive && !mediaActive) {
     return null;
   }
   return pullStatusLabel(pull);
@@ -176,8 +172,8 @@ export function threadSyncLabel(
   if (isHistoryWork(stream)) {
     return t("thread.syncOlder");
   }
-  if (stream.phase === "pulling") {
-    return t("thread.syncLatest");
+  if (isMediaWork(stream) && stream.phase === "pulling") {
+    return t("thread.syncAttachments");
   }
   return null;
 }
@@ -193,7 +189,7 @@ export function threadSyncTone(
   if (stream.phase === "error") {
     return "error";
   }
-  if (isHistoryWork(stream) || stream.phase === "pulling") {
+  if (isHistoryWork(stream) || (isMediaWork(stream) && stream.phase === "pulling")) {
     return "syncing";
   }
   return null;
@@ -203,7 +199,8 @@ export function threadIsSyncing(
   threadId: string,
   pull?: PullStatusView | null,
 ): boolean {
-  return pullingStream(threadId, pull) != null;
+  const stream = pullingStream(threadId, pull);
+  return stream != null && (isHistoryWork(stream) || isMediaWork(stream));
 }
 
 /** Drop live pulling marks for every thread except the one just opened. */
@@ -218,7 +215,7 @@ export function releaseOtherLivePulls(
   const streams = pull.streams.map((stream) => {
     if (
       stream.phase === "pulling" &&
-      stream.work !== "history" &&
+      stream.work === "live" &&
       stream.thread_id &&
       stream.thread_id !== threadId
     ) {
@@ -270,7 +267,13 @@ function chatKey(value: string | null | undefined): string | null {
 }
 
 function isHistoryWork(stream: {
-  work?: "live" | "history" | null;
+  work?: "live" | "history" | "media" | null;
 }): boolean {
   return stream.work === "history";
+}
+
+function isMediaWork(stream: {
+  work?: "live" | "history" | "media" | null;
+}): boolean {
+  return stream.work === "media";
 }

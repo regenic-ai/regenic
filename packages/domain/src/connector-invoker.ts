@@ -2,6 +2,7 @@ import type { ConnectorStreamDescriptor } from "@regenic/connector-contract";
 import type {
   ChannelConnector,
   ConnectorCursor,
+  ConnectorLimits,
   ConnectorPollOptions,
   ConnectorQuotaHint,
   ConnectorSourceMode,
@@ -20,6 +21,7 @@ export interface ConnectorRuntimeInvoker {
   readonly source: string;
   readonly source_mode?: ConnectorSourceMode;
   readonly quota?: ConnectorQuotaHint;
+  readonly limits?: ConnectorLimits;
   poll?(
     cursor: ConnectorCursor | null,
     options?: ConnectorPollOptions,
@@ -41,6 +43,10 @@ export class InProcessConnectorInvoker implements ConnectorRuntimeInvoker {
 
   get quota(): ConnectorQuotaHint | undefined {
     return this.connector.quota;
+  }
+
+  get limits(): ConnectorLimits | undefined {
+    return this.connector.limits;
   }
 
   poll(

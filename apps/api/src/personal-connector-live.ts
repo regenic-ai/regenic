@@ -2,6 +2,7 @@ import type { Host } from "@regenic/plugin-host";
 import {
   asConnectorHost,
   driverPolls,
+  nudgeConnectorLivePush,
   parseConversationThread,
   runInSyncLane,
   type ConnectorInstallation,
@@ -21,6 +22,7 @@ import { shouldHydrateOpenedInbox } from "./personal-inbox-query";
 import { shouldPullOlderFocus } from "./personal-conversation-focus";
 
 import type { ConnectorLiveState as ConnectorState } from "./personal-connector-state";
+import { ensureConnectorLivePush } from "./personal-connector-push";
 import {
   wrapDriverError,
   pollStream,
@@ -114,8 +116,8 @@ export async function hydrateOpenedThread(state: ConnectorState, threadId: strin
 }
 
 /**
- * Open / live focus: immediately poll one recent page for the thread.
- * Works for any polling driver (not only hydrate_on_open).
+ * Open / live focus: ask the connector to push this stream now.
+ * Core does not ingest that page through a poll.
  */
 export async function kickInteractiveLive(state: ConnectorState, threadId: string): Promise<void> {
   if (state.maintenanceHold) {
@@ -333,7 +335,12 @@ function focusAlive(state: ConnectorState, generation: number, signal: AbortSign
 function releaseLivePull(state: ConnectorState, threadId: string): void {
   let released = false;
   for (const [key, meta] of state.streamMeta) {
-    if (meta.thread_id === threadId && state.streamPulling.has(key) && !state.streamPullingHistory.has(key)) {
+    if (
+      meta.thread_id === threadId &&
+      state.streamPulling.has(key) &&
+      !state.streamPullingHistory.has(key) &&
+      !state.streamPullingMedia.has(key)
+    ) {
       state.streamPulling.delete(key);
       released = true;
     }
@@ -509,58 +516,32 @@ async function runRecentLiveForThread(
       return;
     }
     const key = streamPaceKey(installation.id, stream.stream_key);
-    const prior = await store.getSyncState(installation.id, stream.stream_key);
     state.rememberStreamMeta(key, stream);
     state.streamPulling.add(key);
     state.publishStreams();
     try {
-      const pages = await state.exclusiveStream(
+      await ensureConnectorLivePush(state, installation.id);
+      const nudged = await state.exclusiveStream(
         installation.id,
         stream.stream_key,
         () => {
           if (!focusAlive(state, generation, signal)) {
-            return Promise.resolve([]);
+            return Promise.resolve(false);
           }
-          return runInSyncLane("interactive", () =>
-            pollStream(
-              host,
-              store,
-              installation,
-              stream,
-              1,
-              { latest: true, media: false },
-              state.quota,
-            ),
-          );
+          return nudgeConnectorLivePush(installation.id, stream.stream_key);
         },
         { ahead: true },
       );
-      if (pages === undefined || !focusAlive(state, generation, signal)) {
+      if (!focusAlive(state, generation, signal)) {
         return;
-      }
-      const completed = pages.filter(
-        (page) => page.status === "completed" || page.status === "retryable_failure",
-      );
-      if (completed.length > 0) {
-        await rememberPolledStream(
-          store,
-          installation,
-          stream,
-          prior,
-          {
-            media: false,
-            idleMs: streamIdleMs(stream, installation.config),
-          },
-          completed,
-        );
       }
       state.rememberStreamPace({
         key,
-        pages,
+        pages: [],
         pagesBudget: 1,
         idleMs: streamIdleMs(stream, installation.config),
       });
-      if (pages.some((page) => page.status === "completed")) {
+      if (nudged) {
         state.hydrateCooldown.set(threadId, Date.now() + options.cooldownMs);
         state.liveKickCooldown.set(threadId, Date.now() + options.cooldownMs);
         state.inbox.publishThreadUpdated(threadId);
@@ -629,6 +610,7 @@ async function runDrainMediaThread(
     const key = streamPaceKey(installation.id, stream.stream_key);
     state.rememberStreamMeta(key, stream);
     state.streamPulling.add(key);
+    state.streamPullingMedia.add(key);
     state.publishStreams();
     try {
       const pages = await state.exclusiveStream(
@@ -669,6 +651,7 @@ async function runDrainMediaThread(
       throw error;
     } finally {
       state.streamPulling.delete(key);
+      state.streamPullingMedia.delete(key);
       state.publishStreams();
     }
     return;

@@ -10,6 +10,7 @@ import {
   type KernelPressureSample,
   type KernelPressureView,
   type SyncProgressSnapshot,
+  type SyncProgressView,
 } from "@regenic/domain";
 import { processMemoryView } from "./process-memory";
 import { pullStatus } from "./personal-pull-status";
@@ -51,6 +52,10 @@ export class KernelRuntimeService implements OnModuleDestroy {
 
   publishSyncSnapshot(snapshot: SyncProgressSnapshot): SyncProgressSnapshot {
     return this.syncSnapshots.publish(snapshot);
+  }
+
+  peekSyncProgress(installationId: string): SyncProgressView | null {
+    return this.syncSnapshots.peekProgress(installationId);
   }
 
   publishInstallAttempt(
