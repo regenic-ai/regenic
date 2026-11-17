@@ -1614,7 +1614,7 @@ export const MIGRATIONS = [
   {
     version: 80,
     sql: `
-      CREATE TABLE connector_push_watermarks (
+      CREATE TABLE IF NOT EXISTS connector_push_watermarks (
         installation_id TEXT NOT NULL REFERENCES connector_installations(id),
         stream_key TEXT NOT NULL,
         watermark TEXT NOT NULL,
