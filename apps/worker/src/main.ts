@@ -1,3 +1,4 @@
+import "./undici-process-guard";
 import "reflect-metadata";
 import { NestFactory } from "@nestjs/core";
 import { assertCloudWorkerBackend, loadEnv } from "@regenic/config";
