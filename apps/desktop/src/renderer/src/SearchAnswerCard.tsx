@@ -155,6 +155,16 @@ export function SearchAnswerCard({ query, conversations, intent, filters, onCite
       : null;
     body = (
       <>
+        {answer.scope?.plan ? (
+          <p className="muted" role="status">
+            {t("search.answer.planSummary", {
+              operation: answer.scope.plan.operation,
+              metric: answer.scope.plan.metric.label,
+              grouping: answer.scope.plan.group_dimensions
+                .map((dimension) => dimension.label).join(", ") || "—",
+            })}
+          </p>
+        ) : null}
         <div className="search-answer-row">
           <p className="muted" role="status">
             {progressCopy
@@ -175,6 +185,16 @@ export function SearchAnswerCard({ query, conversations, intent, filters, onCite
   } else if (answer.status === "completed" && answer.answer) {
     body = (
       <>
+        {answer.scope?.plan ? (
+          <p className="muted">
+            {t("search.answer.planSummary", {
+              operation: answer.scope.plan.operation,
+              metric: answer.scope.plan.metric.label,
+              grouping: answer.scope.plan.group_dimensions
+                .map((dimension) => dimension.label).join(", ") || "—",
+            })}
+          </p>
+        ) : null}
         {answer.scope && answer.scope.intent !== "lookup" ? (
           <p className={answer.scope.complete ? "muted" : "search-warning"} role="status">
             {t(answer.scope.complete ? "search.answer.scopeComplete" : "search.answer.scopePartial", {

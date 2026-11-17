@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { HttpStatus, Inject, Injectable } from "@nestjs/common";
 import {
   CONTENT_PARTS_MEDIA_TYPE,
+  type AggregateSpec,
   bodyTextFromStored,
   parseStoredContentParts,
   type ContextAuthorityRead,
@@ -58,6 +59,13 @@ export interface ConversationAnswerEvidence {
   refs: string[];
   scope?: SearchAnswerScope;
   map_reduce?: SearchAnswerMapReduce;
+}
+
+export interface MapBatchDedupeMetadata {
+  event_id: string;
+  external_id?: string;
+  url?: string;
+  business_id?: string;
 }
 
 /**
@@ -274,9 +282,10 @@ export class PersonalConversationContextService {
         }
         const mapReduce: SearchAnswerMapReduce = {
           strategy: "map_reduce",
-          phase: "mapping",
+          phase: "planning",
           snapshot_id: complete.snapshot_id,
           ...(executorType ? { executor_type: executorType } : {}),
+          planning_attempt: 0,
           batch_offsets: batchOffsets,
           total_batches: batchOffsets.length - 1,
           completed_batches: 0,
@@ -288,11 +297,7 @@ export class PersonalConversationContextService {
         return {
           query,
           ...(executorType ? { executor_type: executorType } : {}),
-          evidence_text: await this.mapBatchEvidence(
-            complete.snapshot_id,
-            allRefs.slice(batchOffsets[0], batchOffsets[1]),
-            query,
-          ),
+          evidence_text: aggregatePlannerEvidence(query, intent),
           refs: allRefs,
           scope: { ...scope, map_reduce: mapReduce },
           map_reduce: mapReduce,
@@ -387,6 +392,8 @@ export class PersonalConversationContextService {
     snapshotId: string,
     eventIds: readonly string[],
     query: string,
+    spec?: AggregateSpec,
+    specHash?: string,
   ): Promise<string> {
     const bundle = await this.runtime.requireHost().get("context").replay({
       org_id: this.runtime.orgId(),
@@ -407,6 +414,7 @@ export class PersonalConversationContextService {
         "Aggregate context snapshot is incomplete",
       );
     }
+
     const authority = this.runtime.requireHost().get("authority");
     const events = await Promise.all(eventIds.map((eventId) =>
       authority.getEvent(this.runtime.orgId(), eventId)));
@@ -420,6 +428,12 @@ export class PersonalConversationContextService {
       "QUESTION",
       query,
       "",
+      ...(spec && specHash ? [
+        "CANONICAL AGGREGATE SPEC",
+        JSON.stringify(spec),
+        `spec_hash=${specHash}`,
+        "",
+      ] : []),
       "BATCH MESSAGES",
       ...eventIds.map((eventId, index) => {
         const item = byId.get(eventId)!;
@@ -439,6 +453,8 @@ export class PersonalConversationContextService {
           );
         }
         return mapBatchMessageLine({
+          event_id: eventId,
+          external_id: event?.external_id,
           occurred_at: evidence?.occurred_at,
           source: evidence?.source,
           text: content.text,
@@ -446,6 +462,31 @@ export class PersonalConversationContextService {
         }, index);
       }),
     ].join("\n");
+  }
+
+  async mapBatchDedupeMetadata(
+    eventIds: readonly string[],
+  ): Promise<MapBatchDedupeMetadata[]> {
+    const authority = this.runtime.requireHost().get("authority");
+    return Promise.all(eventIds.map(async (eventId) => {
+      const event = await authority.getEvent(this.runtime.orgId(), eventId);
+      if (!event || event.id !== eventId) {
+        throw new PersonalContextError(
+          "context_changed",
+          HttpStatus.CONFLICT,
+          "Aggregate evidence changed; search again",
+        );
+      }
+      const url = stringAttribute(event.attrs, "url")
+        ?? stringAttribute(event.attrs, "permalink");
+      const businessId = stringAttribute(event.attrs, "business_id");
+      return {
+        event_id: event.id,
+        external_id: event.external_id,
+        ...(url ? { url } : {}),
+        ...(businessId ? { business_id: businessId } : {}),
+      };
+    }));
   }
 
   private async selectedAnswerConversations(
@@ -599,6 +640,8 @@ export class PersonalConversationContextService {
 }
 
 interface MapBatchMessage {
+  event_id?: string;
+  external_id?: string;
   occurred_at?: string;
   source?: string;
   text: string;
@@ -617,7 +660,26 @@ export function mapBatchMessageLine(
     message.text.replace(/\s+/g, " ").slice(0, MAP_REDUCE_MESSAGE_CHARS),
     ...attachments,
   ].filter(Boolean).join(" ");
-  return `[${batchIndex + 1}] ${sentAt} UTC · ${message.source ?? "unknown"}: ${body}`;
+  const metadata = [
+    message.event_id ? `event_id=${JSON.stringify(message.event_id)}` : "",
+    message.external_id ? `external_id=${JSON.stringify(message.external_id)}` : "",
+  ].filter(Boolean).join(" ");
+  return `[${batchIndex + 1}] ${sentAt} UTC · ${message.source ?? "unknown"}${
+    metadata ? ` · ${metadata}` : ""
+  }: ${body}`;
+}
+
+function aggregatePlannerEvidence(
+  query: string,
+  intent: SearchAnswerIntent,
+): string {
+  return [
+    "UNTRUSTED QUESTION DATA",
+    query,
+    "",
+    `requested_intent=${intent}`,
+    "Create one bounded canonical plan. Do not infer facts or answer the question.",
+  ].join("\n");
 }
 
 export function adaptiveMapBatchOffsets(
