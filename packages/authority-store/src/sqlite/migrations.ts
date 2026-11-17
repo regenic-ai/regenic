@@ -1627,7 +1627,7 @@ export const MIGRATIONS = [
   {
     version: 81,
     sql: `
-      CREATE TABLE aggregate_fact_cache (
+      CREATE TABLE IF NOT EXISTS aggregate_fact_cache (
         org_id TEXT NOT NULL,
         spec_hash TEXT NOT NULL,
         extractor_version TEXT NOT NULL,
@@ -1638,7 +1638,7 @@ export const MIGRATIONS = [
         updated_at TEXT NOT NULL,
         PRIMARY KEY (org_id, spec_hash, extractor_version, event_id)
       );
-      CREATE INDEX aggregate_fact_cache_event_idx
+      CREATE INDEX IF NOT EXISTS aggregate_fact_cache_event_idx
         ON aggregate_fact_cache (org_id, event_id);
     `,
   },
