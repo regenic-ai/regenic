@@ -225,15 +225,15 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
         .run(orgId, Number(enabled));
     }).immediate();
     if (!enabled) {
-      // The policy write is already committed. A reader can make TRUNCATE
-      // busy for a moment; retry, then keep the process up. The next disable
-      // pass truncates again.
+      // A reader can make TRUNCATE busy for a moment. Retry that, then still
+      // fail: a held reader means the visual pages were not removed, and the
+      // desktop surfaces that as a failed permission change.
       for (let attempt = 0; attempt < 8; attempt += 1) {
         const checkpoint = this.db.pragma("wal_checkpoint(TRUNCATE)") as Array<{ busy: number }>;
         if (!checkpoint.some((row) => row.busy !== 0)) return;
         await new Promise((resolve) => setTimeout(resolve, 25 * (attempt + 1)));
       }
-      console.error("Visual index deletion checkpoint is busy");
+      throw new Error("Visual index deletion checkpoint is busy");
     }
   }
 
