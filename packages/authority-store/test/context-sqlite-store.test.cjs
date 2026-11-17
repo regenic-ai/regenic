@@ -180,6 +180,64 @@ function snapshotIndex(snapshotValue, overrides = {}) {
 }
 
 describe("SQLite context artifact store", () => {
+  it("persists content-addressed aggregate facts including negative results", async () => {
+    const root = await createRoot();
+    const path = join(root, "authority.db");
+    let store = new SqliteAuthorityStore(path);
+    const now = "2026-08-30T00:00:00.000Z";
+    await store.putAggregateFactCache([
+      {
+        org_id: "example-org",
+        spec_hash: HASH_A,
+        extractor_version: "typed-event-v1",
+        event_id: "event-positive",
+        content_hash: HASH_B,
+        facts: [{
+          dedupe_key: "event_id:event-positive",
+          group: "all",
+          metric: "task_count",
+          value: 1,
+          event_ids: ["event-positive"],
+        }],
+        created_at: now,
+        updated_at: now,
+      },
+      {
+        org_id: "example-org",
+        spec_hash: HASH_A,
+        extractor_version: "typed-event-v1",
+        event_id: "event-negative",
+        content_hash: HASH_B,
+        facts: [],
+        created_at: now,
+        updated_at: now,
+      },
+    ]);
+    store.close();
+
+    store = new SqliteAuthorityStore(path);
+    const records = await store.getAggregateFactCache(
+      "example-org",
+      HASH_A,
+      "typed-event-v1",
+      ["event-negative", "event-positive", "outside"],
+    );
+    assert.deepEqual(
+      records.map((record) => [record.event_id, record.facts.length]).sort(),
+      [["event-negative", 0], ["event-positive", 1]],
+    );
+    assert.equal(
+      (await store.getAggregateFactCache(
+        "other-org",
+        HASH_A,
+        "typed-event-v1",
+        ["event-positive"],
+      )).length,
+      0,
+    );
+    store.close();
+  });
+
   it("transitions artifact decisions and atomically supersedes an accepted artifact", async () => {
     const root = await createRoot();
     const path = join(root, "authority.db");

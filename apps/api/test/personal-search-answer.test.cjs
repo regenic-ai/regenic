@@ -112,6 +112,16 @@ describe("aggregate fact reduction", () => {
         () => parseMapFacts(output("task_status", "blocked"), ["event-1"], status),
         /not allowed/,
       );
+      assert.throws(
+        () => parseMapFacts(JSON.stringify([{
+          dedupe_key: "event_id:joined",
+          group: "g",
+          metric: "video_count",
+          value: 1,
+          evidence_refs: [1, 2],
+        }]), ["event-1", "event-2"], count()),
+        /Invalid fact/,
+      );
     });
 
     it("uses deterministic event IDs and operation-specific stable reduction", () => {
@@ -696,6 +706,36 @@ describe("persistent aggregate planning", () => {
     assert.doesNotMatch(serialized, /subject|snapshot_id|facts|work_item_id.*search-answer-map/);
   });
 
+  it("reuses content-addressed event facts without starting map runs", async () => {
+    const harness = planningHarness(completedRun(validPlan), {
+      cached: true,
+    });
+    const result = await harness.service().get("answer-plan");
+
+    assert.equal(result.progress.cache_hits, 4);
+    assert.equal(result.progress.cache_misses, 0);
+    assert.equal(result.progress.completed_batches, 4);
+    assert.equal(
+      harness.started.filter((id) => id.startsWith("search-answer-map:")).length,
+      0,
+    );
+  });
+
+  it("treats a changed content hash as a cache miss", async () => {
+    const harness = planningHarness(completedRun(validPlan), {
+      cached: true,
+      staleEventId: "e1",
+    });
+    const result = await harness.service().get("answer-plan");
+
+    assert.equal(result.progress.cache_hits, 3);
+    assert.equal(result.progress.cache_misses, 1);
+    assert.equal(
+      harness.started.filter((id) => id.startsWith("search-answer-map:")).length,
+      1,
+    );
+  });
+
   it("retries invalid JSON once without embedding the invalid output", async () => {
     const harness = planningHarness(completedRun("INVALID SECRET"));
     const retry = await harness.service().get("answer-plan");
@@ -828,6 +868,28 @@ function planningHarness(initialRun, options = {}) {
       harness.record = structuredClone(record);
       return harness.record;
     },
+    getAggregateFactCache: async (_orgId, specHash, extractorVersion, ids) =>
+      options.cached
+        ? ids.map((event_id) => ({
+            org_id: "org-1",
+            spec_hash: specHash,
+            extractor_version: extractorVersion,
+            event_id,
+            content_hash: event_id === options.staleEventId
+              ? `stale-hash-${event_id}`
+              : `hash-${event_id}`,
+            facts: event_id === "e4" ? [] : [{
+              dedupe_key: `event_id:${event_id}`,
+              group: "all",
+              metric: "task_count",
+              value: 1,
+              event_ids: [event_id],
+            }],
+            created_at: "2026-01-01T00:00:00.000Z",
+            updated_at: "2026-01-01T00:00:00.000Z",
+          }))
+        : [],
+    putAggregateFactCache: async () => {},
   };
   const runtime = {
     orgId: () => "org-1",
@@ -835,6 +897,12 @@ function planningHarness(initialRun, options = {}) {
   };
   const context = {
     mapBatchEvidence: async () => "typed evidence",
+    mapBatchInputs: async (_snapshotId, ids) => ids.map((event_id) => ({
+      event_id,
+      content_hash: `hash-${event_id}`,
+      message: { event_id, text: `message ${event_id}` },
+      dedupe: { event_id },
+    })),
     mapBatchDedupeMetadata: async (ids) =>
       ids.map((event_id) => ({ event_id })),
   };

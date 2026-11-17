@@ -1031,6 +1031,26 @@ export class SqliteSplitAuthorityStore
     return this.writer.call("deleteSearchAnswer", [orgId, id]);
   }
 
+  async getAggregateFactCache(
+    orgId: string,
+    specHash: string,
+    extractorVersion: string,
+    eventIds: readonly string[],
+  ): ReturnType<WorkStore["getAggregateFactCache"]> {
+    return this.reader.call("getAggregateFactCache", [
+      orgId,
+      specHash,
+      extractorVersion,
+      eventIds,
+    ]);
+  }
+
+  async putAggregateFactCache(
+    records: Parameters<WorkStore["putAggregateFactCache"]>[0],
+  ): Promise<void> {
+    return this.writer.call("putAggregateFactCache", [records]);
+  }
+
   async listWorkDeliveries(orgId: string): Promise<WorkDelivery[]> {
     return this.reader.call("listWorkDeliveries", [orgId]);
   }

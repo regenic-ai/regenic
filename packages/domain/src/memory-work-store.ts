@@ -33,7 +33,10 @@ import {
   planWorkDeliveryCommand,
   sameWorkDeliveryRetryCommand,
 } from "./work-delivery";
-import type { SearchAnswerRecord } from "./search-answer";
+import type {
+  AggregateFactCacheRecord,
+  SearchAnswerRecord,
+} from "./search-answer";
 import {
   prepareWorkObservation,
   prepareCancellationJobObservation,
@@ -84,6 +87,15 @@ import {
   type WorkDeliveryLifecycleEvent,
 } from "./work-transition";
 
+function aggregateFactCacheKey(
+  orgId: string,
+  specHash: string,
+  extractorVersion: string,
+  eventId: string,
+): string {
+  return `${orgId}\0${specHash}\0${extractorVersion}\0${eventId}`;
+}
+
 export class MemoryWorkStore implements WorkStore, ExecutorStore {
   private readonly recipes = new Map<string, Recipe>();
   private readonly items = new Map<string, WorkItem>();
@@ -91,6 +103,7 @@ export class MemoryWorkStore implements WorkStore, ExecutorStore {
   private readonly deliveries = new Map<string, WorkDelivery>();
   private readonly uiPrefs = new Map<string, string>();
   private readonly searchAnswers = new Map<string, SearchAnswerRecord>();
+  private readonly aggregateFactCache = new Map<string, AggregateFactCacheRecord>();
   private readonly dismissalCommands = new Map<string, { command: WorkDismissal; item: WorkItem }>();
   private readonly acknowledgmentCommands = new Map<string, { command: WorkAcknowledgment; item: WorkItem }>();
   private readonly currentWorkEvidence = new Set<string>();
@@ -1030,6 +1043,36 @@ export class MemoryWorkStore implements WorkStore, ExecutorStore {
   async deleteSearchAnswer(orgId: string, id: string): Promise<boolean> {
     const record = this.searchAnswers.get(id);
     return record?.org_id === orgId && this.searchAnswers.delete(id);
+  }
+
+  async getAggregateFactCache(
+    orgId: string,
+    specHash: string,
+    extractorVersion: string,
+    eventIds: readonly string[],
+  ): Promise<AggregateFactCacheRecord[]> {
+    return eventIds.flatMap((eventId) => {
+      const record = this.aggregateFactCache.get(
+        aggregateFactCacheKey(orgId, specHash, extractorVersion, eventId),
+      );
+      return record ? [structuredClone(record)] : [];
+    });
+  }
+
+  async putAggregateFactCache(
+    records: readonly AggregateFactCacheRecord[],
+  ): Promise<void> {
+    for (const record of records) {
+      this.aggregateFactCache.set(
+        aggregateFactCacheKey(
+          record.org_id,
+          record.spec_hash,
+          record.extractor_version,
+          record.event_id,
+        ),
+        structuredClone(record),
+      );
+    }
   }
 
   async listExecutorInstallations(orgId: string): Promise<ExecutorInstallation[]> {

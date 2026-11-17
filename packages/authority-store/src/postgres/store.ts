@@ -406,12 +406,14 @@ import {
   listCancellationJobs,
   retryCancellationJob,
   deleteSearchAnswer,
+  getAggregateFactCache,
   deleteExecutorInstallation,
   deleteRecipe,
   getActiveWorkRun,
   getExecutorInstallation,
   getRecipe,
   getSearchAnswer,
+  putAggregateFactCache,
   getWorkDelivery,
   getWorkDeliveryByItem,
   getWorkItem,
@@ -1070,6 +1072,7 @@ export class PostgresAuthorityStore
       await this.execute(`DELETE FROM work_deliveries WHERE org_id = $1`, [orgId], client);
       await this.execute(`DELETE FROM work_runs WHERE org_id = $1`, [orgId], client);
       await this.execute(`DELETE FROM search_answers WHERE org_id = $1`, [orgId], client);
+      await this.execute(`DELETE FROM aggregate_fact_cache WHERE org_id = $1`, [orgId], client);
       await this.execute(`DELETE FROM work_items WHERE org_id = $1`, [orgId], client);
       await this.execute(`DELETE FROM customer_service_tasks WHERE org_id = $1`, [orgId], client);
       await this.execute(`DELETE FROM context_snapshot_index WHERE org_id = $1`, [orgId], client);
@@ -1452,6 +1455,25 @@ export class PostgresAuthorityStore
 
   async deleteSearchAnswer(orgId: string, id: string): Promise<boolean> {
     return deleteSearchAnswer(this.sql, orgId, id);
+  }
+
+  async getAggregateFactCache(
+    orgId: string,
+    specHash: string,
+    extractorVersion: string,
+    eventIds: readonly string[],
+  ) {
+    return getAggregateFactCache(
+      this.sql,
+      orgId,
+      specHash,
+      extractorVersion,
+      eventIds,
+    );
+  }
+
+  async putAggregateFactCache(records: Parameters<typeof putAggregateFactCache>[1]) {
+    return putAggregateFactCache(this.sql, records);
   }
 
   async listWorkDeliveries(orgId: string): Promise<WorkDelivery[]> {

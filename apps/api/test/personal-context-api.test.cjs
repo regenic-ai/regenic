@@ -1404,15 +1404,24 @@ describe("personal context API", () => {
       `${origin}/v1/me/context/search/answers/${answer.answer_id}`,
     );
     answer = await response.json();
+    assert.equal(response.status, 200, JSON.stringify(answer));
+    assert.equal(answer.status, "running", JSON.stringify(answer));
     const startsAfterResume = executor.requests.filter((request) =>
       request.method === "POST" && request.url === "/v1/runs");
+    const resumedMap = startsAfterResume.find((request) =>
+      request.body.work_item_id?.startsWith(`search-answer-map:${answer.answer_id}:`));
+    assert.ok(resumedMap, "expected at least one map execution after planning");
+    const resumedBatch = Number(
+      resumedMap.body.work_item_id.match(/:(\d+):\d+$/)?.[1],
+    );
+    const resumedOffset = persistedOffsets[resumedBatch];
     assert.match(
-      startsAfterResume[2].body.evidence_text,
-      new RegExp(`bulk-task-${persistedOffsets[1]} completed`),
+      resumedMap.body.evidence_text,
+      new RegExp(`bulk-task-${resumedOffset} completed`),
     );
     assert.doesNotMatch(
-      startsAfterResume[2].body.evidence_text,
-      new RegExp(`bulk-task-${persistedOffsets[1] - 1} completed`),
+      resumedMap.body.evidence_text,
+      new RegExp(`bulk-task-${resumedOffset - 1} completed`),
     );
     let pollingRounds = 1;
     while (answer.status !== "completed" && pollingRounds < 20) {
@@ -1466,6 +1475,8 @@ describe("personal context API", () => {
       pending_batches: 0,
       retrying_batches: 0,
       max_parallelism: 1,
+      cache_hits: 0,
+      cache_misses: 1_001,
     });
     const starts = executor.requests.filter((request) =>
       request.method === "POST" && request.url === "/v1/runs");

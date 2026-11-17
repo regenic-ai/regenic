@@ -353,12 +353,14 @@ import {
   listCancellationJobs,
   retryCancellationJob,
   deleteSearchAnswer,
+  getAggregateFactCache,
   deleteExecutorInstallation,
   deleteRecipe,
   getActiveWorkRun,
   getExecutorInstallation,
   getRecipe,
   getSearchAnswer,
+  putAggregateFactCache,
   getWorkDelivery,
   getWorkDeliveryByItem,
   getWorkItem,
@@ -1101,6 +1103,7 @@ export class SqliteAuthorityStore
       this.database.prepare(`DELETE FROM work_deliveries WHERE org_id = ?`).run(orgId);
       this.database.prepare(`DELETE FROM work_runs WHERE org_id = ?`).run(orgId);
       this.database.prepare(`DELETE FROM search_answers WHERE org_id = ?`).run(orgId);
+      this.database.prepare(`DELETE FROM aggregate_fact_cache WHERE org_id = ?`).run(orgId);
       this.database.prepare(`DELETE FROM work_items WHERE org_id = ?`).run(orgId);
       this.database.prepare(`DELETE FROM customer_service_tasks WHERE org_id = ?`).run(orgId);
       this.database.prepare(`DELETE FROM context_snapshot_index WHERE org_id = ?`).run(orgId);
@@ -1485,6 +1488,26 @@ export class SqliteAuthorityStore
   async deleteSearchAnswer(orgId: string, id: string): Promise<boolean> {
     this.assertWritable();
     return deleteSearchAnswer(this.database, orgId, id);
+  }
+
+  async getAggregateFactCache(
+    orgId: string,
+    specHash: string,
+    extractorVersion: string,
+    eventIds: readonly string[],
+  ) {
+    return getAggregateFactCache(
+      this.database,
+      orgId,
+      specHash,
+      extractorVersion,
+      eventIds,
+    );
+  }
+
+  async putAggregateFactCache(records: Parameters<typeof putAggregateFactCache>[1]) {
+    this.assertWritable();
+    return putAggregateFactCache(this.database, records);
   }
 
   async listWorkDeliveries(orgId: string): Promise<WorkDelivery[]> {

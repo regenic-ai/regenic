@@ -10,6 +10,7 @@ import { useLocale } from "./LocaleContext";
 import type { ExecutorCatalogEntry, PersonalSearchAnswer, PersonalSearchConversation } from "./types";
 import { subscribeWorkUpdates } from "./personal-events";
 import {
+  searchAnswerCacheCopy,
   searchAnswerConflictCopy,
   searchAnswerProgressCopy,
 } from "./search-answer-progress";
@@ -153,6 +154,9 @@ export function SearchAnswerCard({ query, conversations, intent, filters, onCite
     const conflictCopy = answer.progress
       ? searchAnswerConflictCopy(answer.progress)
       : null;
+    const cacheCopy = answer.progress
+      ? searchAnswerCacheCopy(answer.progress)
+      : null;
     body = (
       <>
         {answer.scope?.plan ? (
@@ -178,6 +182,11 @@ export function SearchAnswerCard({ query, conversations, intent, filters, onCite
         {conflictCopy ? (
           <p className="search-warning" role="status">
             {t(conflictCopy.key, conflictCopy.vars)}
+          </p>
+        ) : null}
+        {cacheCopy ? (
+          <p className="muted" role="status">
+            {t(cacheCopy.key, cacheCopy.vars)}
           </p>
         ) : null}
       </>

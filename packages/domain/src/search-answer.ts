@@ -21,6 +21,17 @@ export interface SearchAnswerFact {
   event_ids: string[];
 }
 
+export interface AggregateFactCacheRecord {
+  org_id: string;
+  spec_hash: string;
+  extractor_version: string;
+  event_id: string;
+  content_hash: string;
+  facts: SearchAnswerFact[];
+  created_at: string;
+  updated_at: string;
+}
+
 export type SearchAnswerMapBatchStatus =
   | "pending"
   | "running"
@@ -38,6 +49,12 @@ export interface SearchAnswerMapBatch {
   work_item_id?: string;
   /** Parsed facts only; message bodies remain in the authorized snapshot. */
   facts?: SearchAnswerFact[];
+  /** Typed facts restored from content-addressed cache entries. */
+  cached_facts?: SearchAnswerFact[];
+  /** Authorized cache misses included in the current model execution. */
+  map_event_ids?: string[];
+  cache_hits?: number;
+  cache_misses?: number;
 }
 
 export interface SearchAnswerMapReduce {
@@ -94,6 +111,8 @@ export interface SearchAnswerProgress {
   pending_batches: number;
   retrying_batches: number;
   max_parallelism: number;
+  cache_hits?: number;
+  cache_misses?: number;
   /** Number of conflicting canonical fact identities, capped by the reducer. */
   conflict_count?: number;
 }
@@ -119,4 +138,13 @@ export interface SearchAnswerStore {
   /** Existing identity and outcome are immutable here; historical inserts remain supported. */
   putSearchAnswer(record: SearchAnswerRecord): Promise<SearchAnswerRecord>;
   deleteSearchAnswer(orgId: string, id: string): Promise<boolean>;
+  getAggregateFactCache(
+    orgId: string,
+    specHash: string,
+    extractorVersion: string,
+    eventIds: readonly string[],
+  ): Promise<AggregateFactCacheRecord[]>;
+  putAggregateFactCache(
+    records: readonly AggregateFactCacheRecord[],
+  ): Promise<void>;
 }
