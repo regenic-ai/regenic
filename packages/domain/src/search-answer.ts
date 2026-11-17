@@ -1,11 +1,15 @@
 export type SearchAnswerOutcome = "timed_out" | "cancelled";
 export type SearchAnswerIntent = "lookup" | "aggregate" | "list";
+import type { AggregateSpec, AggregateSpecSummary } from "./aggregate-spec";
+
 export type SearchAnswerIncompleteReason =
   | "missing_time_range"
   | "range_too_wide"
   | "scope_limit"
   | "unreadable_evidence"
   | "transcript_limit"
+  | "planning_failed"
+  | "schema_mismatch"
   | "map_failed"
   | "fact_conflict";
 
@@ -38,9 +42,15 @@ export interface SearchAnswerMapBatch {
 
 export interface SearchAnswerMapReduce {
   strategy: "map_reduce";
-  phase: "mapping" | "reducing";
+  phase: "planning" | "mapping" | "reducing";
   snapshot_id: string;
   executor_type?: string;
+  spec?: AggregateSpec;
+  spec_hash?: string;
+  /** Zero-based attempt. Exactly one safe retry is allowed. */
+  planning_attempt?: number;
+  /** Records created before typed planning continue with their legacy parser. */
+  legacy_untyped?: boolean;
   batch_offsets: number[];
   /** Retained for resumability of records created before adaptive batches. */
   batch_size?: number;
@@ -64,6 +74,8 @@ export interface SearchAnswerScope {
   omitted_count: number | null;
   /** Number of conflicting canonical fact identities, capped by the reducer. */
   conflict_count?: number;
+  spec_hash?: string;
+  plan?: AggregateSpecSummary;
   occurred_after?: string;
   occurred_before?: string;
   incomplete_reason?: SearchAnswerIncompleteReason;
@@ -71,7 +83,7 @@ export interface SearchAnswerScope {
 }
 
 export interface SearchAnswerProgress {
-  phase: "mapping" | "reducing";
+  phase: "planning" | "mapping" | "reducing";
   completed_batches: number;
   total_batches: number;
   processed_messages: number;

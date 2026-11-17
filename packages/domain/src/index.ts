@@ -106,6 +106,7 @@ export * from "./context-compatibility";
 export * from "./context-lexical";
 export * from "./context-selection";
 export * from "./search-answer";
+export * from "./aggregate-spec";
 export * from "./embedding-provider";
 export * from "./context-vector-index";
 export * from "./context-projection-outbox";

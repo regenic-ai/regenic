@@ -4,8 +4,11 @@ const {
   PersonalSearchAnswerService,
   SEARCH_ANSWER_REDUCED_CITATION_MAX,
   SEARCH_ANSWER_MAP_RETRY_PROMPT,
+  SEARCH_ANSWER_PLANNER_RETRY_PROMPT,
   mapWorkItemId,
+  parseAggregatePlan,
   parseMapFacts,
+  planWorkItemId,
   reduceFacts,
   reduceFactsWithDiagnostics,
   searchAnswerCitations,
@@ -19,6 +22,7 @@ const {
   adaptiveMapBatchOffsets,
   mapBatchMessageLine,
 } = require("../dist/personal-conversation-context.service");
+const badCaseFixtures = require("./fixtures/typed-aggregate-bad-cases.cjs");
 
 describe("search answer citations", () => {
   it("prefers structured executor evidence and uses bracket refs as fallback", () => {
@@ -53,6 +57,170 @@ describe("aggregate fact reduction", () => {
     );
 
     assert.equal(facts[0].dedupe_key, "ticket 42");
+  });
+
+  describe("typed aggregate plans and facts", () => {
+    const count = () => ({
+      version: 1,
+      operation: "count",
+      metric: { id: "video_count", label: "Video count" },
+      group_dimensions: [{ id: "month", label: "Month" }],
+      subject: { terms: ["hollyland"], constraints: [] },
+      value_type: "count",
+      dedupe_strategy: "event_id",
+    });
+
+    it("parses only strict JSON plans", () => {
+      assert.equal(parseAggregatePlan(JSON.stringify(count())).metric.id, "video_count");
+      assert.throws(
+        () => parseAggregatePlan(`\`\`\`json\n${JSON.stringify(count())}\n\`\`\``),
+        /Invalid aggregate plan/,
+      );
+      assert.throws(
+        () => parseAggregatePlan(JSON.stringify({ ...count(), raw_prompt: "no" })),
+        /unknown field/,
+      );
+    });
+
+    it("rejects wrong metrics, values and categories", () => {
+      const output = (metric, value) => JSON.stringify([{
+        dedupe_key: "event_id:model-value-is-ignored",
+        group: "2026-10",
+        metric,
+        value,
+        evidence_refs: [1],
+      }]);
+      assert.throws(
+        () => parseMapFacts(output("other", 1), ["event-1"], count()),
+        /metric/,
+      );
+      assert.throws(
+        () => parseMapFacts(output("video_count", 2), ["event-1"], count()),
+        /atomic/,
+      );
+      const status = {
+        ...count(),
+        operation: "status_summary",
+        value_type: "category",
+        metric: { id: "task_status", label: "Task status" },
+        allowed_categories: [
+          { id: "done", label: "Done" },
+          { id: "open", label: "Open" },
+        ],
+      };
+      assert.throws(
+        () => parseMapFacts(output("task_status", "blocked"), ["event-1"], status),
+        /not allowed/,
+      );
+    });
+
+    it("uses deterministic event IDs and operation-specific stable reduction", () => {
+      const parsed = parseMapFacts(JSON.stringify([{
+        dedupe_key: "event_id:untrusted",
+        group: "2026-10",
+        metric: "video_count",
+        value: 1,
+        evidence_refs: [1],
+      }]), ["event-1"], count());
+      assert.equal(parsed[0].dedupe_key, "event_id:event-1");
+      assert.equal(
+        reduceFacts(parsed, ["event-1"], count()),
+        '- group="2026-10" metric="video_count" total=1 [1]',
+      );
+
+      const list = {
+        ...count(),
+        operation: "list",
+        value_type: "category",
+        metric: { id: "customer", label: "Customer" },
+        dedupe_strategy: "business_id",
+      };
+      const listFacts = [
+        fact("business_id:customer-2", "unreplied", "customer", "Beta", ["e2"]),
+        fact("business_id:customer-1", "unreplied", "customer", "Acme", ["e1"]),
+      ];
+      const reduced = reduceFacts(listFacts, ["e1", "e2"], list);
+      assert.equal(
+        reduced,
+        '- group="unreplied" metric="customer" item="Acme" [1]\n'
+          + '- group="unreplied" metric="customer" item="Beta" [2]',
+      );
+      assert.equal(
+        Buffer.compare(
+          Buffer.from(reduced),
+          Buffer.from(reduceFacts(listFacts.toReversed(), ["e1", "e2"], list)),
+        ),
+        0,
+      );
+
+      const status = {
+        ...count(),
+        operation: "status_summary",
+        value_type: "category",
+        metric: { id: "task_status", label: "Task status" },
+        allowed_categories: [
+          { id: "done", label: "Done" },
+          { id: "open", label: "Open" },
+        ],
+      };
+      assert.equal(
+        reduceFacts([
+          fact("event_id:e1", "alice", "task_status", "done", ["e1"]),
+          fact("event_id:e2", "alice", "task_status", "open", ["e2"]),
+        ], ["e1", "e2"], status),
+        '- group="alice" metric="task_status" category="done" total=1 [1]\n'
+          + '- group="alice" metric="task_status" category="open" total=1 [2]',
+      );
+    });
+
+    it("forms bounded keys for every dedupe strategy", () => {
+      const output = (key) => JSON.stringify([{
+        dedupe_key: key,
+        group: "g",
+        metric: "customer",
+        value: "Acme",
+        evidence_refs: [1],
+      }]);
+      for (const [strategy, key, expected, metadata] of [
+        ["business_id", "business_id: ACME  42", "business_id:acme 42",
+          [{ event_id: "e1", business_id: "acme 42" }]],
+        ["external_id", "external_id: EXT-42", "external_id:ext-42",
+          [{ event_id: "e1", external_id: "ext-42" }]],
+        ["url", "url:https://example.com/a#fragment", "url:https://example.com/a",
+          [{ event_id: "e1", url: "https://example.com/a" }]],
+        ["text_signature", "text_signature: Customer ACME", /^text_signature:[a-f0-9]{64}$/,
+          undefined],
+      ]) {
+        const spec = {
+          ...count(),
+          operation: "list",
+          value_type: "category",
+          metric: { id: "customer", label: "Customer" },
+          dedupe_strategy: strategy,
+        };
+        const actual = parseMapFacts(output(key), ["e1"], spec, metadata)[0].dedupe_key;
+        expected instanceof RegExp
+          ? assert.match(actual, expected)
+          : assert.equal(actual, expected);
+      }
+    });
+
+    it("closes the four aggregate bad-case fixtures end to end", () => {
+      for (const fixture of badCaseFixtures) {
+        const spec = parseAggregatePlan(JSON.stringify(fixture.spec));
+        const facts = parseMapFacts(
+          JSON.stringify(fixture.facts),
+          fixture.refs,
+          spec,
+          fixture.metadata,
+        );
+        assert.match(
+          reduceFacts(facts, fixture.refs, spec),
+          fixture.expected,
+          fixture.name,
+        );
+      }
+    });
   });
 
   it("merges identical duplicates and unions their citations", () => {
@@ -496,6 +664,98 @@ describe("aggregate map retry", () => {
       searchAnswerIdFromWorkItem(mapWorkItemId("answer-1", 4, 1)),
       "answer-1",
     );
+    assert.equal(
+      searchAnswerIdFromWorkItem(planWorkItemId("answer-1", 1)),
+      "answer-1",
+    );
+  });
+});
+
+describe("persistent aggregate planning", () => {
+  const validPlan = JSON.stringify({
+    version: 1,
+    operation: "count",
+    metric: { id: "task_count", label: "Task count" },
+    group_dimensions: [{ id: "person", label: "Person" }],
+    subject: { terms: ["task"], constraints: [] },
+    value_type: "count",
+    dedupe_strategy: "event_id",
+  });
+
+  it("persists a validated hash before opening at most three map batches", async () => {
+    const harness = planningHarness(completedRun(validPlan));
+    const result = await harness.service().get("answer-plan");
+
+    assert.equal(harness.record.scope.map_reduce.phase, "mapping");
+    assert.match(harness.record.scope.spec_hash, /^[a-f0-9]{64}$/);
+    assert.equal(harness.record.scope.plan.metric.id, "task_count");
+    assert.equal(result.progress.active_batches, 3);
+    assert.equal(result.progress.pending_batches, 1);
+    assert.equal(harness.started.filter((id) => id.startsWith("search-answer-map:")).length, 3);
+    const serialized = JSON.stringify(result);
+    assert.doesNotMatch(serialized, /subject|snapshot_id|facts|work_item_id.*search-answer-map/);
+  });
+
+  it("retries invalid JSON once without embedding the invalid output", async () => {
+    const harness = planningHarness(completedRun("INVALID SECRET"));
+    const retry = await harness.service().get("answer-plan");
+
+    assert.equal(retry.progress.phase, "planning");
+    assert.equal(retry.progress.current_attempt, 2);
+    assert.equal(harness.record.work_item_id, planWorkItemId("answer-plan", 1));
+    assert.equal(harness.prepared.at(-1).prompt, SEARCH_ANSWER_PLANNER_RETRY_PROMPT);
+    assert.doesNotMatch(harness.evidence.at(-1), /INVALID SECRET/);
+
+    harness.states.set(
+      planWorkItemId("answer-plan", 1),
+      executionState(completedRun(validPlan), "completed"),
+    );
+    const mapped = await harness.service().get("answer-plan");
+    assert.equal(mapped.progress.phase, "mapping");
+  });
+
+  it("fails closed after planning retry exhaustion", async () => {
+    const harness = planningHarness(completedRun("{}"), {
+      planningAttempt: 1,
+    });
+    const result = await harness.service().get("answer-plan");
+    assert.equal(result.status, "failed");
+    assert.equal(result.scope.complete, false);
+    assert.equal(result.scope.incomplete_reason, "planning_failed");
+    assert.equal(harness.prepared.length, 0);
+  });
+
+  it("fails closed when a persisted spec no longer matches its hash", async () => {
+    const harness = planningHarness(completedRun(validPlan));
+    await harness.service().get("answer-plan");
+    harness.record.scope.map_reduce.spec.metric.id = "tampered";
+
+    const result = await harness.service().get("answer-plan");
+    assert.equal(result.status, "failed");
+    assert.equal(result.scope.incomplete_reason, "schema_mismatch");
+    assert.equal(result.scope.spec_hash, undefined);
+    assert.equal(result.scope.plan, undefined);
+  });
+
+  it("recovers an open planner run after restart", async () => {
+    const harness = planningHarness(undefined, { itemStatus: "open" });
+    const result = await harness.service().get("answer-plan");
+    assert.equal(result.progress.phase, "planning");
+    assert.deepEqual(harness.started, [planWorkItemId("answer-plan", 0)]);
+  });
+
+  it("cancels planning and honors the original overall deadline", async () => {
+    const cancelled = planningHarness(runWithStatus("running"));
+    const cancelledView = await cancelled.service().cancel("answer-plan");
+    assert.equal(cancelledView.status, "cancelled");
+    assert.deepEqual(cancelled.cancelled, [planWorkItemId("answer-plan", 0)]);
+
+    const expired = planningHarness(runWithStatus("running"), {
+      createdAt: "2020-01-01T00:00:00.000Z",
+    });
+    const timedOut = await expired.service().get("answer-plan");
+    assert.equal(timedOut.status, "timed_out");
+    assert.deepEqual(expired.cancelled, [planWorkItemId("answer-plan", 0)]);
   });
 });
 
@@ -507,6 +767,112 @@ function fact(dedupeKey, group, metric, value, eventIds) {
     value,
     event_ids: eventIds,
   };
+}
+
+function planningHarness(initialRun, options = {}) {
+  const eventIds = ["e1", "e2", "e3", "e4"];
+  const states = new Map();
+  const prepared = [];
+  const started = [];
+  const evidence = [];
+  const cancelled = [];
+  const attempt = options.planningAttempt ?? 0;
+  const harness = {
+    record: {
+      id: "answer-plan",
+      org_id: "org-1",
+      work_item_id: planWorkItemId("answer-plan", attempt),
+      query: "count tasks by person",
+      event_ids: eventIds,
+      scope: {
+        intent: "aggregate",
+        complete: true,
+        total_count: 4,
+        included_count: 4,
+        omitted_count: 0,
+        map_reduce: {
+          strategy: "map_reduce",
+          phase: "planning",
+          snapshot_id: "private-snapshot",
+          batch_offsets: [0, 1, 2, 3, 4],
+          total_batches: 4,
+          planning_attempt: attempt,
+          completed_batches: 0,
+          batch_attempt: 0,
+          facts: [],
+          batches: [0, 1, 2, 3].map((index) => ({
+            index,
+            start_offset: index,
+            end_offset: index + 1,
+            status: "pending",
+            attempt: 0,
+          })),
+        },
+      },
+      created_at: options.createdAt ?? new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    },
+    states,
+    prepared,
+    started,
+    evidence,
+    cancelled,
+  };
+  states.set(
+    harness.record.work_item_id,
+    executionState(initialRun, options.itemStatus ?? "completed"),
+  );
+  const authority = {
+    getSearchAnswer: async () => harness.record,
+    putSearchAnswer: async (record) => {
+      harness.record = structuredClone(record);
+      return harness.record;
+    },
+  };
+  const runtime = {
+    orgId: () => "org-1",
+    requireHost: () => ({ get: () => authority }),
+  };
+  const context = {
+    mapBatchEvidence: async () => "typed evidence",
+    mapBatchDedupeMetadata: async (ids) =>
+      ids.map((event_id) => ({ event_id })),
+  };
+  const work = {
+    refreshAuxiliaryExecution: async (id) =>
+      states.get(id) ?? executionState(undefined, "open"),
+    prepareAuxiliaryExecution: async (input) => {
+      prepared.push(input);
+      states.set(input.id, executionState(undefined, "open"));
+      return { work_item: { id: input.id }, recipe: {} };
+    },
+    prepareExistingAuxiliaryExecution: async (id) => ({
+      work_item: { id },
+      recipe: {},
+    }),
+    startPreparedAuxiliaryExecution: async (preparedValue, value) => {
+      const id = preparedValue.work_item.id;
+      started.push(id);
+      evidence.push(value);
+      const run = runWithStatus("running");
+      states.set(id, executionState(run, "running"));
+      return { work_item: preparedValue.work_item, run };
+    },
+    cancelAuxiliaryExecution: async (id, options = {}) => {
+      cancelled.push(id);
+      if (options.searchAnswerTerminal) {
+        harness.record = {
+          ...harness.record,
+          outcome: options.searchAnswerTerminal.outcome,
+          updated_at: new Date().toISOString(),
+        };
+      }
+      return { work_item: { id, status: "skipped" }, run: runWithStatus("cancelled") };
+    },
+  };
+  harness.service = () =>
+    new PersonalSearchAnswerService(runtime, context, {}, work);
+  return harness;
 }
 
 function retryHarness(initialRun, options = {}) {

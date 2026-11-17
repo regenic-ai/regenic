@@ -681,7 +681,7 @@ export type PersonalSearchAnswerStatus =
   | "cancelled";
 
 export interface PersonalSearchAnswerProgress {
-  phase: "mapping" | "reducing";
+  phase: "planning" | "mapping" | "reducing";
   completed_batches: number;
   total_batches: number;
   processed_messages: number;
@@ -711,6 +711,12 @@ export interface PersonalSearchAnswer {
     omitted_count: number | null;
     incomplete_reason?: string;
     conflict_count?: number;
+    spec_hash?: string;
+    plan?: {
+      operation: "count" | "list" | "status_summary";
+      metric: { id: string; label: string };
+      group_dimensions: Array<{ id: string; label: string }>;
+    };
   };
   progress?: PersonalSearchAnswerProgress;
 }

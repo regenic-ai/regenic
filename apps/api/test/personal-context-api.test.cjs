@@ -1318,11 +1318,21 @@ describe("personal context API", () => {
       const latest = runStart ?? starts.at(-1);
       const batchIndex = latest?.body?.work_item_id?.match(/:(\d+):\d+$/)?.[1]
         ?? starts.length;
-      return latest?.body?.executor_config?.prompt?.includes("Extract atomic facts")
+      return latest?.body?.executor_config?.prompt?.includes("Create a canonical AggregateSpec")
+        ? JSON.stringify({
+            version: 1,
+            operation: "count",
+            metric: { id: "completed_tasks", label: "Completed tasks" },
+            group_dimensions: [{ id: "owner", label: "Owner" }],
+            subject: { terms: ["completed tasks"], constraints: [] },
+            value_type: "count",
+            dedupe_strategy: "event_id",
+          })
+        : latest?.body?.executor_config?.prompt?.includes("Extract atomic facts")
         ? JSON.stringify([{
             dedupe_key: `batch-${batchIndex}`,
             group: "all owners",
-            metric: "completed tasks",
+            metric: "completed_tasks",
             value: 1,
             evidence_refs: [1],
           }])
@@ -1362,9 +1372,9 @@ describe("personal context API", () => {
     );
     assert.equal(started.response.status, 202, started.text);
     let answer = JSON.parse(started.text);
-    assert.ok(answer.progress.completed_batches <= 1);
-    assert.ok(answer.progress.active_batches <= 3);
-    assert.equal(answer.progress.max_parallelism, 3);
+    assert.equal(answer.progress.phase, "planning");
+    assert.equal(answer.progress.active_batches, 1);
+    assert.equal(answer.progress.max_parallelism, 1);
     assert.ok(answer.progress.total_batches > 11);
     const ledger = new SqliteAuthorityStore(join(root, "authority.db"));
     let persistedOffsets;
@@ -1397,11 +1407,11 @@ describe("personal context API", () => {
     const startsAfterResume = executor.requests.filter((request) =>
       request.method === "POST" && request.url === "/v1/runs");
     assert.match(
-      startsAfterResume[1].body.evidence_text,
+      startsAfterResume[2].body.evidence_text,
       new RegExp(`bulk-task-${persistedOffsets[1]} completed`),
     );
     assert.doesNotMatch(
-      startsAfterResume[1].body.evidence_text,
+      startsAfterResume[2].body.evidence_text,
       new RegExp(`bulk-task-${persistedOffsets[1] - 1} completed`),
     );
     let pollingRounds = 1;
@@ -1459,7 +1469,15 @@ describe("personal context API", () => {
     });
     const starts = executor.requests.filter((request) =>
       request.method === "POST" && request.url === "/v1/runs");
-    assert.equal(starts.length, persistedOffsets.length);
+    assert.equal(starts.length, persistedOffsets.length + 1);
+    assert.equal(starts.filter((start) =>
+      start.body.executor_config.prompt.includes("Create a canonical AggregateSpec"))
+      .length, 1);
+    const mapStarts = starts.filter((start) =>
+      start.body.executor_config.prompt.includes("Extract atomic facts"));
+    assert.ok(mapStarts.every((start) =>
+      /CANONICAL AGGREGATE SPEC[\s\S]+spec_hash=[a-f0-9]{64}/
+        .test(start.body.evidence_text)));
     assert.match(starts.at(-1).body.evidence_text, /DETERMINISTIC REDUCED FACTS/);
     assert.match(
       starts.at(-1).body.evidence_text,

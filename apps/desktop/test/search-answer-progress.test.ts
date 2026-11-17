@@ -61,6 +61,20 @@ describe("aggregate answer progress copy", () => {
     assert.match(translate("zh", reducing.key, reducing.vars), /^正在归并/);
   });
 
+  it("announces planning before mapping in both locales", () => {
+    const planning = searchAnswerProgressCopy(progress({
+      phase: "planning",
+      completed_batches: 0,
+      processed_messages: 0,
+      active_batches: 1,
+      pending_batches: 3,
+      max_parallelism: 1,
+    }));
+    assert.equal(planning.key, "search.answer.progress.planning");
+    assert.match(translate("en", planning.key, planning.vars), /^Planning/);
+    assert.match(translate("zh", planning.key, planning.vars), /^正在规划/);
+  });
+
   it("only creates a warning for nonzero conflicts", () => {
     assert.equal(searchAnswerConflictCopy(progress()), null);
 
