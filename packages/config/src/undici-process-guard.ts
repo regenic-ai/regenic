@@ -1,18 +1,29 @@
-const dispatcherSymbol = Symbol.for("undici.globalDispatcher.2");
+// Node 22 and 24 publish the fetch dispatcher on v1. Node 26 publishes the
+// live agent on v2, then a legacy wrapper on v1. v2 is listed first so a
+// runtime that has both pins the agent fetch actually uses.
+const dispatcherSymbols: symbol[] = [
+  Symbol.for("undici.globalDispatcher.2"),
+  Symbol.for("undici.globalDispatcher.1"),
+];
 
 let installed = false;
 
 /**
- * Node 26's bundled undici turns an idle HTTP/2 session into an unhandled
- * `error` on a ClientHttp2Stream (`UND_ERR_INFO` / "socket idle timeout"),
- * which exits the process. HTTPS fetch negotiates HTTP/2 unless the global
- * dispatcher was created with `allowH2: false`. Pin that before the first
- * request, and ignore the informational timeout if a session is already open.
+ * Undici 8 (Node 26) turns an idle HTTP/2 session into an unhandled `error`
+ * on a ClientHttp2Stream (`UND_ERR_INFO` / "socket idle timeout"), which
+ * exits the process. That reaper is not in the undici bundled with Node 22
+ * or 24. On undici 8, pin `allowH2: false` before the first request and
+ * restore `Object.defineProperty` once the dispatcher is installed. On every
+ * runtime, ignore the informational timeout if a session is already open.
  */
 export function installUndiciProcessGuard(): void {
   if (installed) return;
   installed = true;
-  if (!pinAllowH2(readDispatcher())) hookDispatcherInstall();
+  if (bundledUndiciHasHttp2IdleReaper()) {
+    const existing = readDispatcher();
+    if (existing) pinAllowH2(existing);
+    else hookDispatcherInstall();
+  }
   process.on("uncaughtException", onUncaughtException);
 }
 
@@ -31,8 +42,21 @@ function onUncaughtException(error: unknown): void {
   process.exit(1);
 }
 
+function bundledUndiciHasHttp2IdleReaper(): boolean {
+  const major = Number(process.versions.undici?.split(".")[0] ?? "0");
+  return Number.isInteger(major) && major >= 8;
+}
+
 function readDispatcher(): unknown {
-  return (globalThis as Record<symbol, unknown>)[dispatcherSymbol];
+  const globals = globalThis as Record<symbol, unknown>;
+  for (const symbol of dispatcherSymbols) {
+    if (globals[symbol]) return globals[symbol];
+  }
+  return undefined;
+}
+
+function isDispatcherSymbol(property: PropertyKey): boolean {
+  return typeof property === "symbol" && dispatcherSymbols.includes(property);
 }
 
 function pinAllowH2(agent: unknown): boolean {
@@ -56,16 +80,18 @@ function dispatcherOptions(agent: unknown): { allowH2?: boolean } | undefined {
 
 function hookDispatcherInstall(): void {
   const original = Object.defineProperty;
+  let restored = false;
   const hooked = function hooked(target: object, property: PropertyKey, descriptor: PropertyDescriptor): object {
-    if (target === globalThis && property === dispatcherSymbol && "value" in descriptor) {
-      pinAllowH2(descriptor.value);
-      try {
-        return original.call(Object, target, property, descriptor) as object;
-      } finally {
+    const dispatcher = target === globalThis && isDispatcherSymbol(property) && "value" in descriptor;
+    if (dispatcher) pinAllowH2(descriptor.value);
+    try {
+      return original.call(Object, target, property, descriptor) as object;
+    } finally {
+      if (dispatcher && !restored) {
+        restored = true;
         Object.defineProperty = original;
       }
     }
-    return original.call(Object, target, property, descriptor) as object;
   };
   Object.defineProperty = hooked as typeof Object.defineProperty;
 }

@@ -19,13 +19,17 @@ describe("isUndiciSocketIdleTimeout", () => {
 describe("installUndiciProcessGuard", () => {
   it("forces the built-in fetch dispatcher off HTTP/2 and keeps the process up", () => {
     const result = runGuard(`
+      const originalDefine = Object.defineProperty;
+      installUndiciProcessGuard();
       fetch("http://127.0.0.1:9/", { signal: AbortSignal.timeout(500) }).catch(() => {}).then(() => {
-        const agent = globalThis[Symbol.for("undici.globalDispatcher.2")];
-        const options = agent && Object.getOwnPropertySymbols(agent)
-          .map((symbol) => agent[symbol])
-          .find((value) => value && Object.prototype.hasOwnProperty.call(value, "maxOrigins"));
-        if (!options || options.allowH2 !== false) {
-          console.error("allowH2", options && options.allowH2);
+        if (Object.defineProperty !== originalDefine) {
+          console.error("defineProperty hook leaked");
+          process.exit(3);
+        }
+        const options = dispatcherOptions();
+        const undiciMajor = Number(String(process.versions.undici || "0").split(".")[0]);
+        if (undiciMajor >= 8 && (!options || options.allowH2 !== false)) {
+          console.error("allowH2", options && options.allowH2, "undici", process.versions.undici);
           process.exit(2);
         }
         const { EventEmitter } = require("node:events");
@@ -36,7 +40,7 @@ describe("installUndiciProcessGuard", () => {
         }, 20);
         setTimeout(() => process.exit(0), 150);
       });
-    `);
+    `, { install: false });
     assert.equal(result.status, 0, result.stderr || result.stdout);
     assert.match(result.stderr, /ignored undici http2 idle timeout/);
   });
@@ -52,11 +56,21 @@ describe("installUndiciProcessGuard", () => {
   });
 });
 
-function runGuard(body) {
+function runGuard(body, options = {}) {
   const config = require.resolve("../dist/undici-process-guard.js");
   const script = `
     const { installUndiciProcessGuard } = require(${JSON.stringify(config)});
-    installUndiciProcessGuard();
+    function dispatcherOptions() {
+      for (const version of [2, 1]) {
+        const agent = globalThis[Symbol.for("undici.globalDispatcher." + version)];
+        const options = agent && Object.getOwnPropertySymbols(agent)
+          .map((symbol) => agent[symbol])
+          .find((value) => value && Object.prototype.hasOwnProperty.call(value, "maxOrigins"));
+        if (options) return options;
+      }
+      return undefined;
+    }
+    ${options.install === false ? "" : "installUndiciProcessGuard();"}
     ${body}
   `;
   return spawnSync(process.execPath, ["-e", script], {
