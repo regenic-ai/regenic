@@ -36,6 +36,7 @@ function fixture(overrides = {}) {
     },
     deleteInstallation: async () => { calls.push("delete"); current = null; },
     clearOperationalData: async () => { calls.push("clear"); return { cleared: true }; },
+    summarizePushWatermarks: async () => ({ stream_count: 0 }),
   };
   const connectors = new MemoryConnectorRegistry();
   const host = {

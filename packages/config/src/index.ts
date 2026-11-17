@@ -244,3 +244,5 @@ export function isPersonalApiEnabled(env: AppEnv | NodeJS.ProcessEnv = process.e
 function isLoadedEnv(env: AppEnv | NodeJS.ProcessEnv): env is AppEnv {
   return typeof (env as AppEnv).PORT === "number";
 }
+
+export { installUndiciProcessGuard, isUndiciSocketIdleTimeout } from "./undici-process-guard";

@@ -355,12 +355,17 @@ export async function ensureConnectorLivePush(
   if (!host.push) {
     return;
   }
+  // Execute-only drivers fork a process from startInstallation. Install,
+  // catalog, and restart leave that lazy until a runtime call. Sync
+  // connectors open their live tail here.
   if (driver?.startInstallation) {
-    await state.drivers.startInstallation(installation, host, {
-      restart:
-        host.livePush?.has(installation.id) === false ||
-        host.livePush?.generation(installation.id) !== installation.updated_at,
-    });
+    if (driver.capabilities(installation).sync) {
+      await state.drivers.startInstallation(installation, host, {
+        restart:
+          host.livePush?.has(installation.id) === false ||
+          host.livePush?.generation(installation.id) !== installation.updated_at,
+      });
+    }
     return;
   }
   host.livePush?.start({

@@ -1,3 +1,4 @@
+import "./undici-process-guard";
 import "reflect-metadata";
 import { loadEnv } from "@regenic/config";
 import { createHttpApp, enablePersonalCors, listenHttpApp } from "./http-app";
