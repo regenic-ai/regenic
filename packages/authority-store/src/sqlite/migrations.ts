@@ -1,4 +1,4 @@
-export const LATEST_SCHEMA_VERSION = 80;
+export const LATEST_SCHEMA_VERSION = 81;
 
 export const PRE_MERGE_LIFECYCLE_REPAIR_SQL = `
   ALTER TABLE work_items ADD COLUMN current_run_id TEXT REFERENCES work_runs(id);
@@ -1622,6 +1622,24 @@ export const MIGRATIONS = [
         updated_at TEXT NOT NULL,
         PRIMARY KEY (installation_id, stream_key)
       );
+    `,
+  },
+  {
+    version: 81,
+    sql: `
+      CREATE TABLE aggregate_fact_cache (
+        org_id TEXT NOT NULL,
+        spec_hash TEXT NOT NULL,
+        extractor_version TEXT NOT NULL,
+        event_id TEXT NOT NULL,
+        content_hash TEXT NOT NULL,
+        facts_json TEXT NOT NULL CHECK (json_valid(facts_json)),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (org_id, spec_hash, extractor_version, event_id)
+      );
+      CREATE INDEX aggregate_fact_cache_event_idx
+        ON aggregate_fact_cache (org_id, event_id);
     `,
   },
 ] as const;

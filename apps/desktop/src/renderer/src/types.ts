@@ -692,6 +692,8 @@ export interface PersonalSearchAnswerProgress {
   pending_batches: number;
   retrying_batches: number;
   max_parallelism: number;
+  cache_hits?: number;
+  cache_misses?: number;
   conflict_count?: number;
 }
 

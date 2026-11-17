@@ -20,6 +20,7 @@ import type {
   WorkDeliveryCommandResult,
   WorkDelivery,
   ExecutorInstallation,
+  AggregateFactCacheRecord,
   SearchAnswerRecord,
 } from "@regenic/domain";
 import {
@@ -1844,6 +1845,53 @@ export async function deleteSearchAnswer(
   )) > 0;
 }
 
+export async function getAggregateFactCache(
+  db: PgSql,
+  orgId: string,
+  specHash: string,
+  extractorVersion: string,
+  eventIds: readonly string[],
+): Promise<AggregateFactCacheRecord[]> {
+  if (eventIds.length === 0) return [];
+  const rows = await db.query<AggregateFactCacheRow>(
+    `SELECT * FROM aggregate_fact_cache
+     WHERE org_id = $1 AND spec_hash = $2 AND extractor_version = $3
+       AND event_id = ANY($4::text[])`,
+    [orgId, specHash, extractorVersion, [...eventIds]],
+  );
+  return rows.map(toAggregateFactCache);
+}
+
+export async function putAggregateFactCache(
+  db: PgSql,
+  records: readonly AggregateFactCacheRecord[],
+): Promise<void> {
+  if (records.length === 0) return;
+  await db.withTx(async (client) => {
+    for (const record of records) {
+      await db.execute(`
+        INSERT INTO aggregate_fact_cache (
+          org_id, spec_hash, extractor_version, event_id, content_hash,
+          facts_json, created_at, updated_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        ON CONFLICT (org_id, spec_hash, extractor_version, event_id) DO UPDATE SET
+          content_hash = EXCLUDED.content_hash,
+          facts_json = EXCLUDED.facts_json,
+          updated_at = EXCLUDED.updated_at
+      `, [
+        record.org_id,
+        record.spec_hash,
+        record.extractor_version,
+        record.event_id,
+        record.content_hash,
+        jsonb(record.facts),
+        record.created_at,
+        record.updated_at,
+      ], client);
+    }
+  });
+}
+
 export async function listWorkDeliveries(db: PgSql, orgId: string): Promise<WorkDelivery[]> {
     const rows = await db.query<WorkDeliveryRow>(
       `SELECT * FROM work_deliveries WHERE org_id = $1 ORDER BY updated_at DESC, id`,
@@ -2267,6 +2315,17 @@ interface SearchAnswerRow {
   updated_at: unknown;
 }
 
+interface AggregateFactCacheRow {
+  org_id: string;
+  spec_hash: string;
+  extractor_version: string;
+  event_id: string;
+  content_hash: string;
+  facts_json: unknown;
+  created_at: unknown;
+  updated_at: unknown;
+}
+
 function toExecutorInstallation(row: ExecutorRow): ExecutorInstallation {
   return {
     id: row.id,
@@ -2378,6 +2437,19 @@ function toSearchAnswer(row: SearchAnswerRow): SearchAnswerRecord {
       ? { scope: asJson<NonNullable<SearchAnswerRecord["scope"]>>(row.scope_json) }
       : {}),
     ...(row.outcome ? { outcome: row.outcome } : {}),
+    created_at: toIso(row.created_at),
+    updated_at: toIso(row.updated_at),
+  };
+}
+
+function toAggregateFactCache(row: AggregateFactCacheRow): AggregateFactCacheRecord {
+  return {
+    org_id: row.org_id,
+    spec_hash: row.spec_hash,
+    extractor_version: row.extractor_version,
+    event_id: row.event_id,
+    content_hash: row.content_hash,
+    facts: asJson<AggregateFactCacheRecord["facts"]>(row.facts_json),
     created_at: toIso(row.created_at),
     updated_at: toIso(row.updated_at),
   };

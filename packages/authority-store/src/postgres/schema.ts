@@ -1,4 +1,4 @@
-export const PG_SCHEMA_VERSION = 80;
+export const PG_SCHEMA_VERSION = 81;
 
 /** Applied when an existing postgres authority DB is already at a prior baseline. */
 export const PG_MIGRATIONS = [
@@ -953,6 +953,24 @@ ON CONFLICT DO NOTHING;
       );
     `,
   },
+  {
+    version: 81,
+    sql: `
+      CREATE TABLE aggregate_fact_cache (
+        org_id TEXT NOT NULL,
+        spec_hash TEXT NOT NULL,
+        extractor_version TEXT NOT NULL,
+        event_id TEXT NOT NULL,
+        content_hash TEXT NOT NULL,
+        facts_json JSONB NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL,
+        PRIMARY KEY (org_id, spec_hash, extractor_version, event_id)
+      );
+      CREATE INDEX aggregate_fact_cache_event_idx
+        ON aggregate_fact_cache (org_id, event_id);
+    `,
+  },
 ] as const;
 
 export const PG_BASELINE_SQL = `
@@ -1261,6 +1279,21 @@ CREATE TABLE search_answers (
 
 CREATE UNIQUE INDEX search_answers_work_item_idx
   ON search_answers (org_id, work_item_id);
+
+CREATE TABLE aggregate_fact_cache (
+  org_id TEXT NOT NULL,
+  spec_hash TEXT NOT NULL,
+  extractor_version TEXT NOT NULL,
+  event_id TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  facts_json JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL,
+  PRIMARY KEY (org_id, spec_hash, extractor_version, event_id)
+);
+
+CREATE INDEX aggregate_fact_cache_event_idx
+  ON aggregate_fact_cache (org_id, event_id);
 
 CREATE TABLE ui_prefs (
   org_id TEXT NOT NULL,

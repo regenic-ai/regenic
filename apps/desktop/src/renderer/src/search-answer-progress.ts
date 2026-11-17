@@ -38,3 +38,18 @@ export function searchAnswerConflictCopy(
     vars: { conflicts: progress.conflict_count },
   };
 }
+
+export function searchAnswerCacheCopy(
+  progress: PersonalSearchAnswerProgress,
+): SearchAnswerProgressCopy | null {
+  if (progress.cache_hits === undefined && progress.cache_misses === undefined) {
+    return null;
+  }
+  return {
+    key: "search.answer.progress.cache",
+    vars: {
+      hits: progress.cache_hits ?? 0,
+      misses: progress.cache_misses ?? 0,
+    },
+  };
+}
