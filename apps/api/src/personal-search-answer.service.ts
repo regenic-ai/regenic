@@ -540,14 +540,14 @@ export class PersonalSearchAnswerService {
       batchRefs: string[];
       mapEventIds?: string[];
     }> = [];
-    let cacheStateChanged = false;
+    const cachedCompletions: SearchAnswerMapBatch[] = [];
     for (const batch of candidates) {
       const batchRefs = searchAnswerMapBatchRefs(record.event_ids, map, batch.index);
       const mapEventIds = map.spec && map.spec_hash
         ? batch.map_event_ids ?? batchRefs
         : undefined;
       if (mapEventIds?.length === 0) {
-        if (await this.completeCachedBatch(batch)) cacheStateChanged = true;
+        cachedCompletions.push(batch);
         continue;
       }
       if (selected.length >= freeSlots) continue;
@@ -569,6 +569,15 @@ export class PersonalSearchAnswerService {
           "Aggregate context snapshot is incomplete",
         );
       }
+    }
+
+    let cacheStateChanged = false;
+    for (const batch of cachedCompletions) {
+      if (await this.completeCachedBatch(batch)) cacheStateChanged = true;
+    }
+    if (cacheStateChanged) {
+      record = withMap(record, synchronizeMapAggregates(map));
+      await this.putRecord(record);
     }
 
     const launches: Array<{
@@ -610,10 +619,6 @@ export class PersonalSearchAnswerService {
             max_concurrent: SEARCH_ANSWER_MAP_PARALLELISM,
           });
       launches.push({ batch, prepared, evidence });
-    }
-    if (cacheStateChanged) {
-      record = withMap(record, synchronizeMapAggregates(map));
-      await this.putRecord(record);
     }
     if (launches.length === 0) return record;
     for (const { batch } of launches) {

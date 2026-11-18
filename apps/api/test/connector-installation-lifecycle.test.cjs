@@ -225,6 +225,23 @@ test("failed remote reconnect does not leave a disabled installation enabled", a
   assert.equal(f.current.status, "disabled");
 });
 
+test("failed status update rolls back a saved enable handshake", async () => {
+  const f = fixture({
+    connectInstallation: async () => ({ connection_id: "remote" }),
+  });
+  await f.service.setStatus("installation", "disabled");
+  f.store.setInstallationStatus = async () => {
+    throw new Error("status write failed");
+  };
+  await assert.rejects(
+    f.service.setStatus("installation", "enabled"),
+    { code: "sync_failed", message: "status write failed" },
+  );
+  assert.equal(f.current.status, "disabled");
+  assert.equal(f.current.config.endpoint, "old");
+  assert.equal(f.current.config.connection_id, undefined);
+});
+
 test("clear stops before data reset, keeps credentials/config, and resumes only after cache cleanup", async () => {
   const f = fixture();
   await f.activate();

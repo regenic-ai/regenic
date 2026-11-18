@@ -425,6 +425,28 @@ async function invoke(
   return response.result;
 }
 
+function namespaceEvent<T extends {
+  external_id: string;
+  actor: { id: string };
+  scope: { id: string };
+  thread?: { id: string };
+  parent_external_id?: string;
+}>(installation: ConnectorInstallation, record: T): T {
+  return {
+    ...record,
+    source: SERVER_APP_SOURCE,
+    external_id: prefix(installation, record.external_id),
+    actor: { ...record.actor, id: prefix(installation, record.actor.id) },
+    scope: { ...record.scope, id: prefix(installation, record.scope.id) },
+    ...(record.thread
+      ? { thread: { ...record.thread, id: prefix(installation, record.thread.id) } }
+      : {}),
+    ...(record.parent_external_id
+      ? { parent_external_id: prefix(installation, record.parent_external_id) }
+      : {}),
+  };
+}
+
 function namespaceBatch(
   installation: ConnectorInstallation,
   batch: IngestBatch,
@@ -433,18 +455,7 @@ function namespaceBatch(
     ...batch,
     connector_id: installation.id,
     org_id: installation.org_id,
-    records: batch.records.map((record) => ({
-      ...record,
-      source: SERVER_APP_SOURCE,
-      external_id: prefix(installation, record.external_id),
-      scope: { ...record.scope, id: prefix(installation, record.scope.id) },
-      ...(record.thread
-        ? { thread: { id: prefix(installation, record.thread.id) } }
-        : {}),
-      ...(record.parent_external_id
-        ? { parent_external_id: prefix(installation, record.parent_external_id) }
-        : {}),
-    })),
+    records: batch.records.map((record) => namespaceEvent(installation, record)),
   };
 }
 
@@ -455,18 +466,7 @@ function namespacePushBatch(
   return {
     ...batch,
     stream_key: prefix(installation, batch.stream_key),
-    events: batch.events.map((record) => ({
-      ...record,
-      source: SERVER_APP_SOURCE,
-      external_id: prefix(installation, record.external_id),
-      scope: { ...record.scope, id: prefix(installation, record.scope.id) },
-      ...(record.thread
-        ? { thread: { id: prefix(installation, record.thread.id) } }
-        : {}),
-      ...(record.parent_external_id
-        ? { parent_external_id: prefix(installation, record.parent_external_id) }
-        : {}),
-    })),
+    events: batch.events.map((record) => namespaceEvent(installation, record)),
   };
 }
 
@@ -573,7 +573,14 @@ function text(value: unknown): string {
 
 function isLoopback(hostname: string): boolean {
   const host = hostname.replace(/^\[|\]$/g, "").toLowerCase();
-  return host === "localhost" || host === "::1" || host.startsWith("127.");
+  if (host === "localhost" || host === "::1") return true;
+  if (host.startsWith("::ffff:")) return isLoopback(host.slice("::ffff:".length));
+  const octets = host.split(".");
+  if (octets.length !== 4) return false;
+  const numbers = octets.map((octet) => (
+    /^\d{1,3}$/.test(octet) ? Number(octet) : Number.NaN
+  ));
+  return numbers.every((octet) => octet >= 0 && octet <= 255) && numbers[0] === 127;
 }
 
 function assertSecureServerUrl(value: string): void {

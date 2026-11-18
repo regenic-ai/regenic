@@ -714,29 +714,58 @@ export class PersonalConnectorService implements OnModuleDestroy, OnApplicationB
       const host = this.runtime.requireHost();
       const store = host.get("authority");
       const current = await this.requireInstallation(store, installationId);
+      const previousConfig = { ...current.config };
+      let patched = false;
       try {
         const candidate = { ...current, status: "enabled" as const };
         const patch = await this.connectInstallation(candidate);
         if (patch && Object.keys(patch).length > 0) {
-          await store.updateInstallationConfig({
+          const saved = await store.updateInstallationConfig({
             id: current.id,
             org_id: current.org_id,
-            config: { ...current.config, ...patch },
+            config: { ...previousConfig, ...patch },
             updated_at: new Date(
               Math.max(Date.now(), Date.parse(current.updated_at) + 1),
             ).toISOString(),
           });
+          if (!saved) {
+            throw new PersonalConnectorError(
+              "not_found",
+              "Connector installation not found",
+              404,
+            );
+          }
+          patched = true;
         }
+        const view = await this.changeInstallation(() =>
+          connectorInstall.setStatus(this.connectorState(), installationId, status));
+        await this.executors?.setConnectorExecutorsStatus(installationId, status);
+        await this.executors?.ensureDeclaredExecutor(installationId);
+        return view;
       } catch (error) {
+        if (patched) {
+          const latest = await store.findInstallation(current.id);
+          if (
+            latest
+            && latest.org_id === current.org_id
+            && latest.status !== "enabled"
+          ) {
+            await store.updateInstallationConfig({
+              id: current.id,
+              org_id: current.org_id,
+              config: previousConfig,
+              updated_at: new Date(
+                Math.max(Date.now(), Date.parse(latest.updated_at) + 1),
+              ).toISOString(),
+            }).catch(() => undefined);
+          }
+        }
         throw wrapDriverError(error, "invalid_config");
       }
     }
     const view = await this.changeInstallation(() =>
       connectorInstall.setStatus(this.connectorState(), installationId, status));
     await this.executors?.setConnectorExecutorsStatus(installationId, status);
-    if (status === "enabled") {
-      await this.executors?.ensureDeclaredExecutor(installationId);
-    }
     return view;
   }
 

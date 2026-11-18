@@ -122,6 +122,7 @@ test("discovers, connects, pulls and executes through one installation", async (
   assert.equal(polled.batch.connector_id, "install-1");
   assert.equal(polled.batch.records[0].source, SERVER_APP_SOURCE);
   assert.equal(polled.batch.records[0].external_id, "acme.support:install-1:message:1");
+  assert.equal(polled.batch.records[0].actor.id, "acme.support:install-1:user:1");
   assert.equal(polled.batch.records[0].thread.id, "acme.support:install-1:thread:1");
 
   const pushed = serverAppDriver.transformPushBatch(installation, {
@@ -145,6 +146,7 @@ test("discovers, connects, pulls and executes through one installation", async (
     pushed.events[0].external_id,
     "acme.support:install-1:message:2",
   );
+  assert.equal(pushed.events[0].actor.id, "acme.support:install-1:user:1");
 
   const created = await serverAppDriver.createThread(
     installation,
@@ -205,6 +207,24 @@ test("requires HTTPS for remote servers but permits loopback HTTP", async () => 
       now: "2026-01-01T00:00:00.000Z",
     }),
     /must use HTTPS/,
+  );
+  await assert.rejects(
+    serverAppDriver.install({
+      id: "prefixed-host",
+      org_id: "org-1",
+      config: { base_url: "http://127.example.com", token: "secret" },
+      now: "2026-01-01T00:00:00.000Z",
+    }),
+    /must use HTTPS/,
+  );
+  await assert.rejects(
+    serverAppDriver.install({
+      id: "loopback-range",
+      org_id: "org-1",
+      config: { base_url: "http://127.0.0.2:9", token: "secret" },
+      now: "2026-01-01T00:00:00.000Z",
+    }),
+    (error) => !/must use HTTPS/.test(String(error)),
   );
 });
 

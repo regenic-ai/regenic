@@ -24,6 +24,7 @@ const {
   adaptiveMapBatchOffsets,
   mapBatchMessageLine,
 } = require("../dist/personal-conversation-context.service");
+const { PersonalContextError } = require("../dist/personal-context-error");
 const badCaseFixtures = require("./fixtures/typed-aggregate-bad-cases.cjs");
 
 describe("search answer citations", () => {
@@ -847,6 +848,36 @@ describe("persistent aggregate planning", () => {
     assert.equal(harness.bodyReads, 1);
   });
 
+  it("keeps a cached batch running when window hydration conflicts", async () => {
+    const harness = planningHarness(completedRun(validPlan), {
+      cached: true,
+      staleEventId: "e1",
+    });
+    await harness.service().get("answer-plan");
+    const cached = harness.record.scope.map_reduce.batches[1];
+    cached.status = "running";
+    cached.work_item_id = "cached-map";
+    harness.states.set("cached-map", executionState(undefined, "open"));
+    const missed = harness.record.scope.map_reduce.batches[2];
+    missed.status = "pending";
+    missed.map_event_ids = ["e3"];
+    delete missed.work_item_id;
+    harness.cancelled.length = 0;
+    harness.bodyError = new PersonalContextError(
+      "context_changed",
+      409,
+      "Aggregate context snapshot is incomplete",
+    );
+
+    await assert.rejects(
+      harness.service().get("answer-plan"),
+      (error) => error.code === "context_changed",
+    );
+    assert.equal(harness.cancelled.includes("cached-map"), false);
+    assert.equal(cached.status, "running");
+    assert.equal(cached.work_item_id, "cached-map");
+  });
+
   it("retries invalid JSON once without embedding the invalid output", async () => {
     const harness = planningHarness(completedRun("INVALID SECRET"));
     const retry = await harness.service().get("answer-plan");
@@ -971,6 +1002,7 @@ function planningHarness(initialRun, options = {}) {
     cancelled,
     manifestReads: 0,
     bodyReads: 0,
+    bodyError: undefined,
     validated: [],
     cacheVersions: [],
   };
@@ -1027,6 +1059,7 @@ function planningHarness(initialRun, options = {}) {
     },
     mapBatchInputs: async (_snapshotId, ids) => {
       harness.bodyReads += 1;
+      if (harness.bodyError) throw harness.bodyError;
       return ids.map((event_id) => ({
         event_id,
         content_hash: `hash-${event_id}`,
