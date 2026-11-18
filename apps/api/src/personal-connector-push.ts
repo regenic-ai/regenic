@@ -71,7 +71,9 @@ export async function ingestPush(
     ack = await state.pushGate.submit({
       installation,
       source: driver.source,
-      batch: body,
+      batch: driver.transformPushBatch
+        ? driver.transformPushBatch(installation, body)
+        : body,
     });
   } catch (error) {
     if (error instanceof PushIngestBackpressureError) {

@@ -18,7 +18,7 @@ test("discovers, connects, pulls and executes through one installation", async (
         app_id: "acme.support",
         name: "Acme Support",
         capabilities: {
-          source: { push: true, pull: true, reply: false, create: false },
+          source: { push: true, pull: true, reply: true, create: true },
           agent: true,
         },
       }));
@@ -30,7 +30,15 @@ test("discovers, connects, pulls and executes through one installation", async (
       }));
     }
     if (request.url === "/v1/regenic/invoke") {
-      const result = body.kind === "resolve_streams"
+      const result = body.kind === "create"
+        ? { target: "created:1" }
+        : body.kind === "send"
+          ? {
+              accepted: true,
+              rpc_id: "sent:1",
+              channel_message_ids: ["message:sent:1"],
+            }
+          : body.kind === "resolve_streams"
         ? { streams: [{ stream_key: "chat:1", thread_id: "thread:1" }] }
         : body.kind === "poll"
           ? {
@@ -101,6 +109,7 @@ test("discovers, connects, pulls and executes through one installation", async (
   );
   assert.deepEqual(patch, { connection_id: "remote-connection" });
   assert.equal(serverAppDriver.capabilities(installation).execute, true);
+  assert.equal(installation.config.token, "server-token");
 
   const streams = await serverAppDriver.resolveStreams(
     installation,
@@ -108,12 +117,59 @@ test("discovers, connects, pulls and executes through one installation", async (
     {},
     { discover: true },
   );
-  assert.equal(streams[0].stream_key, "acme.support:chat:1");
+  assert.equal(streams[0].stream_key, "acme.support:install-1:chat:1");
   const polled = await streams[0].connector.poll(null, { latest: true });
   assert.equal(polled.batch.connector_id, "install-1");
   assert.equal(polled.batch.records[0].source, SERVER_APP_SOURCE);
-  assert.equal(polled.batch.records[0].external_id, "acme.support:message:1");
-  assert.equal(polled.batch.records[0].thread.id, "acme.support:thread:1");
+  assert.equal(polled.batch.records[0].external_id, "acme.support:install-1:message:1");
+  assert.equal(polled.batch.records[0].thread.id, "acme.support:install-1:thread:1");
+
+  const pushed = serverAppDriver.transformPushBatch(installation, {
+    stream_key: "chat:1",
+    batch_id: "push-1",
+    events: [{
+      operation: "create",
+      source: "wrong-but-normalized",
+      external_id: "message:2",
+      occurred_at: "2026-01-01T00:00:00.000Z",
+      actor: { id: "user:1" },
+      scope: { id: "chat:1" },
+      thread: { id: "thread:1" },
+      type: "message",
+      content: [{ role: "body", media_type: "text/plain", text: "pushed" }],
+    }],
+  });
+  assert.equal(pushed.stream_key, "acme.support:install-1:chat:1");
+  assert.equal(pushed.events[0].source, SERVER_APP_SOURCE);
+  assert.equal(
+    pushed.events[0].external_id,
+    "acme.support:install-1:message:2",
+  );
+
+  const created = await serverAppDriver.createThread(
+    installation,
+    host,
+    {},
+    { text: "start" },
+  );
+  assert.deepEqual(created, {
+    source: SERVER_APP_SOURCE,
+    target: "acme.support:install-1:created:1",
+  });
+  const egress = await serverAppDriver.bindEgress(
+    installation,
+    { source: SERVER_APP_SOURCE, target: created.target },
+    host,
+    {},
+  );
+  const receipt = await egress.send({
+    installation_id: installation.id,
+    target: { scope_id: "acme.support:install-1:chat:1" },
+    content: [{ role: "body", media_type: "text/plain", text: "reply" }],
+  });
+  assert.deepEqual(receipt.channel_message_ids, [
+    "acme.support:install-1:message:sent:1",
+  ]);
 
   const executor = await serverAppDriver.bindExecutor(installation, host, {});
   const run = await executor.start({
@@ -136,7 +192,19 @@ test("discovers, connects, pulls and executes through one installation", async (
   assert.deepEqual(
     received.find((entry) => entry.url === "/v1/regenic/connections")
       .body.namespace,
-    { source: "server_app", id_prefix: "acme.support:" },
+    { source: "server_app", id_prefix: "acme.support:install-1:" },
+  );
+});
+
+test("requires HTTPS for remote servers but permits loopback HTTP", async () => {
+  await assert.rejects(
+    serverAppDriver.install({
+      id: "remote-http",
+      org_id: "org-1",
+      config: { base_url: "http://app.example.com", token: "secret" },
+      now: "2026-01-01T00:00:00.000Z",
+    }),
+    /must use HTTPS/,
   );
 });
 

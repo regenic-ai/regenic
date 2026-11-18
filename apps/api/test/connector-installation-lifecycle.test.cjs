@@ -1,7 +1,12 @@
 const assert = require("node:assert/strict");
 const { test } = require("node:test");
 const { setImmediate } = require("node:timers/promises");
-const { ChannelDriverRegistry, MemoryConnectorRegistry, asConnectorHost } = require("@regenic/domain");
+const {
+  ChannelDriverError,
+  ChannelDriverRegistry,
+  MemoryConnectorRegistry,
+  asConnectorHost,
+} = require("@regenic/domain");
 const { PersonalConnectorService } = require("../dist/personal-connector.service");
 const { PersonalRuntimeService } = require("../dist/personal-runtime.service");
 const { PersonalInboxService } = require("../dist/personal-inbox.service");
@@ -73,7 +78,14 @@ function fixture(overrides = {}) {
     clearInstallationSnapshots: () => calls.push("snapshots"),
     inboxSummary: { clear: () => {} },
   };
-  const service = new PersonalConnectorService(runtime, {}, drivers, kernelRuntime);
+  const personalApiKey = { expectedKey: () => null };
+  const service = new PersonalConnectorService(
+    runtime,
+    {},
+    drivers,
+    kernelRuntime,
+    personalApiKey,
+  );
   service.connectorState().catchUp = async () => {};
   const inbox = Object.assign(Object.create(PersonalInboxService.prototype), {
     runtime, drivers, kernelRuntime, touchInboxDigest() {},
@@ -173,6 +185,44 @@ test("reconfigure rejects stale installation snapshots and repeated enable prese
   assert.throws(() => f.drivers.get("managed").resolveStreams(stale, asConnectorHost(f.runtime.host), {}), /stopped/);
   await f.activate();
   assert.equal(f.calls.filter((call) => call === "start").length, 2);
+});
+
+test("failed remote reconnect restores the previous config", async () => {
+  const f = fixture({
+    connectInstallation: async () => {
+      throw new ChannelDriverError("sync_failed", "remote refused");
+    },
+  });
+  await assert.rejects(
+    f.service.updateConfig("installation", { endpoint: "new" }),
+    { code: "sync_failed", message: "remote refused" },
+  );
+  assert.equal(f.current.config.endpoint, "old");
+  assert.equal(f.current.status, "enabled");
+});
+
+test("failed remote reconnect does not leave a disabled installation enabled", async () => {
+  let rejectConnect = false;
+  const f = fixture({
+    connectInstallation: async (_installation, _host, _env, context) => {
+      assert.equal(context.ingest, undefined);
+      if (rejectConnect) {
+        throw new ChannelDriverError(
+          "invalid_config",
+          "public_url_required",
+          "public_url_required",
+        );
+      }
+      return { connection_id: "connected" };
+    },
+  });
+  await f.service.setStatus("installation", "disabled");
+  rejectConnect = true;
+  await assert.rejects(
+    f.service.setStatus("installation", "enabled"),
+    { code: "public_url_required", httpStatus: 400 },
+  );
+  assert.equal(f.current.status, "disabled");
 });
 
 test("clear stops before data reset, keeps credentials/config, and resumes only after cache cleanup", async () => {

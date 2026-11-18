@@ -23,6 +23,7 @@ export type ConnectorInvocationKind =
   | "resolve_streams"
   | "poll"
   | "translate_webhook"
+  | "create"
   | "send"
   | "lifecycle";
 
@@ -220,6 +221,7 @@ function isInvocationKind(value: unknown): value is ConnectorInvocationKind {
     value === "resolve_streams" ||
     value === "poll" ||
     value === "translate_webhook" ||
+    value === "create" ||
     value === "send" ||
     value === "lifecycle"
   );

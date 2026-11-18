@@ -9,6 +9,7 @@ import {
   SERVER_APP_MANIFEST_PATH,
   SERVER_APP_PROTOCOL,
   validateIngestBatch,
+  validatePushIngestBatch,
   type ChannelDriver,
   type ConnectorConnectionContext,
   type ConnectorInstallation,
@@ -21,6 +22,7 @@ import {
   type JsonValue,
   type NewConnectorInstallation,
   type PollResult,
+  type PushIngestBatch,
   type ServerAppManifest,
   type SyncDirectoryPage,
 } from "@regenic/connector-contract";
@@ -43,6 +45,7 @@ export const serverAppDriver: ChannelDriver = {
 
   async install(input): Promise<NewConnectorInstallation> {
     const baseUrl = normalizeExecutorHttpUrl(text(input.config.base_url));
+    assertSecureServerUrl(baseUrl);
     const token =
       text(input.config.token) ||
       (await input.secrets?.read(SERVER_APP_CONNECTOR_TYPE, input.id, "token")) ||
@@ -58,6 +61,7 @@ export const serverAppDriver: ChannelDriver = {
         app_id: manifest.app_id,
         app_name: manifest.name,
         manifest: manifest as unknown as JsonValue,
+        ...(token ? { token } : {}),
       },
       created_at: input.now,
     };
@@ -68,8 +72,8 @@ export const serverAppDriver: ChannelDriver = {
   },
 
   ownsThread(installation, thread) {
-    const prefix = `${appId(installation)}:`;
-    return this.matchesThread(installation, thread) && thread.target.startsWith(prefix);
+    return this.matchesThread(installation, thread) &&
+      thread.target.startsWith(namespacePrefix(installation));
   },
 
   capabilities(installation) {
@@ -109,7 +113,7 @@ export const serverAppDriver: ChannelDriver = {
           installation_id: installation.id,
           namespace: {
             source: SERVER_APP_SOURCE,
-            id_prefix: `${appId(installation)}:`,
+            id_prefix: namespacePrefix(installation),
           },
           ...(ingest ? { ingest } : {}),
         },
@@ -117,6 +121,12 @@ export const serverAppDriver: ChannelDriver = {
     );
     const connected = parseServerAppConnectionResponse(response);
     return { connection_id: connected.connection_id };
+  },
+
+  transformPushBatch(installation, batch) {
+    const validation = validatePushIngestBatch(batch);
+    if (!validation.success) return batch;
+    return namespacePushBatch(installation, validation.data);
   },
 
   async bindExecutor(installation, host, env) {
@@ -132,6 +142,68 @@ export const serverAppDriver: ChannelDriver = {
         .replace(/\/v1\/runs\/?$/, ""),
       auth_token: await accessToken(installation, host, env),
     });
+  },
+
+  async createThread(installation, host, env, options) {
+    if (!manifestOf(installation).capabilities.source?.create) {
+      throw new ChannelDriverError("invalid_config", "Server app cannot create conversations");
+    }
+    const result = object(await invoke(installation, host, env, "create", {
+      ...(options?.cwd ? { cwd: options.cwd } : {}),
+      ...(options?.text ? { text: options.text } : {}),
+    }));
+    const target = text(result.target) || text(result.thread_id);
+    if (!target) {
+      throw new ChannelDriverError("sync_failed", "Server app returned no conversation");
+    }
+    return { source: SERVER_APP_SOURCE, target: prefix(installation, target) };
+  },
+
+  async bindEgress(installation, thread, host, env) {
+    if (!manifestOf(installation).capabilities.source?.reply) {
+      throw new ChannelDriverError("send_failed", "Server app cannot receive replies");
+    }
+    return {
+      source: SERVER_APP_SOURCE,
+      capabilities: () => ({ reply: true, edit: false, tombstone: false }),
+      send: async (intent) => {
+        const result = object(await invoke(installation, host, env, "send", {
+          target: {
+            ...(intent.target?.external_id
+              ? { external_id: unprefix(installation, intent.target.external_id) }
+              : {}),
+            ...(intent.target?.scope_id
+              ? { scope_id: unprefix(installation, intent.target.scope_id) }
+              : {}),
+            thread_id: unprefix(installation, thread.target),
+          },
+          content: intent.content as unknown as ConnectorJson,
+          ...(intent.idempotency_key
+            ? { idempotency_key: intent.idempotency_key }
+            : {}),
+        }));
+        if (typeof result.accepted !== "boolean") {
+          throw new ChannelDriverError("send_failed", "Invalid server send receipt");
+        }
+        const rpcId = text(result.rpc_id);
+        const channelIds = Array.isArray(result.channel_message_ids)
+          ? result.channel_message_ids
+              .map((value) => text(value))
+              .filter(Boolean)
+              .map((value) => prefix(installation, value))
+          : [];
+        return {
+          accepted: result.accepted,
+          ...(rpcId ? { rpc_id: rpcId } : {}),
+          ...(channelIds.length ? { channel_message_ids: channelIds } : {}),
+        };
+      },
+    };
+  },
+
+  outboundId(thread, receipt) {
+    const sent = receipt.rpc_id?.trim();
+    return `${thread.target}:out:${sent || "local"}`;
   },
 
   async resolveStreams(installation, host, env, options) {
@@ -240,7 +312,9 @@ export const serverAppDriver: ChannelDriver = {
     const manifest = manifestOf(installation);
     const source = Boolean(
       manifest.capabilities.source?.push ||
-      manifest.capabilities.source?.pull,
+      manifest.capabilities.source?.pull ||
+      manifest.capabilities.source?.reply ||
+      manifest.capabilities.source?.create,
     );
     const agent = manifest.capabilities.agent;
     return {
@@ -374,6 +448,28 @@ function namespaceBatch(
   };
 }
 
+function namespacePushBatch(
+  installation: ConnectorInstallation,
+  batch: PushIngestBatch,
+): PushIngestBatch {
+  return {
+    ...batch,
+    stream_key: prefix(installation, batch.stream_key),
+    events: batch.events.map((record) => ({
+      ...record,
+      source: SERVER_APP_SOURCE,
+      external_id: prefix(installation, record.external_id),
+      scope: { ...record.scope, id: prefix(installation, record.scope.id) },
+      ...(record.thread
+        ? { thread: { id: prefix(installation, record.thread.id) } }
+        : {}),
+      ...(record.parent_external_id
+        ? { parent_external_id: prefix(installation, record.parent_external_id) }
+        : {}),
+    })),
+  };
+}
+
 async function accessToken(
   installation: ConnectorInstallation,
   host: Parameters<NonNullable<ChannelDriver["resolveStreams"]>>[1],
@@ -398,13 +494,17 @@ function appId(installation: ConnectorInstallation): string {
   return text(installation.config.app_id);
 }
 
+function namespacePrefix(installation: ConnectorInstallation): string {
+  return `${appId(installation)}:${installation.id}:`;
+}
+
 function prefix(installation: ConnectorInstallation, value: string): string {
-  const marker = `${appId(installation)}:`;
+  const marker = namespacePrefix(installation);
   return value.startsWith(marker) ? value : `${marker}${value}`;
 }
 
 function unprefix(installation: ConnectorInstallation, value: string): string {
-  const marker = `${appId(installation)}:`;
+  const marker = namespacePrefix(installation);
   return value.startsWith(marker) ? value.slice(marker.length) : value;
 }
 
@@ -439,10 +539,18 @@ async function requestJson(
       ...(input.body ? { body: JSON.stringify(input.body) } : {}),
     });
     if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
+      throw new ChannelDriverError(
+        response.status === 401 || response.status === 403
+          ? "missing_credentials"
+          : response.status === 429 || response.status === 503
+            ? "throttled"
+            : "sync_failed",
+        `HTTP ${response.status}`,
+      );
     }
     return await response.json();
   } catch (error) {
+    if (error instanceof ChannelDriverError) throw error;
     throw new ChannelDriverError(
       "sync_failed",
       error instanceof Error ? error.message : "Server app request failed",
@@ -466,4 +574,13 @@ function text(value: unknown): string {
 function isLoopback(hostname: string): boolean {
   const host = hostname.replace(/^\[|\]$/g, "").toLowerCase();
   return host === "localhost" || host === "::1" || host.startsWith("127.");
+}
+
+function assertSecureServerUrl(value: string): void {
+  const parsed = new URL(value);
+  if (parsed.protocol === "https:" || isLoopback(parsed.hostname)) return;
+  throw new ChannelDriverError(
+    "invalid_config",
+    "Remote server apps must use HTTPS",
+  );
 }

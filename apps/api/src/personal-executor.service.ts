@@ -4,7 +4,6 @@ import {
   ChannelDriverRegistry,
   asConnectorHost,
   DEFAULT_COPY_LOCALE,
-  resolveCopyText,
   resolveExecutorCatalog,
   type CopyLocale,
   EXECUTOR_DEFAULTS_SEEDED_PREF,
@@ -236,7 +235,6 @@ export class PersonalExecutorService {
     const capabilities = driver.capabilities(installation);
     if (
       capabilities.execute !== true ||
-      capabilities.create === true ||
       !this.localBinding(installation)
     ) {
       if (installation.status === "enabled" && capabilities.execute !== true) {
@@ -257,11 +255,15 @@ export class PersonalExecutorService {
         executorConfigText(row.config, "installation_id") === installationId,
     );
     if (pinned) {
+      await this.ensureMounted();
       return;
     }
-    const tables = driver.locales?.() ?? [];
-    const name = resolveCopyText(tables, DEFAULT_COPY_LOCALE, catalog.title).trim()
-      || installation.connector_type;
+    const name = toInstallationView(
+      installation,
+      null,
+      this.drivers,
+      DEFAULT_COPY_LOCALE,
+    ).label;
     await this.install({
       kind: "local_connector",
       name,
@@ -479,9 +481,12 @@ export class PersonalExecutorService {
         continue;
       }
       const catalog = driver.installCatalog?.({ env: process.env });
-      const name = catalog
-        ? resolveCopyText(driver.locales?.() ?? [], DEFAULT_COPY_LOCALE, catalog.title).trim()
-        : "";
+      const name = toInstallationView(
+        installation,
+        null,
+        this.drivers,
+        DEFAULT_COPY_LOCALE,
+      ).label;
       const now = new Date().toISOString();
       const created: ExecutorInstallation = {
         id: randomUUID(),
@@ -778,8 +783,11 @@ function isClosedStore(error: unknown): boolean {
 function connectorIsAgent(capabilities: {
   create_with_task?: boolean;
   prompts?: boolean;
+  execute?: boolean;
 }): boolean {
-  return capabilities.create_with_task === true || capabilities.prompts === true;
+  return capabilities.create_with_task === true ||
+    capabilities.prompts === true ||
+    capabilities.execute === true;
 }
 
 function hostOf(url: string): string {

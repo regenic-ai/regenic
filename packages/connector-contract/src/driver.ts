@@ -534,6 +534,15 @@ export interface ConnectorConnectionContext {
 export interface ChannelDriver
   extends ChannelDriverCore, ChannelSourcePort, Partial<ChannelSinkPort> {
   /**
+   * Normalize an authenticated push before core validates and ingests it.
+   * Out-of-process multi-install drivers use this to enforce their namespace
+   * instead of trusting the remote process to apply the advertised prefix.
+   */
+  transformPushBatch?(
+    installation: ConnectorInstallation,
+    batch: unknown,
+  ): unknown;
+  /**
    * With stopInstallation, once before the first asynchronous runtime call of
    * each activation, including re-enable. Catalog/probe/install metadata never
    * activates an installation. Synchronous queue reads do not start resources;
