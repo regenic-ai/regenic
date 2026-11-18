@@ -46,23 +46,4 @@ describe("context artifact previews", () => {
     );
     assert.deepEqual(contextArtifactPreviewFromStored(JSON.stringify(preview)), preview);
   });
-
-  it("uses digest lines when the artifact has no messages", () => {
-    const preview = contextArtifactPreview({
-      ...artifact({
-        utc_date: "2026-08-30",
-        item_count: 9,
-        directions: [{
-          items: [
-            { text: "later", occurred_at: "2026-08-30T02:00:00.000Z" },
-            { text: " earlier ", occurred_at: "2026-08-30T01:00:00.000Z" },
-          ],
-        }],
-      }),
-      kind: "daily_digest",
-    });
-    assert.equal(preview.last_text, "later");
-    assert.equal(preview.readable_count, 2);
-    assert.equal(preview.utc_date, "2026-08-30");
-  });
 });

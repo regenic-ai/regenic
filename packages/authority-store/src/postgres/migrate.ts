@@ -1,5 +1,6 @@
 import type { Pool } from "pg";
 import { rebuildArtifactPreviews } from "./context-artifacts";
+import { backfillRecipeFlowJson } from "./work";
 import {
   PG_BASELINE_SQL,
   PG_MIGRATIONS,
@@ -61,6 +62,9 @@ export async function migratePostgresAuthority(pool: Pool): Promise<void> {
       }
       if (step.version === 48) {
         await rebuildArtifactPreviews(client);
+      }
+      if (step.version === 88) {
+        await backfillRecipeFlowJson(client);
       }
       await client.query(
         `INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2)`,

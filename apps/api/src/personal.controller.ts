@@ -58,10 +58,7 @@ import {
   PersonalExecutorService,
   type ExecutorInput,
 } from "./personal-executor.service";
-import {
-  PersonalWorkService,
-  type RecipeInput,
-} from "./personal-work.service";
+import { PersonalWorkService } from "./personal-work.service";
 import { PersonalEventsService } from "./personal-events.service";
 import { ConnectorMarketService } from "./connector-market.service";
 import { ConnectorMarketInstaller } from "./connector-market-installer";
@@ -152,32 +149,6 @@ export class PersonalController {
       locale: requestLocale(locale, acceptLanguage),
     };
     return this.guard(async () => this.inbox.listInbox(query));
-  }
-
-  @Get("follow-ups")
-  listFollowUps() {
-    return this.guard(() => this.inbox.listFollowUps());
-  }
-
-  @Get("follow-ups/snoozes")
-  listFollowUpSnoozes() {
-    return this.guard(() => this.inbox.listFollowUpSnoozes());
-  }
-
-  @Post("follow-ups/:threadId/snooze")
-  snoozeFollowUp(
-    @Param("threadId") threadId: string,
-    @Body() body: { until?: string; outbound_external_id?: string } | undefined,
-  ) {
-    return this.guard(() => this.inbox.snoozeFollowUp(threadId, body?.until ?? "", body?.outbound_external_id));
-  }
-
-  @Delete("follow-ups/:threadId/snooze")
-  unsnoozeFollowUp(
-    @Param("threadId") threadId: string,
-    @Body() body: { outbound_external_id?: string } | undefined,
-  ) {
-    return this.guard(() => this.inbox.unsnoozeFollowUp(threadId, body?.outbound_external_id));
   }
 
   @Post("inbox/:eventId/triage")
@@ -566,27 +537,30 @@ export class PersonalController {
     return this.guard(() => this.inbox.answerConversationPrompt(body ?? {}));
   }
 
-  @Get("recipes")
-  listRecipes() {
-    return this.guard(() => this.work.listRecipes());
+  @Get("flows")
+  listFlows() {
+    return this.guard(() => this.work.listFlows());
   }
 
-  @Post("recipes")
-  createRecipe(@Body() body: RecipeInput | undefined) {
-    return this.guard(() => this.work.putRecipe(body ?? {}));
+  @Post("flows")
+  createFlow(@Body() body: { name?: string; config?: unknown } | undefined) {
+    return this.guard(() => this.work.putFlow(body ?? {}));
   }
 
-  @Post("recipes/:id")
-  updateRecipe(@Param("id") id: string, @Body() body: RecipeInput | undefined) {
-    return this.guard(() => this.work.putRecipe(body ?? {}, id));
+  @Post("flows/:id")
+  updateFlow(
+    @Param("id") id: string,
+    @Body() body: { name?: string; config?: unknown } | undefined,
+  ) {
+    return this.guard(() => this.work.putFlow(body ?? {}, id));
   }
 
-  @Delete("recipes/:id")
-  deleteRecipe(@Param("id") id: string) {
+  @Delete("flows/:id")
+  deleteFlow(@Param("id") id: string) {
     return this.guard(() => this.work.deleteRecipe(id));
   }
 
-  @Post("recipes/:id/try")
+  @Post("flows/:id/try")
   tryRecipe(
     @Param("id") id: string,
     @Body() body: { thread_id?: string; write_back?: boolean } | undefined,
@@ -761,16 +735,6 @@ export class PersonalController {
   @Post("dispatch-policy")
   putPersonalDispatchPolicy(@Body() body: { policy?: unknown } | undefined) {
     return this.guard(() => this.work.putPersonalDispatchPolicy(body?.policy));
-  }
-
-  @Get("follow-up-policy")
-  getPersonalFollowUpPolicy() {
-    return this.guard(() => this.work.getPersonalFollowUpPolicy());
-  }
-
-  @Post("follow-up-policy")
-  putPersonalFollowUpPolicy(@Body() body: { policy?: unknown } | undefined) {
-    return this.guard(() => this.work.putPersonalFollowUpPolicy(body?.policy));
   }
 
   @Post("prefs")

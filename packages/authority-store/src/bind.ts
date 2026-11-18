@@ -5,9 +5,6 @@ import type {
   ContextArtifactStore,
   ContextAuthorityReader,
   ContextProjectionOutboxStore,
-  DailyDigestJobStore,
-  DailyDigestPolicyStore,
-  DailyDigestCoverageAlertStore,
   ProposalStore,
   DecisionStore,
   ReviewStore,
@@ -16,7 +13,6 @@ import type {
   StandardGapStore,
   AgentRunStore,
   StandardUsageStore,
-  CustomerServiceTaskStore,
   ExecutorStore,
   WorkStore,
 } from "@regenic/domain";
@@ -29,8 +25,14 @@ export type AuthorityServicesStore = AuthorityStore &
   ContextArtifactStore &
   ContextAuthorityReader &
   ContextProjectionOutboxStore &
-  DailyDigestJobStore & {
-  } & DailyDigestPolicyStore & DailyDigestCoverageAlertStore & ProposalStore & DecisionStore & ReviewStore & HandoffStore & StandardStore & StandardGapStore & AgentRunStore & StandardUsageStore & CustomerServiceTaskStore & {
+  ProposalStore &
+  DecisionStore &
+  ReviewStore &
+  HandoffStore &
+  StandardStore &
+  StandardGapStore &
+  AgentRunStore &
+  StandardUsageStore & {
     close(): void | Promise<void>;
   };
 
@@ -42,9 +44,6 @@ export function provideAuthorityServices(
   ctx.provide("context-authority", store);
   ctx.provide("context-artifacts", store);
   ctx.provide("context-projection-outbox", store);
-  ctx.provide("daily-digest-jobs", store);
-  ctx.provide("daily-digest-policy", store);
-  ctx.provide("daily-digest-coverage-alerts", store);
   ctx.provide("proposals", store);
   ctx.provide("decisions", store);
   ctx.provide("reviews", store);
@@ -53,6 +52,5 @@ export function provideAuthorityServices(
   ctx.provide("standard-gaps", store);
   ctx.provide("agent-runs", store);
   ctx.provide("standard-usage", store);
-  ctx.provide("customer-service-tasks", store);
   ctx.effect(() => () => store.close());
 }

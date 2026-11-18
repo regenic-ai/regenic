@@ -601,7 +601,7 @@ describe("thread activity", () => {
       ),
       "审核不通过：地区不符",
     );
-    assert.match(workNextStepCopy({ record_class: "task" }) ?? "", /Set a rule/);
+    assert.match(workNextStepCopy({ record_class: "task" }) ?? "", /Create an automation/);
     assert.match(
       workNextStepCopy({ work: { status: "running" } }) ?? "",
       /chat reply is not the same as finishing/i,

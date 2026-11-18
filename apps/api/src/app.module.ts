@@ -23,7 +23,6 @@ import { PersonalSearchAnswerService } from "./personal-search-answer.service";
 import { PersonalConversationLabelsService } from "./personal-conversation-labels.service";
 import { PersonalConversationContextService } from "./personal-conversation-context.service";
 import { PersonalContextProjectionService } from "./personal-context-projection.service";
-import { PersonalDailyDigestService } from "./personal-daily-digest.service";
 import { PersonalController } from "./personal.controller";
 import { PersonalInboxService } from "./personal-inbox.service";
 import { PersonalForwardService } from "./personal-forward.service";
@@ -38,7 +37,6 @@ import { ConnectorMarketInstaller } from "./connector-market-installer";
 import { PersonalExecutorService } from "./personal-executor.service";
 import { PersonalWorkService } from "./personal-work.service";
 import { PersonalStoreMaintenanceService } from "./personal-store-maintenance.service";
-import { PersonalCustomerService } from "./personal-customer-service";
 
 @Module({
   controllers: [
@@ -60,9 +58,7 @@ import { PersonalCustomerService } from "./personal-customer-service";
     PersonalSearchAnswerService,
     PersonalConversationLabelsService,
     PersonalConversationContextService,
-    PersonalCustomerService,
     PersonalContextProjectionService,
-    PersonalDailyDigestService,
     PersonalInboxService,
     PersonalReplyService,
     PersonalForwardService,

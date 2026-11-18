@@ -2,6 +2,33 @@ const assert = require("node:assert/strict");
 const { test } = require("node:test");
 const { isolatedHost, closedPort } = require("./support/isolated-host.cjs");
 
+test("an execute + create connector is projected once with its application name as an Agent", { timeout: 30_000 }, async (t) => {
+  const f = await isolatedHost(t);
+  const driver = f.drivers.get("synthetic-direct");
+  driver.capabilities = (installation) => ({
+    sync: false,
+    reply: false,
+    create: installation.status === "enabled",
+    execute: installation.status === "enabled",
+  });
+  driver.presentInstall = () => ({
+    label: { literal: "Acme Agent" },
+    detail: { literal: "Handles work" },
+  });
+  const installation = await f.connectors.install({
+    connector_type: "synthetic-direct",
+    config: {},
+  });
+  const views = await f.executors.listViews();
+  const projected = views.filter((view) => view.connector_id === installation.id);
+  assert.equal(projected.length, 1);
+  assert.equal(projected[0].label, "Acme Agent");
+  const catalog = await f.executors.listCatalog();
+  assert.equal(catalog.find((entry) => entry.executor_type === projected[0].id).agent, true);
+  assert.deepEqual(f.calls, []);
+  await f.close();
+});
+
 test("SQLite + real host pins execution through approval/status/cancel and fences generations without metadata activation", { timeout: 30_000 }, async (t) => {
   const f = await isolatedHost(t);
   const a = await f.connectors.install({ connector_type: "synthetic-direct", config: { revision: 1 } });

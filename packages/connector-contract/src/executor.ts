@@ -132,6 +132,8 @@ export interface ExecutorCatalogEntry {
   /** Host-owned local binding, also used to pin spawnSysout. */
   installation_id?: string;
   kind?: "local_connector" | "http";
+  /** This executor is an Agent. Connectors are not executors. */
+  agent?: boolean;
   fields: ExecutorCatalogField[];
 }
 
@@ -150,6 +152,8 @@ export interface ExecutorContext {
   spawnSysout(options?: {
     cwd?: string;
     mcp_servers?: Record<string, WorkMcpServer>;
+    /** First task for connectors that open a session only with text. */
+    text?: string;
   }): Promise<ConversationThread>;
   writeStdin(thread: ConversationThread, text: string): Promise<void>;
   listPrompts(thread: ConversationThread): Promise<ThreadPrompt[]>;
@@ -159,6 +163,8 @@ export interface ExecutorContext {
    * the context tools itself. Absent means no.
    */
   sysoutSupportsMcp?(): Promise<boolean>;
+  /** Whether the connector starts the run from `spawnSysout({ text })`. */
+  sysoutCreateWithTask?(): Promise<boolean>;
   /** Write files the local agent can read from cwd. Same machine only. */
   writeWorkFiles?(
     files: Record<string, string>,

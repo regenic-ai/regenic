@@ -19,7 +19,6 @@ import { PersonalPluginService } from "./personal-plugin.service";
 import { KernelRuntimeService } from "./kernel-runtime.service";
 import { PersonalRuntimeService } from "./personal-runtime.service";
 import { PersonalContextProjectionService } from "./personal-context-projection.service";
-import { PersonalDailyDigestService } from "./personal-daily-digest.service";
 import { PersonalStoreMaintenanceService } from "./personal-store-maintenance.service";
 import { PersonalWorkService } from "./personal-work.service";
 import { markBackgroundListen } from "./personal-interactive-gate";
@@ -70,7 +69,6 @@ function startBackgroundTimers(app: INestApplication): void {
   app.get(PersonalStoreMaintenanceService).startAfterListen();
   if (shouldRunInProcessContextJobs()) {
     app.get(PersonalContextProjectionService).startAfterListen();
-    app.get(PersonalDailyDigestService).startAfterListen();
   }
   app.get(PersonalInboxService).startAfterListen();
   app.get(PersonalConnectorService).startAfterListen();
@@ -85,7 +83,6 @@ function startBackgroundTimers(app: INestApplication): void {
 function stopBackgroundTimers(app: INestApplication): void {
   stopOne(app, PersonalStoreMaintenanceService);
   stopOne(app, PersonalContextProjectionService);
-  stopOne(app, PersonalDailyDigestService);
   stopOne(app, PersonalConnectorService);
   stopOne(app, PersonalPluginService);
   stopOne(app, PersonalWorkService);

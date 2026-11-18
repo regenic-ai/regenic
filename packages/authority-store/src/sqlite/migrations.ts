@@ -1,4 +1,4 @@
-export const LATEST_SCHEMA_VERSION = 81;
+export const LATEST_SCHEMA_VERSION = 88;
 
 export const PRE_MERGE_LIFECYCLE_REPAIR_SQL = `
   ALTER TABLE work_items ADD COLUMN current_run_id TEXT REFERENCES work_runs(id);
@@ -1640,6 +1640,67 @@ export const MIGRATIONS = [
       );
       CREATE INDEX IF NOT EXISTS aggregate_fact_cache_event_idx
         ON aggregate_fact_cache (org_id, event_id);
+    `,
+  },
+  {
+    version: 82,
+    sql: `
+      DROP TABLE IF EXISTS customer_service_tasks;
+      DROP TABLE IF EXISTS daily_digest_coverage_alerts;
+      DROP TABLE IF EXISTS daily_digest_jobs;
+      DROP TABLE IF EXISTS daily_digest_schedule_cursors;
+      DELETE FROM ui_prefs WHERE key IN (
+        'daily_digest_policy_v1',
+        'personal_follow_up_policy_v1',
+        'personal_follow_up_snoozes_v1'
+      );
+    `,
+  },
+  {
+    // Some local databases already advanced through 83–85. Those steps are not
+    // repeated: 83 and 84 deleted live preferences, and 85 dropped search_answers.
+    version: 83,
+    sql: "SELECT 1",
+  },
+  {
+    version: 84,
+    sql: "SELECT 1",
+  },
+  {
+    version: 85,
+    sql: "SELECT 1",
+  },
+  {
+    version: 86,
+    sql: `
+      CREATE TABLE IF NOT EXISTS search_answers (
+        id TEXT PRIMARY KEY,
+        org_id TEXT NOT NULL,
+        work_item_id TEXT NOT NULL REFERENCES work_items(id),
+        query TEXT NOT NULL,
+        event_ids_json TEXT NOT NULL CHECK (json_valid(event_ids_json)),
+        scope_json TEXT CHECK (scope_json IS NULL OR json_valid(scope_json)),
+        outcome TEXT CHECK (outcome IN ('timed_out', 'cancelled')),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS search_answers_work_item_idx
+        ON search_answers (org_id, work_item_id);
+    `,
+  },
+  {
+    version: 87,
+    sql: `
+      DELETE FROM context_artifact_states
+        WHERE (org_id, artifact_id) IN (SELECT org_id, id FROM context_artifacts WHERE kind = 'daily_digest');
+      DELETE FROM context_artifacts WHERE kind = 'daily_digest';
+    `,
+  },
+  {
+    version: 88,
+    sql: `
+      ALTER TABLE recipes ADD COLUMN flow_json TEXT
+        CHECK (flow_json IS NULL OR json_valid(flow_json));
     `,
   },
 ] as const;

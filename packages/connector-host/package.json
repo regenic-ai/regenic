@@ -20,7 +20,8 @@
     "@regenic/domain": "workspace:*",
     "@regenic/plugin-host": "workspace:*",
     "@regenic/dsh-connector": "workspace:*",
-    "@regenic/feishu-connector": "workspace:*"
+    "@regenic/feishu-connector": "workspace:*",
+    "@regenic/server-app-connector": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

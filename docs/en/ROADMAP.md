@@ -52,17 +52,14 @@ Make connected messages searchable, analyzable, and easy to hand to the right pe
 - [x] Recipes: route work items to executors by rule, on a schedule, with human confirmation — [RFC 0009](rfcs/0009-work-orchestration.md)
 - [x] Swappable model service, including local models — [Local model service](LOCAL_MODEL_SERVICE.md)
 - [x] Read-only MCP for external AI tools — [MCP](CONTEXT_SEARCH_MCP.md)
-- [x] Follow-ups: surface conversations waiting on a reply in the workbench
-- [x] Daily digests with sources, coverage gaps, and anomaly signals
 - [x] Versioned judgment standards, gap intake, and drift signals
 - [x] Policy-filtered Evidence Bundles for collaboration platforms and agents
-- [x] Evidence-bound customer-service agent workflow — [Customer-service agent](CUSTOMER_SERVICE_AGENT.md)
 
 **Next**
 
 - [ ] Composable processing: filter, transform, analyze, route, and write back
 - [ ] Proactive triage: decide what needs attention now against personal standards, and defer when unsure
-- [ ] Review and revise digests, standards, and follow-ups in the workbench
+- [ ] Review and revise standards in the workbench
 - [ ] More connectors, and validation of existing ones on real accounts
 
 **Done when:** a person's daily messages are identified, distilled, and routed by their own standards, with sourced conclusions, and at least one personal standard has been revised.

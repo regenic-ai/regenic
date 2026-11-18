@@ -22,7 +22,6 @@ import type {
   ContextArtifactState,
   ContextArtifactStore,
   ContextArtifactSupersession,
-  ContextArtifactProposedSupersession,
   ContextAuthorityRead,
   ContextAuthorityReadQuery,
   ContextAuthorityReader,
@@ -31,11 +30,6 @@ import type {
   ContextProjectionCheckpoint,
   ContextProjectionJob,
   ContextProjectionOutboxStore,
-  DailyDigestJob,
-  DailyDigestJobStore,
-  DailyDigestPolicy,
-  DailyDigestPolicyStore,
-  DailyDigestCoverageAlert,
   ProposalRecord,
   ProposalStatus,
   DecisionRecord,
@@ -53,8 +47,6 @@ import type {
   AgentRunStatus,
   StandardUsageRecord,
   StandardUsageSourceKind,
-  CustomerServiceTask,
-  CustomerServiceTaskStatus,
   ClaimContextProjectionJobs,
   CompleteContextProjectionJob,
   FailContextProjectionJob,
@@ -175,9 +167,7 @@ export class SqliteSplitAuthorityStore
     ExecutorStore,
     ContextArtifactStore,
     ContextAuthorityReader,
-    ContextProjectionOutboxStore,
-    DailyDigestJobStore,
-    DailyDigestPolicyStore
+    ContextProjectionOutboxStore
 {
   readonly atomicSyncPage = true;
   private constructor(
@@ -327,12 +317,6 @@ export class SqliteSplitAuthorityStore
     return this.writer.call("supersedeArtifact", [input]);
   }
 
-  async supersedeProposedArtifact(input: ContextArtifactProposedSupersession): Promise<{
-    superseded: ContextArtifactState;
-    replacement: ContextArtifactState;
-  }> {
-    return this.writer.call("supersedeProposedArtifact", [input]);
-  }
 
   async putSnapshot(snapshot: ContextSnapshot): Promise<void> {
     await this.writer.call("putSnapshot", [snapshot]);
@@ -394,57 +378,15 @@ export class SqliteSplitAuthorityStore
     return this.reader.call("listContextProjectionJobs", [orgId]);
   }
 
-  async enqueueDailyDigestCatchUp(input: {
-    org_id: string;
-    through_utc_date: string;
-    generation: string;
-    created_at: string;
-    max_days: number;
-  }): Promise<DailyDigestJob[]> {
-    return this.writer.call("enqueueDailyDigestCatchUp", [input]);
-  }
 
-  async enqueueDailyDigestJob(input: {
-    org_id: string; utc_date: string; generation: string; created_at: string;
-  }): Promise<DailyDigestJob> {
-    return this.writer.call("enqueueDailyDigestJob", [input]);
-  }
 
-  async claimDailyDigestJobs(input: {
-    owner: string; now: string; lease_ms: number; limit: number;
-  }): Promise<DailyDigestJob[]> {
-    return this.writer.call("claimDailyDigestJobs", [input]);
-  }
 
-  async completeDailyDigestJob(input: { id: string; owner: string; completed_at: string }): Promise<boolean> {
-    return this.writer.call("completeDailyDigestJob", [input]);
-  }
 
-  async renewDailyDigestJob(input: { id: string; owner: string; now: string; lease_ms: number }): Promise<boolean> {
-    return this.writer.call("renewDailyDigestJob", [input]);
-  }
 
-  async failDailyDigestJob(input: {
-    id: string; owner: string; failed_at: string; next_retry_at: string; error_code: string;
-  }): Promise<boolean> {
-    return this.writer.call("failDailyDigestJob", [input]);
-  }
 
-  async listDailyDigestJobs(orgId: string): Promise<DailyDigestJob[]> {
-    return this.reader.call("listDailyDigestJobs", [orgId]);
-  }
 
-  async putDailyDigestCoverageAlert(alert: DailyDigestCoverageAlert): Promise<DailyDigestCoverageAlert> {
-    return this.writer.call("putDailyDigestCoverageAlert", [alert]);
-  }
 
-  async listDailyDigestCoverageAlerts(input: { org_id: string; status?: "open" | "resolved"; limit?: number }): Promise<DailyDigestCoverageAlert[]> {
-    return this.reader.call("listDailyDigestCoverageAlerts", [input]);
-  }
 
-  async resolveDailyDigestCoverageAlert(input: { org_id: string; alert_id: string; resolved_at: string }): Promise<DailyDigestCoverageAlert | null> {
-    return this.writer.call("resolveDailyDigestCoverageAlert", [input]);
-  }
 
   async putProposal(proposal: ProposalRecord): Promise<ProposalRecord> {
     return this.writer.call("putProposal", [proposal]);
@@ -486,17 +428,8 @@ export class SqliteSplitAuthorityStore
     return this.reader.call("listReviews", [input]);
   }
 
-  async putCustomerServiceTask(input: CustomerServiceTask, expectedRevision?: number): Promise<CustomerServiceTask> {
-    return this.writer.call("putCustomerServiceTask", [input, expectedRevision]);
-  }
 
-  async getCustomerServiceTask(orgId: string, taskId: string): Promise<CustomerServiceTask | null> {
-    return this.reader.call("getCustomerServiceTask", [orgId, taskId]);
-  }
 
-  async listCustomerServiceTasks(input: { org_id: string; statuses?: CustomerServiceTaskStatus[]; limit?: number }): Promise<CustomerServiceTask[]> {
-    return this.reader.call("listCustomerServiceTasks", [input]);
-  }
 
   async putHandoff(handoff: HandoffRecord): Promise<HandoffRecord> {
     return this.writer.call("putHandoff", [handoff]);
@@ -1078,13 +1011,7 @@ export class SqliteSplitAuthorityStore
     return this.reader.call("getUiPref", [orgId, key]);
   }
 
-  async getDailyDigestPolicy(orgId: string): Promise<DailyDigestPolicy | null> {
-    return this.reader.call("getDailyDigestPolicy", [orgId]);
-  }
 
-  async putDailyDigestPolicy(input: { org_id: string; policy: DailyDigestPolicy; updated_at: string }): Promise<DailyDigestPolicy> {
-    return this.writer.call("putDailyDigestPolicy", [input]);
-  }
 
   async putUiPref(
     orgId: string,

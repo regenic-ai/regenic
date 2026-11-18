@@ -11,6 +11,7 @@ import {
   stopAllConnectorLivePushes,
   type ChannelDriver,
   type ConnectorInstallation,
+  type JsonValue,
   type ConnectorPollRunResult,
   type ConnectorRuntimeStore,
   type ConnectorStream,
@@ -47,6 +48,7 @@ import {
   markBackgroundListen,
 } from "./personal-interactive-gate";
 import { PersonalRuntimeService } from "./personal-runtime.service";
+import { PersonalApiKeyService } from "./personal-api-key.service";
 import { createConnectorState, type ConnectorState } from "./personal-connector-state";
 import {
   INGEST_TOKEN_HEADER,
@@ -132,6 +134,8 @@ export class PersonalConnectorService implements OnModuleDestroy, OnApplicationB
     private readonly drivers: ChannelDriverRegistry,
     @Inject(KernelRuntimeService)
     private readonly kernelRuntime: KernelRuntimeService,
+    @Inject(PersonalApiKeyService)
+    private readonly personalApiKey: PersonalApiKeyService,
     @Inject(PersonalExecutorService)
     private readonly executors?: PersonalExecutorService,
   ) {
@@ -618,8 +622,19 @@ export class PersonalConnectorService implements OnModuleDestroy, OnApplicationB
   }
 
   async install(input: ConnectorInstallInput): Promise<EngineInstallationView> {
-    const view = await this.changeInstallation(() => connectorInstall.install(this.connectorState(), input));
-    await this.executors?.ensureDeclaredExecutor(view.id);
+    const view = await this.changeInstallation(() =>
+      connectorInstall.install(this.connectorState(), input, {
+        deferActivation: true,
+      }));
+    try {
+      await this.connectDeclaredInstallation(view.id);
+      await this.executors?.ensureDeclaredExecutor(view.id);
+      void this.connectorState().catchUp(view.id);
+    } catch (error) {
+      await connectorInstall.uninstall(this.connectorState(), view.id).catch(() => undefined);
+      await this.executors?.removeConnectorExecutors(view.id).catch(() => undefined);
+      throw wrapDriverError(error, "invalid_config");
+    }
     return view;
   }
 
@@ -627,20 +642,131 @@ export class PersonalConnectorService implements OnModuleDestroy, OnApplicationB
     installationId: string,
     config: Record<string, unknown>,
   ): Promise<EngineInstallationView> {
-    const view = await this.changeInstallation(() => connectorInstall.updateConfig(this.connectorState(), installationId, config));
+    const view = await this.changeInstallation(() =>
+      connectorInstall.updateConfig(
+        this.connectorState(),
+        installationId,
+        config,
+        (installation) => this.connectInstallation(installation),
+      ));
     await this.executors?.ensureDeclaredExecutor(view.id);
     return view;
   }
 
+  private async connectDeclaredInstallation(installationId: string): Promise<void> {
+    const host = this.runtime.requireHost();
+    const store = host.get("authority");
+    const installation = await store.findInstallation(installationId);
+    if (!installation || installation.org_id !== this.runtime.orgId()) return;
+    const patch = await this.connectInstallation(installation);
+    if (!patch || Object.keys(patch).length === 0) return;
+    await store.updateInstallationConfig({
+      id: installation.id,
+      org_id: installation.org_id,
+      config: { ...installation.config, ...patch },
+      updated_at: new Date(
+        Math.max(Date.now(), Date.parse(installation.updated_at) + 1),
+      ).toISOString(),
+    });
+  }
+
+  private async connectInstallation(
+    installation: ConnectorInstallation,
+  ): Promise<Record<string, JsonValue> | void> {
+    const host = this.runtime.requireHost();
+    const driver = this.drivers.get(installation.connector_type);
+    if (!driver?.connectInstallation) return;
+    const key = this.personalApiKey.expectedKey();
+    const base = (
+      process.env.REGENIC_PUBLIC_URL?.trim() ||
+      `http://127.0.0.1:${process.env.REGENIC_DESKTOP_API_PORT?.trim() || "4370"}`
+    ).replace(/\/$/, "");
+    return driver.connectInstallation(
+      installation,
+      asConnectorHost(host),
+      process.env,
+      {
+        ...(key
+          ? {
+              ingest: {
+                url: `${base}/v1/me/connectors/${encodeURIComponent(installation.id)}/ingest`,
+                header: INGEST_TOKEN_HEADER,
+                token: ingestTokenFor(key, installation.id),
+              } as const,
+            }
+          : {}),
+      },
+    );
+  }
+
   async uninstall(installationId: string): Promise<{ id: string; removed: true }> {
-    return this.changeInstallation(() => connectorInstall.uninstall(this.connectorState(), installationId));
+    const removed = await this.changeInstallation(() =>
+      connectorInstall.uninstall(this.connectorState(), installationId));
+    await this.executors?.removeConnectorExecutors(installationId);
+    return removed;
   }
 
   async setStatus(
     installationId: string,
     status: "enabled" | "disabled",
   ): Promise<EngineInstallationView> {
-    return this.changeInstallation(() => connectorInstall.setStatus(this.connectorState(), installationId, status));
+    if (status === "enabled") {
+      const host = this.runtime.requireHost();
+      const store = host.get("authority");
+      const current = await this.requireInstallation(store, installationId);
+      const previousConfig = { ...current.config };
+      let patched = false;
+      try {
+        const candidate = { ...current, status: "enabled" as const };
+        const patch = await this.connectInstallation(candidate);
+        if (patch && Object.keys(patch).length > 0) {
+          const saved = await store.updateInstallationConfig({
+            id: current.id,
+            org_id: current.org_id,
+            config: { ...previousConfig, ...patch },
+            updated_at: new Date(
+              Math.max(Date.now(), Date.parse(current.updated_at) + 1),
+            ).toISOString(),
+          });
+          if (!saved) {
+            throw new PersonalConnectorError(
+              "not_found",
+              "Connector installation not found",
+              404,
+            );
+          }
+          patched = true;
+        }
+        const view = await this.changeInstallation(() =>
+          connectorInstall.setStatus(this.connectorState(), installationId, status));
+        await this.executors?.setConnectorExecutorsStatus(installationId, status);
+        await this.executors?.ensureDeclaredExecutor(installationId);
+        return view;
+      } catch (error) {
+        if (patched) {
+          const latest = await store.findInstallation(current.id);
+          if (
+            latest
+            && latest.org_id === current.org_id
+            && latest.status !== "enabled"
+          ) {
+            await store.updateInstallationConfig({
+              id: current.id,
+              org_id: current.org_id,
+              config: previousConfig,
+              updated_at: new Date(
+                Math.max(Date.now(), Date.parse(latest.updated_at) + 1),
+              ).toISOString(),
+            }).catch(() => undefined);
+          }
+        }
+        throw wrapDriverError(error, "invalid_config");
+      }
+    }
+    const view = await this.changeInstallation(() =>
+      connectorInstall.setStatus(this.connectorState(), installationId, status));
+    await this.executors?.setConnectorExecutorsStatus(installationId, status);
+    return view;
   }
 
   private changeInstallation<T>(work: () => Promise<T>): Promise<T> {

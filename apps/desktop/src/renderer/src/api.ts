@@ -2,7 +2,6 @@ import type {
   AgentContextRead,
   ConversationPrefView,
   CreatedConversation,
-  CustomerServiceTaskView,
   DataDirectoryAction,
   DataDirectoryPlan,
   EngineExecutorView,
@@ -20,8 +19,6 @@ import type {
   PersonalSyncSettings,
   PersonalSyncSettingsView,
   PersonalEngineView,
-  PersonalFollowUpPolicy,
-  PersonalFollowUpView,
   PersonalContextBundle,
   PersonalContextDiff,
   PersonalContextSnapshotIndexEntry,
@@ -50,6 +47,11 @@ import type {
   CancellationJobView,
   WorkIdentityDiagnosticView,
 } from "./types";
+import {
+  flowConfigFromFields,
+  recipeFromFlowRecord,
+  type FlowWireRecord,
+} from "./flow-wire.ts";
 import { activeLocale } from "../../shared/i18n.ts";
 import { throwKernelError } from "./kernel-request.ts";
 import { normalizeListTitle } from "./types";
@@ -1313,12 +1315,12 @@ function replyErrorMessage(
 }
 
 export async function fetchRecipes(): Promise<RecipeView[]> {
-  const response = await fetch(`${origin()}/v1/me/recipes`);
+  const response = await fetch(`${origin()}/v1/me/flows`);
   if (!response.ok) {
-    throw new Error(`recipes ${response.status}`);
+    throw new Error(`flows ${response.status}`);
   }
-  const items = (await response.json()) as RecipeView[];
-  return Array.isArray(items) ? items : [];
+  const items = (await response.json()) as FlowWireRecord[];
+  return Array.isArray(items) ? items.map(recipeFromFlowRecord) : [];
 }
 
 export async function installExecutor(
@@ -1426,26 +1428,26 @@ export async function saveRecipe(
   id?: string,
 ): Promise<RecipeView> {
   const response = await fetch(
-    id ? `${origin()}/v1/me/recipes/${id}` : `${origin()}/v1/me/recipes`,
+    id ? `${origin()}/v1/me/flows/${id}` : `${origin()}/v1/me/flows`,
     {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(input),
+      body: JSON.stringify({ name: input.name, config: flowConfigFromFields(input) }),
     },
   );
-  const body = (await response.json()) as RecipeView | { error?: { message?: string } };
+  const body = (await response.json()) as FlowWireRecord | { error?: { message?: string } };
   if (!response.ok) {
     throw new Error(
       "error" in body && body.error?.message
         ? body.error.message
-        : `recipe ${response.status}`,
+        : `flow ${response.status}`,
     );
   }
-  return body as RecipeView;
+  return recipeFromFlowRecord(body as FlowWireRecord);
 }
 
 export async function deleteRecipe(id: string): Promise<void> {
-  const response = await fetch(`${origin()}/v1/me/recipes/${id}`, {
+  const response = await fetch(`${origin()}/v1/me/flows/${id}`, {
     method: "DELETE",
   });
   if (!response.ok) {
@@ -1458,7 +1460,7 @@ export async function tryRecipe(
   id: string,
   input?: { thread_id?: string; write_back?: boolean },
 ): Promise<{ thread_id: string }> {
-  const response = await fetch(`${origin()}/v1/me/recipes/${id}/try`, {
+  const response = await fetch(`${origin()}/v1/me/flows/${id}/try`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(input ?? {}),
@@ -1818,55 +1820,6 @@ export async function fetchSemanticIndexStatus(signal?: AbortSignal): Promise<Se
   return response.json() as Promise<SemanticIndexStatus>;
 }
 
-export async function fetchCustomerServiceTasks(
-  options: { statuses?: string[]; signal?: AbortSignal } = {},
-): Promise<CustomerServiceTaskView[]> {
-  const params = new URLSearchParams({ limit: "100" });
-  if (options.statuses?.length) {
-    params.set("statuses", options.statuses.join(","));
-  }
-  const response = await kernelFetch(`/v1/me/context/customer-tasks?${params.toString()}`, {
-    signal: options.signal,
-  });
-  const body = await response.json();
-  if (!response.ok) throwKernelError(body, `customer tasks ${response.status}`);
-  return Array.isArray(body) ? body as CustomerServiceTaskView[] : [];
-}
-
-export async function reviewCustomerServiceTask(
-  taskId: string,
-  result: "approved" | "rejected",
-  note?: string,
-): Promise<CustomerServiceTaskView> {
-  const response = await kernelFetch(
-    `/v1/me/context/customer-tasks/${encodeURIComponent(taskId)}/review`,
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(note?.trim() ? { result, note: note.trim() } : { result }),
-    },
-  );
-  const body = await response.json();
-  if (!response.ok) throwKernelError(body, `customer task review ${response.status}`);
-  return body as CustomerServiceTaskView;
-}
-
-export async function sendCustomerServiceTask(
-  taskId: string,
-): Promise<CustomerServiceTaskView> {
-  const response = await kernelFetch(
-    `/v1/me/context/customer-tasks/${encodeURIComponent(taskId)}/send`,
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: "{}",
-    },
-  );
-  const body = await response.json();
-  if (!response.ok) throwKernelError(body, `customer task send ${response.status}`);
-  return body as CustomerServiceTaskView;
-}
-
 export async function fetchSearchSource(
   input: { event_id: string; content_hash: string; part_index?: number },
   signal: AbortSignal,
@@ -1993,68 +1946,6 @@ export async function fetchPersonalContextHistory(
     throw new Error("context history");
   }
   return entries;
-}
-
-export async function fetchFollowUps(): Promise<PersonalFollowUpView[]> {
-  const response = await fetch(`${origin()}/v1/me/follow-ups`);
-  if (!response.ok) {
-    throw new Error(`follow-ups ${response.status}`);
-  }
-  const items = (await response.json()) as PersonalFollowUpView[];
-  if (!Array.isArray(items)) {
-    throw new Error("follow-ups");
-  }
-  return items;
-}
-
-export async function fetchFollowUpPolicy(): Promise<PersonalFollowUpPolicy> {
-  const response = await fetch(`${origin()}/v1/me/follow-up-policy`);
-  if (!response.ok) {
-    throw new Error(`follow-up policy ${response.status}`);
-  }
-  return response.json() as Promise<PersonalFollowUpPolicy>;
-}
-
-export async function fetchFollowUpSnoozes(): Promise<Record<string, string>> {
-  const response = await fetch(`${origin()}/v1/me/follow-ups/snoozes`);
-  if (!response.ok) {
-    throw new Error(`follow-up snoozes ${response.status}`);
-  }
-  return response.json() as Promise<Record<string, string>>;
-}
-
-export async function saveFollowUpPolicy(
-  policy: PersonalFollowUpPolicy,
-): Promise<PersonalFollowUpPolicy> {
-  const response = await fetch(`${origin()}/v1/me/follow-up-policy`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ policy }),
-  });
-  if (!response.ok) {
-    throw new Error(`follow-up policy ${response.status}`);
-  }
-  return response.json() as Promise<PersonalFollowUpPolicy>;
-}
-
-export async function snoozeFollowUp(threadId: string, until: string): Promise<void> {
-  const response = await fetch(`${origin()}/v1/me/follow-ups/${encodeURIComponent(threadId)}/snooze`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ until }),
-  });
-  if (!response.ok) {
-    throw new Error(`follow-up snooze ${response.status}`);
-  }
-}
-
-export async function unsnoozeFollowUp(threadId: string): Promise<void> {
-  const response = await fetch(`${origin()}/v1/me/follow-ups/${encodeURIComponent(threadId)}/snooze`, {
-    method: "DELETE",
-  });
-  if (!response.ok) {
-    throw new Error(`follow-up unsnooze ${response.status}`);
-  }
 }
 
 export async function fetchDispatchPolicy(): Promise<PersonalDispatchPolicy> {

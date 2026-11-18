@@ -24,26 +24,74 @@ export function InboxIcon() {
   );
 }
 
-export function FollowUpIcon() {
+export function ConnectIcon() {
   return (
     <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
-      <circle cx="9" cy="9" r="6" fill="none" stroke="currentColor" strokeWidth="1.4" />
-      <path d="M9 5.5V9l2.5 1.5" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      <path
+        d="M6.2 3v3M11.8 3v3M4.6 6h8.8v2.4a4.4 4.4 0 0 1-8.8 0V6ZM9 12.8V15.4"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </svg>
   );
 }
 
-export function EngineIcon() {
+export function ConnectedAppsHint() {
+  return (
+    <span className="connected-app-hint" aria-hidden="true">
+      <svg viewBox="0 0 16 16">
+        <rect width="16" height="16" rx="4" fill="#fff" />
+        <path d="M4 3.3 8.1 2l3.9 2.1-2.2 1.4L8 4.6 5.3 5.7 4 3.3Z" fill="#36C5F0" />
+        <path d="m4 3.3 1.3 2.4-1.1 2.7L2.5 6.1 4 3.3Z" fill="#00B96B" />
+        <path d="m4.2 8.4 2.5.6 1.4 2.3-2.8 1.1-2.2-1.7 1.1-2.3Z" fill="#7B61FF" />
+        <path d="m8.1 11.3 1.7-2.1L12.6 9l.2 2.8-2.1 1.8-2.6-2.3Z" fill="#FFB800" />
+      </svg>
+      <svg viewBox="0 0 16 16">
+        <rect width="16" height="16" rx="4" fill="#111" />
+        <path d="m4 5.1 4-2.2 4 2.2v5.8l-4 2.2-4-2.2V5.1Zm2 .9v4l2 1.1 2-1.1V6L8 4.9 6 6Z" fill="#fff" />
+      </svg>
+    </span>
+  );
+}
+
+export function FlowIcon() {
   return (
     <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
-      <circle cx="9" cy="9" r="3" fill="none" stroke="currentColor" strokeWidth="1.4" />
+      <circle cx="4.4" cy="4.6" r="1.9" fill="none" stroke="currentColor" strokeWidth="1.4" />
+      <circle cx="13.6" cy="13.4" r="1.9" fill="none" stroke="currentColor" strokeWidth="1.4" />
       <path
-        d="M9 2.4v1.8M9 13.8v1.8M2.4 9h1.8M13.8 9h1.8M4.3 4.3l1.3 1.3M12.4 12.4l1.3 1.3M13.7 4.3l-1.3 1.3M5.6 12.4l-1.3 1.3"
+        d="M6.3 4.6h4.2a2.3 2.3 0 0 1 0 4.6h-3a2.3 2.3 0 0 0 0 4.6h4.2"
         fill="none"
         stroke="currentColor"
         strokeWidth="1.4"
         strokeLinecap="round"
       />
+    </svg>
+  );
+}
+
+export function FilterIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
+      <path
+        d="M2.5 4h11M4.5 8h7M6.5 12h3"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+export function SidebarIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+      <rect x="2" y="3" width="12" height="10" rx="2" fill="none" stroke="currentColor" strokeWidth="1.3" />
+      <path d="M6.2 3v10" stroke="currentColor" strokeWidth="1.3" />
     </svg>
   );
 }
@@ -193,30 +241,6 @@ export function ChevronIcon() {
   );
 }
 
-export function RecipesIcon() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
-      <rect
-        x="4"
-        y="3.2"
-        width="10"
-        height="11.6"
-        rx="1.6"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.4"
-      />
-      <path
-        d="M6.4 6.4h5.2M6.4 9h5.2M6.4 11.6h3.4"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.4"
-        strokeLinecap="round"
-      />
-    </svg>
-  );
-}
-
 export function SettingsIcon() {
   return (
     <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
@@ -230,6 +254,36 @@ export function SettingsIcon() {
       <circle cx="6.2" cy="5.2" r="1.2" fill="currentColor" />
       <circle cx="11.5" cy="9" r="1.2" fill="currentColor" />
       <circle cx="7.4" cy="12.8" r="1.2" fill="currentColor" />
+    </svg>
+  );
+}
+
+export function ChatIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
+      <path
+        d="M3.5 4.8c0-.9.7-1.6 1.6-1.6h7.8c.9 0 1.6.7 1.6 1.6v5.4c0 .9-.7 1.6-1.6 1.6H8.2L5 14.5v-2.7h0c-.8-.1-1.5-.8-1.5-1.6V4.8Z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+export function ClockIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
+      <circle cx="9" cy="9" r="6" fill="none" stroke="currentColor" strokeWidth="1.4" />
+      <path
+        d="M9 5.6V9l2.3 1.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </svg>
   );
 }

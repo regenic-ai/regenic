@@ -48,8 +48,9 @@
 
 .search-body { display: grid; gap: 12px; margin-top: 16px; }
 
-.search-empty-state { padding: 20px 4px; }
-.search-empty-state p { margin: 0 0 10px; }
+.search-empty-state { padding: 4px 0; }
+.search-empty-state .empty-state { min-height: 320px; }
+.search-recent-block { width: min(100%, 560px); }
 .search-recent-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; font-size: 12px; }
 .search-recent { display: flex; flex-wrap: wrap; gap: 8px; }
 .search-recent-chip {

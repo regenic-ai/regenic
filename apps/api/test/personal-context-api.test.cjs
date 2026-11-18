@@ -996,9 +996,9 @@ describe("personal context API", () => {
     assert.ok((await ledger.listHiddenExecutorThreadIds("local-owner")).includes("dsh:answer-1"));
     const systemRecipeId = item.recipe_id;
     ledger.close();
-    const visibleRecipes = await (await fetch(`${origin}/v1/me/recipes`)).json();
+    const visibleRecipes = await (await fetch(`${origin}/v1/me/flows`)).json();
     assert.ok(visibleRecipes.every((recipe) => !recipe.id.startsWith("system:")));
-    const systemRecipeUrl = `${origin}/v1/me/recipes/${encodeURIComponent(systemRecipeId)}`;
+    const systemRecipeUrl = `${origin}/v1/me/flows/${encodeURIComponent(systemRecipeId)}`;
     assert.equal((await postJson(systemRecipeUrl, {})).response.status, 404);
     assert.equal((await postJson(`${systemRecipeUrl}/try`, {})).response.status, 404);
     assert.equal((await fetch(systemRecipeUrl, { method: "DELETE" })).status, 404);
@@ -2270,157 +2270,9 @@ describe("personal context API", () => {
     assert.equal(JSON.parse((await postJson(`${origin}/v1/me/context/standard-gaps/${encodeURIComponent(dismissedGap.id)}/dismiss`, {})).text).status, "dismissed");
   });
 
-  it("lists and resolves coverage alerts without exposing source event identity", async () => {
-    const root = await createRoot();
-    const database = join(root, "authority.db");
-    const blobRoot = join(root, "blobs");
-    const eventId = await ingestEvidence(database, blobRoot);
-    const store = new SqliteAuthorityStore(database);
-    await store.putDailyDigestCoverageAlert({
-      id: "coverage-alert-api", org_id: "local-owner", local_date: "2026-08-30",
-      generation: "daily-digest-d0-v3", event_id: eventId,
-      reason_code: "omitted_high_signal", status: "open", created_at: "2026-08-30T01:00:00.000Z",
-    });
-    store.close();
-    const { origin } = await startApi(root);
-    const response = await fetch(`${origin}/v1/me/context/daily-digests/coverage-alerts`);
-    assert.equal(response.status, 200);
-    const [alert] = await response.json();
-    assert.equal(alert.id, "coverage-alert-api");
-    assert.equal("event_id" in alert, false);
-    assert.equal("org_id" in alert, false);
-    const resolved = await fetch(`${origin}/v1/me/context/daily-digests/coverage-alerts/coverage-alert-api/resolve`, { method: "POST" });
-    assert.equal(resolved.status, 201);
-    assert.equal((await resolved.json()).status, "resolved");
-    assert.deepEqual(await (await fetch(`${origin}/v1/me/context/daily-digests/coverage-alerts`)).json(), []);
-    const missing = await fetch(`${origin}/v1/me/context/daily-digests/coverage-alerts/missing/resolve`, { method: "POST" });
-    assert.equal(missing.status, 404);
-  });
 
-  it("lists safe daily digest job status without matching the date route", async () => {
-    const root = await createRoot();
-    const { origin } = await startApi(root);
-    const response = await fetch(`${origin}/v1/me/context/daily-digests/jobs`);
-    assert.equal(response.status, 200);
-    const jobs = await response.json();
-    assert.ok(Array.isArray(jobs));
-    for (const job of jobs) {
-      assert.equal("lease_owner" in job, false);
-      assert.equal("last_error" in job, false);
-    }
-  });
 
-  it("reads and updates only the current organization's validated daily digest policy", async () => {
-    const root = await createRoot();
-    const { origin } = await startApi(root);
-    const initial = await fetch(`${origin}/v1/me/context/daily-digests/policy`);
-    assert.equal(initial.status, 200);
-    assert.deepEqual((await initial.json()).enabled_directions, [
-      "product", "sales", "customer", "org", "finance", "risk",
-    ]);
-    const policy = {
-      version: 1,
-      time_zone: "UTC",
-      enabled_directions: ["product"],
-      max_items_per_direction: 2,
-      bad_news_terms: ["watchlist"],
-      hypothesis_min_score: 2,
-      role_tier_threshold: 4,
-      evidence_weights: {
-        metric: 4, demo: 3, user_verbatim: 2.5, decision_record: 2.5, opinion: 1,
-      },
-    };
-    const updated = await postJson(`${origin}/v1/me/context/daily-digests/policy`, { policy });
-    assert.equal(updated.response.status, 201);
-    assert.deepEqual(JSON.parse(updated.text), policy);
-    const fetched = await fetch(`${origin}/v1/me/context/daily-digests/policy`);
-    assert.deepEqual(await fetched.json(), policy);
-    const invalid = await postJson(`${origin}/v1/me/context/daily-digests/policy`, {
-      policy: { ...policy, enabled_directions: ["untrusted"] },
-    });
-    assert.equal(invalid.response.status, 400);
-  });
 
-  it("projects a UTC daily digest and exposes it only after artifact acceptance", async () => {
-    const root = await createRoot();
-    const { origin, eventId } = await startApi(root);
-    const proposed = await postJson(`${origin}/v1/me/context/daily-digests/project`, {
-      utc_date: "2026-08-30",
-    });
-    assert.equal(proposed.response.status, 201, proposed.text);
-    const proposal = JSON.parse(proposed.text);
-    assert.ok(proposal.artifact_id);
-    const beforeAcceptance = await postJson(
-      `${origin}/v1/me/context/daily-digests/${encodeURIComponent(proposal.artifact_id)}/proposals`,
-      { direction: "product", item_event_id: eventId },
-    );
-    assert.equal(beforeAcceptance.response.status, 409);
-    const before = await fetch(`${origin}/v1/me/context/daily-digests/2026-08-30`);
-    assert.deepEqual(await before.json(), []);
-    const accepted = await postJson(
-      `${origin}/v1/me/context/artifacts/${encodeURIComponent(proposal.artifact_id)}/decision`,
-      { status: "accepted" },
-    );
-    assert.equal(accepted.response.status, 201);
-    const after = await fetch(`${origin}/v1/me/context/daily-digests/2026-08-30`);
-    assert.equal(after.status, 200);
-    assert.equal((await after.json())[0].id, proposal.artifact_id);
-    const intake = await postJson(
-      `${origin}/v1/me/context/daily-digests/${encodeURIComponent(proposal.artifact_id)}/proposals`,
-      { direction: "product", item_event_id: eventId, single_uncertainty: "Should the release proceed?" },
-    );
-    assert.equal(intake.response.status, 201);
-    const draft = JSON.parse(intake.text);
-    assert.equal(draft.kind, "hypothesis");
-    assert.equal(draft.status, "draft");
-    assert.equal(draft.source_digest_id, proposal.artifact_id);
-    assert.ok(draft.evidence.some((value) => value.uri_or_ref === `event:${eventId}`));
-    const replayedIntake = await postJson(
-      `${origin}/v1/me/context/daily-digests/${encodeURIComponent(proposal.artifact_id)}/proposals`,
-      { direction: "product", item_event_id: eventId },
-    );
-    assert.equal(JSON.parse(replayedIntake.text).id, draft.id);
-    assert.equal((await (await fetch(`${origin}/v1/me/context/proposals`)).json()).length, 1);
-    assert.equal((await (await fetch(`${origin}/v1/me/context/proposals/${encodeURIComponent(draft.id)}`)).json()).id, draft.id);
-    const submitted = await postJson(`${origin}/v1/me/context/proposals/${encodeURIComponent(draft.id)}/submit`, {});
-    assert.equal(JSON.parse(submitted.text).status, "submitted");
-    const duplicateSubmit = await postJson(`${origin}/v1/me/context/proposals/${encodeURIComponent(draft.id)}/submit`, {});
-    assert.equal(duplicateSubmit.response.status, 409);
-    const withdrawn = await postJson(`${origin}/v1/me/context/proposals/${encodeURIComponent(draft.id)}/withdraw`, {});
-    assert.equal(JSON.parse(withdrawn.text).status, "withdrawn");
-    const assembled = await postJson(`${origin}/v1/me/context/assemble`, {
-      ...assembleBody(),
-      query: "release approved",
-      requested_kinds: ["artifact"],
-      budget: {
-        profile: "daily-digest-test",
-        max_tokens: 200,
-        max_items: 5,
-        max_raw_evidence: 5,
-      },
-    });
-    assert.equal(assembled.response.status, 201);
-    assert.equal(
-      JSON.parse(assembled.text).bundle.sections.find((section) => section.kind === "summaries")?.items[0]?.resource_id,
-      proposal.artifact_id,
-    );
-    const invalid = await postJson(`${origin}/v1/me/context/daily-digests/project`, {
-      utc_date: "2026-08-30T00:00:00Z",
-    });
-    assert.equal(invalid.response.status, 400);
-    const local = await postJson(`${origin}/v1/me/context/daily-digests/project`, {
-      local_date: "2026-08-30",
-    });
-    assert.equal(local.response.status, 201);
-    const ambiguous = await postJson(`${origin}/v1/me/context/daily-digests/project`, {
-      utc_date: "2026-08-30", local_date: "2026-08-30",
-    });
-    assert.equal(ambiguous.response.status, 400);
-    const impossible = await postJson(`${origin}/v1/me/context/daily-digests/project`, {
-      utc_date: "2026-02-30",
-    });
-    assert.equal(impossible.response.status, 400);
-  });
 
   it("accepts a proposed summary and retrieves it only after lifecycle approval", async () => {
     const root = await createRoot();

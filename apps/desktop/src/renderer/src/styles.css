@@ -73,6 +73,12 @@
   --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
 
   /* Shape */
+  --text-body: 15px;
+  --text-title: 28px;
+  --text-section: 18px;
+  --control-h: 36px;
+  --nav-h: 40px;
+
   --radius-bubble: 18px;
   --radius-card: 14px;
   --radius-row: 10px;
@@ -118,8 +124,8 @@ body {
   font-weight: 420;
   color: var(--text);
   background: var(--chrome);
-  font-size: 13px;
-  line-height: 1.45;
+  font-size: var(--text-body);
+  line-height: 1.5;
   user-select: none;
   -webkit-font-smoothing: antialiased;
 }

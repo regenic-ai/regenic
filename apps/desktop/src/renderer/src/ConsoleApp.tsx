@@ -1,5 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  LIST_MIN,
+  SIDEBAR_DEFAULT,
+  SIDEBAR_WIDTH_KEY,
+  THREAD_MIN,
+  readColumnWidth,
+  writeColumnWidth,
+} from "./ColumnResize";
+import {
   liveReceiptFocusRequest,
   mediaDrainFocusRequest,
   openThreadFocusRequest,
@@ -22,19 +30,17 @@ import {
   reconcileWorkDelivery,
   saveUiPrefs,
   updateConversationPrefs,
-  fetchCustomerServiceTasks,
-  fetchFollowUps,
 } from "./api";
 import { fetchRuntimePulse } from "./runtime-pulse-fetch.ts";
 import {
   type KernelReachability,
 } from "../../shared/connection-state.ts";
-import { BrandBadge } from "./Brand";
-import { EngineChip, RailButton } from "./console-chrome";
+import { NAV_SHORTCUTS, Sidebar } from "./console-chrome";
 import { connectorAlerts } from "./connector-alerts";
 import { engineRevision } from "./console-refresh";
 import { EnginePage } from "./EnginePage";
-import { engineChip, memoryWatchCopy, releaseOtherLivePulls } from "./format";
+import { engineChip, releaseOtherLivePulls } from "./format";
+import { buildShellStatus } from "./shell-status";
 import {
   evictThreadCache,
   groupInboxThreads,
@@ -61,21 +67,12 @@ import { t as translate } from "../../shared/i18n.ts";
 import { useLocale } from "./LocaleContext";
 import { InboxWorkspace } from "./InboxWorkspace";
 import { connectPersonalEvents } from "./personal-events";
-import { EngineIcon, FollowUpIcon, InboxIcon, RecipesIcon, SettingsIcon, SearchIcon } from "./Icons";
 import { SearchPage } from "./SearchPage";
-import { FollowUpsPage } from "./FollowUpsPage";
-import {
-  EMPTY_OVERLAYS,
-  PROPOSAL_STATUSES,
-  indexFollowUps,
-  indexProposals,
-  withThreadOverlays,
-  type ThreadOverlays,
-} from "./reply-proposals";
 import { threadTitle } from "./message-view";
 import { recipeConversationOptions } from "./recipe-conversations";
 import { RecipesPage } from "./RecipesPage";
 import { SettingsPage } from "./SettingsPage";
+import { StatusPage } from "./StatusPage";
 import {
   InboxListStore,
   isActivePrefWrite,
@@ -135,7 +132,6 @@ const POLL_MS = 2000;
 const IDLE_POLL_MS = 8000;
 const SSE_FALLBACK_POLL_MS = 60_000;
 const HOST_POLL_MS = 5000;
-const OVERLAY_POLL_MS = 30_000;
 const OPEN_RETRY_MS = 350;
 const OPEN_RETRIES = 5;
 const OPEN_FETCH_MS = 5_000;
@@ -143,31 +139,19 @@ const LIVE_FETCH_MS = 12_000;
 /** Skip live receipt fetches when the user leaves before this dwell. */
 const RECEIPT_DWELL_MS = 400;
 const RECEIPT_REFRESH_MS = 15_000;
+const SIDEBAR_COLLAPSED_KEY = "regenic.sidebar.collapsed";
 
 export function ConsoleApp() {
   const { t, locale } = useLocale();
   const [nav, setNav] = useState<NavId>("inbox");
-  const [overlays, setOverlays] = useState<ThreadOverlays>(EMPTY_OVERLAYS);
-  const reloadOverlays = useCallback(async () => {
-    // Customer service and follow-ups are optional kernel features; absence is quiet.
-    const [tasks, followUps] = await Promise.all([
-      fetchCustomerServiceTasks({ statuses: [...PROPOSAL_STATUSES] }).catch(() => null),
-      fetchFollowUps().catch(() => null),
-    ]);
-    setOverlays((current) => ({
-      proposals: tasks ? indexProposals(tasks) : current.proposals,
-      followUps: followUps ? indexFollowUps(followUps) : current.followUps,
-    }));
-  }, []);
-  useEffect(() => {
-    void reloadOverlays();
-    const timer = window.setInterval(() => {
-      if (document.visibilityState !== "hidden") {
-        void reloadOverlays();
-      }
-    }, OVERLAY_POLL_MS);
-    return () => window.clearInterval(timer);
-  }, [reloadOverlays]);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(
+    () => localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1",
+  );
+  const [sidebarWidth, setSidebarWidth] = useState(() =>
+    readColumnWidth(SIDEBAR_WIDTH_KEY, SIDEBAR_DEFAULT),
+  );
+  const [resizingSidebar, setResizingSidebar] = useState(false);
+  const shellRef = useRef<HTMLDivElement>(null);
   const [inbox, setInbox] = useState<InboxViewItem[]>([]);
   const [messagesByThread, setMessagesByThread] = useState<
     Record<string, InboxViewItem[]>
@@ -1277,12 +1261,10 @@ export function ConsoleApp() {
     groupedRef.current = grouped;
     groupedInboxRef.current = inbox;
     return sortInboxThreads(
-      applyOpenedAt(mergeDraftThreads(grouped, drafts), openedAtRef.current).map(
-        (thread) => withThreadOverlays(thread, overlays),
-      ),
+      applyOpenedAt(mergeDraftThreads(grouped, drafts), openedAtRef.current),
       sortMode,
     );
-  }, [inbox, drafts, sortMode, overlays]);
+  }, [inbox, drafts, sortMode]);
   const listThreads = useMemo(
     () =>
       catalogThreads.filter((thread) =>
@@ -1314,11 +1296,49 @@ export function ConsoleApp() {
       messagesByThread[thread.id],
     );
     selectedThreadRef.current = opened;
-    return withThreadOverlays(opened, overlays);
-  }, [catalogThreads, selectedId, messagesByThread, overlays]);
+    return opened;
+  }, [catalogThreads, selectedId, messagesByThread]);
   const chip = engineChip(engine, reachability);
   const alerts = connectorAlerts(engine);
   const alert = alerts[0];
+  const shellStatus = buildShellStatus(engine, host, chip, alerts);
+  const workCount =
+    engine?.inbox_count ?? (listView === "shown" ? listThreads.length : 0);
+  const toggleSidebar = useCallback(() => {
+    setSidebarCollapsed((value) => {
+      localStorage.setItem(SIDEBAR_COLLAPSED_KEY, value ? "0" : "1");
+      return !value;
+    });
+  }, []);
+  const openSearch = useCallback(() => {
+    setNav("search");
+    window.requestAnimationFrame(() => {
+      document.getElementById("context-query")?.focus();
+    });
+  }, []);
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return;
+      const key = event.key.toLowerCase();
+      if (key === "k") {
+        event.preventDefault();
+        openSearch();
+        return;
+      }
+      if (key === "\\") {
+        event.preventDefault();
+        toggleSidebar();
+        return;
+      }
+      const target = NAV_SHORTCUTS[key];
+      if (target) {
+        event.preventDefault();
+        setNav(target);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [openSearch, toggleSidebar]);
   const createTargets = createConversationTargets(engine);
 
   const startConversation = async (installationId: string) => {
@@ -1705,70 +1725,31 @@ export function ConsoleApp() {
   }, [engine]);
 
   return (
-    <div className="shell">
-      <header className="titlebar">
-        <div className="titlebar-traffic" aria-hidden="true" />
-        <div className="titlebar-brand" title="Regenic">
-          <BrandBadge />
-        </div>
-        <button type="button" className="search" onClick={() => setNav("search")}>{t("nav.search")}</button>
-        <div className="titlebar-meta">
-          <EngineChip state={chip} />
-          {host && host.memory.kind !== "ok" ? (
-            <span className="chip stopped">{memoryWatchCopy(host.memory)}</span>
-          ) : null}
-          <span className="chip">
-            {t("chrome.currentWorkCount", {
-              count: engine?.inbox_count ?? (listView === "shown" ? listThreads.length : 0),
-            })}
-          </span>
-        </div>
-      </header>
-      <nav className="rail" aria-label="Main">
-        <div className="rail-top">
-          <RailButton label={t("nav.search")} active={nav === "search"} onClick={() => setNav("search")}>
-            <SearchIcon />
-          </RailButton>
-          <RailButton
-            label={t("nav.inbox")}
-            active={nav === "inbox"}
-            onClick={() => setNav("inbox")}
-          >
-            <InboxIcon />
-          </RailButton>
-          <RailButton
-            label={t("nav.recipes")}
-            active={nav === "recipes"}
-            onClick={() => setNav("recipes")}
-          >
-            <RecipesIcon />
-          </RailButton>
-          <RailButton
-            label={t("nav.followUps")}
-            active={nav === "follow-ups"}
-            onClick={() => setNav("follow-ups")}
-          >
-            <FollowUpIcon />
-          </RailButton>
-          <RailButton
-            label={t("nav.engine")}
-            active={nav === "engine"}
-            onClick={() => setNav("engine")}
-          >
-            <EngineIcon />
-          </RailButton>
-        </div>
-        <div className="rail-bottom">
-          <RailButton
-            label={t("nav.settings")}
-            active={nav === "settings"}
-            onClick={() => setNav("settings")}
-          >
-            <SettingsIcon />
-          </RailButton>
-        </div>
-      </nav>
+    <div
+      ref={shellRef}
+      className={`shell${sidebarCollapsed ? " sidebar-collapsed" : ""}${resizingSidebar ? " is-resizing" : ""}`}
+      style={sidebarCollapsed ? undefined : { ["--sidebar-w" as string]: `${sidebarWidth}px` }}
+    >
+      <Sidebar
+        nav={nav}
+        collapsed={sidebarCollapsed}
+        width={sidebarWidth}
+        workCount={workCount}
+        status={shellStatus}
+        onNav={setNav}
+        onSearch={openSearch}
+        onToggle={toggleSidebar}
+        onWidth={(width) => {
+          setSidebarWidth(width);
+          writeColumnWidth(SIDEBAR_WIDTH_KEY, width);
+        }}
+        onResizeDrag={setResizingSidebar}
+        resizeMax={() =>
+          (shellRef.current?.clientWidth ?? window.innerWidth) - LIST_MIN - THREAD_MIN
+        }
+      />
       <div className="workspace">
+        <div className="workspace-drag" aria-hidden="true" />
         {alert ? (
           <div className="connector-alert" role="alert">
             <div className="connector-alert-body">
@@ -1857,7 +1838,7 @@ export function ConsoleApp() {
             onAcknowledgeWork={acknowledgeSelectedWork}
             onBindRecipe={bindSelectedRecipe}
             onForwardCreated={openForwardedConversation}
-            onOverlaysChanged={reloadOverlays}
+            onOpenConnections={() => setNav("engine")}
           />
         ) : null}
         {nav === "recipes" ? (
@@ -1877,7 +1858,6 @@ export function ConsoleApp() {
         {nav === "engine" ? (
           <EnginePage
             engine={engine}
-            host={host}
             error={error}
             onChanged={refresh}
           />
@@ -1892,20 +1872,8 @@ export function ConsoleApp() {
           setLocatedEvent({ thread_id: thread.id, event_id: item.event.id });
           setNav("inbox");
         }} /> : null}
-        {nav === "follow-ups" ? (
-          <FollowUpsPage
-            onChanged={async () => {
-              await Promise.all([refresh(), reloadOverlays()]);
-            }}
-            threadLabel={(threadId) => {
-              const thread = catalogThreads.find((item) => item.id === threadId);
-              return thread ? threadTitle(thread) : null;
-            }}
-            onOpenThread={(threadId) => {
-              setSelectedId(threadId);
-              setNav("inbox");
-            }}
-          />
+        {nav === "status" ? (
+          <StatusPage status={shellStatus} onOpenConnections={() => setNav("engine")} />
         ) : null}
         {nav === "settings" ? (
           <SettingsPage onChanged={refresh} onStoreCleared={resetWorkspace} />

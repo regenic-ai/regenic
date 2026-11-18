@@ -66,26 +66,26 @@ export function createSessionTaskExecutor(meta?: {
         source: meta?.source,
         attach: "absentee",
         kind: "local_connector",
+        agent: true,
         fields: [],
       };
     },
 
     async start(input: ExecutorStartInput, ctx: ExecutorContext) {
       const prepared = await prepareLocalAgentStart(input, ctx);
-      const thread = await ctx.spawnSysout(
-        Object.keys(prepared.spawn).length ? prepared.spawn : undefined,
-      );
-      const sysoutId = `${thread.source}:${thread.target}`;
       const prompt =
         input.task_instruction ?? taskInstructionOf(input.recipe.executor_config) ?? "";
       const evidence_text = prepared.evidence_text;
-      await ctx.writeStdin(
-        thread,
-        composeSessionStdin({
-          prompt,
-          evidence_text,
-        }),
-      );
+      const stdin = composeSessionStdin({ prompt, evidence_text });
+      const withTask = (await ctx.sysoutCreateWithTask?.()) === true;
+      const thread = await ctx.spawnSysout({
+        ...prepared.spawn,
+        ...(withTask ? { text: stdin } : {}),
+      });
+      const sysoutId = `${thread.source}:${thread.target}`;
+      if (!withTask) {
+        await ctx.writeStdin(thread, stdin);
+      }
       return {
         external_run_id: sysoutId,
         agent_thread_id: sysoutId,

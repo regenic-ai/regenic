@@ -29,10 +29,6 @@ import {
   type ContextReplayRequest,
   type ContextRequest,
   type ContextSnapshot,
-  type DailyDigestJob,
-  DEFAULT_DAILY_DIGEST_POLICY,
-  validateDailyDigestPolicy,
-  type ProposalKind,
   type ProposalRecord,
   type DecisionRecord,
   type ReviewRecord,
@@ -501,124 +497,13 @@ export class PersonalContextService {
     });
   }
 
-  async projectDailyDigest(input: unknown) {
-    const body = strictBody(input, new Set(["utc_date", "local_date"]));
-    if ((body.utc_date === undefined) === (body.local_date === undefined)) {
-      throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "Provide exactly one of utc_date or local_date");
-    }
-    return this.runtime.requireHost().get("context-daily-digests").projectDailyDigest({
-      org_id: this.runtime.orgId(),
-      utc_date: requiredUtcDate(body.local_date ?? body.utc_date),
-    });
-  }
 
-  async listDailyDigests(utcDate: string): Promise<ContextArtifact[]> {
-    const date = requiredUtcDate(utcDate);
-    const artifacts = await this.runtime.requireHost().get("context-artifacts").listArtifacts({
-      org_id: this.runtime.orgId(),
-      kinds: ["daily_digest"],
-      statuses: ["accepted"],
-    });
-    return artifacts.filter((artifact) =>
-      artifact.attrs && typeof artifact.attrs === "object" && !Array.isArray(artifact.attrs) &&
-      artifact.attrs.utc_date === date,
-    );
-  }
 
-  async listDailyDigestJobs(): Promise<Array<Pick<DailyDigestJob,
-    "utc_date" | "generation" | "status" | "attempts" | "lease_expires_at" | "next_retry_at" | "created_at" | "updated_at"
-  >>> {
-    return (await this.runtime.requireHost().get("daily-digest-jobs")
-      .listDailyDigestJobs(this.runtime.orgId()))
-      .map((job) => ({
-        utc_date: job.utc_date,
-        generation: job.generation,
-        status: job.status,
-        attempts: job.attempts,
-        ...(job.lease_expires_at ? { lease_expires_at: job.lease_expires_at } : {}),
-        ...(job.next_retry_at ? { next_retry_at: job.next_retry_at } : {}),
-        created_at: job.created_at,
-        updated_at: job.updated_at,
-      }));
-  }
 
-  async listDailyDigestCoverageAlerts() {
-    const alerts = await this.runtime.requireHost().get("daily-digest-coverage-alerts")
-      .listDailyDigestCoverageAlerts({ org_id: this.runtime.orgId(), status: "open", limit: 100 });
-    return alerts.map(safeCoverageAlert);
-  }
 
-  async resolveDailyDigestCoverageAlert(alertId: string) {
-    const alert = await this.runtime.requireHost().get("daily-digest-coverage-alerts")
-      .resolveDailyDigestCoverageAlert({
-        org_id: this.runtime.orgId(),
-        alert_id: requiredString(alertId, "alert_id"),
-        resolved_at: new Date().toISOString(),
-      });
-    if (!alert) throw new PersonalContextError("not_found", HttpStatus.NOT_FOUND, "Coverage alert was not found");
-    return safeCoverageAlert(alert);
-  }
 
-  async getDailyDigestPolicy() {
-    return (await this.runtime.requireHost().get("daily-digest-policy")
-      .getDailyDigestPolicy(this.runtime.orgId())) ?? DEFAULT_DAILY_DIGEST_POLICY;
-  }
 
-  async putDailyDigestPolicy(input: unknown) {
-    const body = strictBody(input, new Set(["policy"]));
-    try {
-      return await this.runtime.requireHost().get("daily-digest-policy").putDailyDigestPolicy({
-        org_id: this.runtime.orgId(),
-        policy: validateDailyDigestPolicy(body.policy as never),
-        updated_at: new Date().toISOString(),
-      });
-    } catch (error) {
-      if (error instanceof Error && error.message.includes("daily digest policy")) {
-        throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, error.message);
-      }
-      throw error;
-    }
-  }
 
-  async createProposalFromDailyDigest(artifactId: string, input: unknown): Promise<ProposalRecord> {
-    const body = strictBody(input, new Set([
-      "direction", "item_event_id", "rights_level", "boundary", "context_snapshot_id", "single_uncertainty",
-    ]));
-    const direction = requiredString(body.direction, "direction");
-    const itemEventId = requiredString(body.item_event_id, "item_event_id");
-    const artifacts = this.runtime.requireHost().get("context-artifacts");
-    const artifact = await artifacts.getArtifact(this.runtime.orgId(), requiredString(artifactId, "artifact_id"));
-    const state = artifact ? await artifacts.getArtifactState(this.runtime.orgId(), artifact.id) : null;
-    if (!artifact || artifact.kind !== "daily_digest" || state?.status !== "accepted"
-      || !artifact.body_hash || hashCanonicalContext(artifact.attrs) !== artifact.body_hash) {
-      throw new PersonalContextError("invalid_request", HttpStatus.CONFLICT, "Proposal intake requires an accepted valid daily digest");
-    }
-    const item = digestItem(artifact.attrs, direction, itemEventId);
-    const kind = proposalKindForItem(item.item_kind);
-    const head = artifact.input_refs.find((reference) => reference.event_id === itemEventId);
-    if (!head) throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "Digest item is not bound to artifact evidence");
-    const evidence = artifact.input_refs
-      .filter((reference) => reference.source === head.source && reference.external_id === head.external_id)
-      .map((reference) => ({ kind: "document" as const, uri_or_ref: `event:${reference.event_id}` }));
-    evidence.unshift({ kind: "document", uri_or_ref: `artifact:${artifact.id}` });
-    const now = new Date().toISOString();
-    const summary = requiredString(item.text, "digest item text");
-    const contextSnapshotId = optionalString(body.context_snapshot_id);
-    const singleUncertainty = optionalString(body.single_uncertainty);
-    return this.runtime.requireHost().get("proposals").putProposal({
-      schema_version: PROPOSAL_SCHEMA_VERSION,
-      id: `proposal:${hashCanonicalContext([this.runtime.orgId(), artifact.id, direction, itemEventId])}`,
-      org_id: this.runtime.orgId(), kind, title: summary.split(/\r?\n/, 1)[0].slice(0, 120), summary,
-      status: "draft", author: { actor_type: "human", actor_id: this.runtime.orgId() },
-      rights_level: optionalRightsLevel(body.rights_level),
-      boundary: optionalString(body.boundary) ?? `${direction} daily digest item`,
-      ...(contextSnapshotId ? { context_snapshot_id: contextSnapshotId } : {}),
-      standard_bindings: [],
-      ...(singleUncertainty ? { single_uncertainty: singleUncertainty } : {}),
-      evidence, source_digest_id: artifact.id, source_item_event_id: itemEventId,
-      created_at: now, updated_at: now,
-    });
-  }
 
   async createProposal(input: unknown): Promise<ProposalRecord> {
     const body = strictBody(input, new Set([
@@ -1857,14 +1742,6 @@ function requiredString(value: unknown, name: string): string {
   return value.trim();
 }
 
-function requiredUtcDate(value: unknown): string {
-  const date = requiredString(value, "utc_date");
-  const timestamp = Date.parse(`${date}T00:00:00.000Z`);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(timestamp) || new Date(timestamp).toISOString().slice(0, 10) !== date) {
-    throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "utc_date must be YYYY-MM-DD in UTC");
-  }
-  return date;
-}
 
 function requiredTimestamp(value: unknown, name: string): string {
   const timestamp = requiredString(value, name);
@@ -1887,38 +1764,6 @@ function querySafeInteger(
     throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, `${name} must be an integer from ${minimum} to ${maximum}`);
   }
   return parsed;
-}
-
-function safeCoverageAlert(alert: {
-  id: string; local_date: string; generation: string; reason_code: string;
-  status: string; created_at: string; resolved_at?: string;
-}) {
-  return {
-    id: alert.id,
-    local_date: alert.local_date,
-    generation: alert.generation,
-    reason_code: alert.reason_code,
-    status: alert.status,
-    created_at: alert.created_at,
-    ...(alert.resolved_at ? { resolved_at: alert.resolved_at } : {}),
-  };
-}
-
-function digestItem(attrs: unknown, direction: string, eventId: string): { item_kind: string; text: unknown } {
-  if (!attrs || typeof attrs !== "object" || Array.isArray(attrs)) throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "Invalid daily digest body");
-  const directions = (attrs as { directions?: unknown }).directions;
-  if (!Array.isArray(directions)) throw new PersonalContextError("invalid_request", HttpStatus.BAD_REQUEST, "Invalid daily digest directions");
-  const bucket = directions.find((value) => value && typeof value === "object" && !Array.isArray(value) && (value as { direction?: unknown }).direction === direction) as { items?: unknown } | undefined;
-  const item = Array.isArray(bucket?.items) ? bucket.items.find((value) => value && typeof value === "object" && !Array.isArray(value) && (value as { event_id?: unknown }).event_id === eventId) : undefined;
-  if (!item) throw new PersonalContextError("not_found", HttpStatus.NOT_FOUND, "Daily digest item was not found");
-  return item as { item_kind: string; text: unknown };
-}
-
-function proposalKindForItem(itemKind: string): ProposalKind {
-  if (itemKind === "hypothesis") return "hypothesis";
-  if (itemKind === "new_judgment") return "new_standard";
-  if (itemKind === "standard_amendment") return "revise_standard";
-  throw new PersonalContextError("invalid_request", HttpStatus.CONFLICT, "Digest item kind cannot create a Proposal");
 }
 
 function proposalKind(value: unknown): "decision" | "new_standard" | "revise_standard" {

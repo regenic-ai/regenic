@@ -62,6 +62,7 @@ function httpStatusFor(code: string): number {
     case "channel_required":
     case "conversation_required":
     case "kinds_required":
+    case "public_url_required":
       return 400;
     case "already_installed":
       return 409;

@@ -24,9 +24,13 @@ async function rendererSmoke() {
     await window.loadURL(process.env.REGENIC_SMOKE_URL);
     window.webContents.focus();
     for (let attempt = 0; ; attempt++) {
-      if (await window.webContents.executeJavaScript(
-        'Boolean(document.querySelector(".recipe-form-foot"))',
-      )) break;
+      if (await window.webContents.executeJavaScript(`(() => {
+        if (document.querySelector(".recipe-form-foot")) return true;
+        const start = [...document.querySelectorAll("button")]
+          .find((item) => item.textContent.trim() === "New automation");
+        start?.click();
+        return false;
+      })()`)) break;
       assert.ok(attempt < 100, "Real recipe editor did not render");
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
@@ -242,8 +246,8 @@ async function rendererSmoke() {
         'window.__savedRecipe ?? null',
       );
       if (saved) {
-        assert.equal(saved.match.text_contains, "APPROVE");
-        assert.equal(saved.match.text_excludes, "DRAFT");
+        assert.equal(saved.config.scope.match.text_contains, "APPROVE");
+        assert.equal(saved.config.scope.match.text_excludes, "DRAFT");
         break;
       }
       assert.ok(attempt < 50, "Filtered recipe was not saved");
@@ -285,7 +289,7 @@ async function rendererSmoke() {
     );
     for (let attempt = 0; ; attempt++) {
       const cleared = await window.webContents.executeJavaScript(
-        'window.__savedRecipe.match.text_contains === undefined && window.__savedRecipe.match.text_excludes === undefined',
+        'window.__savedRecipe.config.scope.match.text_contains === undefined && window.__savedRecipe.config.scope.match.text_excludes === undefined',
       );
       if (cleared) break;
       assert.ok(attempt < 50, "Removing all conditions must persist an unfiltered rule");
@@ -400,9 +404,9 @@ async function rendererSmoke() {
         await new Promise((resolve) => setTimeout(resolve, 50));
       }
       const payload = await window.webContents.executeJavaScript('window.__savedRecipe');
-      assert.equal(payload.trigger.kind, kind);
-      assert.equal(payload.match.text_contains, "MISSING");
-      assert.equal(payload.match.text_excludes, "RELEASE");
+      assert.equal(payload.config.trigger.kind, kind);
+      assert.equal(payload.config.scope.match.text_contains, "MISSING");
+      assert.equal(payload.config.scope.match.text_excludes, "RELEASE");
       await window.webContents.executeJavaScript('document.querySelector(".recipe-card-hit").click()');
       await new Promise((resolve) => setTimeout(resolve, 75));
       if (kind !== "push") {
@@ -502,20 +506,20 @@ async function rendererSmoke() {
       "A read-only original must not prevent picking another writable destination");
     await saveAndReopen();
     let delivery = await window.webContents.executeJavaScript('window.__savedRecipe');
-    assert.equal(delivery.can_write_back, true);
-    assert.equal(delivery.write_back_thread_id, "results:room");
+    assert.equal(delivery.config.destination.send, true);
+    assert.equal(delivery.config.destination.thread, "results:room");
     await clickText("Try & send back");
     assert.equal(await window.webContents.executeJavaScript('window.__lastTry.write_back'), true);
     assert.equal(await window.webContents.executeJavaScript('window.__lastTry.thread_id'), "smoke:room");
     await clickText("Keep here");
     await saveAndReopen();
-    assert.equal(await window.webContents.executeJavaScript('window.__savedRecipe.can_write_back'), false);
-    assert.equal(await window.webContents.executeJavaScript('window.__savedRecipe.write_back_thread_id'), "results:room");
+    assert.equal(await window.webContents.executeJavaScript('window.__savedRecipe.config.destination.send'), false);
+    assert.equal(await window.webContents.executeJavaScript('window.__savedRecipe.config.destination.thread'), "results:room");
     await clickText("Send back");
     await setConversations(true, true);
     await pickDestination("Original conversation");
     await saveAndReopen();
-    assert.equal(await window.webContents.executeJavaScript('window.__savedRecipe.write_back_thread_id'), null);
+    assert.equal(await window.webContents.executeJavaScript('window.__savedRecipe.config.destination.thread'), "origin");
     await pickDestination("Writable result chat");
     await saveAndReopen();
     await setConversations(false, false);
@@ -554,8 +558,8 @@ async function rendererSmoke() {
     })()`), true, "Unavailable destinations must block send trials");
     await saveAndReopen();
     delivery = await window.webContents.executeJavaScript('window.__savedRecipe');
-    assert.equal(delivery.can_write_back, true, "Unrelated saves must preserve unavailable delivery intent");
-    assert.equal(delivery.write_back_thread_id, "results:room");
+    assert.equal(delivery.config.destination.send, true, "Unrelated saves must preserve unavailable delivery intent");
+    assert.equal(delivery.config.destination.thread, "results:room");
     await clickText("Keep here");
     await saveAndReopen();
     await clickText("Send back");
@@ -643,11 +647,11 @@ async function rendererSmoke() {
         ), false, "Dynamic original capability must not depend on current text matches");
         await saveAndReopen();
         const saved = await window.webContents.executeJavaScript('window.__savedRecipe');
-        assert.equal(saved.can_write_back, true);
-        assert.equal(saved.write_back_thread_id, null);
-        assert.equal(saved.match.text_contains, contains);
-        assert.equal(saved.match.text_excludes, excludes);
-        assert.equal(saved.match.source, scope === "One channel" ? "smoke" : undefined);
+        assert.equal(saved.config.destination.send, true);
+        assert.equal(saved.config.destination.thread, "origin");
+        assert.equal(saved.config.scope.match.text_contains, contains);
+        assert.equal(saved.config.scope.match.text_excludes, excludes);
+        assert.equal(saved.config.scope.match.source, scope === "One channel" ? "smoke" : undefined);
         assert.equal(await window.webContents.executeJavaScript(`(() => {
           return [...document.querySelectorAll(".recipe-form-foot button")]
             .find(item => item.textContent.trim() === "Try once").disabled;
@@ -811,7 +815,7 @@ async function launchSmoke() {
     import { RecipesPage } from "/src/RecipesPage";
     import "/src/styles.css";
     const fixtures = {
-      "/v1/me/recipes": [],
+      "/v1/me/flows": [],
       "/v1/me/executors": [{
         executor_type: "smoke", label: "Smoke assistant", description: "Layout smoke fixture",
         fields: [
@@ -829,17 +833,17 @@ async function launchSmoke() {
         }
         return new Response(JSON.stringify({ pinned: [], live: [], active_work: [], has_older: false, next_before: null }));
       }
-      if (path === "/v1/me/recipes/smoke-rule/try" && init?.method === "POST") {
+      if (path === "/v1/me/flows/smoke-rule/try" && init?.method === "POST") {
         window.__lastTry = JSON.parse(init.body);
         window.__tryCalls = (window.__tryCalls ?? 0) + 1;
         return new Response(JSON.stringify({ thread_id: "smoke:room" }), { headers: { "content-type": "application/json" } });
       }
-      if ((path === "/v1/me/recipes" || path === "/v1/me/recipes/smoke-rule") && init?.method === "POST") {
+      if ((path === "/v1/me/flows" || path === "/v1/me/flows/smoke-rule") && init?.method === "POST") {
         const recipe = { ...JSON.parse(init.body), id: "smoke-rule", org_id: "local-owner",
           created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
         window.__savedRecipe = recipe;
         window.__saveCount = (window.__saveCount ?? 0) + 1;
-        fixtures["/v1/me/recipes"] = [recipe];
+        fixtures["/v1/me/flows"] = [recipe];
         return new Response(JSON.stringify(recipe), { headers: { "content-type": "application/json" } });
       }
       if (!(path in fixtures)) throw new Error("Unexpected smoke request: " + path);
@@ -857,10 +861,8 @@ async function launchSmoke() {
         setConversations([]); setFixtureSeed(nextSeed); setVersion(value => value + 1);
       };
       return (
-      <div className="shell">
-        <header className="titlebar">Recipe layout smoke</header>
-        <nav className="rail" />
-        <div className="workspace"><RecipesPage key={version} sources={[{ id: "smoke", label: "Smoke channel" }]} conversations={conversations} seed={fixtureSeed} /></div>
+      <div className="shell" style={{ display: "block" }}>
+        <div className="workspace" style={{ height: "100%" }}><RecipesPage key={version} sources={[{ id: "smoke", label: "Smoke channel" }]} conversations={conversations} seed={fixtureSeed} /></div>
       </div>
       );
     }

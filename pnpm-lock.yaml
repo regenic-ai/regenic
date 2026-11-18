@@ -436,6 +436,9 @@ importers:
       '@regenic/plugin-host':
         specifier: workspace:*
         version: link:../plugin-host
+      '@regenic/server-app-connector':
+        specifier: workspace:*
+        version: link:../server-app-connector
     devDependencies:
       '@types/node':
         specifier: ^22.10.2
@@ -681,6 +684,25 @@ importers:
       cordis:
         specifier: 4.0.0-rc.8
         version: 4.0.0-rc.8
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.2
+        version: 22.20.1
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
+  packages/server-app-connector:
+    dependencies:
+      '@regenic/connector-contract':
+        specifier: workspace:*
+        version: link:../connector-contract
+      '@regenic/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@regenic/plugin-host':
+        specifier: workspace:*
+        version: link:../plugin-host
     devDependencies:
       '@types/node':
         specifier: ^22.10.2

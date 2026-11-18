@@ -8,8 +8,10 @@ import {
   INBOX_SORT_PREF_KEY,
   PERSONAL_DISPATCH_POLICY_PREF_KEY,
   DEFAULT_PERSONAL_DISPATCH_POLICY,
-  DEFAULT_PERSONAL_FOLLOW_UP_POLICY,
-  DEFAULT_LOCAL_EXECUTOR_ID,
+  FlowConfigError,
+  flowConfigFromRecipe,
+  parseFlowConfig,
+  recipeFieldsFromFlow,
   diagnoseWorkItemRunIdentity,
   hiddenExecutorThreadIds,
   isActiveWorkStatus,
@@ -22,7 +24,6 @@ import {
   normalizeUnitKind,
   parseConversationThread,
   validatePersonalDispatchPolicy,
-  validatePersonalFollowUpPolicy,
   projectThreadFacet,
   recipeMatches,
   recordClassFromType,
@@ -38,8 +39,8 @@ import {
   type ExecutorRunHandle,
   type InboxListView,
   type InboxSortMode,
+  type FlowConfig,
   type PersonalDispatchPolicy,
-  type PersonalFollowUpPolicy,
   type PromptAnswer,
   type Recipe,
   type SearchAnswerRecord,
@@ -94,7 +95,6 @@ const CANCELLATION_CALL_TIMEOUT_MS = 20_000;
 const CANCELLATION_RETRY_MS = [5_000, 30_000, 2 * 60_000, 10 * 60_000] as const;
 const CANCELLATION_BATCH_SIZE = 5;
 export { PERSONAL_DISPATCH_POLICY_PREF_KEY } from "@regenic/domain";
-export const PERSONAL_FOLLOW_UP_POLICY_PREF_KEY = "personal_follow_up_policy_v1";
 
 export interface UiPrefsView {
   inbox_sort: InboxSortMode;
@@ -132,6 +132,32 @@ export interface RecipeView extends Recipe {
   last_run?: RecipeLastRun;
   /** Newest first; includes last_run when present. */
   recent_runs?: RecipeLastRun[];
+}
+
+export interface FlowView {
+  id: string;
+  org_id: string;
+  name: string;
+  config: FlowConfig;
+  next_run_at?: string;
+  last_run?: RecipeLastRun;
+  recent_runs?: RecipeLastRun[];
+  created_at: string;
+  updated_at: string;
+}
+
+export function flowViewFromRecipe(recipe: RecipeView): FlowView {
+  return {
+    id: recipe.id,
+    org_id: recipe.org_id,
+    name: recipe.name,
+    config: flowConfigFromRecipe(recipe),
+    ...(recipe.next_run_at ? { next_run_at: recipe.next_run_at } : {}),
+    ...(recipe.last_run ? { last_run: recipe.last_run } : {}),
+    ...(recipe.recent_runs ? { recent_runs: recipe.recent_runs } : {}),
+    created_at: recipe.created_at,
+    updated_at: recipe.updated_at,
+  };
 }
 
 export interface CancellationJobView {
@@ -314,42 +340,7 @@ export class PersonalWorkService implements OnModuleDestroy {
     return policy;
   }
 
-  async getPersonalFollowUpPolicy(): Promise<PersonalFollowUpPolicy> {
-    const host = this.runtime.requireHost();
-    const value = await host.get("authority").getUiPref(
-      this.runtime.orgId(),
-      PERSONAL_FOLLOW_UP_POLICY_PREF_KEY,
-    );
-    if (!value) {
-      return DEFAULT_PERSONAL_FOLLOW_UP_POLICY;
-    }
-    try {
-      return validatePersonalFollowUpPolicy(JSON.parse(value) as PersonalFollowUpPolicy);
-    } catch {
-      throw new PersonalConnectorError("invalid_config", "Stored personal follow-up policy is invalid", 409);
-    }
-  }
 
-  async putPersonalFollowUpPolicy(input: unknown): Promise<PersonalFollowUpPolicy> {
-    let policy: PersonalFollowUpPolicy;
-    try {
-      policy = validatePersonalFollowUpPolicy(input as PersonalFollowUpPolicy);
-    } catch (error) {
-      throw new PersonalConnectorError(
-        "invalid_config",
-        error instanceof Error ? error.message : "Invalid personal follow-up policy",
-        400,
-      );
-    }
-    const host = this.runtime.requireHost();
-    await host.get("authority").putUiPref(
-      this.runtime.orgId(),
-      PERSONAL_FOLLOW_UP_POLICY_PREF_KEY,
-      JSON.stringify(policy),
-      new Date().toISOString(),
-    );
-    return policy;
-  }
 
   private async tickDispatch(): Promise<void> {
     if (this.maintenanceHold || this.dispatching || !this.runtime.isReady()) {
@@ -709,6 +700,10 @@ export class PersonalWorkService implements OnModuleDestroy {
     }
   }
 
+  async listFlows(): Promise<FlowView[]> {
+    return (await this.listRecipes()).map(flowViewFromRecipe);
+  }
+
   async listRecipes(): Promise<RecipeView[]> {
     const host = this.runtime.requireHost();
     const orgId = this.runtime.orgId();
@@ -752,10 +747,10 @@ export class PersonalWorkService implements OnModuleDestroy {
     await this.executors.ensureMounted();
     const host = this.runtime.requireHost();
     const orgId = this.runtime.orgId();
+    const mounted = host.get("executors").list();
     const executorType = input.executor_type
-      ?? (host.get("executors").get(DEFAULT_LOCAL_EXECUTOR_ID)
-        ? DEFAULT_LOCAL_EXECUTOR_ID
-        : host.get("executors").list()[0]?.executor_type);
+      ?? mounted.find((executor) => executor.catalog().agent === true)?.executor_type
+      ?? mounted[0]?.executor_type;
     if (!executorType || !host.get("executors").get(executorType)) {
       throw new PersonalConnectorError(
         "invalid_config",
@@ -979,6 +974,49 @@ export class PersonalWorkService implements OnModuleDestroy {
       work_item: dismissed.item,
       run: run ?? undefined,
     };
+  }
+
+  async putFlow(
+    input: { name?: string; config?: unknown },
+    id?: string,
+  ): Promise<FlowView> {
+    if (isSystemRecipeId(id)) {
+      throw new PersonalConnectorError("not_found", "Flow not found", 404);
+    }
+    const existing = id
+      ? await this.runtime.requireHost().get("authority").getRecipe(this.runtime.orgId(), id)
+      : null;
+    if (id && (!existing || isSystemRecipeId(existing.id))) {
+      throw new PersonalConnectorError("not_found", "Flow not found", 404);
+    }
+    if (input.config === undefined && !existing) {
+      throw new PersonalConnectorError("invalid_config", "Flow config is required", 400);
+    }
+    try {
+      const config = input.config === undefined
+        ? flowConfigFromRecipe(existing as Recipe)
+        : parseFlowConfig(input.config);
+      const fields = recipeFieldsFromFlow(config);
+      const saved = await this.putRecipe({
+        name: input.name,
+        match: fields.match,
+        trigger: fields.trigger,
+        executor_type: fields.executor_type,
+        executor_config: fields.executor_config,
+        can_write_back: fields.can_write_back,
+        write_back_thread_id: fields.write_back_thread_id ?? null,
+        hide_on_success: fields.hide_on_success,
+        include_context: fields.include_context,
+        max_concurrent: fields.max_concurrent ?? null,
+        enabled: fields.enabled,
+      }, id);
+      return flowViewFromRecipe(saved);
+    } catch (error) {
+      if (error instanceof FlowConfigError) {
+        throw new PersonalConnectorError("invalid_config", error.message, 400);
+      }
+      throw error;
+    }
   }
 
   async putRecipe(input: RecipeInput, id?: string): Promise<Recipe> {

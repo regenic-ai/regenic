@@ -18,10 +18,6 @@ import type { ContextProjectionOutboxStore } from "./context-projection-outbox";
 import type { ContextLexicalIndex } from "./context-lexical";
 import type { EmbeddingProvider } from "./embedding-provider";
 import type { ContextVectorIndex, ContextVectorGenerationStore, EmbeddingJobStore, ContextEmbeddingRunner } from "./context-vector-index";
-import type { DailyDigestProjectionRunner } from "./context-daily-digest";
-import type { DailyDigestJobStore } from "./daily-digest-jobs";
-import type { DailyDigestPolicyStore } from "./daily-digest-policy";
-import type { DailyDigestCoverageAlertStore } from "./daily-digest-coverage-alerts";
 import type { ProposalStore } from "./proposal";
 import type { DecisionStore } from "./decision";
 import type { ReviewStore } from "./review";
@@ -30,7 +26,6 @@ import type { StandardStore } from "./standard";
 import type { StandardGapStore } from "./standard-gap";
 import type { AgentRunStore } from "./agent-run";
 import type { StandardUsageStore } from "./standard-usage";
-import type { CustomerServiceTaskStore } from "./customer-service-task";
 
 declare module "@regenic/plugin-host" {
   interface Services {
@@ -44,10 +39,6 @@ declare module "@regenic/plugin-host" {
     "context-authority": ContextAuthorityReader;
     "context-artifacts": ContextArtifactStore;
     "context-projections": ContextProjectionRunner;
-    "context-daily-digests": DailyDigestProjectionRunner;
-    "daily-digest-jobs": DailyDigestJobStore;
-    "daily-digest-policy": DailyDigestPolicyStore;
-    "daily-digest-coverage-alerts": DailyDigestCoverageAlertStore;
     proposals: ProposalStore;
     decisions: DecisionStore;
     reviews: ReviewStore;
@@ -56,7 +47,6 @@ declare module "@regenic/plugin-host" {
     "standard-gaps": StandardGapStore;
     "agent-runs": AgentRunStore;
     "standard-usage": StandardUsageStore;
-    "customer-service-tasks": CustomerServiceTaskStore;
     "context-projection-outbox": ContextProjectionOutboxStore;
     "context-lexical-index": ContextLexicalIndex;
     embedding: EmbeddingProvider;

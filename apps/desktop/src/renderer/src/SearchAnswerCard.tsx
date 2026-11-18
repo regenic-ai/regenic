@@ -43,8 +43,9 @@ export function SearchAnswerCard({ query, conversations, intent, filters, onCite
     fetchExecutors()
       .then((list) => {
         if (!live) return;
-        setExecutors(list);
-        setExecutor(list.find((entry) => entry.executor_type === "dsh")?.executor_type ?? list[0]?.executor_type ?? "");
+        const agents = list.filter((entry) => entry.agent === true);
+        setExecutors(agents);
+        setExecutor(agents[0]?.executor_type ?? "");
       })
       .catch(() => { if (live) setExecutors([]); });
     return () => { live = false; };
@@ -126,7 +127,7 @@ export function SearchAnswerCard({ query, conversations, intent, filters, onCite
     }
   }
 
-  const choose = executors && executors.length > 1 && !isActive(answer) ? (
+  const choose = executors && executors.length > 0 && !isActive(answer) ? (
     <select aria-label={t("search.answer.executor")} value={executor} disabled={starting}
       onChange={(event) => setExecutor(event.target.value)}>
       {executors.map((entry) => <option key={entry.executor_type} value={entry.executor_type}>{entry.label}</option>)}

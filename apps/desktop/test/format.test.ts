@@ -308,14 +308,18 @@ describe("connector action errors", () => {
             "lifecycle_failed",
           ),
         ),
-        "连接器仍在关闭，请稍后重试。",
+        "应用仍在关闭，请稍后重试。",
+      );
+      assert.match(
+        connectorActionError(new Error("public_url_required")),
+        /REGENIC_PUBLIC_URL/,
       );
     } finally {
       setActiveLocale("en");
     }
     assert.equal(
       connectorActionError(new KernelRequestError("feishu-chat is already installed", "already_installed")),
-      "This connector is already installed",
+      "This app is already installed",
     );
   });
 });

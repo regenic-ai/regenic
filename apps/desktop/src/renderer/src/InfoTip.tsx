@@ -26,8 +26,8 @@ export function InfoTip({ label, children, id }: {
     if (!focused.current) closeTimer.current = window.setTimeout(() => setOpen(false), 120);
   };
 
-  useLayoutEffect(() => {
-    if (!open || !trigger.current || !popup.current) return;
+  const place = () => {
+    if (!trigger.current || !popup.current) return;
     const anchor = trigger.current.getBoundingClientRect();
     const box = popup.current.getBoundingClientRect();
     const left = Math.max(12, Math.min(anchor.left, window.innerWidth - box.width - 12));
@@ -35,6 +35,10 @@ export function InfoTip({ label, children, id }: {
     const top = below + box.height <= window.innerHeight - 12
       ? below : Math.max(12, anchor.top - box.height - 8);
     setPosition({ left, top });
+  };
+
+  useLayoutEffect(() => {
+    if (open) place();
   }, [open, children]);
 
   useEffect(() => {
@@ -42,6 +46,10 @@ export function InfoTip({ label, children, id }: {
     const dismiss = () => setOpen(false);
     const onScroll = (event: Event) => {
       if (event.target instanceof Node && popup.current?.contains(event.target)) return;
+      if (focused.current) {
+        place();
+        return;
+      }
       dismiss();
     };
     const onKeyDown = (event: KeyboardEvent) => {

@@ -24,6 +24,7 @@ const {
   adaptiveMapBatchOffsets,
   mapBatchMessageLine,
 } = require("../dist/personal-conversation-context.service");
+const { PersonalContextError } = require("../dist/personal-context-error");
 const badCaseFixtures = require("./fixtures/typed-aggregate-bad-cases.cjs");
 
 describe("search answer citations", () => {
@@ -726,6 +727,12 @@ describe("persistent aggregate planning", () => {
     assert.equal(result.progress.active_batches, 3);
     assert.equal(result.progress.pending_batches, 1);
     assert.equal(harness.started.filter((id) => id.startsWith("search-answer-map:")).length, 3);
+    assert.equal(harness.bodyReads, 1);
+    assert.deepEqual(
+      harness.record.scope.map_reduce.batches.slice(0, 3)
+        .map((batch) => batch.map_inputs.map((input) => input.event_id)),
+      [["e1"], ["e2"], ["e3"]],
+    );
     const serialized = JSON.stringify(result);
     assert.doesNotMatch(serialized, /subject|snapshot_id|facts|work_item_id.*search-answer-map/);
   });
@@ -747,6 +754,59 @@ describe("persistent aggregate planning", () => {
     assert.equal(harness.bodyReads, 0);
     assert.deepEqual(harness.validated, ["e1", "e2", "e3", "e4"]);
     assert.equal(harness.record.scope.map_reduce.cache_manifest.version, 1);
+    assert.deepEqual(harness.cacheVersions, ["typed-event-v1:dsh"]);
+  });
+
+  it("does not reuse an empty or expired fact list", async () => {
+    const empty = planningHarness(completedRun(validPlan), {
+      cached: true,
+      emptyEventId: "e4",
+    });
+    const emptyResult = await empty.service().get("answer-plan");
+    assert.equal(emptyResult.progress.cache_hits, 3);
+    assert.equal(emptyResult.progress.cache_misses, 1);
+
+    const expired = planningHarness(completedRun(validPlan), {
+      cached: true,
+      cacheUpdatedAt: "2020-01-01T00:00:00.000Z",
+    });
+    const expiredResult = await expired.service().get("answer-plan");
+    assert.equal(expiredResult.progress.cache_hits, 0);
+    assert.equal(expiredResult.progress.cache_misses, 4);
+  });
+
+  it("recomputes legacy routing and cancels a running cached batch", async () => {
+    const harness = planningHarness(completedRun(validPlan), { cached: true });
+    await harness.service().get("answer-plan");
+    const batch = harness.record.scope.map_reduce.batches[0];
+    batch.status = "running";
+    batch.work_item_id = "orphan-map";
+    delete harness.record.scope.map_reduce.cache_manifest;
+    await harness.service().get("answer-plan");
+
+    assert.equal(harness.manifestReads, 2);
+    assert.deepEqual(harness.cancelled, ["orphan-map"]);
+    assert.equal(batch.status, "completed");
+    assert.equal(batch.work_item_id, undefined);
+  });
+
+  it("keeps a running batch's original routing when cancellation fails", async () => {
+    const harness = planningHarness(completedRun(validPlan), {
+      cached: true,
+      cancelError: new Error("executor unavailable"),
+    });
+    const batch = harness.record.scope.map_reduce.batches[0];
+    batch.status = "running";
+    batch.work_item_id = "legacy-map";
+
+    const result = await harness.service().get("answer-plan");
+
+    assert.deepEqual(harness.cancelled, ["legacy-map"]);
+    assert.equal(batch.status, "running");
+    assert.equal(batch.work_item_id, "legacy-map");
+    assert.equal(batch.map_event_ids, undefined);
+    assert.equal(harness.record.scope.map_reduce.cache_manifest, undefined);
+    assert.equal(result.progress.active_batches, 1);
   });
 
   it("treats a changed content hash as a cache miss", async () => {
@@ -772,6 +832,50 @@ describe("persistent aggregate planning", () => {
 
     await harness.service().get("answer-plan");
     assert.equal(harness.manifestReads, 1);
+
+    const mapId = harness.record.scope.map_reduce.batches[0].work_item_id;
+    harness.states.set(
+      mapId,
+      executionState(completedRun(JSON.stringify([{
+        dedupe_key: "event_id:ignored",
+        group: "all",
+        metric: "task_count",
+        value: 1,
+        evidence_refs: [1],
+      }])), "done"),
+    );
+    await harness.service().get("answer-plan");
+    assert.equal(harness.bodyReads, 1);
+  });
+
+  it("keeps a cached batch running when window hydration conflicts", async () => {
+    const harness = planningHarness(completedRun(validPlan), {
+      cached: true,
+      staleEventId: "e1",
+    });
+    await harness.service().get("answer-plan");
+    const cached = harness.record.scope.map_reduce.batches[1];
+    cached.status = "running";
+    cached.work_item_id = "cached-map";
+    harness.states.set("cached-map", executionState(undefined, "open"));
+    const missed = harness.record.scope.map_reduce.batches[2];
+    missed.status = "pending";
+    missed.map_event_ids = ["e3"];
+    delete missed.work_item_id;
+    harness.cancelled.length = 0;
+    harness.bodyError = new PersonalContextError(
+      "context_changed",
+      409,
+      "Aggregate context snapshot is incomplete",
+    );
+
+    await assert.rejects(
+      harness.service().get("answer-plan"),
+      (error) => error.code === "context_changed",
+    );
+    assert.equal(harness.cancelled.includes("cached-map"), false);
+    assert.equal(cached.status, "running");
+    assert.equal(cached.work_item_id, "cached-map");
   });
 
   it("retries invalid JSON once without embedding the invalid output", async () => {
@@ -872,6 +976,7 @@ function planningHarness(initialRun, options = {}) {
           strategy: "map_reduce",
           phase: "planning",
           snapshot_id: "private-snapshot",
+          executor_type: "dsh",
           batch_offsets: [0, 1, 2, 3, 4],
           total_batches: 4,
           planning_attempt: attempt,
@@ -897,7 +1002,9 @@ function planningHarness(initialRun, options = {}) {
     cancelled,
     manifestReads: 0,
     bodyReads: 0,
+    bodyError: undefined,
     validated: [],
+    cacheVersions: [],
   };
   states.set(
     harness.record.work_item_id,
@@ -909,8 +1016,9 @@ function planningHarness(initialRun, options = {}) {
       harness.record = structuredClone(record);
       return harness.record;
     },
-    getAggregateFactCache: async (_orgId, specHash, extractorVersion, ids) =>
-      options.cached
+    getAggregateFactCache: async (_orgId, specHash, extractorVersion, ids) => {
+      harness.cacheVersions.push(extractorVersion);
+      return options.cached
         ? ids.map((event_id) => ({
             org_id: "org-1",
             spec_hash: specHash,
@@ -919,17 +1027,18 @@ function planningHarness(initialRun, options = {}) {
             content_hash: event_id === options.staleEventId
               ? `stale-hash-${event_id}`
               : `hash-${event_id}`,
-            facts: event_id === "e4" ? [] : [{
+            facts: event_id === options.emptyEventId ? [] : [{
               dedupe_key: `event_id:${event_id}`,
               group: "all",
               metric: "task_count",
               value: 1,
               event_ids: [event_id],
             }],
-            created_at: "2026-01-01T00:00:00.000Z",
-            updated_at: "2026-01-01T00:00:00.000Z",
+            created_at: options.cacheUpdatedAt ?? new Date().toISOString(),
+            updated_at: options.cacheUpdatedAt ?? new Date().toISOString(),
           }))
-        : [],
+        : [];
+    },
     putAggregateFactCache: async () => {},
   };
   const runtime = {
@@ -950,6 +1059,7 @@ function planningHarness(initialRun, options = {}) {
     },
     mapBatchInputs: async (_snapshotId, ids) => {
       harness.bodyReads += 1;
+      if (harness.bodyError) throw harness.bodyError;
       return ids.map((event_id) => ({
         event_id,
         content_hash: `hash-${event_id}`,
@@ -980,12 +1090,13 @@ function planningHarness(initialRun, options = {}) {
       states.set(id, executionState(run, "running"));
       return { work_item: preparedValue.work_item, run };
     },
-    cancelAuxiliaryExecution: async (id, options = {}) => {
+    cancelAuxiliaryExecution: async (id, cancelOptions = {}) => {
       cancelled.push(id);
-      if (options.searchAnswerTerminal) {
+      if (options.cancelError) throw options.cancelError;
+      if (cancelOptions.searchAnswerTerminal) {
         harness.record = {
           ...harness.record,
-          outcome: options.searchAnswerTerminal.outcome,
+          outcome: cancelOptions.searchAnswerTerminal.outcome,
           updated_at: new Date().toISOString(),
         };
       }

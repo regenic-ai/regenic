@@ -19,6 +19,8 @@ import {
 import { KernelRequestError } from "./kernel-request";
 import { useLocale } from "./LocaleContext";
 import { SearchAnswerCard } from "./SearchAnswerCard";
+import { EmptyState } from "./EmptyState";
+import { SearchIcon } from "./Icons";
 import type {
   InboxViewItem,
   PersonalExpandedSearchResult,
@@ -310,8 +312,11 @@ export function SearchPage({ onSettings, onOpenConversation }: {
 
         {!busy && !result && !error ? (
           <div className="search-empty-state">
-            {recent.length ? (
-              <>
+            <EmptyState
+              icon={<SearchIcon />}
+              title={t("search.idleTitle")}
+              actions={recent.length ? (
+                <div className="search-recent-block">
                 <div className="search-recent-head">
                   <span className="muted">{t("search.recent")}</span>
                   <button type="button" className="link muted-link" onClick={() => { setRecent([]); saveRecent([]); }}>
@@ -323,8 +328,12 @@ export function SearchPage({ onSettings, onOpenConversation }: {
                     <button type="button" key={entry} className="search-recent-chip" onClick={() => runRecent(entry)}>{entry}</button>
                   ))}
                 </div>
-              </>
-            ) : <p className="muted">{t("search.idle")}</p>}
+                </div>
+              ) : undefined}
+            >
+              <p>{t("search.idle")}</p>
+              <p className="muted">{t("search.idleHint")}</p>
+            </EmptyState>
           </div>
         ) : null}
 
@@ -384,10 +393,15 @@ export function SearchPage({ onSettings, onOpenConversation }: {
               ? <p className="muted">{t("search.eventOnly")}</p> : null}
             {!result.items.length ? (
               <div className="search-empty-state">
-                <p>{t("search.empty")}</p>
-                {activeFilters ? <button type="button" className="ghost" onClick={() => {
-                  clearFilters(); void search(submitted, { source: "", thread: "", limit: DEFAULT_LIMIT });
-                }}>{t("search.clearFiltersAndRetry")}</button> : null}
+                <EmptyState
+                  icon={<SearchIcon />}
+                  title={t("search.emptyTitle")}
+                  actions={activeFilters ? <button type="button" className="ghost" onClick={() => {
+                    clearFilters(); void search(submitted, { source: "", thread: "", limit: DEFAULT_LIMIT });
+                  }}>{t("search.clearFiltersAndRetry")}</button> : null}
+                >
+                  <p>{t("search.empty")}</p>
+                </EmptyState>
               </div>
             ) : null}
             {cards.length ? (

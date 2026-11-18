@@ -6,6 +6,7 @@ import {
   saveRecipe,
   tryRecipe,
 } from "./api";
+import { ChatIcon, ClockIcon, ConnectIcon, FlowIcon, PlusIcon } from "./Icons";
 import { useLocale } from "./LocaleContext";
 import { MenuSelect } from "./MenuSelect";
 import { loadRecipeConversations } from "./recipe-conversations";
@@ -37,7 +38,7 @@ import {
   lastRunCopy,
   nextRunCopy,
   parseMaxConcurrent,
-  recipeCardLine,
+  recipeChain,
   saveCoverageCopy,
   scopeChoices,
   scopeError,
@@ -110,6 +111,7 @@ export function RecipesPage({
   }, [locale]);
   const formRef = useRef<HTMLElement>(null);
   const [recipes, setRecipes] = useState<RecipeView[]>([]);
+  const [composing, setComposing] = useState(false);
   const [executors, setExecutors] = useState<ExecutorCatalogEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -207,6 +209,7 @@ export function RecipesPage({
     [executors],
   );
   const formFirst = Boolean(draft.id || returnToWork || recipes.length === 0);
+  const awaitingStart = recipes.length === 0 && !draft.id && !returnToWork && !composing;
   const conversationOptions = useMemo(
     () => conversationChoices(conversations, draft),
     [conversations, draft.thread_id, draft.thread_title],
@@ -220,7 +223,10 @@ export function RecipesPage({
     (savedRecipe.write_back_thread_id ?? "") === draft.write_back_thread_id &&
     (Boolean(draft.write_back_thread_id) ||
       savedRecipe.match.thread_id === draftMatch(draft).thread_id);
-  const writeBackSaveBlocker = draft.can_write_back && !canWriteBack && !writeBackUnchanged
+  const writeBackAwaitsThread = (draft.scope === "thread" || draft.trigger_kind === "pull") &&
+    !draft.thread_id && !draft.write_back_thread_id;
+  const writeBackSaveBlocker = draft.can_write_back && !canWriteBack && !writeBackUnchanged &&
+    !writeBackAwaitsThread
     ? t(writeBackOptions.length ? "recipes.writeBackUnavailable" : "recipes.writeBackNoTargets")
     : null;
   const writeBackLabel = draft.write_back_thread_id
@@ -473,7 +479,13 @@ export function RecipesPage({
     }
   };
 
+  const openBlank = () => {
+    resetDraft();
+    setComposing(true);
+  };
+
   const applyStarter = (kind: StarterKind) => {
+    setComposing(true);
     setReturnToWork(false);
     setError(null);
     setFilterEditorVersion((current) => current + 1);
@@ -637,16 +649,21 @@ export function RecipesPage({
                       </span>
                     ) : null}
                   </div>
-                  <p className="recipe-card-line">
-                    {recipeCardLine(
+                  <ol className="recipe-chain" aria-label={t("recipes.chainLabel")}>
+                    {recipeChain(
                       recipe,
                       sources,
                       conversations,
                       executorByType.get(recipe.executor_type)?.label ??
                         recipe.executor_type,
                       t,
-                    )}
-                  </p>
+                    ).map((step) => (
+                      <li key={step.stage} className={`recipe-chain-step is-${step.stage}`}>
+                        <span className="recipe-chain-stage">{t(`recipes.chain.${step.stage}`)}</span>
+                        <span className="recipe-chain-value">{step.label}</span>
+                      </li>
+                    ))}
+                  </ol>
                   {next ? <p className="recipe-card-next">{next}</p> : null}
                   {last && recentRuns.length <= 1 ? (
                     <p className="recipe-card-next">{last}</p>
@@ -762,7 +779,8 @@ export function RecipesPage({
           <div className="recipe-stack">
               <section className="recipe-section">
                 <header className="recipe-section-head">
-                  <h3>{t("recipes.triggerLegend")}</h3>
+                  <span className="recipe-step-no" aria-hidden="true">1</span>
+                  <h3>{t("recipes.stageTrigger")}</h3>
                 </header>
                 <div className="recipe-rows">
                 <RecipeRow label={t("recipes.triggerRow")} hint={triggerHint(draft.trigger_kind, t)}>
@@ -783,6 +801,17 @@ export function RecipesPage({
                     ))}
                   </div>
                 </RecipeRow>
+                {draft.trigger_kind === "pull" ? (
+                  <RecipeRow label={t("recipes.interval")} hint={t("recipes.scheduleInstructionsHint")}>
+                    <ScheduleField
+                      draft={draft}
+                      t={t}
+                      onChange={(patch) =>
+                        setDraft((current) => ({ ...current, ...patch }))
+                      }
+                    />
+                  </RecipeRow>
+                ) : null}
                 {draft.trigger_kind !== "pull" ? (
                 <RecipeRow label={t("recipes.watchLegend")}>
                   <div className="seg">
@@ -871,18 +900,15 @@ export function RecipesPage({
                   </RecipeRow>
                 ) : null}
 
-                {draft.trigger_kind === "pull" ? (
-                  <RecipeRow label={t("recipes.interval")} hint={t("recipes.scheduleInstructionsHint")}>
-                    <ScheduleField
-                      draft={draft}
-                      t={t}
-                      onChange={(patch) =>
-                        setDraft((current) => ({ ...current, ...patch }))
-                      }
-                    />
-                  </RecipeRow>
-                ) : null}
+                </div>
+              </section>
 
+              <section className="recipe-section">
+                <header className="recipe-section-head">
+                  <span className="recipe-step-no" aria-hidden="true">2</span>
+                  <h3>{t("recipes.stageScope")}</h3>
+                </header>
+                <div className="recipe-rows">
                 <TextFilterConditions key={`${draft.id ?? "new"}:${filterEditorVersion}`} draft={draft} setDraft={setDraft} t={t} />
                 <RecipeRow label={t("recipes.previewTitle")}>
                   <MatchPreview
@@ -899,7 +925,8 @@ export function RecipesPage({
 
               <section className="recipe-section">
                 <header className="recipe-section-head">
-                  <h3>{t("recipes.then")}</h3>
+                  <span className="recipe-step-no" aria-hidden="true">3</span>
+                  <h3>{t("recipes.stageHandler")}</h3>
                 </header>
                 <div className="recipe-rows">
                 <RecipeRow label={t("recipes.runWith")} hint={catalog?.description}>
@@ -989,7 +1016,8 @@ export function RecipesPage({
 
               <section className="recipe-section">
                 <header className="recipe-section-head">
-                  <h3>{t("recipes.afterDone")}</h3>
+                  <span className="recipe-step-no" aria-hidden="true">4</span>
+                  <h3>{t("recipes.stageDestination")}</h3>
                 </header>
                 <div className="recipe-rows">
                 <RecipeRow label={t("recipes.result")}>
@@ -1021,9 +1049,11 @@ export function RecipesPage({
                     <MenuSelect
                       value={draft.write_back_thread_id}
                       options={writeBackOptions}
-                      valueLabel={draft.write_back_thread_id || writeBackOptions.length || writeBackUnchanged
-                        ? t("recipes.writeBackTargetUnavailable", { name: writeBackLabel })
-                        : t("recipes.writeBackNoTargets")}
+                      valueLabel={writeBackAwaitsThread
+                        ? t("recipes.writeBackOriginal")
+                        : draft.write_back_thread_id || writeBackOptions.length || writeBackUnchanged
+                          ? t("recipes.writeBackTargetUnavailable", { name: writeBackLabel })
+                          : t("recipes.writeBackNoTargets")}
                       placeholder={t("recipes.searchConversation")}
                       searchable
                       onLoad={loadConversations}
@@ -1032,7 +1062,9 @@ export function RecipesPage({
                         setDraft((current) => ({ ...current, write_back_thread_id }))
                       }
                     />
-                    {!canWriteBack && (writeBackOptions.length > 0 || draft.write_back_thread_id || writeBackUnchanged) ? (
+                    {writeBackAwaitsThread ? (
+                      <p className="recipe-hint">{t("recipes.writeBackHint")}</p>
+                    ) : !canWriteBack && (writeBackOptions.length > 0 || draft.write_back_thread_id || writeBackUnchanged) ? (
                       <p className="recipe-hint" role="status">
                         {t(writeBackOptions.length
                           ? "recipes.writeBackUnavailable"
@@ -1050,18 +1082,6 @@ export function RecipesPage({
                     ) : null}
                   </RecipeRow>
                 ) : null}
-                <RecipeRow label={t("recipes.enabledCheck")}>
-                  <SwitchRow
-                    label={t("recipes.enabledCheck")}
-                    checked={draft.enabled}
-                    onChange={(enabled) => setDraft((current) => ({ ...current, enabled }))}
-                  >
-                    {""}
-                  </SwitchRow>
-                  {!draft.enabled ? (
-                    <p className="recipe-hint">{t("recipes.enabledOffHint")}</p>
-                  ) : null}
-                </RecipeRow>
                 </div>
               </section>
           </div>
@@ -1081,9 +1101,25 @@ export function RecipesPage({
                 }
               />
             </label>
+            <div className="recipe-enabled" title={draft.enabled ? undefined : t("recipes.enabledOffHint")}>
+              <SwitchRow
+                label={t("recipes.enabledCheck")}
+                checked={draft.enabled}
+                onChange={(enabled) => setDraft((current) => ({ ...current, enabled }))}
+              >
+                {t("recipes.enabledCheck")}
+              </SwitchRow>
+            </div>
             <div className="recipe-actions">
-              {draft.id || returnToWork ? (
-                <button type="button" className="ghost" onClick={resetDraft}>
+              {draft.id || returnToWork || composing ? (
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={() => {
+                    resetDraft();
+                    if (!draft.id && !returnToWork) setComposing(false);
+                  }}
+                >
                   {t("recipes.cancel")}
                 </button>
               ) : null}
@@ -1100,25 +1136,25 @@ export function RecipesPage({
                   />
                 </label>
               ) : null}
-              <button
-                type="button"
-                className="ghost"
-                disabled={busy || !draft.id || !tryThreadId}
-                title={
-                  !draft.id
-                    ? t("recipes.tryNeedSave")
-                    : !tryThreadId
+              {draft.id ? (
+                <button
+                  type="button"
+                  className="ghost"
+                  disabled={busy || !tryThreadId}
+                  title={
+                    !tryThreadId
                       ? t("recipes.tryNeedChat")
                       : dirty
                         ? `${t("recipes.tryTitle")} · ${t("recipes.trySavesFirst")}`
                         : t("recipes.tryTitle")
-                }
-                onClick={() => {
-                  void runTryOnce(false);
-                }}
-              >
-                {t("recipes.tryOnce")}
-              </button>
+                  }
+                  onClick={() => {
+                    void runTryOnce(false);
+                  }}
+                >
+                  {t("recipes.tryOnce")}
+                </button>
+              ) : null}
               {draft.id &&
               draft.can_write_back &&
               tryThreadId ? (
@@ -1154,10 +1190,10 @@ export function RecipesPage({
               <p className="muted recipe-try-hint is-blocking" role="status">
                 {saveBlocker}
               </p>
-            ) : !draft.id || !tryThreadId ? (
-              <p className="muted recipe-try-hint">
-                {!draft.id ? t("recipes.tryNeedSave") : t("recipes.tryNeedChat")}
-              </p>
+            ) : !draft.id ? (
+              <p className="muted recipe-try-hint">{t("recipes.tryNeedSave")}</p>
+            ) : !tryThreadId ? (
+              <p className="muted recipe-try-hint">{t("recipes.tryNeedChat")}</p>
             ) : null}
           </div>
         </form>
@@ -1165,7 +1201,7 @@ export function RecipesPage({
     </section>
   );
 
-  const showGuide = recipes.length === 0 && !draft.id && !returnToWork;
+  const showGuide = awaitingStart;
 
   return (
     <div className="page page-wide page-recipes">
@@ -1176,12 +1212,69 @@ export function RecipesPage({
       </header>
       {notice ? <p className="action-ok recipe-page-notice">{notice}</p> : null}
       {error ? <p className="action-error recipe-page-notice">{error}</p> : null}
-      {showGuide ? (
-        <section className="card recipe-guide">
-          <header className="recipe-guide-head">
-            <h2>{t("recipes.howTitle")}</h2>
-          </header>
-          <ol className="recipe-steps">
+      {showGuide && executors.length === 0 ? (
+        <section className="recipe-empty">
+          <span className="recipe-empty-icon"><FlowIcon /></span>
+          <h2>{t("recipes.noAgentTitle")}</h2>
+          <p>{t("recipes.noExecutor")}</p>
+          {onGoEngine ? (
+            <button type="button" className="primary" onClick={onGoEngine}>
+              {t("recipes.goEngine")}
+            </button>
+          ) : null}
+        </section>
+      ) : null}
+      {showGuide && executors.length > 0 ? (
+        <section className="recipe-start">
+          <div className="recipe-start-head">
+            <h2>{t("recipes.startersTitle")}</h2>
+            <div className="recipe-start-actions">
+              <button
+                type="button"
+                className="ghost"
+                disabled={busy}
+                onClick={() => importRef.current?.click()}
+              >
+                {t("recipes.import")}
+              </button>
+              <button type="button" className="primary" onClick={openBlank}>
+                <PlusIcon />
+                {t("recipes.startBlank")}
+              </button>
+            </div>
+          </div>
+          <div className="recipe-template-grid">
+            {(
+              [
+                ["chat", ChatIcon, "recipes.starterChat", "recipes.starterChatBody",
+                  ["recipes.flow.newMessage", "recipes.flow.agent", "recipes.flow.backToChat"]],
+                ["channel", ConnectIcon, "recipes.starterChannel", "recipes.starterChannelBody",
+                  ["recipes.flow.newTask", "recipes.flow.agent", "recipes.flow.backToSource"]],
+                ["schedule", ClockIcon, "recipes.starterSchedule", "recipes.starterScheduleBody",
+                  ["recipes.flow.hourly", "recipes.flow.agent", "recipes.flow.backToChat"]],
+              ] as const
+            ).map(([kind, Icon, titleKey, bodyKey, flow]) => (
+              <button
+                key={kind}
+                type="button"
+                className="recipe-template"
+                onClick={() => applyStarter(kind)}
+              >
+                <span className="recipe-template-icon"><Icon /></span>
+                <strong>{t(titleKey)}</strong>
+                <span className="recipe-template-body">{t(bodyKey)}</span>
+                <span className="recipe-template-flow">
+                  {flow.map((step, index) => (
+                    <span key={step}>
+                      {index > 0 ? <span className="recipe-flow-arrow" aria-hidden="true">→</span> : null}
+                      <span className="recipe-flow-chip">{t(step)}</span>
+                    </span>
+                  ))}
+                </span>
+              </button>
+            ))}
+          </div>
+          <ol className="recipe-how" aria-label={t("recipes.howTitle")}>
             <li>
               <strong>{t("recipes.step1Title")}</strong>
               <span>{t("recipes.step1Body")}</span>
@@ -1195,45 +1288,11 @@ export function RecipesPage({
               <span>{t("recipes.step3Body")}</span>
             </li>
           </ol>
-          {executors.length > 0 ? (
-            <div className="recipe-starters">
-              <div className="recipe-starters-head">
-                <h3>{t("recipes.startersTitle")}</h3>
-                <button
-                  type="button"
-                  className="ghost recipe-import-link"
-                  disabled={busy}
-                  onClick={() => importRef.current?.click()}
-                >
-                  {t("recipes.import")}
-                </button>
-              </div>
-              <div className="recipe-starter-grid">
-                {(
-                  [
-                    ["chat", "recipes.starterChat", "recipes.starterChatBody"],
-                    ["channel", "recipes.starterChannel", "recipes.starterChannelBody"],
-                    ["schedule", "recipes.starterSchedule", "recipes.starterScheduleBody"],
-                  ] as const
-                ).map(([kind, titleKey, bodyKey]) => (
-                  <button
-                    key={kind}
-                    type="button"
-                    className="recipe-starter"
-                    onClick={() => applyStarter(kind)}
-                  >
-                    <strong>{t(titleKey)}</strong>
-                    <span>{t(bodyKey)}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-          ) : null}
         </section>
       ) : null}
-      {formFirst ? formCard : null}
+      {awaitingStart ? null : formFirst ? formCard : null}
       {listCard}
-      {formFirst ? null : formCard}
+      {awaitingStart || formFirst ? null : formCard}
       <input
         ref={importRef}
         type="file"

@@ -40,7 +40,7 @@ describe("context record view", () => {
       kind: value.kind,
       status: value.status,
       recorded_at: value.recorded_at,
-      preview: { readable_count: 0, utc_date: "2026-08-30" },
-    }).title, "2026-08-30");
+      preview: { readable_count: 0, thread_id: "chat-9" },
+    }).title, "chat-9");
   });
 });

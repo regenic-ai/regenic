@@ -82,13 +82,15 @@ export class PersonalWorkChannel {
             501,
           );
         }
-        const mcp = options?.mcp_servers &&
-          found.driver.capabilities(found.installation).create_mcp === true
+        const capabilities = found.driver.capabilities(found.installation);
+        const mcp = options?.mcp_servers && capabilities.create_mcp === true
           ? options.mcp_servers
           : undefined;
+        const text = options?.text?.trim();
         const createOptions = {
           ...(options?.cwd ? { cwd: options.cwd } : {}),
           ...(mcp ? { mcp_servers: mcp } : {}),
+          ...(capabilities.create_with_task === true && text ? { text } : {}),
         };
         return requireCreateThread(found.driver)(
           found.installation,
@@ -100,6 +102,10 @@ export class PersonalWorkChannel {
       sysoutSupportsMcp: async () => {
         const found = await this.creatableFor(executor);
         return found?.driver.capabilities(found.installation).create_mcp === true;
+      },
+      sysoutCreateWithTask: async () => {
+        const found = await this.creatableFor(executor);
+        return found?.driver.capabilities(found.installation).create_with_task === true;
       },
       ...(this.runtime.getOptions()?.blobRoot
         ? {

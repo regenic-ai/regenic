@@ -2,11 +2,16 @@ import { randomUUID } from "node:crypto";
 import {
   asConnectorHost,
   DEFAULT_COPY_LOCALE,
+  deleteKeychainSecret,
+  installSecretRef,
   persistInstallSecrets,
   readInstallSecret,
+  writeKeychainSecret,
   loadSyncProgress,
   type ConnectorInstallation,
   type ConnectorRuntimeStore,
+  type DriverInstallCatalog,
+  type JsonValue,
 } from "@regenic/domain";
 import {
   PersonalConnectorError,
@@ -27,7 +32,11 @@ import {
 import { prepareConnectorForm } from "./personal-connector-form";
 import { forgetPushInstallation } from "./personal-connector-push";
 
-export async function install(state: ConnectorState, input: ConnectorInstallInput): Promise<EngineInstallationView> {
+export async function install(
+  state: ConnectorState,
+  input: ConnectorInstallInput,
+  options: { deferActivation?: boolean } = {},
+): Promise<EngineInstallationView> {
   const store = state.runtime.requireHost().get("authority");
   if (
     !connectorAllowsMultiple(
@@ -47,7 +56,7 @@ export async function install(state: ConnectorState, input: ConnectorInstallInpu
     }
   }
   const now = new Date().toISOString();
-  const { drafted, catalog, credentialChanges } = buildInstallation(state, input, now);
+  const { drafted, catalog, credentialChanges } = await buildInstallation(state, input, now);
   const created = await store.createInstallation({
     ...drafted,
     config: persistInstallSecrets({
@@ -58,7 +67,9 @@ export async function install(state: ConnectorState, input: ConnectorInstallInpu
       stored: drafted.config ?? {},
     }),
   });
-  void state.catchUp(created.id);
+  if (!options.deferActivation) {
+    void state.catchUp(created.id);
+  }
   return viewWithPairingCode(state, store, created);
 }
 
@@ -66,6 +77,9 @@ export async function updateConfig(
   state: ConnectorState,
   installationId: string,
   config: Record<string, unknown>,
+  afterPersist?: (
+    installation: ConnectorInstallation,
+  ) => Promise<Record<string, JsonValue> | void>,
 ): Promise<EngineInstallationView> {
   const store = state.runtime.requireHost().get("authority");
   const current = await state.requireInstallation(store, installationId);
@@ -78,22 +92,28 @@ export async function updateConfig(
     );
   }
   const catalog = driver.installCatalog?.({ env: process.env });
+  const previousSecrets = await snapshotInstallSecrets(
+    current.connector_type,
+    current.id,
+    catalog,
+  );
   const credentials = await credentialStatus(state, installationId);
   const form = prepareConnectorForm(catalog, config, true, credentials, true);
   let nextConfig: ConnectorInstallation["config"];
   try {
-    nextConfig = driver.install({
+    nextConfig = (await driver.install({
       id: current.id,
       org_id: current.org_id,
       config: form.config,
       now: new Date().toISOString(),
       secrets: state.installSecrets(),
-    }).config;
+    })).config;
   } catch (error) {
     throw wrapDriverError(error, "invalid_config");
   }
   asConnectorHost(state.runtime.requireHost()).livePush?.stop(current.id);
   await state.drivers.stopInstallation(current, state.runtime.requireHost(), "reconfigure");
+  let updated: ConnectorInstallation | null = null;
   try {
     for (const key of Object.keys(form.credentialChanges)) {
       await driver.clearCatalogCredential?.(current, key);
@@ -105,21 +125,56 @@ export async function updateConfig(
       incoming: form.credentialChanges,
       stored: nextConfig,
     });
+    updated = await store.updateInstallationConfig({
+      id: current.id,
+      org_id: state.runtime.orgId(),
+      config: nextConfig,
+      updated_at: nextUpdatedAt(current),
+    });
+    if (!updated) {
+      throw new PersonalConnectorError(
+        "not_found",
+        "Connector installation not found",
+        404,
+      );
+    }
+    const patch = await afterPersist?.(updated);
+    if (patch && Object.keys(patch).length > 0) {
+      const patched = await store.updateInstallationConfig({
+        id: updated.id,
+        org_id: updated.org_id,
+        config: { ...updated.config, ...patch },
+        updated_at: nextUpdatedAt(updated),
+      });
+      if (!patched) {
+        throw new PersonalConnectorError(
+          "not_found",
+          "Connector installation not found",
+          404,
+        );
+      }
+      updated = patched;
+    }
   } catch (error) {
-    throw wrapDriverError(error, "invalid_config");
-  }
-  const updated = await store.updateInstallationConfig({
-    id: current.id,
-    org_id: state.runtime.orgId(),
-    config: nextConfig,
-    updated_at: nextUpdatedAt(current),
-  });
-  if (!updated) {
-    throw new PersonalConnectorError(
-      "not_found",
-      "Connector installation not found",
-      404,
+    await restoreInstallSecrets(
+      current.connector_type,
+      current.id,
+      catalog,
+      previousSecrets,
     );
+    const restored = updated
+      ? await store.updateInstallationConfig({
+          id: current.id,
+          org_id: current.org_id,
+          config: current.config,
+          updated_at: nextUpdatedAt(updated),
+        })
+      : await store.findInstallation(current.id);
+    if (restored?.status === "enabled") {
+      state.drivers.installationLifecycle.resume(restored.id, restored.updated_at);
+      void state.catchUp(restored.id);
+    }
+    throw wrapDriverError(error, "invalid_config");
   }
   if (updated.status === "enabled") {
     state.drivers.installationLifecycle.resume(updated.id, updated.updated_at);
@@ -156,9 +211,68 @@ export async function uninstall(state: ConnectorState, installationId: string): 
   }
   await state.drivers.stopInstallation(current, state.runtime.requireHost(), "delete");
   await store.deleteInstallation(current.id, state.runtime.orgId());
+  try {
+    await clearInstallSecrets(
+      current.connector_type,
+      current.id,
+      state.drivers.get(current.connector_type)?.installCatalog?.({ env: process.env }),
+    );
+  } catch (error) {
+    console.error("connector credential cleanup failed", {
+      installation_id: current.id,
+      connector_type: current.connector_type,
+      error,
+    });
+  }
   state.kernelRuntime.clearInstallationSnapshots(current.id);
   forgetPushInstallation(state, current.id);
   return { id: current.id, removed: true };
+}
+
+function installSecretKeys(catalog: DriverInstallCatalog | undefined): string[] {
+  return (catalog?.fields ?? []).flatMap((field) =>
+    (field.secret || field.widget === "password") && field.key.trim()
+      ? [field.key.trim()]
+      : [],
+  );
+}
+
+async function snapshotInstallSecrets(
+  connectorType: string,
+  installationId: string,
+  catalog: DriverInstallCatalog | undefined,
+): Promise<Record<string, string | undefined>> {
+  return Object.fromEntries(await Promise.all(
+    installSecretKeys(catalog).map(async (key) => [
+      key,
+      await readInstallSecret(connectorType, installationId, key),
+    ]),
+  ));
+}
+
+async function restoreInstallSecrets(
+  connectorType: string,
+  installationId: string,
+  catalog: DriverInstallCatalog | undefined,
+  values: Record<string, string | undefined>,
+): Promise<void> {
+  for (const key of installSecretKeys(catalog)) {
+    const ref = installSecretRef(connectorType, installationId, key);
+    const value = values[key];
+    if (value) {
+      writeKeychainSecret(ref, value);
+    } else {
+      deleteKeychainSecret(ref);
+    }
+  }
+}
+
+async function clearInstallSecrets(
+  connectorType: string,
+  installationId: string,
+  catalog: DriverInstallCatalog | undefined,
+): Promise<void> {
+  await restoreInstallSecrets(connectorType, installationId, catalog, {});
 }
 
 export async function setStatus(
@@ -204,7 +318,7 @@ function nextUpdatedAt(installation: ConnectorInstallation): string {
   return new Date(Math.max(Date.now(), Date.parse(installation.updated_at) + 1)).toISOString();
 }
 
-function buildInstallation(
+async function buildInstallation(
   state: ConnectorState,
   input: ConnectorInstallInput,
   now: string,
@@ -220,7 +334,7 @@ function buildInstallation(
   const catalog = driver.installCatalog?.({ env: process.env });
   const form = prepareConnectorForm(catalog, input.config ?? {}, false, {}, true);
   try {
-    const drafted = driver.install({
+    const drafted = await driver.install({
       id: randomUUID(),
       org_id: state.runtime.orgId(),
       config: form.config,

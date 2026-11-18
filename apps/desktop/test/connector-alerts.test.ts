@@ -185,7 +185,7 @@ describe("connector alerts", () => {
     });
     const alerts = connectorAlerts(view);
     assert.equal(alerts.length, 1);
-    assert.equal(alerts[0].name, "connector");
+    assert.equal(alerts[0].name, "app");
     assert.equal(alerts[0].message, "network down");
     assert.equal(alerts[0].installationId, null);
   });

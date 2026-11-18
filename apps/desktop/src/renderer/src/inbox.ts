@@ -3,11 +3,9 @@ import { deliveryNeedsYou } from "./message-view.ts";
 import { collapseSourceRevisions, type InboxReuse } from "./thread-window.ts";
 import type {
   AttentionClass,
-  CustomerServiceTaskView,
   InboxSortMode,
   InboxViewItem,
   ListTitleMode,
-  PersonalFollowUpView,
   RecordClass,
   ThreadFacet,
   ThreadPrompt,
@@ -43,10 +41,6 @@ export interface InboxThread {
   thread_facet?: ThreadFacet;
   attention?: AttentionClass;
   work?: WorkFace;
-  /** Desktop overlay: an Agent-drafted reply waiting for the human. */
-  proposal?: CustomerServiceTaskView;
-  /** Desktop overlay: your last outbound message is still unanswered. */
-  follow_up?: PersonalFollowUpView;
 }
 
 export type PinFilter = "all" | "pinned" | "unpinned";
@@ -228,8 +222,7 @@ export function threadStatusFilterKey(
   if (
     thread.work?.status === "waiting_human" ||
     thread.work?.delivery?.status === "uncertain" ||
-    (thread.prompts?.length ?? 0) > 0 ||
-    Boolean(thread.proposal)
+    (thread.prompts?.length ?? 0) > 0
   ) {
     return "waiting";
   }
@@ -797,9 +790,6 @@ function mergeMessages(
 }
 
 export function resolveThreadAttention(thread: InboxThread): AttentionClass {
-  if (thread.proposal) {
-    return "waiting_you";
-  }
   if (
     thread.attention === "waiting_you" ||
     thread.attention === "needs_ack" ||
@@ -816,10 +806,9 @@ export function resolveThreadAttention(thread: InboxThread): AttentionClass {
     return "waiting_you";
   }
   if (
-    (thread.work?.status === "done" &&
-      thread.work.has_result &&
-      thread.work.can_write_back === false) ||
-    Boolean(thread.follow_up)
+    thread.work?.status === "done" &&
+    thread.work.has_result &&
+    thread.work.can_write_back === false
   ) {
     return "needs_ack";
   }

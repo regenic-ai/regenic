@@ -3,7 +3,6 @@ import type { JsonValue } from "./ingestion";
 
 export const CONTEXT_ARTIFACT_KINDS = [
   "thread_summary",
-  "daily_digest",
   "claim_extraction",
   "identity_link",
   "topic_assignment",

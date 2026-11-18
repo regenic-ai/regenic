@@ -11,6 +11,48 @@ const {
   startPersonalApi,
 } = require("./personal-api-harness.cjs");
 
+function flowBody(body) {
+  const params = body.executor_config ?? {};
+  const task = typeof params.prompt === "string" ? params.prompt : undefined;
+  return {
+    name: body.name,
+    config: {
+      source: { installations: "all" },
+      scope: { kind: "new_messages", match: body.match },
+      handler: {
+        kind: "agent",
+        executor_type: body.executor_type,
+        ...(task !== undefined ? { task } : {}),
+        ...(Object.keys(params).length ? { params } : {}),
+      },
+      destination: {
+        kind: "reply",
+        thread: body.write_back_thread_id || "origin",
+        confirm: false,
+        send: body.can_write_back === true,
+      },
+      trigger: body.trigger,
+      hide_on_success: false,
+      include_context: false,
+      enabled: body.enabled !== false,
+    },
+  };
+}
+
+function withDestination(config, thread) {
+  return {
+    config: {
+      ...config,
+      destination: { kind: "reply", thread, confirm: false, send: true },
+    },
+  };
+}
+
+function replyThread(flow) {
+  const thread = flow.config?.destination?.thread;
+  return !thread || thread === "origin" ? undefined : thread;
+}
+
 it("persists HTTP recipe destinations through list, unrelated edits and API restart, and uses them for delivery", async () => {
   const root = await createRoot();
   const database = join(root, "authority.db");
@@ -31,11 +73,11 @@ it("persists HTTP recipe destinations through list, unrelated edits and API rest
   }
 
   async function checkPersisted(expected) {
-    const response = await fetch(`${running.origin}/v1/me/recipes`);
+    const response = await fetch(`${running.origin}/v1/me/flows`);
     assert.equal(response.status, 200);
     const listed = (await response.json()).find((recipe) => recipe.id === id);
     assert.ok(listed);
-    assert.equal(listed.write_back_thread_id, expected);
+    assert.equal(replyThread(listed), expected);
 
     const sql = new DatabaseSync(database, { readOnly: true });
     try {
@@ -90,25 +132,28 @@ it("persists HTTP recipe destinations through list, unrelated edits and API rest
     await post("connectors", {
       connector_type: "dsh-session", config: { transport: "web", base_url: stub.origin },
     });
-    const created = await post("recipes", {
+    const created = await post("flows", flowBody({
       name: "Persist destination",
       match: { thread_id: "dsh:source" },
       trigger: { kind: "manual" },
       executor_type: "dsh", executor_config: { prompt: "Summarize updates." },
       can_write_back: true, write_back_thread_id: "dsh:results", enabled: false,
-    });
+    }));
     id = created.id;
-    assert.equal(created.write_back_thread_id, "dsh:results");
+    let config = created.config;
+    assert.equal(replyThread(created), "dsh:results");
     await checkPersisted("dsh:results");
     await restartAndCheck("dsh:results");
 
     for (const [patch, expected] of [
-      [{ write_back_thread_id: "dsh:other" }, "dsh:other"],
+      [withDestination(config, "dsh:other"), "dsh:other"],
       [{ name: "Unrelated edit" }, "dsh:other"],
-      [{ write_back_thread_id: null }, undefined],
+      [withDestination(config, "origin"), undefined],
       [{ name: "Still original" }, undefined],
     ]) {
-      assert.equal((await post(`recipes/${id}`, patch)).write_back_thread_id, expected);
+      const saved = await post(`flows/${id}`, patch);
+      if (patch.config) config = saved.config;
+      assert.equal(replyThread(saved), expected);
       await checkPersisted(expected);
       await restartAndCheck(expected);
     }

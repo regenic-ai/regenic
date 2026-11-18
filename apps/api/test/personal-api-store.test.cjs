@@ -16,21 +16,25 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
     const { app, origin } = await startPersonalApi(database, blobRoot);
     try {
       const created = await (
-        await fetch(`${origin}/v1/me/recipes`, {
+        await fetch(`${origin}/v1/me/flows`, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
             name: "Keep me",
-            match: { record_class: "task" },
-            executor_type: "dsh",
-            executor_config: { prompt: "Triage each task." },
-            can_write_back: false,
-            enabled: true,
+            config: {
+              source: { installations: "all" },
+              scope: { kind: "new_messages", match: { record_class: "task" } },
+              handler: { kind: "agent", executor_type: "dsh", task: "Triage each task.", params: { prompt: "Triage each task." } },
+              trigger: { kind: "push", coalesce: true },
+              hide_on_success: false,
+              include_context: false,
+              enabled: true,
+            },
           }),
         })
       ).json();
       assert.equal(created.name, "Keep me");
-      assert.equal(created.include_context, false);
+      assert.equal(created.config.include_context, false);
 
       const before = await (await fetch(`${origin}/v1/me/store`)).json();
       assert.ok(before.events >= 1);
@@ -57,7 +61,7 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
       const inbox = await (await fetch(`${origin}/v1/me/inbox`)).json();
       const after = await (await fetch(`${origin}/v1/me/store`)).json();
       const engine = await (await fetch(`${origin}/v1/me/engine?detail=0`)).json();
-      const recipes = await (await fetch(`${origin}/v1/me/recipes`)).json();
+      const recipes = await (await fetch(`${origin}/v1/me/flows`)).json();
       assert.equal(inbox.length, 0);
       assert.equal(after.events, 0);
       assert.equal(after.conversations, 0);
