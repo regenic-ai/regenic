@@ -2,6 +2,7 @@ const assert = require("node:assert/strict");
 const { describe, it } = require("node:test");
 const {
   INGEST_SCHEMA_VERSION,
+  collectAvailableBlobs,
   validateIngestBatch,
 } = require("../dist");
 
@@ -33,6 +34,28 @@ function createBatch(overrides = {}) {
     ...overrides,
   };
 }
+
+describe("collectAvailableBlobs", () => {
+  it("omits unreadable blobs and keeps at most 32 reads in flight", async () => {
+    let active = 0;
+    let peak = 0;
+    const hashes = ["missing", ...Array.from({ length: 40 }, (_, index) => `hash-${index}`)];
+    const bodies = await collectAvailableBlobs(async (hash) => {
+      if (hash === "missing") {
+        throw new Error("missing");
+      }
+      active += 1;
+      peak = Math.max(peak, active);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      active -= 1;
+      return Buffer.from(hash);
+    }, [...hashes, "hash-0"]);
+
+    assert.equal(bodies.size, 40);
+    assert.equal(bodies.has("missing"), false);
+    assert.equal(peak, 32);
+  });
+});
 
 describe("validateIngestBatch", () => {
   it("accepts a canonical create batch", () => {

@@ -79,6 +79,11 @@ export class ContextProjectionCoordinator implements ContextProjectionRunner {
       await this.syncLexicalIndex(orgId, generation);
       return;
     }
+    // Restart calls this with no event ids. A current generation has nothing
+    // to write, so skip the authority read before it opens every blob.
+    if (eventIds.length === 0 && status.generation === generation) {
+      return;
+    }
     const read = structuredClone(
       threadId
         ? await this.authority.openContextReadForThread(orgId, threadId)
