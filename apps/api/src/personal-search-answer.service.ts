@@ -11,6 +11,7 @@ import {
   type SearchAnswerRecord,
   type SearchAnswerFact,
   type SearchAnswerMapBatch,
+  type SearchAnswerMapInputProof,
   type SearchAnswerMapReduce,
   type SearchAnswerProgress,
   type SearchAnswerScope,
@@ -455,14 +456,18 @@ export class PersonalSearchAnswerService {
         try {
           const batchRefs = batch.map_event_ids
             ?? searchAnswerMapBatchRefs(record.event_ids, map, batch.index);
-          const inputs = map.spec
-            ? await this.context.mapBatchInputs(map.snapshot_id, batchRefs)
-            : undefined;
+          let inputs: readonly SearchAnswerMapInputProof[] | undefined;
+          if (map.spec) {
+            inputs = validMapInputProofs(batch.map_inputs, batchRefs)
+              ? batch.map_inputs
+              : (await this.context.mapBatchInputs(map.snapshot_id, batchRefs))
+                .map(mapInputProof);
+          }
           const mappedFacts = parseMapFacts(
             run.result.summary,
             batchRefs,
             map.spec,
-            inputs?.map((input) => input.dedupe),
+            inputs?.map(mapInputMetadata),
           );
           batch.facts = [...(batch.cached_facts ?? []), ...mappedFacts];
           if (map.spec && map.spec_hash && inputs) {
@@ -530,29 +535,54 @@ export class PersonalSearchAnswerService {
       ...running.filter((batch) => resumable.has(batch.index)),
       ...batches.filter((batch) => batch.status === "pending"),
     ];
+    const selected: Array<{
+      batch: SearchAnswerMapBatch;
+      batchRefs: string[];
+      mapEventIds?: string[];
+    }> = [];
+    let cacheStateChanged = false;
+    for (const batch of candidates) {
+      const batchRefs = searchAnswerMapBatchRefs(record.event_ids, map, batch.index);
+      const mapEventIds = map.spec && map.spec_hash
+        ? batch.map_event_ids ?? batchRefs
+        : undefined;
+      if (mapEventIds?.length === 0) {
+        if (await this.completeCachedBatch(batch)) cacheStateChanged = true;
+        continue;
+      }
+      if (selected.length >= freeSlots) continue;
+      selected.push({ batch, batchRefs, mapEventIds });
+    }
+
+    const inputById = new Map<string, MapBatchInput>();
+    if (map.spec && map.spec_hash && selected.length > 0) {
+      const eventIds = selected.flatMap(({ mapEventIds }) => mapEventIds ?? []);
+      const inputs = await this.context.mapBatchInputs(map.snapshot_id, eventIds);
+      for (const input of inputs) inputById.set(input.event_id, input);
+      if (
+        inputById.size !== eventIds.length
+        || eventIds.some((eventId) => !inputById.has(eventId))
+      ) {
+        throw new PersonalContextError(
+          "context_changed",
+          HttpStatus.CONFLICT,
+          "Aggregate context snapshot is incomplete",
+        );
+      }
+    }
+
     const launches: Array<{
       batch: SearchAnswerMapBatch;
       prepared: Awaited<ReturnType<PersonalWorkService["prepareAuxiliaryExecution"]>>;
       evidence: string;
     }> = [];
-    let cacheStateChanged = false;
-    for (const batch of candidates) {
+    for (const { batch, batchRefs, mapEventIds } of selected) {
       const id = batch.work_item_id
         ?? mapWorkItemId(record.id, batch.index, batch.attempt);
-      const batchRefs = searchAnswerMapBatchRefs(record.event_ids, map, batch.index);
       let evidence: string;
       if (map.spec && map.spec_hash) {
-        const mapEventIds = batch.map_event_ids
-          ?? searchAnswerMapBatchRefs(record.event_ids, map, batch.index);
-        if (mapEventIds.length === 0) {
-          if (await this.completeCachedBatch(batch)) cacheStateChanged = true;
-          continue;
-        }
-        if (launches.length >= freeSlots) continue;
-        const inputs = await this.context.mapBatchInputs(
-          map.snapshot_id,
-          mapEventIds,
-        );
+        const inputs = mapEventIds!.map((eventId) => inputById.get(eventId)!);
+        batch.map_inputs = inputs.map(mapInputProof);
         evidence = mapBatchEvidenceText(
           inputs,
           record.query,
@@ -560,7 +590,6 @@ export class PersonalSearchAnswerService {
           map.spec_hash,
         );
       } else {
-        if (launches.length >= freeSlots) continue;
         evidence = await this.context.mapBatchEvidence(
           map.snapshot_id,
           batchRefs,
@@ -898,7 +927,7 @@ export class PersonalSearchAnswerService {
   private async putFactCache(
     specHash: string,
     executorType: string | undefined,
-    inputs: readonly MapBatchInput[],
+    inputs: readonly Pick<MapBatchInput, "event_id" | "content_hash">[],
     facts: readonly SearchAnswerFact[],
   ): Promise<void> {
     const now = new Date().toISOString();
@@ -953,6 +982,38 @@ export class PersonalSearchAnswerService {
       }
     }
   }
+}
+
+function mapInputProof(input: MapBatchInput): SearchAnswerMapInputProof {
+  return {
+    ...input.dedupe,
+    event_id: input.event_id,
+    content_hash: input.content_hash,
+  };
+}
+
+function mapInputMetadata(
+  input: SearchAnswerMapInputProof,
+): MapBatchDedupeMetadata {
+  return {
+    event_id: input.event_id,
+    ...(input.external_id ? { external_id: input.external_id } : {}),
+    ...(input.url ? { url: input.url } : {}),
+    ...(input.business_id ? { business_id: input.business_id } : {}),
+  };
+}
+
+function validMapInputProofs(
+  inputs: readonly SearchAnswerMapInputProof[] | undefined,
+  eventIds: readonly string[],
+): inputs is readonly SearchAnswerMapInputProof[] {
+  return inputs?.length === eventIds.length
+    && inputs.every((input, index) =>
+      input.event_id === eventIds[index]
+      && typeof input.content_hash === "string"
+      && input.content_hash.length > 0
+      && [input.external_id, input.url, input.business_id].every((value) =>
+        value === undefined || (typeof value === "string" && value.length > 0)));
 }
 
 function normalizeMapRecord(record: SearchAnswerRecord): SearchAnswerRecord {

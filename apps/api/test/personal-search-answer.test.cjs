@@ -726,6 +726,12 @@ describe("persistent aggregate planning", () => {
     assert.equal(result.progress.active_batches, 3);
     assert.equal(result.progress.pending_batches, 1);
     assert.equal(harness.started.filter((id) => id.startsWith("search-answer-map:")).length, 3);
+    assert.equal(harness.bodyReads, 1);
+    assert.deepEqual(
+      harness.record.scope.map_reduce.batches.slice(0, 3)
+        .map((batch) => batch.map_inputs.map((input) => input.event_id)),
+      [["e1"], ["e2"], ["e3"]],
+    );
     const serialized = JSON.stringify(result);
     assert.doesNotMatch(serialized, /subject|snapshot_id|facts|work_item_id.*search-answer-map/);
   });
@@ -825,6 +831,20 @@ describe("persistent aggregate planning", () => {
 
     await harness.service().get("answer-plan");
     assert.equal(harness.manifestReads, 1);
+
+    const mapId = harness.record.scope.map_reduce.batches[0].work_item_id;
+    harness.states.set(
+      mapId,
+      executionState(completedRun(JSON.stringify([{
+        dedupe_key: "event_id:ignored",
+        group: "all",
+        metric: "task_count",
+        value: 1,
+        evidence_refs: [1],
+      }])), "done"),
+    );
+    await harness.service().get("answer-plan");
+    assert.equal(harness.bodyReads, 1);
   });
 
   it("retries invalid JSON once without embedding the invalid output", async () => {
