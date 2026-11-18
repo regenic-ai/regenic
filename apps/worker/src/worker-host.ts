@@ -1,6 +1,5 @@
 import {
   contextProjectionCoordinatorPlugin,
-  dailyDigestProjectionPlugin,
   acceptedThreadSummaryRetrieverPlugin,
   deterministicEventRetrieverPlugin,
   deterministicThreadSummaryProjectorPlugin,
@@ -42,7 +41,6 @@ export async function createWorkerHost<A, B>(
     await host.plugin(acceptedThreadSummaryRetrieverPlugin);
     await host.plugin(deterministicThreadSummaryProjectorPlugin);
     await host.plugin(contextProjectionCoordinatorPlugin);
-    await host.plugin(dailyDigestProjectionPlugin);
     await host.plugin(personalContextEnginePlugin, { org_id: options.orgId });
     await host.plugin(modelProviderPlugin, options.model ?? { driver: "none" });
     return host;

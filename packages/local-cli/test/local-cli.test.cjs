@@ -454,46 +454,6 @@ describe("regenic-local", () => {
       /--before-created-at and --before-snapshot-id must be provided together/,
     );
 
-    const digest = await run([
-      "context-daily-digest-project",
-      ...common,
-      "--utc-date", "2026-08-30",
-    ]);
-    assert.ok(digest.artifact_id);
-    assert.deepEqual(await run([
-      "context-daily-digest-get",
-      ...common,
-      "--utc-date", "2026-08-30",
-    ]), []);
-    const digestStore = new SqliteAuthorityStore(database);
-    await digestStore.decideArtifact({
-      org_id: "local-owner",
-      artifact_id: digest.artifact_id,
-      status: "accepted",
-      decided_at: "2026-08-30T02:00:00.000Z",
-    });
-    digestStore.close();
-    const acceptedDigests = await run([
-      "context-daily-digest-get",
-      ...common,
-      "--utc-date", "2026-08-30",
-    ]);
-    assert.equal(acceptedDigests[0].id, digest.artifact_id);
-    const proposalArgs = [
-      "context-proposal-create", ...common,
-      "--digest", digest.artifact_id,
-      "--direction", "product",
-      "--event", ingested.records[0].event_id,
-      "--uncertainty", "Should the release proceed?",
-    ];
-    const proposal = await run(proposalArgs);
-    assert.equal(proposal.status, "draft");
-    assert.equal(proposal.kind, "hypothesis");
-    assert.equal((await run(proposalArgs)).id, proposal.id);
-    assert.equal((await run(["context-proposals", ...common]))[0].id, proposal.id);
-    assert.equal((await run(["context-proposal-get", ...common, "--proposal", proposal.id])).id, proposal.id);
-    assert.equal((await run(["context-proposal-submit", ...common, "--proposal", proposal.id])).status, "submitted");
-    assert.equal((await run(["context-proposal-withdraw", ...common, "--proposal", proposal.id])).status, "withdrawn");
     const decisionProposalArgs = [
       "context-proposal-new-decision", ...common,
       "--request", "decision-request-1",
@@ -578,9 +538,12 @@ describe("regenic-local", () => {
     const changedHandoffArgs = [...handoffArgs];
     changedHandoffArgs[changedHandoffArgs.indexOf("--payload") + 1] = JSON.stringify({ summary: "Changed after creation." });
     await assert.rejects(run(changedHandoffArgs), /Cannot replace immutable Handoff/);
+    const otherProposalArgs = [...decisionProposalArgs];
+    otherProposalArgs[otherProposalArgs.indexOf("--request") + 1] = "decision-request-other";
+    const otherProposal = await run(otherProposalArgs);
     const mismatchedHandoffArgs = [...handoffArgs];
     mismatchedHandoffArgs[mismatchedHandoffArgs.indexOf("--request") + 1] = "handoff-request-mismatch";
-    mismatchedHandoffArgs[mismatchedHandoffArgs.indexOf("--proposal") + 1] = proposal.id;
+    mismatchedHandoffArgs[mismatchedHandoffArgs.indexOf("--proposal") + 1] = otherProposal.id;
     await assert.rejects(run(mismatchedHandoffArgs), /do not refer to the same outcome/);
     assert.equal((await run(["context-handoff-get", ...common, "--handoff", handoff.id])).status, "open");
     assert.equal((await run(["context-handoffs", ...common, "--status", "open", "--direction", "agent_to_human"]))[0].id, handoff.id);
@@ -962,32 +925,6 @@ describe("regenic-local", () => {
     ]);
     assert.equal((await run(["context-run-cancel", ...common, "--run", cancelledRun.id])).status, "cancelled");
     assert.equal((await run(["context-run-cancel", ...common, "--run", cancelledRun.id])).status, "cancelled");
-    const jobStore = new SqliteAuthorityStore(database);
-    await jobStore.enqueueDailyDigestJob({
-      org_id: "local-owner",
-      utc_date: "2026-08-31",
-      generation: "daily-digest-d0-v3",
-      created_at: "2026-08-31T00:00:00.000Z",
-    });
-    await jobStore.putDailyDigestCoverageAlert({
-      id: "coverage-alert-cli", org_id: "local-owner", local_date: "2026-08-30",
-      generation: "daily-digest-d0-v3", event_id: ingested.records[0].event_id,
-      reason_code: "omitted_high_signal", status: "open", created_at: "2026-08-12T00:00:00.000Z",
-    });
-    jobStore.close();
-    const dailyJobs = await run(["context-daily-digest-jobs", ...common]);
-    assert.equal(dailyJobs[0].utc_date, "2026-08-31");
-    assert.equal("lease_owner" in dailyJobs[0], false);
-    assert.equal("last_error" in dailyJobs[0], false);
-    const alerts = await run(["context-daily-digest-alerts", ...common]);
-    assert.equal(alerts[0].id, "coverage-alert-cli");
-    assert.equal("event_id" in alerts[0], false);
-    assert.equal("org_id" in alerts[0], false);
-    const resolvedAlert = await run([
-      "context-daily-digest-alert-resolve", ...common, "--alert", "coverage-alert-cli",
-    ]);
-    assert.equal(resolvedAlert.status, "resolved");
-    assert.deepEqual(await run(["context-daily-digest-alerts", ...common]), []);
 
     const snapshot = await run([
       "context-snapshot",
@@ -1792,57 +1729,4 @@ it("acknowledges a completed inbox work item with its read cursor", async () => 
   }
 });
 
-it("stores a personal follow-up policy through the local CLI", async () => {
-  const root = await createRoot();
-  const database = join(root, "authority.db");
-  const policyPath = join(root, "follow-up-policy.json");
-  const authority = new SqliteAuthorityStore(database);
-  authority.close();
-  const defaults = await run(["follow-up-policy-get", "--database", database, "--org", "local-owner"]);
-  const policy = { ...defaults, wait_minutes: 120, include_initial_outbound: true };
-  await writeFile(policyPath, JSON.stringify(policy));
-  assert.deepEqual(await run([
-    "follow-up-policy-set", "--database", database, "--org", "local-owner", "--policy", policyPath,
-  ]), policy);
-  assert.deepEqual(await run(["follow-up-policy-get", "--database", database, "--org", "local-owner"]), policy);
-});
 
-it("reviews overdue personal follow-ups through the local CLI", async () => {
-  const root = await createRoot();
-  const database = join(root, "authority.db");
-  const blobRoot = join(root, "blobs");
-  const authority = new SqliteAuthorityStore(database);
-  const service = new IngestionService(new FsBlobStore(blobRoot), authority);
-  const result = await service.ingest({
-    schema_version: INGEST_SCHEMA_VERSION,
-    connector_id: "native-local",
-    org_id: "local-owner",
-    delivery_id: "follow-up-1",
-    received_at: "2026-08-11T12:00:00.000Z",
-    records: [
-      channelRecord({ channel: "slack", kind: "user", direction: "inbound", external_id: "thread-1:in-1", occurred_at: "2026-08-11T09:00:00.000Z", actor_id: "peer", scope_id: "personal", text: "Can you confirm the release?" }),
-      channelRecord({ channel: "slack", kind: "user", direction: "outbound", external_id: "thread-1:out-1", occurred_at: "2026-08-11T10:00:00.000Z", actor_id: "local-owner", scope_id: "personal", text: "I will confirm it today." }),
-    ],
-  });
-  authority.close();
-  const followUps = await run([
-    "follow-ups", "--database", database, "--blob-root", blobRoot, "--org", "local-owner",
-  ]);
-  assert.equal(followUps.length, 1);
-  assert.equal(followUps[0].event.id, result.records[1].event_id);
-  assert.deepEqual(followUps[0].candidate.reason_codes, ["awaiting_reply"]);
-  const threadId = followUps[0].candidate.thread_id;
-  assert.deepEqual(await run([
-    "follow-up-snooze", "--database", database, "--org", "local-owner",
-    "--thread", threadId, "--until", "2099-01-01T00:00:00.000Z",
-  ]), { thread_id: threadId, snoozed_until: "2099-01-01T00:00:00.000Z" });
-  assert.deepEqual(await run([
-    "follow-ups", "--database", database, "--blob-root", blobRoot, "--org", "local-owner",
-  ]), []);
-  assert.deepEqual(await run([
-    "follow-up-unsnooze", "--database", database, "--org", "local-owner", "--thread", threadId,
-  ]), { thread_id: threadId, snoozed_until: null });
-  assert.equal((await run([
-    "follow-ups", "--database", database, "--blob-root", blobRoot, "--org", "local-owner",
-  ])).length, 1);
-});

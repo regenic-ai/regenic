@@ -36,6 +36,7 @@ export function httpExecutorCatalog(
       : "http.description",
     attach: "absentee",
     kind: "http",
+    agent: true,
     fields: [],
   };
 }

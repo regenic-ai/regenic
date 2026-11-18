@@ -19,9 +19,6 @@ import {
 import { PersonalKernelStoppedError } from "./personal-runtime.service";
 import { PersonalInboxService } from "./personal-inbox.service";
 import { requestLocale } from "./request-locale";
-import { CustomerServiceError } from "@regenic/context-engine";
-import { CustomerServiceTaskConflictError } from "@regenic/domain";
-import { PersonalCustomerService } from "./personal-customer-service";
 import { PersonalSearchAnswerService } from "./personal-search-answer.service";
 import { PersonalConversationLabelsService } from "./personal-conversation-labels.service";
 import { PersonalConnectorError } from "./personal-errors";
@@ -34,8 +31,6 @@ export class PersonalContextController {
     private readonly context: PersonalContextService,
     @Inject(PersonalInboxService)
     private readonly inbox: PersonalInboxService,
-    @Inject(PersonalCustomerService)
-    private readonly customerService: PersonalCustomerService,
     @Inject(PersonalSearchAnswerService)
     private readonly answers: PersonalSearchAnswerService,
     @Inject(PersonalConversationLabelsService)
@@ -128,59 +123,6 @@ export class PersonalContextController {
     });
   }
 
-  @Post("customer-tasks")
-  createCustomerTask(@Body() body: unknown) {
-    return this.guard(() => this.customerService.create(body));
-  }
-
-  @Get("customer-tasks")
-  listCustomerTasks(
-    @Query("statuses") statuses?: string,
-    @Query("limit") limit?: string,
-  ) {
-    return this.guard(() => this.customerService.list(statuses, limit));
-  }
-
-  @Get("customer-tasks/:taskId")
-  getCustomerTask(@Param("taskId") taskId: string) {
-    return this.guard(() => this.customerService.get(taskId));
-  }
-
-  @Post("customer-tasks/:taskId/search")
-  searchCustomerTask(@Param("taskId") taskId: string, @Body() body: unknown) {
-    return this.guard(() => this.customerService.search(taskId, body));
-  }
-
-  @Post("customer-tasks/:taskId/read")
-  readCustomerTask(@Param("taskId") taskId: string, @Body() body: unknown) {
-    return this.guard(() => this.customerService.read(taskId, body));
-  }
-
-  @Post("customer-tasks/:taskId/brief")
-  updateCustomerTaskBrief(@Param("taskId") taskId: string, @Body() body: unknown) {
-    return this.guard(() => this.customerService.updateBrief(taskId, body));
-  }
-
-  @Post("customer-tasks/:taskId/query")
-  queryCustomerTask(@Param("taskId") taskId: string, @Body() body: unknown) {
-    return this.guard(() => this.customerService.query(taskId, body));
-  }
-
-  @Post("customer-tasks/:taskId/draft")
-  draftCustomerTask(@Param("taskId") taskId: string, @Body() body: unknown) {
-    return this.guard(() => this.customerService.draft(taskId, body));
-  }
-
-  @Post("customer-tasks/:taskId/review")
-  reviewCustomerTask(@Param("taskId") taskId: string, @Body() body: unknown) {
-    return this.guard(() => this.customerService.review(taskId, body));
-  }
-
-  @Post("customer-tasks/:taskId/send")
-  sendCustomerTask(@Param("taskId") taskId: string, @Body() body: unknown) {
-    return this.guard(() => this.customerService.send(taskId, body));
-  }
-
   @Get("embedding/status")
   semanticStatus() {
     return this.guard(() => this.context.semanticStatus());
@@ -237,46 +179,6 @@ export class PersonalContextController {
     @Query("limit") limit?: string,
   ) {
     return this.guard(() => this.context.getArtifactRecord(artifactId, offset, limit));
-  }
-
-  @Post("daily-digests/project")
-  projectDailyDigest(@Body() body: unknown) {
-    return this.guard(() => this.context.projectDailyDigest(body));
-  }
-
-  @Get("daily-digests/jobs")
-  listDailyDigestJobs() {
-    return this.guard(() => this.context.listDailyDigestJobs());
-  }
-
-  @Get("daily-digests/policy")
-  getDailyDigestPolicy() {
-    return this.guard(() => this.context.getDailyDigestPolicy());
-  }
-
-  @Post("daily-digests/policy")
-  putDailyDigestPolicy(@Body() body: unknown) {
-    return this.guard(() => this.context.putDailyDigestPolicy(body));
-  }
-
-  @Get("daily-digests/coverage-alerts")
-  listDailyDigestCoverageAlerts() {
-    return this.guard(() => this.context.listDailyDigestCoverageAlerts());
-  }
-
-  @Post("daily-digests/coverage-alerts/:alertId/resolve")
-  resolveDailyDigestCoverageAlert(@Param("alertId") alertId: string) {
-    return this.guard(() => this.context.resolveDailyDigestCoverageAlert(alertId));
-  }
-
-  @Post("daily-digests/:artifactId/proposals")
-  createProposalFromDailyDigest(@Param("artifactId") artifactId: string, @Body() body: unknown) {
-    return this.guard(() => this.context.createProposalFromDailyDigest(artifactId, body));
-  }
-
-  @Get("daily-digests/:utcDate")
-  listDailyDigests(@Param("utcDate") utcDate: string) {
-    return this.guard(() => this.context.listDailyDigests(utcDate));
   }
 
   @Get("proposals")
@@ -577,25 +479,6 @@ export class PersonalContextController {
         throw new HttpException(
           { error: { code: error.code, message: error.message } },
           error.httpStatus,
-        );
-      }
-      if (error instanceof CustomerServiceError) {
-        const status = error.code === "not_found"
-          ? HttpStatus.NOT_FOUND
-          : error.code === "invalid_request"
-            ? HttpStatus.BAD_REQUEST
-            : error.code === "business_unavailable"
-              ? HttpStatus.SERVICE_UNAVAILABLE
-              : HttpStatus.CONFLICT;
-        throw new HttpException(
-          { error: { code: error.code, message: error.message } },
-          status,
-        );
-      }
-      if (error instanceof CustomerServiceTaskConflictError) {
-        throw new HttpException(
-          { error: { code: "task_conflict", message: error.message } },
-          HttpStatus.CONFLICT,
         );
       }
       throw error;

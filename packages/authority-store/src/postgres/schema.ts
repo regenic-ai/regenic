@@ -1,4 +1,4 @@
-export const PG_SCHEMA_VERSION = 80;
+export const PG_SCHEMA_VERSION = 86;
 
 /** Applied when an existing postgres authority DB is already at a prior baseline. */
 export const PG_MIGRATIONS = [
@@ -953,6 +953,70 @@ ON CONFLICT DO NOTHING;
       );
     `,
   },
+  {
+    version: 81,
+    sql: `
+      CREATE TABLE IF NOT EXISTS aggregate_fact_cache (
+        org_id TEXT NOT NULL,
+        spec_hash TEXT NOT NULL,
+        extractor_version TEXT NOT NULL,
+        event_id TEXT NOT NULL,
+        content_hash TEXT NOT NULL,
+        facts_json JSONB NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL,
+        PRIMARY KEY (org_id, spec_hash, extractor_version, event_id)
+      );
+      CREATE INDEX IF NOT EXISTS aggregate_fact_cache_event_idx
+        ON aggregate_fact_cache (org_id, event_id);
+    `,
+  },
+  {
+    version: 82,
+    sql: `
+      DROP TABLE IF EXISTS customer_service_tasks;
+      DROP TABLE IF EXISTS daily_digest_coverage_alerts;
+      DROP TABLE IF EXISTS daily_digest_jobs;
+      DROP TABLE IF EXISTS daily_digest_schedule_cursors;
+      DELETE FROM ui_prefs WHERE key IN (
+        'daily_digest_policy_v1',
+        'personal_follow_up_policy_v1',
+        'personal_follow_up_snoozes_v1'
+      );
+    `,
+  },
+  {
+    // Some local databases already advanced through 83–85. Those steps are not
+    // repeated: 83 and 84 deleted live preferences, and 85 dropped search_answers.
+    version: 83,
+    sql: "SELECT 1",
+  },
+  {
+    version: 84,
+    sql: "SELECT 1",
+  },
+  {
+    version: 85,
+    sql: "SELECT 1",
+  },
+  {
+    version: 86,
+    sql: `
+      CREATE TABLE IF NOT EXISTS search_answers (
+        id TEXT PRIMARY KEY,
+        org_id TEXT NOT NULL,
+        work_item_id TEXT NOT NULL REFERENCES work_items(id),
+        query TEXT NOT NULL,
+        event_ids_json JSONB NOT NULL,
+        scope_json JSONB,
+        outcome TEXT CHECK (outcome IN ('timed_out', 'cancelled')),
+        created_at TIMESTAMPTZ NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS search_answers_work_item_idx
+        ON search_answers (org_id, work_item_id);
+    `,
+  },
 ] as const;
 
 export const PG_BASELINE_SQL = `
@@ -1262,6 +1326,21 @@ CREATE TABLE search_answers (
 CREATE UNIQUE INDEX search_answers_work_item_idx
   ON search_answers (org_id, work_item_id);
 
+CREATE TABLE aggregate_fact_cache (
+  org_id TEXT NOT NULL,
+  spec_hash TEXT NOT NULL,
+  extractor_version TEXT NOT NULL,
+  event_id TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  facts_json JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL,
+  PRIMARY KEY (org_id, spec_hash, extractor_version, event_id)
+);
+
+CREATE INDEX aggregate_fact_cache_event_idx
+  ON aggregate_fact_cache (org_id, event_id);
+
 CREATE TABLE ui_prefs (
   org_id TEXT NOT NULL,
   key TEXT NOT NULL,
@@ -1517,49 +1596,6 @@ CREATE INDEX context_projection_outbox_running_expired_idx
   WHERE status = 'running';
 CREATE INDEX context_projection_outbox_org_idx
   ON context_projection_outbox (org_id, created_at, id);
-
-CREATE TABLE daily_digest_jobs (
-  id TEXT PRIMARY KEY,
-  org_id TEXT NOT NULL,
-  utc_date TEXT NOT NULL,
-  generation TEXT NOT NULL,
-  status TEXT NOT NULL CHECK (status IN ('pending', 'running', 'succeeded', 'failed')),
-  attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
-  lease_owner TEXT,
-  lease_expires_at TIMESTAMPTZ,
-  next_retry_at TIMESTAMPTZ,
-  last_error TEXT,
-  created_at TIMESTAMPTZ NOT NULL,
-  updated_at TIMESTAMPTZ NOT NULL,
-  UNIQUE (org_id, utc_date, generation)
-);
-CREATE INDEX daily_digest_jobs_due_idx
-  ON daily_digest_jobs (status, next_retry_at, lease_expires_at, created_at);
-CREATE INDEX daily_digest_jobs_org_idx
-  ON daily_digest_jobs (org_id, created_at, id);
-
-CREATE TABLE daily_digest_schedule_cursors (
-  org_id TEXT NOT NULL,
-  generation TEXT NOT NULL,
-  last_scheduled_utc_date TEXT NOT NULL,
-  updated_at TIMESTAMPTZ NOT NULL,
-  PRIMARY KEY (org_id, generation)
-);
-
-CREATE TABLE daily_digest_coverage_alerts (
-  id TEXT PRIMARY KEY,
-  org_id TEXT NOT NULL,
-  local_date TEXT NOT NULL,
-  generation TEXT NOT NULL,
-  event_id TEXT NOT NULL REFERENCES events(id),
-  reason_code TEXT NOT NULL CHECK (reason_code = 'omitted_high_signal'),
-  status TEXT NOT NULL CHECK (status IN ('open', 'resolved')),
-  created_at TIMESTAMPTZ NOT NULL,
-  resolved_at TIMESTAMPTZ,
-  UNIQUE (org_id, local_date, generation, event_id, reason_code)
-);
-CREATE INDEX daily_digest_coverage_alerts_query_idx
-  ON daily_digest_coverage_alerts (org_id, status, local_date, id);
 
 CREATE TABLE proposals (
   id TEXT PRIMARY KEY,

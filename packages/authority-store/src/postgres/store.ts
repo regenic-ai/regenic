@@ -18,8 +18,6 @@ import type {
   ContextArtifactStore,
   ContextAuthorityReader,
   ContextProjectionOutboxStore,
-  DailyDigestJobStore,
-  DailyDigestPolicyStore,
   SourceIdentity,
   EventRecord,
   SourceIdentityAliasBind,
@@ -52,8 +50,6 @@ import type {
   CompleteContextProjectionJob,
   RenewContextProjectionJob,
   FailContextProjectionJob,
-  DailyDigestJob,
-  DailyDigestCoverageAlert,
   ProposalRecord,
   ProposalStatus,
   DecisionRecord,
@@ -71,8 +67,6 @@ import type {
   AgentRunOutput,
   StandardUsageSourceKind,
   StandardUsageRecord,
-  CustomerServiceTask,
-  CustomerServiceTaskStatus,
   ArrangementDecision,
   InboxQuery,
   InboxItem,
@@ -120,7 +114,6 @@ import type {
   CommitWorkObservationResult,
   SearchAnswerRecord,
   WorkDelivery,
-  DailyDigestPolicy,
   ExecutorInstallation,
   BlobRecord,
   EventAttachmentReferenceBackfill,
@@ -191,11 +184,6 @@ import {
   DispositionRepairConflictError,
   conversationId,
 } from "@regenic/domain";
-import {
-  getCustomerServiceTask,
-  listCustomerServiceTasks,
-  putCustomerServiceTask,
-} from "./customer-service-tasks";
 import {
   PgSql,
   asNumber,
@@ -299,22 +287,7 @@ import {
   listContextProjectionJobs,
   renewContextProjectionJob,
 } from "./context-projection";
-import {
-  claimDailyDigestJobs,
-  completeDailyDigestJob,
-  enqueueDailyDigestCatchUp,
-  enqueueDailyDigestJob,
-  failDailyDigestJob,
-  getDailyDigestPolicy,
-  getUiPref,
-  listDailyDigestCoverageAlerts,
-  listDailyDigestJobs,
-  putDailyDigestCoverageAlert,
-  putDailyDigestPolicy,
-  putUiPref,
-  renewDailyDigestJob,
-  resolveDailyDigestCoverageAlert,
-} from "./daily-digest";
+import { getUiPref, putUiPref } from "./ui-prefs";
 import {
   HandoffRow,
   ProposalRow,
@@ -406,12 +379,14 @@ import {
   listCancellationJobs,
   retryCancellationJob,
   deleteSearchAnswer,
+  getAggregateFactCache,
   deleteExecutorInstallation,
   deleteRecipe,
   getActiveWorkRun,
   getExecutorInstallation,
   getRecipe,
   getSearchAnswer,
+  putAggregateFactCache,
   getWorkDelivery,
   getWorkDeliveryByItem,
   getWorkItem,
@@ -449,9 +424,7 @@ export class PostgresAuthorityStore
     ExecutorStore,
     ContextArtifactStore,
     ContextAuthorityReader,
-    ContextProjectionOutboxStore,
-    DailyDigestJobStore,
-    DailyDigestPolicyStore
+    ContextProjectionOutboxStore
 {
   readonly atomicSyncPage = true;
   private readonly sql: PgSql;
@@ -676,57 +649,15 @@ export class PostgresAuthorityStore
     return listContextProjectionJobs(this.sql, orgId);
   }
 
-  async enqueueDailyDigestCatchUp(input: {
-    org_id: string;
-    through_utc_date: string;
-    generation: string;
-    created_at: string;
-    max_days: number;
-  }): Promise<DailyDigestJob[]> {
-    return enqueueDailyDigestCatchUp(this.sql, input);
-  }
 
-  async enqueueDailyDigestJob(input: {
-    org_id: string; utc_date: string; generation: string; created_at: string;
-  }): Promise<DailyDigestJob> {
-    return enqueueDailyDigestJob(this.sql, input);
-  }
 
-  async claimDailyDigestJobs(input: {
-    owner: string; now: string; lease_ms: number; limit: number;
-  }): Promise<DailyDigestJob[]> {
-    return claimDailyDigestJobs(this.sql, input);
-  }
 
-  async completeDailyDigestJob(input: { id: string; owner: string; completed_at: string }): Promise<boolean> {
-    return completeDailyDigestJob(this.sql, input);
-  }
 
-  async renewDailyDigestJob(input: { id: string; owner: string; now: string; lease_ms: number }): Promise<boolean> {
-    return renewDailyDigestJob(this.sql, input);
-  }
 
-  async failDailyDigestJob(input: {
-    id: string; owner: string; failed_at: string; next_retry_at: string; error_code: string;
-  }): Promise<boolean> {
-    return failDailyDigestJob(this.sql, input);
-  }
 
-  async listDailyDigestJobs(orgId: string): Promise<DailyDigestJob[]> {
-    return listDailyDigestJobs(this.sql, orgId);
-  }
 
-  async putDailyDigestCoverageAlert(alert: DailyDigestCoverageAlert): Promise<DailyDigestCoverageAlert> {
-    return putDailyDigestCoverageAlert(this.sql, alert);
-  }
 
-  async listDailyDigestCoverageAlerts(input: { org_id: string; status?: "open" | "resolved"; limit?: number }): Promise<DailyDigestCoverageAlert[]> {
-    return listDailyDigestCoverageAlerts(this.sql, input);
-  }
 
-  async resolveDailyDigestCoverageAlert(input: { org_id: string; alert_id: string; resolved_at: string }): Promise<DailyDigestCoverageAlert | null> {
-    return resolveDailyDigestCoverageAlert(this.sql, input);
-  }
 
   async putProposal(input: ProposalRecord): Promise<ProposalRecord> {
     return putProposal(this.sql, input);
@@ -768,17 +699,8 @@ export class PostgresAuthorityStore
     return listReviews(this.sql, input);
   }
 
-  async putCustomerServiceTask(input: CustomerServiceTask, expectedRevision?: number): Promise<CustomerServiceTask> {
-    return putCustomerServiceTask(this.sql, input, expectedRevision);
-  }
 
-  async getCustomerServiceTask(orgId: string, taskId: string): Promise<CustomerServiceTask | null> {
-    return getCustomerServiceTask(this.sql, orgId, taskId);
-  }
 
-  async listCustomerServiceTasks(input: { org_id: string; statuses?: CustomerServiceTaskStatus[]; limit?: number }): Promise<CustomerServiceTask[]> {
-    return listCustomerServiceTasks(this.sql, input);
-  }
 
   async putHandoff(input: HandoffRecord): Promise<HandoffRecord> {
     return putHandoff(this.sql, input);
@@ -1070,8 +992,8 @@ export class PostgresAuthorityStore
       await this.execute(`DELETE FROM work_deliveries WHERE org_id = $1`, [orgId], client);
       await this.execute(`DELETE FROM work_runs WHERE org_id = $1`, [orgId], client);
       await this.execute(`DELETE FROM search_answers WHERE org_id = $1`, [orgId], client);
+      await this.execute(`DELETE FROM aggregate_fact_cache WHERE org_id = $1`, [orgId], client);
       await this.execute(`DELETE FROM work_items WHERE org_id = $1`, [orgId], client);
-      await this.execute(`DELETE FROM customer_service_tasks WHERE org_id = $1`, [orgId], client);
       await this.execute(`DELETE FROM context_snapshot_index WHERE org_id = $1`, [orgId], client);
       await this.execute(`DELETE FROM context_bundles WHERE org_id = $1`, [orgId], client);
       await this.execute(`DELETE FROM context_snapshots WHERE org_id = $1`, [orgId], client);
@@ -1121,11 +1043,6 @@ export class PostgresAuthorityStore
       );
       await this.execute(`DELETE FROM source_heads WHERE org_id = $1`, [orgId], client);
       await this.execute(`DELETE FROM thread_heads WHERE org_id = $1`, [orgId], client);
-      await this.execute(
-        `DELETE FROM daily_digest_coverage_alerts WHERE org_id = $1`,
-        [orgId],
-        client,
-      );
       await this.execute(`DELETE FROM events WHERE org_id = $1`, [orgId], client);
       await this.execute(
         `
@@ -1454,6 +1371,25 @@ export class PostgresAuthorityStore
     return deleteSearchAnswer(this.sql, orgId, id);
   }
 
+  async getAggregateFactCache(
+    orgId: string,
+    specHash: string,
+    extractorVersion: string,
+    eventIds: readonly string[],
+  ) {
+    return getAggregateFactCache(
+      this.sql,
+      orgId,
+      specHash,
+      extractorVersion,
+      eventIds,
+    );
+  }
+
+  async putAggregateFactCache(records: Parameters<typeof putAggregateFactCache>[1]) {
+    return putAggregateFactCache(this.sql, records);
+  }
+
   async listWorkDeliveries(orgId: string): Promise<WorkDelivery[]> {
     return listWorkDeliveries(this.sql, orgId);
   }
@@ -1481,13 +1417,7 @@ export class PostgresAuthorityStore
     return getUiPref(this.sql, orgId, key);
   }
 
-  async getDailyDigestPolicy(orgId: string): Promise<DailyDigestPolicy | null> {
-    return getDailyDigestPolicy(this.sql, orgId);
-  }
 
-  async putDailyDigestPolicy(input: { org_id: string; policy: DailyDigestPolicy; updated_at: string }): Promise<DailyDigestPolicy> {
-    return putDailyDigestPolicy(this.sql, input);
-  }
 
   async putUiPref(
     orgId: string,

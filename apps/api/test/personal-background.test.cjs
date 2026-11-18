@@ -95,11 +95,10 @@ describe("startPersonalBackgroundWork", { concurrency: 1 }, () => {
     const app = fakeApp();
     startPersonalBackgroundWork(app);
     assert.ok(app.started.includes("PersonalContextProjectionService"));
-    assert.ok(app.started.includes("PersonalDailyDigestService"));
     assert.ok(app.started.includes("PersonalConnectorService"));
   });
 
-  it("moves projection and digest off the postgres API", async () => {
+  it("moves projection off the postgres API", async () => {
     process.env.REGENIC_AUTHORITY_DRIVER = "postgres";
     process.env.DATABASE_URL = "postgres://regenic:regenic@localhost:5432/regenic";
     process.env.REGENIC_BLOB_ROOT = "./blobs";
@@ -112,7 +111,6 @@ describe("startPersonalBackgroundWork", { concurrency: 1 }, () => {
     assert.deepEqual(app.started, ["KernelRuntimeService", "PersonalRuntimeService"]);
     await leader.tick();
     assert.ok(!app.started.includes("PersonalContextProjectionService"));
-    assert.ok(!app.started.includes("PersonalDailyDigestService"));
     assert.ok(app.started.includes("PersonalConnectorService"));
     await leader.stop();
   });

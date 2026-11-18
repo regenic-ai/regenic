@@ -90,7 +90,6 @@ export function InboxWorkspace({
   onAcknowledgeWork,
   onBindRecipe,
   onForwardCreated,
-  onOverlaysChanged,
 }: {
   threads: InboxThread[];
   locateEventId?: string;
@@ -135,7 +134,6 @@ export function InboxWorkspace({
   onAcknowledgeWork: (thread: InboxThread) => Promise<void>;
   onBindRecipe: (thread: InboxThread) => void;
   onForwardCreated: (result: ForwardView) => Promise<void>;
-  onOverlaysChanged?: () => Promise<void>;
 }) {
   const { t } = useLocale();
   const [pinFilter, setPinFilter] = useState<PinFilter>("all");
@@ -502,7 +500,6 @@ export function InboxWorkspace({
             forwardTargets={threads}
             createTargets={createTargets}
             onForwardCreated={onForwardCreated}
-            onOverlaysChanged={onOverlaysChanged}
           />
         ) : (
           <div className="thread-empty">{t("inbox.selectConversation")}</div>
@@ -614,11 +611,7 @@ function WorkRow({
       className={`item${selected ? " selected" : ""}${thread.pinned ? " pinned" : ""}${
         thread.unread ? " unread" : ""
       }${
-        thread.proposal
-          ? " work-waiting_human"
-          : thread.work?.status
-            ? ` work-${thread.work.status}`
-            : ""
+        thread.work?.status ? ` work-${thread.work.status}` : ""
       }${
         folded ? " is-hidden" : ""
       }`}

@@ -247,11 +247,6 @@ pnpm local inbox-dispatch-reapply --database ./regenic.db --blob-root ./blobs \
 # Review events held for explicit attention without widening the work inbox.
 pnpm local inbox-pending --database ./regenic.db --org local-owner
 
-# Review overdue replies, or snooze one outbound message until a specific time.
-pnpm local follow-ups --database ./regenic.db --blob-root ./blobs --org local-owner
-pnpm local follow-up-snooze --database ./regenic.db --org local-owner \
-	--thread <thread-id> --outbound <external-id> --until 2026-10-01T09:00:00.000Z
-
 # Human triage overrides the current-work layer without changing the Event.
 pnpm local inbox-triage --database ./regenic.db --org local-owner \
 	--event <event-id> --disposition pending
@@ -308,29 +303,6 @@ pnpm local context-snapshot --database ./regenic.db --blob-root ./blobs \
 
 pnpm local context-replay --database ./regenic.db --blob-root ./blobs \
 	--org local-owner --snapshot <snapshot-id>
-```
-
-Create a deterministic UTC-day digest proposal, then accept it through the
-Artifact lifecycle before reading it. The date is explicit and uses `YYYY-MM-DD`.
-
-```bash
-pnpm local context-daily-digest-project --database ./regenic.db --blob-root ./blobs \
-	--org local-owner --utc-date 2026-09-06
-
-pnpm local context-daily-digest-get --database ./regenic.db --blob-root ./blobs \
-	--org local-owner --utc-date 2026-09-06
-
-pnpm local context-daily-digest-jobs --database ./regenic.db --blob-root ./blobs \
-	--org local-owner
-
-pnpm local context-daily-digest-alerts --database ./regenic.db --blob-root ./blobs \
-	--org local-owner
-
-pnpm local context-daily-digest-alert-resolve --database ./regenic.db --blob-root ./blobs \
-	--org local-owner --alert <alert-id>
-
-pnpm local context-proposal-create --database ./regenic.db --blob-root ./blobs \
-	--org local-owner --digest <digest-id> --direction product --event <event-id>
 
 pnpm local context-proposals --database ./regenic.db --blob-root ./blobs \
 	--org local-owner

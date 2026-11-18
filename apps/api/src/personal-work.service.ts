@@ -8,7 +8,6 @@ import {
   INBOX_SORT_PREF_KEY,
   PERSONAL_DISPATCH_POLICY_PREF_KEY,
   DEFAULT_PERSONAL_DISPATCH_POLICY,
-  DEFAULT_PERSONAL_FOLLOW_UP_POLICY,
   DEFAULT_LOCAL_EXECUTOR_ID,
   diagnoseWorkItemRunIdentity,
   hiddenExecutorThreadIds,
@@ -22,7 +21,6 @@ import {
   normalizeUnitKind,
   parseConversationThread,
   validatePersonalDispatchPolicy,
-  validatePersonalFollowUpPolicy,
   projectThreadFacet,
   recipeMatches,
   recordClassFromType,
@@ -39,7 +37,6 @@ import {
   type InboxListView,
   type InboxSortMode,
   type PersonalDispatchPolicy,
-  type PersonalFollowUpPolicy,
   type PromptAnswer,
   type Recipe,
   type SearchAnswerRecord,
@@ -94,7 +91,6 @@ const CANCELLATION_CALL_TIMEOUT_MS = 20_000;
 const CANCELLATION_RETRY_MS = [5_000, 30_000, 2 * 60_000, 10 * 60_000] as const;
 const CANCELLATION_BATCH_SIZE = 5;
 export { PERSONAL_DISPATCH_POLICY_PREF_KEY } from "@regenic/domain";
-export const PERSONAL_FOLLOW_UP_POLICY_PREF_KEY = "personal_follow_up_policy_v1";
 
 export interface UiPrefsView {
   inbox_sort: InboxSortMode;
@@ -314,42 +310,7 @@ export class PersonalWorkService implements OnModuleDestroy {
     return policy;
   }
 
-  async getPersonalFollowUpPolicy(): Promise<PersonalFollowUpPolicy> {
-    const host = this.runtime.requireHost();
-    const value = await host.get("authority").getUiPref(
-      this.runtime.orgId(),
-      PERSONAL_FOLLOW_UP_POLICY_PREF_KEY,
-    );
-    if (!value) {
-      return DEFAULT_PERSONAL_FOLLOW_UP_POLICY;
-    }
-    try {
-      return validatePersonalFollowUpPolicy(JSON.parse(value) as PersonalFollowUpPolicy);
-    } catch {
-      throw new PersonalConnectorError("invalid_config", "Stored personal follow-up policy is invalid", 409);
-    }
-  }
 
-  async putPersonalFollowUpPolicy(input: unknown): Promise<PersonalFollowUpPolicy> {
-    let policy: PersonalFollowUpPolicy;
-    try {
-      policy = validatePersonalFollowUpPolicy(input as PersonalFollowUpPolicy);
-    } catch (error) {
-      throw new PersonalConnectorError(
-        "invalid_config",
-        error instanceof Error ? error.message : "Invalid personal follow-up policy",
-        400,
-      );
-    }
-    const host = this.runtime.requireHost();
-    await host.get("authority").putUiPref(
-      this.runtime.orgId(),
-      PERSONAL_FOLLOW_UP_POLICY_PREF_KEY,
-      JSON.stringify(policy),
-      new Date().toISOString(),
-    );
-    return policy;
-  }
 
   private async tickDispatch(): Promise<void> {
     if (this.maintenanceHold || this.dispatching || !this.runtime.isReady()) {

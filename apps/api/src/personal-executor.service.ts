@@ -365,6 +365,10 @@ export class PersonalExecutorService {
       if (!this.runtime.isReady()) {
         return;
       }
+      await this.ensureAgentExecutors(orgId);
+      if (!this.runtime.isReady()) {
+        return;
+      }
       const rows = await authority.listExecutorInstallations(orgId);
       const registry = host.get("executors");
       const mounted = [];
@@ -403,6 +407,51 @@ export class PersonalExecutorService {
     await authority.putUiPref(orgId, EXECUTOR_DEFAULTS_SEEDED_PREF, "1", now);
   }
 
+  /** Any Agent can be an executor. A plain connector cannot. */
+  private async ensureAgentExecutors(orgId: string): Promise<void> {
+    const authority = this.runtime.requireHost().get("authority");
+    const [installations, rows] = await Promise.all([
+      authority.listInstallations(orgId),
+      authority.listExecutorInstallations(orgId),
+    ]);
+    for (const installation of installations) {
+      if (installation.status !== "enabled" || installation.org_id !== orgId) {
+        continue;
+      }
+      const driver = this.drivers.get(installation.connector_type);
+      if (!driver || !connectorIsAgent(driver.capabilities(installation))) {
+        continue;
+      }
+      const pinned = rows.some(
+        (row) =>
+          row.kind === "local_connector" &&
+          executorConfigText(row.config, "installation_id") === installation.id,
+      );
+      if (pinned) {
+        continue;
+      }
+      const catalog = driver.installCatalog?.({ env: process.env });
+      const name = catalog
+        ? resolveCopyText(driver.locales?.() ?? [], DEFAULT_COPY_LOCALE, catalog.title).trim()
+        : "";
+      const now = new Date().toISOString();
+      const created: ExecutorInstallation = {
+        id: randomUUID(),
+        org_id: orgId,
+        kind: "local_connector",
+        name: name || "Agent",
+        status: "enabled",
+        config: { installation_id: installation.id },
+        created_at: now,
+        updated_at: now,
+      };
+      await authority.putExecutorInstallation(created);
+      if (!rows.some((row) => row.id === created.id)) {
+        rows.push(created);
+      }
+    }
+  }
+
   private async createRuntime(row: ExecutorInstallation) {
     if (row.kind === "http") {
       const timeout = row.config.timeout_ms;
@@ -423,15 +472,26 @@ export class PersonalExecutorService {
     if (pin && !binding) return undefined;
     const driver = binding?.driver;
     const source = driver?.source;
+    const boundAgent = connector && driver
+      ? connectorIsAgent(driver.capabilities(connector))
+      : false;
     const plugin =
       binding?.plugin ??
+      (boundAgent
+        ? createSessionTaskExecutor({
+            source,
+            executor_type: row.id,
+            label: row.name,
+          })
+        : undefined) ??
       this.localPlugins.default() ??
       createSessionTaskExecutor({ source });
     const executor = createLocalConnectorExecutor({
       executor_type: row.id,
       label: row.name,
-      source: plugin.catalog().source ?? source,
+      source: boundAgent ? source : (plugin.catalog().source ?? source),
       installation_id: pin || undefined,
+      agent: boundAgent || plugin.catalog().agent === true,
       plugin,
     });
     return connector && driver
@@ -590,6 +650,13 @@ export class PersonalExecutorService {
 function isClosedStore(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return /database connection is not open/i.test(message);
+}
+
+function connectorIsAgent(capabilities: {
+  create_with_task?: boolean;
+  prompts?: boolean;
+}): boolean {
+  return capabilities.create_with_task === true || capabilities.prompts === true;
 }
 
 function hostOf(url: string): string {

@@ -1,6 +1,6 @@
 import type { DriverCatalogField, DriverCatalogFieldWhen, ConnectorCatalogFieldOption } from "@regenic/connector-contract";
 
-export type NavId = "inbox" | "search" | "follow-ups" | "recipes" | "engine" | "settings";
+export type NavId = "inbox" | "search" | "recipes" | "engine" | "settings";
 
 export interface PersonalSyncSettings {
   quota_tokens: number;
@@ -19,65 +19,6 @@ export interface PersonalSyncSettingsView {
   defaults: PersonalSyncSettings;
   ranges: Record<keyof PersonalSyncSettings, [number, number]>;
   customized: boolean;
-}
-
-export interface CustomerServiceTaskView {
-  id: string;
-  status: string;
-  revision: number;
-  updated_at: string;
-  brief: {
-    version: number;
-    question: string;
-    source: {
-      event_id: string;
-      thread_id: string;
-    };
-    customer: { status: string; value?: string };
-    project: { status: string; value?: string };
-    batch: { status: string; value?: string };
-    intent: { status: string; value?: string };
-    expected_member_count?: number;
-    members_closed: boolean;
-    members: Array<{
-      member_key: string;
-      display_name: string;
-      business_id?: string;
-      status: string;
-    }>;
-    requested_fields: string[];
-    unresolved: string[];
-  };
-  business_evidence: Array<{
-    query_id: string;
-    queried_at: string;
-    complete: boolean;
-    results: Array<{
-      member_key: string;
-      status: string;
-      fields: Array<{
-        field: string;
-        value: string | number | boolean | null;
-        visibility: string;
-        updated_at: string;
-      }>;
-    }>;
-  }>;
-  draft?: {
-    version: number;
-    text: string;
-    covered_member_keys: string[];
-    unresolved: string[];
-    review?: {
-      result: string;
-      reviewed_at: string;
-      note?: string;
-    };
-    sent?: {
-      event_id: string;
-      sent_at: string;
-    };
-  };
 }
 
 export interface SemanticIndexStatus {
@@ -355,6 +296,7 @@ export interface ExecutorCatalogEntry {
   attach?: "interactive" | "absentee";
   installation_id?: string;
   kind?: ExecutorKind;
+  agent?: boolean;
   fields: ExecutorCatalogField[];
 }
 
@@ -486,24 +428,6 @@ export interface RecipeConversationOption {
 export interface UiPrefsView {
   inbox_sort: InboxSortMode;
   inbox_list: InboxListView;
-}
-
-export interface PersonalFollowUpPolicy {
-  version: 1;
-  wait_minutes: number;
-  include_initial_outbound: boolean;
-}
-
-export interface PersonalFollowUpView {
-  event: EventRecord;
-  candidate: {
-    thread_id: string;
-    outbound_external_id: string;
-    outbound_at: string;
-    due_at: string;
-    reason_codes: string[];
-  };
-  body_text?: string;
 }
 
 export type MessageDisposition = "current_work" | "outside_current_work" | "pending";
@@ -692,6 +616,8 @@ export interface PersonalSearchAnswerProgress {
   pending_batches: number;
   retrying_batches: number;
   max_parallelism: number;
+  cache_hits?: number;
+  cache_misses?: number;
   conflict_count?: number;
 }
 

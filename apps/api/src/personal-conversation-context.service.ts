@@ -68,6 +68,37 @@ export interface MapBatchDedupeMetadata {
   business_id?: string;
 }
 
+export interface MapBatchInput {
+  event_id: string;
+  content_hash: string;
+  message: MapBatchMessage;
+  dedupe: MapBatchDedupeMetadata;
+}
+
+export interface MapSnapshotManifestEntry {
+  event_id: string;
+  content_hash: string;
+}
+
+export function mapBatchEvidenceText(
+  inputs: readonly MapBatchInput[],
+  query: string,
+  spec?: AggregateSpec,
+  specHash?: string,
+): string {
+  return [
+    ...(!spec ? ["QUESTION", query, ""] : []),
+    ...(spec && specHash ? [
+      "CANONICAL AGGREGATE SPEC",
+      JSON.stringify(spec),
+      `spec_hash=${specHash}`,
+      "",
+    ] : []),
+    "BATCH MESSAGES",
+    ...inputs.map((input, index) => mapBatchMessageLine(input.message, index)),
+  ].join("\n");
+}
+
 /**
  * Authorized current-message reading shared by search cards and executor
  * evidence. It owns lifecycle-head filtering, blob verification and attachment
@@ -395,14 +426,70 @@ export class PersonalConversationContextService {
     spec?: AggregateSpec,
     specHash?: string,
   ): Promise<string> {
-    const bundle = await this.runtime.requireHost().get("context").replay({
-      org_id: this.runtime.orgId(),
-      snapshot_id: snapshotId,
-      principal: { actor_type: "human", actor_id: this.runtime.orgId() },
-      consumer_id: "personal-search-answer-complete",
-      purpose: "answer an exhaustive time-bounded search question",
-      allowed_uses: ["reason"],
-    });
+    const inputs = await this.mapBatchInputs(snapshotId, eventIds);
+    return mapBatchEvidenceText(inputs, query, spec, specHash);
+  }
+
+  async mapSnapshotManifest(
+    snapshotId: string,
+    eventIds: readonly string[],
+  ): Promise<MapSnapshotManifestEntry[]> {
+    const bundle = await this.replayAggregateSnapshot(snapshotId);
+    const wanted = new Set(eventIds);
+    const byId = new Map(bundle.sections.flatMap((section) => section.items)
+      .filter((item) => item.kind === "event" && wanted.has(item.resource_id))
+      .map((item) => {
+        const evidence = item.evidence.find((entry) =>
+          entry.event_id === item.resource_id);
+        return [item.resource_id, evidence?.content_hash];
+      }));
+    if (
+      byId.size !== wanted.size
+      || eventIds.some((eventId) => !byId.get(eventId))
+    ) {
+      throw new PersonalContextError(
+        "context_changed",
+        HttpStatus.CONFLICT,
+        "Aggregate context snapshot is incomplete",
+      );
+    }
+    return eventIds.map((eventId) => ({
+      event_id: eventId,
+      content_hash: byId.get(eventId)!,
+    }));
+  }
+
+  async validateMapManifest(
+    entries: readonly MapSnapshotManifestEntry[],
+  ): Promise<void> {
+    const hashes = entries.map((entry) => entry.content_hash);
+    const host = this.runtime.requireHost();
+    for (let offset = 0; offset < hashes.length; offset += 500) {
+      const chunk = hashes.slice(offset, offset + 500);
+      const [bodies, inventory] = await Promise.all([
+        host.get("blobs").getMany(chunk),
+        host.get("authority").findBlobs(chunk),
+      ]);
+      if (chunk.some((hash) => {
+        const bytes = bodies.get(hash);
+        return !inventory.has(hash)
+          || !bytes
+          || createHash("sha256").update(bytes).digest("hex") !== hash;
+      })) {
+        throw new PersonalContextError(
+          "context_changed",
+          HttpStatus.CONFLICT,
+          "Aggregate evidence changed; search again",
+        );
+      }
+    }
+  }
+
+  async mapBatchInputs(
+    snapshotId: string,
+    eventIds: readonly string[],
+  ): Promise<MapBatchInput[]> {
+    const bundle = await this.replayAggregateSnapshot(snapshotId);
     const wanted = new Set(eventIds);
     const byId = new Map(bundle.sections.flatMap((section) => section.items)
       .filter((item) => item.kind === "event" && wanted.has(item.resource_id))
@@ -424,18 +511,7 @@ export class PersonalConversationContextService {
       this.runtime.requireHost().get("blobs").getMany(hashes),
       authority.findBlobs(hashes),
     ]);
-    return [
-      "QUESTION",
-      query,
-      "",
-      ...(spec && specHash ? [
-        "CANONICAL AGGREGATE SPEC",
-        JSON.stringify(spec),
-        `spec_hash=${specHash}`,
-        "",
-      ] : []),
-      "BATCH MESSAGES",
-      ...eventIds.map((eventId, index) => {
+    return eventIds.map((eventId, index) => {
         const item = byId.get(eventId)!;
         const evidence = item.evidence.find((entry) => entry.event_id === eventId);
         const event = events[index];
@@ -445,23 +521,46 @@ export class PersonalConversationContextService {
           && createHash("sha256").update(bytes).digest("hex") === event.content_hash
           ? storedMessageContent(bytes, blob.media_type)
           : undefined;
-        if (!content || evidence?.content_hash !== event?.content_hash) {
+        if (!event || !content || evidence?.content_hash !== event.content_hash) {
           throw new PersonalContextError(
             "context_changed",
             HttpStatus.CONFLICT,
             "Aggregate evidence changed; search again",
           );
         }
-        return mapBatchMessageLine({
+        const url = stringAttribute(event.attrs, "url")
+          ?? stringAttribute(event.attrs, "permalink");
+        const businessId = stringAttribute(event.attrs, "business_id");
+        return {
           event_id: eventId,
-          external_id: event?.external_id,
-          occurred_at: evidence?.occurred_at,
-          source: evidence?.source,
-          text: content.text,
-          attachments: content.attachments,
-        }, index);
-      }),
-    ].join("\n");
+          content_hash: event.content_hash!,
+          message: {
+            event_id: eventId,
+            external_id: event.external_id,
+            occurred_at: evidence?.occurred_at,
+            source: evidence?.source,
+            text: content.text,
+            attachments: content.attachments,
+          },
+          dedupe: {
+            event_id: eventId,
+            external_id: event.external_id,
+            ...(url ? { url } : {}),
+            ...(businessId ? { business_id: businessId } : {}),
+          },
+        };
+      });
+  }
+
+  private replayAggregateSnapshot(snapshotId: string) {
+    return this.runtime.requireHost().get("context").replay({
+      org_id: this.runtime.orgId(),
+      snapshot_id: snapshotId,
+      principal: { actor_type: "human", actor_id: this.runtime.orgId() },
+      consumer_id: "personal-search-answer-complete",
+      purpose: "answer an exhaustive time-bounded search question",
+      allowed_uses: ["reason"],
+    });
   }
 
   async mapBatchDedupeMetadata(
@@ -477,6 +576,7 @@ export class PersonalConversationContextService {
           "Aggregate evidence changed; search again",
         );
       }
+
       const url = stringAttribute(event.attrs, "url")
         ?? stringAttribute(event.attrs, "permalink");
       const businessId = stringAttribute(event.attrs, "business_id");
@@ -639,7 +739,7 @@ export class PersonalConversationContextService {
   }
 }
 
-interface MapBatchMessage {
+export interface MapBatchMessage {
   event_id?: string;
   external_id?: string;
   occurred_at?: string;

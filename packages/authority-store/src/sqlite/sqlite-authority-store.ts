@@ -9,8 +9,6 @@ import type {
   ContextArtifactStore,
   ContextAuthorityReader,
   ContextProjectionOutboxStore,
-  DailyDigestJobStore,
-  DailyDigestPolicyStore,
   SourceIdentity,
   EventRecord,
   SourceIdentityAliasBind,
@@ -43,8 +41,6 @@ import type {
   CompleteContextProjectionJob,
   RenewContextProjectionJob,
   FailContextProjectionJob,
-  DailyDigestJob,
-  DailyDigestCoverageAlert,
   ProposalRecord,
   ProposalStatus,
   DecisionRecord,
@@ -62,8 +58,6 @@ import type {
   AgentRunOutput,
   StandardUsageSourceKind,
   StandardUsageRecord,
-  CustomerServiceTask,
-  CustomerServiceTaskStatus,
   ArrangementDecision,
   InboxQuery,
   InboxItem,
@@ -108,7 +102,6 @@ import type {
   CommitWorkObservationResult,
   WorkDelivery,
   SearchAnswerRecord,
-  DailyDigestPolicy,
   ExecutorInstallation,
   BlobRecord,
   EventAttachmentReferenceBackfill,
@@ -241,27 +234,7 @@ import {
   listContextProjectionJobs,
   renewContextProjectionJob,
 } from "./context-projection";
-import {
-  getCustomerServiceTask,
-  listCustomerServiceTasks,
-  putCustomerServiceTask,
-} from "./customer-service-tasks";
-import {
-  claimDailyDigestJobs,
-  completeDailyDigestJob,
-  enqueueDailyDigestCatchUp,
-  enqueueDailyDigestJob,
-  failDailyDigestJob,
-  getDailyDigestPolicy,
-  getUiPref,
-  listDailyDigestCoverageAlerts,
-  listDailyDigestJobs,
-  putDailyDigestCoverageAlert,
-  putDailyDigestPolicy,
-  putUiPref,
-  renewDailyDigestJob,
-  resolveDailyDigestCoverageAlert,
-} from "./daily-digest";
+import { getUiPref, putUiPref } from "./ui-prefs";
 import {
   HandoffRow,
   ProposalRow,
@@ -353,12 +326,14 @@ import {
   listCancellationJobs,
   retryCancellationJob,
   deleteSearchAnswer,
+  getAggregateFactCache,
   deleteExecutorInstallation,
   deleteRecipe,
   getActiveWorkRun,
   getExecutorInstallation,
   getRecipe,
   getSearchAnswer,
+  putAggregateFactCache,
   getWorkDelivery,
   getWorkDeliveryByItem,
   getWorkItem,
@@ -458,9 +433,7 @@ export class SqliteAuthorityStore
     ExecutorStore,
     ContextArtifactStore,
     ContextAuthorityReader,
-    ContextProjectionOutboxStore,
-    DailyDigestJobStore
-      , DailyDigestPolicyStore
+    ContextProjectionOutboxStore
 {
 
   readonly atomicSyncPage = true;
@@ -680,68 +653,15 @@ export class SqliteAuthorityStore
     return listContextProjectionJobs(this.database, orgId);
   }
 
-  async enqueueDailyDigestCatchUp(input: {
-    org_id: string;
-    through_utc_date: string;
-    generation: string;
-    created_at: string;
-    max_days: number;
-  }): Promise<DailyDigestJob[]> {
-    this.assertWritable();
-    return enqueueDailyDigestCatchUp(this.database, input);
-  }
 
-  async enqueueDailyDigestJob(input: {
-    org_id: string;
-    utc_date: string;
-    generation: string;
-    created_at: string;
-  }): Promise<DailyDigestJob> {
-    this.assertWritable();
-    return enqueueDailyDigestJob(this.database, input);
-  }
 
-  async claimDailyDigestJobs(input: {
-    owner: string; now: string; lease_ms: number; limit: number;
-  }): Promise<DailyDigestJob[]> {
-    this.assertWritable();
-    return claimDailyDigestJobs(this.database, input);
-  }
 
-  async completeDailyDigestJob(input: { id: string; owner: string; completed_at: string }): Promise<boolean> {
-    this.assertWritable();
-    return completeDailyDigestJob(this.database, input);
-  }
 
-  async renewDailyDigestJob(input: { id: string; owner: string; now: string; lease_ms: number }): Promise<boolean> {
-    this.assertWritable();
-    return renewDailyDigestJob(this.database, input);
-  }
 
-  async failDailyDigestJob(input: {
-    id: string; owner: string; failed_at: string; next_retry_at: string; error_code: string;
-  }): Promise<boolean> {
-    this.assertWritable();
-    return failDailyDigestJob(this.database, input);
-  }
 
-  async listDailyDigestJobs(orgId: string): Promise<DailyDigestJob[]> {
-    return listDailyDigestJobs(this.database, orgId);
-  }
 
-  async putDailyDigestCoverageAlert(alert: DailyDigestCoverageAlert): Promise<DailyDigestCoverageAlert> {
-    this.assertWritable();
-    return putDailyDigestCoverageAlert(this.database, alert);
-  }
 
-  async listDailyDigestCoverageAlerts(input: { org_id: string; status?: "open" | "resolved"; limit?: number }): Promise<DailyDigestCoverageAlert[]> {
-    return listDailyDigestCoverageAlerts(this.database, input);
-  }
 
-  async resolveDailyDigestCoverageAlert(input: { org_id: string; alert_id: string; resolved_at: string }): Promise<DailyDigestCoverageAlert | null> {
-    this.assertWritable();
-    return resolveDailyDigestCoverageAlert(this.database, input);
-  }
 
   async putProposal(input: ProposalRecord): Promise<ProposalRecord> {
     this.assertWritable();
@@ -787,18 +707,8 @@ export class SqliteAuthorityStore
     return listReviews(this.database, input);
   }
 
-  async putCustomerServiceTask(input: CustomerServiceTask, expectedRevision?: number): Promise<CustomerServiceTask> {
-    this.assertWritable();
-    return putCustomerServiceTask(this.database, input, expectedRevision);
-  }
 
-  async getCustomerServiceTask(orgId: string, taskId: string): Promise<CustomerServiceTask | null> {
-    return getCustomerServiceTask(this.database, orgId, taskId);
-  }
 
-  async listCustomerServiceTasks(input: { org_id: string; statuses?: CustomerServiceTaskStatus[]; limit?: number }): Promise<CustomerServiceTask[]> {
-    return listCustomerServiceTasks(this.database, input);
-  }
 
   async putHandoff(input: HandoffRecord): Promise<HandoffRecord> {
     this.assertWritable();
@@ -1101,8 +1011,8 @@ export class SqliteAuthorityStore
       this.database.prepare(`DELETE FROM work_deliveries WHERE org_id = ?`).run(orgId);
       this.database.prepare(`DELETE FROM work_runs WHERE org_id = ?`).run(orgId);
       this.database.prepare(`DELETE FROM search_answers WHERE org_id = ?`).run(orgId);
+      this.database.prepare(`DELETE FROM aggregate_fact_cache WHERE org_id = ?`).run(orgId);
       this.database.prepare(`DELETE FROM work_items WHERE org_id = ?`).run(orgId);
-      this.database.prepare(`DELETE FROM customer_service_tasks WHERE org_id = ?`).run(orgId);
       this.database.prepare(`DELETE FROM context_snapshot_index WHERE org_id = ?`).run(orgId);
       this.database.prepare(`DELETE FROM context_bundles WHERE org_id = ?`).run(orgId);
       this.database.prepare(`DELETE FROM context_snapshots WHERE org_id = ?`).run(orgId);
@@ -1142,9 +1052,6 @@ export class SqliteAuthorityStore
         .run(orgId);
       this.database.prepare(`DELETE FROM source_heads WHERE org_id = ?`).run(orgId);
       this.database.prepare(`DELETE FROM thread_heads WHERE org_id = ?`).run(orgId);
-      this.database
-        .prepare(`DELETE FROM daily_digest_coverage_alerts WHERE org_id = ?`)
-        .run(orgId);
       this.database.prepare(`DELETE FROM events WHERE org_id = ?`).run(orgId);
       this.database
         .prepare(
@@ -1487,6 +1394,26 @@ export class SqliteAuthorityStore
     return deleteSearchAnswer(this.database, orgId, id);
   }
 
+  async getAggregateFactCache(
+    orgId: string,
+    specHash: string,
+    extractorVersion: string,
+    eventIds: readonly string[],
+  ) {
+    return getAggregateFactCache(
+      this.database,
+      orgId,
+      specHash,
+      extractorVersion,
+      eventIds,
+    );
+  }
+
+  async putAggregateFactCache(records: Parameters<typeof putAggregateFactCache>[1]) {
+    this.assertWritable();
+    return putAggregateFactCache(this.database, records);
+  }
+
   async listWorkDeliveries(orgId: string): Promise<WorkDelivery[]> {
     return listWorkDeliveries(this.database, orgId);
   }
@@ -1515,13 +1442,7 @@ export class SqliteAuthorityStore
     return getUiPref(this.database, orgId, key);
   }
 
-  async getDailyDigestPolicy(orgId: string): Promise<DailyDigestPolicy | null> {
-    return getDailyDigestPolicy(this.database, orgId);
-  }
 
-  async putDailyDigestPolicy(input: { org_id: string; policy: DailyDigestPolicy; updated_at: string }): Promise<DailyDigestPolicy> {
-    return putDailyDigestPolicy(this.database, input);
-  }
 
   async putUiPref(
     orgId: string,

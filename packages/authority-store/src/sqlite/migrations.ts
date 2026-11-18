@@ -1,4 +1,4 @@
-export const LATEST_SCHEMA_VERSION = 80;
+export const LATEST_SCHEMA_VERSION = 86;
 
 export const PRE_MERGE_LIFECYCLE_REPAIR_SQL = `
   ALTER TABLE work_items ADD COLUMN current_run_id TEXT REFERENCES work_runs(id);
@@ -1622,6 +1622,70 @@ export const MIGRATIONS = [
         updated_at TEXT NOT NULL,
         PRIMARY KEY (installation_id, stream_key)
       );
+    `,
+  },
+  {
+    version: 81,
+    sql: `
+      CREATE TABLE IF NOT EXISTS aggregate_fact_cache (
+        org_id TEXT NOT NULL,
+        spec_hash TEXT NOT NULL,
+        extractor_version TEXT NOT NULL,
+        event_id TEXT NOT NULL,
+        content_hash TEXT NOT NULL,
+        facts_json TEXT NOT NULL CHECK (json_valid(facts_json)),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (org_id, spec_hash, extractor_version, event_id)
+      );
+      CREATE INDEX IF NOT EXISTS aggregate_fact_cache_event_idx
+        ON aggregate_fact_cache (org_id, event_id);
+    `,
+  },
+  {
+    version: 82,
+    sql: `
+      DROP TABLE IF EXISTS customer_service_tasks;
+      DROP TABLE IF EXISTS daily_digest_coverage_alerts;
+      DROP TABLE IF EXISTS daily_digest_jobs;
+      DROP TABLE IF EXISTS daily_digest_schedule_cursors;
+      DELETE FROM ui_prefs WHERE key IN (
+        'daily_digest_policy_v1',
+        'personal_follow_up_policy_v1',
+        'personal_follow_up_snoozes_v1'
+      );
+    `,
+  },
+  {
+    // Some local databases already advanced through 83–85. Those steps are not
+    // repeated: 83 and 84 deleted live preferences, and 85 dropped search_answers.
+    version: 83,
+    sql: "SELECT 1",
+  },
+  {
+    version: 84,
+    sql: "SELECT 1",
+  },
+  {
+    version: 85,
+    sql: "SELECT 1",
+  },
+  {
+    version: 86,
+    sql: `
+      CREATE TABLE IF NOT EXISTS search_answers (
+        id TEXT PRIMARY KEY,
+        org_id TEXT NOT NULL,
+        work_item_id TEXT NOT NULL REFERENCES work_items(id),
+        query TEXT NOT NULL,
+        event_ids_json TEXT NOT NULL CHECK (json_valid(event_ids_json)),
+        scope_json TEXT CHECK (scope_json IS NULL OR json_valid(scope_json)),
+        outcome TEXT CHECK (outcome IN ('timed_out', 'cancelled')),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS search_answers_work_item_idx
+        ON search_answers (org_id, work_item_id);
     `,
   },
 ] as const;

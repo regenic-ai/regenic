@@ -577,3 +577,67 @@ for (const [label, options, mutate] of [
     assert.deepEqual(f.calls, []);
   });
 }
+
+test("search selects the Agent pinned to its connector, not the default connector executor", async () => {
+  const calls = [];
+  const cursor = {
+    id: "cursor-1", org_id: "org", connector_type: "cursor",
+    status: "enabled", config: {}, updated_at: "1",
+  };
+  const rows = [{
+    id: "dsh", org_id: "org", kind: "local_connector", name: "DSH",
+    status: "enabled", config: {},
+  }];
+  const store = {
+    getUiPref: async () => "1",
+    listExecutorInstallations: async () => rows,
+    putExecutorInstallation: async (value) => { rows.push(value); return value; },
+    findInstallation: async (id) => id === cursor.id ? cursor : null,
+    listInstallations: async () => [cursor],
+  };
+  const registry = new MemoryExecutorRegistry();
+  const host = { get: (name) => name === "authority" ? store : registry };
+  const runtime = {
+    isReady: () => true, orgId: () => "org", requireHost: () => host, getOptions: () => ({}),
+  };
+  const driver = {
+    connector_type: "cursor",
+    source: "cursor",
+    capabilities: () => ({ create: true, create_with_task: true, sync: true }),
+    createThread: async (installation, _host, _env, options) => {
+      calls.push(["create", installation.id, options?.text]);
+      return { source: "cursor", target: "agent-1" };
+    },
+  };
+  const drivers = new ChannelDriverRegistry().register(driver);
+  const plugin = createSessionTaskExecutor({
+    source: "dsh", executor_type: "dsh", label: "DSH",
+  });
+  const mounts = new PersonalExecutorService(
+    runtime, drivers, new LocalExecutorPluginRegistry().register(plugin),
+  );
+  await mounts.ensureMounted();
+  const catalog = await mounts.listCatalog();
+  const agents = catalog.filter((entry) => entry.agent === true);
+  assert.equal(agents.length, 2);
+  const cursorAgent = agents.find((entry) => entry.installation_id === "cursor-1");
+  assert.equal(catalog.find((entry) => entry.executor_type === "dsh")?.agent, true);
+  const executor = registry.get(cursorAgent.executor_type);
+  const channel = new PersonalWorkChannel(runtime, drivers);
+  channel.sendText = async () => {
+    calls.push(["stdin"]);
+    return { accepted: true };
+  };
+  const handle = await executor.start({
+    run_id: "run",
+    work_item: {
+      id: "work", thread_id: "system:search:work",
+      record_class: "utterance", thread_facet: "agent",
+    },
+    recipe: { id: "recipe", executor_config: { prompt: "Answer this" } },
+    task_instruction: "Answer this",
+    evidence_text: "evidence",
+  }, channel.contextFor(executor));
+  assert.equal(handle.agent_thread_id, "cursor:agent-1");
+  assert.deepEqual(calls, [["create", "cursor-1", "Answer this\n\nWORK\nevidence"]]);
+});

@@ -9,7 +9,6 @@ import {
   contextProjectionCoordinatorPlugin,
   contextEmbeddingWorkerPlugin,
   hybridEventRetrieverPlugin,
-  dailyDigestProjectionPlugin,
   deterministicThreadSummaryProjectorPlugin,
   indexedEventRetrieverPlugin,
   personalContextEnginePlugin,
@@ -63,7 +62,6 @@ export async function createLocalHost(options: LocalHostOptions): Promise<Host> 
       await host.plugin(contextProjectionCoordinatorPlugin, {
         lexical_index: host.get("context-lexical-index"),
       });
-      await host.plugin(dailyDigestProjectionPlugin);
       await host.plugin(personalContextEnginePlugin, { org_id: options.orgId, hybrid: options.embedding !== undefined });
       await host.plugin(modelProviderPlugin, options.model ?? { driver: "none" });
       if (options.embedding) {

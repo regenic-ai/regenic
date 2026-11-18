@@ -6,6 +6,7 @@ export function createLocalConnectorExecutor(input: {
   description?: string;
   source?: string;
   installation_id?: string;
+  agent?: boolean;
   plugin: TaskExecutor;
 }): TaskExecutor {
   return {
@@ -31,6 +32,7 @@ export function createLocalConnectorExecutor(input: {
         source: input.source ?? base.source,
         installation_id: input.installation_id,
         kind: "local_connector",
+        ...(input.agent ? { agent: true } : {}),
       };
     },
 

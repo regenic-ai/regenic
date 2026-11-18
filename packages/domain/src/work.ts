@@ -488,6 +488,15 @@ export interface WorkStore {
   ): Promise<SearchAnswerRecord | null>;
   putSearchAnswer(record: SearchAnswerRecord): Promise<SearchAnswerRecord>;
   deleteSearchAnswer(orgId: string, id: string): Promise<boolean>;
+  getAggregateFactCache(
+    orgId: string,
+    specHash: string,
+    extractorVersion: string,
+    eventIds: readonly string[],
+  ): Promise<import("./search-answer").AggregateFactCacheRecord[]>;
+  putAggregateFactCache(
+    records: readonly import("./search-answer").AggregateFactCacheRecord[],
+  ): Promise<void>;
 }
 
 export type WorkDeliveryCommand = {

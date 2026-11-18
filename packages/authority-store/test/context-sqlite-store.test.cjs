@@ -180,6 +180,64 @@ function snapshotIndex(snapshotValue, overrides = {}) {
 }
 
 describe("SQLite context artifact store", () => {
+  it("persists content-addressed aggregate facts including negative results", async () => {
+    const root = await createRoot();
+    const path = join(root, "authority.db");
+    let store = new SqliteAuthorityStore(path);
+    const now = "2026-08-30T00:00:00.000Z";
+    await store.putAggregateFactCache([
+      {
+        org_id: "example-org",
+        spec_hash: HASH_A,
+        extractor_version: "typed-event-v1",
+        event_id: "event-positive",
+        content_hash: HASH_B,
+        facts: [{
+          dedupe_key: "event_id:event-positive",
+          group: "all",
+          metric: "task_count",
+          value: 1,
+          event_ids: ["event-positive"],
+        }],
+        created_at: now,
+        updated_at: now,
+      },
+      {
+        org_id: "example-org",
+        spec_hash: HASH_A,
+        extractor_version: "typed-event-v1",
+        event_id: "event-negative",
+        content_hash: HASH_B,
+        facts: [],
+        created_at: now,
+        updated_at: now,
+      },
+    ]);
+    store.close();
+
+    store = new SqliteAuthorityStore(path);
+    const records = await store.getAggregateFactCache(
+      "example-org",
+      HASH_A,
+      "typed-event-v1",
+      ["event-negative", "event-positive", "outside"],
+    );
+    assert.deepEqual(
+      records.map((record) => [record.event_id, record.facts.length]).sort(),
+      [["event-negative", 0], ["event-positive", 1]],
+    );
+    assert.equal(
+      (await store.getAggregateFactCache(
+        "other-org",
+        HASH_A,
+        "typed-event-v1",
+        ["event-positive"],
+      )).length,
+      0,
+    );
+    store.close();
+  });
+
   it("transitions artifact decisions and atomically supersedes an accepted artifact", async () => {
     const root = await createRoot();
     const path = join(root, "authority.db");
@@ -308,67 +366,7 @@ describe("SQLite context artifact store", () => {
     await split.close();
   });
 
-  it("persists a validated daily digest policy through restart and split reads", async () => {
-    const root = await createRoot();
-    const path = join(root, "authority.db");
-    const policy = {
-      version: 1,
-      time_zone: "UTC",
-      enabled_directions: ["product", "risk"],
-      max_items_per_direction: 3,
-      bad_news_terms: ["blocked", "outage"],
-      hypothesis_min_score: 2,
-      role_tier_threshold: 4,
-      evidence_weights: {
-        metric: 4, demo: 3, user_verbatim: 2.5, decision_record: 2.5, opinion: 1,
-      },
-    };
-    let store = new SqliteAuthorityStore(path);
-    assert.deepEqual(await store.putDailyDigestPolicy({
-      org_id: "example-org", policy, updated_at: "2026-08-30T00:00:00.000Z",
-    }), policy);
-    await assert.rejects(store.putDailyDigestPolicy({
-      org_id: "example-org", policy: { ...policy, enabled_directions: ["free-form"] },
-      updated_at: "2026-08-30T00:00:00.000Z",
-    }), /Invalid daily digest policy directions/);
-    store.close();
 
-    store = new SqliteAuthorityStore(path);
-    assert.deepEqual(await store.getDailyDigestPolicy("example-org"), policy);
-    store.close();
-
-    const split = await SqliteSplitAuthorityStore.open(path);
-    assert.deepEqual(await split.getDailyDigestPolicy("example-org"), policy);
-    await split.close();
-  });
-
-  it("persists and resolves idempotent daily digest coverage alerts", async () => {
-    const root = await createRoot();
-    const path = join(root, "authority.db");
-    let store = new SqliteAuthorityStore(path);
-    const event = await store.append({
-      org_id: "example-org", source: "synthetic", external_id: "coverage-1",
-      content_hash: HASH_A, content_media_type: "text/plain", content_byte_size: 1,
-      occurred_at: "2026-08-30T00:00:00.000Z", expected_head_id: null,
-    });
-    const alert = {
-      id: "coverage-alert-1", org_id: "example-org", local_date: "2026-08-30",
-      generation: "daily-digest-d0-v3", event_id: event.id,
-      reason_code: "omitted_high_signal", status: "open", created_at: "2026-08-30T01:00:00.000Z",
-    };
-    assert.deepEqual(await store.putDailyDigestCoverageAlert(alert), alert);
-    assert.equal((await store.putDailyDigestCoverageAlert({ ...alert, id: "different-id" })).id, alert.id);
-    store.close();
-
-    const split = await SqliteSplitAuthorityStore.open(path);
-    assert.equal((await split.listDailyDigestCoverageAlerts({ org_id: "example-org", status: "open" }))[0].id, alert.id);
-    const resolved = await split.resolveDailyDigestCoverageAlert({
-      org_id: "example-org", alert_id: alert.id, resolved_at: "2026-08-30T02:00:00.000Z",
-    });
-    assert.equal(resolved.status, "resolved");
-    assert.equal((await split.listDailyDigestCoverageAlerts({ org_id: "example-org", status: "open" })).length, 0);
-    await split.close();
-  });
 
   it("persists idempotent digest proposals and enforces submission transitions", async () => {
     const root = await createRoot();
@@ -985,69 +983,7 @@ describe("SQLite context artifact store", () => {
     store.close();
   });
 
-  it("persists idempotent daily digest jobs across retry, restart, and split reads", async () => {
-    const root = await createRoot();
-    const path = join(root, "authority.db");
-    let store = new SqliteAuthorityStore(path);
-    const input = {
-      org_id: "example-org", utc_date: "2026-08-30", generation: "daily-digest-d0-v1",
-      created_at: "2026-08-30T00:00:00.000Z",
-    };
-    const first = await store.enqueueDailyDigestJob(input);
-    const second = await store.enqueueDailyDigestJob({ ...input, created_at: "2026-08-30T00:00:01.000Z" });
-    assert.equal(first.id, second.id);
-    const [claimed] = await store.claimDailyDigestJobs({
-      owner: "worker-1", now: "2026-08-30T00:01:00.000Z", lease_ms: 1_000, limit: 1,
-    });
-    assert.equal(claimed.attempts, 1);
-    assert.equal(await store.failDailyDigestJob({
-      id: claimed.id, owner: "worker-1", failed_at: "2026-08-30T00:01:00.500Z",
-      next_retry_at: "2026-08-30T00:01:01.000Z", error_code: "transient",
-    }), true);
-    const [retried] = await store.claimDailyDigestJobs({
-      owner: "worker-2", now: "2026-08-30T00:01:01.000Z", lease_ms: 1_000, limit: 1,
-    });
-    assert.equal(retried.attempts, 2);
-    store.close();
 
-    store = new SqliteAuthorityStore(path);
-    assert.equal((await store.listDailyDigestJobs("example-org"))[0].lease_owner, "worker-2");
-    store.close();
-
-    const split = await SqliteSplitAuthorityStore.open(path);
-    assert.equal(await split.completeDailyDigestJob({
-      id: retried.id, owner: "worker-2", completed_at: "2026-08-30T00:01:01.500Z",
-    }), true);
-    assert.equal((await split.listDailyDigestJobs("example-org"))[0].status, "succeeded");
-    await split.close();
-  });
-
-  it("persists bounded daily digest catch-up cursors across restart", async () => {
-    const root = await createRoot();
-    const path = join(root, "authority.db");
-    const input = {
-      org_id: "example-org", generation: "daily-digest-d0-v2",
-      created_at: "2026-08-30T00:00:00.000Z", max_days: 2,
-    };
-    let store = new SqliteAuthorityStore(path);
-    assert.deepEqual((await store.enqueueDailyDigestCatchUp({
-      ...input, through_utc_date: "2026-08-30",
-    })).map((job) => job.utc_date), ["2026-08-30"]);
-    assert.deepEqual((await store.enqueueDailyDigestCatchUp({
-      ...input, through_utc_date: "2026-09-03",
-    })).map((job) => job.utc_date), ["2026-08-31", "2026-09-01"]);
-    store.close();
-
-    store = new SqliteAuthorityStore(path);
-    assert.deepEqual((await store.enqueueDailyDigestCatchUp({
-      ...input, through_utc_date: "2026-09-03",
-    })).map((job) => job.utc_date), ["2026-09-02", "2026-09-03"]);
-
-    assert.deepEqual((await store.listDailyDigestJobs("example-org")).map((job) => job.utc_date), [
-      "2026-08-30", "2026-08-31", "2026-09-01", "2026-09-02", "2026-09-03",
-    ]);
-    store.close();
-  });
 
   it("requeues a completed projection when compacted content changes its hash", async () => {
     const root = await createRoot();

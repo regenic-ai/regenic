@@ -93,9 +93,9 @@ ALTER TABLE recipes ADD COLUMN trigger_timezone TEXT;
     }
     const inspect = new Database(path);
     try {
-      assert.ok(inspect.prepare(
+      assert.equal(inspect.prepare(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'customer_service_tasks'",
-      ).get());
+      ).get(), undefined);
       assert.deepEqual(inspect.pragma("foreign_key_check"), []);
     } finally {
       inspect.close();
@@ -143,7 +143,10 @@ ALTER TABLE recipes ADD COLUMN trigger_timezone TEXT;
     }
     const inspect = new Database(path);
     try {
-      for (const name of ["customer_service_tasks", "context_artifact_segments", "search_answers"]) {
+      assert.equal(inspect.prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'customer_service_tasks'",
+      ).get(), undefined);
+      for (const name of ["context_artifact_segments", "search_answers"]) {
         assert.ok(inspect.prepare("SELECT name FROM sqlite_master WHERE name = ?").get(name));
       }
       assert.deepEqual(inspect.pragma("foreign_key_check"), []);

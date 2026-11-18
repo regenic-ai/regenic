@@ -247,11 +247,6 @@ pnpm local inbox-dispatch-reapply --database ./regenic.db --blob-root ./blobs \
 # 复核等待明确关注的 event，不扩大默认工作 inbox。
 pnpm local inbox-pending --database ./regenic.db --org local-owner
 
-# 复核超时未回复，或将一条 outbound message 暂停提醒到指定时间。
-pnpm local follow-ups --database ./regenic.db --blob-root ./blobs --org local-owner
-pnpm local follow-up-snooze --database ./regenic.db --org local-owner \
-	--thread <thread-id> --outbound <external-id> --until 2026-10-01T09:00:00.000Z
-
 # 人工 triage 覆盖当前工作分层，但不会修改 Event。
 pnpm local inbox-triage --database ./regenic.db --org local-owner \
 	--event <event-id> --disposition pending
@@ -306,29 +301,6 @@ pnpm local context-snapshot --database ./regenic.db --blob-root ./blobs \
 
 pnpm local context-replay --database ./regenic.db --blob-root ./blobs \
 	--org local-owner --snapshot <snapshot-id>
-```
-
-先创建确定性的 UTC 日级 digest proposal，再经 Artifact lifecycle accepted 后读取。日期必须
-显式提供，格式为 `YYYY-MM-DD`。
-
-```bash
-pnpm local context-daily-digest-project --database ./regenic.db --blob-root ./blobs \
-	--org local-owner --utc-date 2026-09-06
-
-pnpm local context-daily-digest-get --database ./regenic.db --blob-root ./blobs \
-	--org local-owner --utc-date 2026-09-06
-
-pnpm local context-daily-digest-jobs --database ./regenic.db --blob-root ./blobs \
-	--org local-owner
-
-pnpm local context-daily-digest-alerts --database ./regenic.db --blob-root ./blobs \
-	--org local-owner
-
-pnpm local context-daily-digest-alert-resolve --database ./regenic.db --blob-root ./blobs \
-	--org local-owner --alert <alert-id>
-
-pnpm local context-proposal-create --database ./regenic.db --blob-root ./blobs \
-	--org local-owner --digest <digest-id> --direction product --event <event-id>
 
 pnpm local context-proposals --database ./regenic.db --blob-root ./blobs \
 	--org local-owner

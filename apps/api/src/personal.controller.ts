@@ -154,32 +154,6 @@ export class PersonalController {
     return this.guard(async () => this.inbox.listInbox(query));
   }
 
-  @Get("follow-ups")
-  listFollowUps() {
-    return this.guard(() => this.inbox.listFollowUps());
-  }
-
-  @Get("follow-ups/snoozes")
-  listFollowUpSnoozes() {
-    return this.guard(() => this.inbox.listFollowUpSnoozes());
-  }
-
-  @Post("follow-ups/:threadId/snooze")
-  snoozeFollowUp(
-    @Param("threadId") threadId: string,
-    @Body() body: { until?: string; outbound_external_id?: string } | undefined,
-  ) {
-    return this.guard(() => this.inbox.snoozeFollowUp(threadId, body?.until ?? "", body?.outbound_external_id));
-  }
-
-  @Delete("follow-ups/:threadId/snooze")
-  unsnoozeFollowUp(
-    @Param("threadId") threadId: string,
-    @Body() body: { outbound_external_id?: string } | undefined,
-  ) {
-    return this.guard(() => this.inbox.unsnoozeFollowUp(threadId, body?.outbound_external_id));
-  }
-
   @Post("inbox/:eventId/triage")
   triageInboxEvent(
     @Param("eventId") eventId: string,
@@ -761,16 +735,6 @@ export class PersonalController {
   @Post("dispatch-policy")
   putPersonalDispatchPolicy(@Body() body: { policy?: unknown } | undefined) {
     return this.guard(() => this.work.putPersonalDispatchPolicy(body?.policy));
-  }
-
-  @Get("follow-up-policy")
-  getPersonalFollowUpPolicy() {
-    return this.guard(() => this.work.getPersonalFollowUpPolicy());
-  }
-
-  @Post("follow-up-policy")
-  putPersonalFollowUpPolicy(@Body() body: { policy?: unknown } | undefined) {
-    return this.guard(() => this.work.putPersonalFollowUpPolicy(body?.policy));
   }
 
   @Post("prefs")

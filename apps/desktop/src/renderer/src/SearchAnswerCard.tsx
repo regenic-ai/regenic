@@ -10,6 +10,7 @@ import { useLocale } from "./LocaleContext";
 import type { ExecutorCatalogEntry, PersonalSearchAnswer, PersonalSearchConversation } from "./types";
 import { subscribeWorkUpdates } from "./personal-events";
 import {
+  searchAnswerCacheCopy,
   searchAnswerConflictCopy,
   searchAnswerProgressCopy,
 } from "./search-answer-progress";
@@ -42,8 +43,13 @@ export function SearchAnswerCard({ query, conversations, intent, filters, onCite
     fetchExecutors()
       .then((list) => {
         if (!live) return;
-        setExecutors(list);
-        setExecutor(list.find((entry) => entry.executor_type === "dsh")?.executor_type ?? list[0]?.executor_type ?? "");
+        const agents = list.filter((entry) => entry.agent === true);
+        setExecutors(agents);
+        setExecutor(
+          agents.find((entry) => entry.executor_type === "dsh")?.executor_type
+            ?? agents[0]?.executor_type
+            ?? "",
+        );
       })
       .catch(() => { if (live) setExecutors([]); });
     return () => { live = false; };
@@ -125,7 +131,7 @@ export function SearchAnswerCard({ query, conversations, intent, filters, onCite
     }
   }
 
-  const choose = executors && executors.length > 1 && !isActive(answer) ? (
+  const choose = executors && executors.length > 0 && !isActive(answer) ? (
     <select aria-label={t("search.answer.executor")} value={executor} disabled={starting}
       onChange={(event) => setExecutor(event.target.value)}>
       {executors.map((entry) => <option key={entry.executor_type} value={entry.executor_type}>{entry.label}</option>)}
@@ -153,6 +159,9 @@ export function SearchAnswerCard({ query, conversations, intent, filters, onCite
     const conflictCopy = answer.progress
       ? searchAnswerConflictCopy(answer.progress)
       : null;
+    const cacheCopy = answer.progress
+      ? searchAnswerCacheCopy(answer.progress)
+      : null;
     body = (
       <>
         {answer.scope?.plan ? (
@@ -178,6 +187,11 @@ export function SearchAnswerCard({ query, conversations, intent, filters, onCite
         {conflictCopy ? (
           <p className="search-warning" role="status">
             {t(conflictCopy.key, conflictCopy.vars)}
+          </p>
+        ) : null}
+        {cacheCopy ? (
+          <p className="muted" role="status">
+            {t(cacheCopy.key, cacheCopy.vars)}
           </p>
         ) : null}
       </>

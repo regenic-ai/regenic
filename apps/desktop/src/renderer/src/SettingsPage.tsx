@@ -16,7 +16,6 @@ import {
 } from "./api";
 import { isMessageKey, type MessageKey } from "../../shared/messages.ts";
 import { ContextRecordsDialog } from "./ContextRecordsDialog";
-import { FollowUpPolicySettings } from "./FollowUpPolicySettings";
 import { SemanticSettings } from "./SemanticSettings";
 import { SyncSettings } from "./SyncSettings";
 import { DatabaseSettings } from "./DatabaseSettings";
@@ -472,7 +471,6 @@ export function SettingsPage({
   const sections = [
     ["settings-general", t("settings.language")],
     ["settings-dispatch", t("settings.dispatch")],
-    ["settings-follow-up", t("followUps.policy")],
     ["settings-sync", t("syncSettings.title")],
     ["settings-semantic", t("semantic.title")],
     ["settings-kernel", t("settings.kernel")],
@@ -569,8 +567,6 @@ export function SettingsPage({
               </span>
             </div>
           </section>
-
-          <FollowUpPolicySettings key={`${activeOrigin}:${databaseRevision}`} />
 
           <SyncSettings key={`${activeOrigin}:${databaseRevision}`} />
 

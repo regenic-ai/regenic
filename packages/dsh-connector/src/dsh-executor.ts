@@ -99,6 +99,7 @@ export const dshTaskExecutor: TaskExecutor = {
       description: "executor.description",
       source: "dsh",
       attach: "absentee",
+      agent: true,
       fields: [
         {
           key: DSH_SKILL_FIELD,
@@ -125,8 +126,6 @@ export const dshTaskExecutor: TaskExecutor = {
           selfServe && access ? { self_serve: { run_id: access.run_id } } : undefined,
         )
       : undefined;
-    const thread = await ctx.spawnSysout(staged?.cwd ? { cwd: staged.cwd } : undefined);
-    const sysoutId = `${thread.source}:${thread.target}`;
     const evidence_text = staged?.cwd
       ? formatWorkEvidence({
           thread_id: input.work_item.thread_id,
@@ -138,15 +137,21 @@ export const dshTaskExecutor: TaskExecutor = {
           }),
         })
       : input.evidence_text;
-    await ctx.writeStdin(
-      thread,
-      composeDshStdin({
-        skill: dshSkillOf(input.recipe.executor_config),
-        prompt:
-          input.task_instruction ?? taskInstructionOf(input.recipe.executor_config),
-        evidence_text,
-      }),
-    );
+    const stdin = composeDshStdin({
+      skill: dshSkillOf(input.recipe.executor_config),
+      prompt:
+        input.task_instruction ?? taskInstructionOf(input.recipe.executor_config),
+      evidence_text,
+    });
+    const withTask = (await ctx.sysoutCreateWithTask?.()) === true;
+    const thread = await ctx.spawnSysout({
+      ...(staged?.cwd ? { cwd: staged.cwd } : {}),
+      ...(withTask ? { text: stdin } : {}),
+    });
+    const sysoutId = `${thread.source}:${thread.target}`;
+    if (!withTask) {
+      await ctx.writeStdin(thread, stdin);
+    }
     return {
       external_run_id: sysoutId,
       agent_thread_id: sysoutId,

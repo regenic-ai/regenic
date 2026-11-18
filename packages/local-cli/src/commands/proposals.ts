@@ -1,12 +1,10 @@
 import {
   PROPOSAL_SCHEMA_VERSION,
   hashCanonicalContext,
-  type ProposalKind,
   type ProposalRecord,
 } from "@regenic/domain";
 import {
   cliStandardBindings,
-  isObject,
   optionalString,
   optionString,
   requireOption,
@@ -18,38 +16,6 @@ import {
 } from "../cli-runtime";
 import { withLocalHost } from "../host";
 
-export async function createProposalFromDigest(options: CommandOptions, stdout: CliOutput, now: () => string): Promise<void> {
-  const orgId = requireOption(options, "org");
-  await withLocalHost({ database: requirePath(options, "database"), blobRoot: requirePath(options, "blob-root"), orgId, model: { driver: "none" } }, async (host) => {
-    const artifactId = requireOption(options, "digest");
-    const eventId = requireOption(options, "event");
-    const direction = requireOption(options, "direction");
-    const artifacts = host.get("context-artifacts");
-    const artifact = await artifacts.getArtifact(orgId, artifactId);
-    const state = artifact ? await artifacts.getArtifactState(orgId, artifact.id) : null;
-    if (!artifact || artifact.kind !== "daily_digest" || state?.status !== "accepted" || !artifact.body_hash || hashCanonicalContext(artifact.attrs) !== artifact.body_hash) throw new Error("Proposal intake requires an accepted valid daily digest");
-    const item = cliDigestItem(artifact.attrs, direction, eventId);
-    const kind = cliProposalKind(item.item_kind);
-    const head = artifact.input_refs.find((reference) => reference.event_id === eventId);
-    if (!head) throw new Error("Digest item is not bound to artifact evidence");
-    const evidence = artifact.input_refs.filter((reference) => reference.source === head.source && reference.external_id === head.external_id).map((reference) => ({ kind: "document" as const, uri_or_ref: `event:${reference.event_id}` }));
-    evidence.unshift({ kind: "document", uri_or_ref: `artifact:${artifact.id}` });
-    const at = now();
-    const summary = requireString(item.text);
-    const proposal: ProposalRecord = {
-      schema_version: PROPOSAL_SCHEMA_VERSION,
-      id: `proposal:${hashCanonicalContext([orgId, artifact.id, direction, eventId])}`,
-      org_id: orgId, kind, title: summary.split(/\r?\n/, 1)[0].slice(0, 120), summary,
-      status: "draft", author: { actor_type: "human", actor_id: orgId }, rights_level: "coach",
-      boundary: optionalString(options.boundary) ?? `${direction} daily digest item`,
-      standard_bindings: [],
-      ...(optionalString(options.uncertainty) ? { single_uncertainty: optionalString(options.uncertainty)! } : {}),
-      evidence, source_digest_id: artifact.id, source_item_event_id: eventId,
-      created_at: at, updated_at: at,
-    };
-    writeJson(stdout, await host.get("proposals").putProposal(proposal));
-  });
-}
 
 export async function listProposals(options: CommandOptions, stdout: CliOutput): Promise<void> {
   const orgId = requireOption(options, "org");
@@ -157,18 +123,4 @@ export async function createStandardProposal(
   });
 }
 
-function cliDigestItem(attrs: unknown, direction: string, eventId: string): { item_kind: string; text: unknown } {
-  if (!isObject(attrs) || !Array.isArray(attrs.directions)) throw new Error("Invalid daily digest body");
-  const bucket = attrs.directions.find((value) => isObject(value) && value.direction === direction);
-  const item = isObject(bucket) && Array.isArray(bucket.items) ? bucket.items.find((value) => isObject(value) && value.event_id === eventId) : undefined;
-  if (!isObject(item)) throw new Error("Daily digest item was not found");
-  return item as { item_kind: string; text: unknown };
-}
-
-function cliProposalKind(itemKind: string): ProposalKind {
-  if (itemKind === "hypothesis") return "hypothesis";
-  if (itemKind === "new_judgment") return "new_standard";
-  if (itemKind === "standard_amendment") return "revise_standard";
-  throw new Error("Digest item kind cannot create a Proposal");
-}
 

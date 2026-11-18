@@ -18,7 +18,11 @@ import {
 } from "@regenic/domain";
 import { PersonalContextError } from "./personal-context-error";
 import { PersonalConversationContextService } from "./personal-conversation-context.service";
-import type { MapBatchDedupeMetadata } from "./personal-conversation-context.service";
+import {
+  mapBatchEvidenceText,
+  type MapBatchDedupeMetadata,
+  type MapBatchInput,
+} from "./personal-conversation-context.service";
 import { PersonalConversationLabelsService } from "./personal-conversation-labels.service";
 import { PersonalRuntimeService } from "./personal-runtime.service";
 import { PersonalWorkService, type PreparedAuxiliaryExecution } from "./personal-work.service";
@@ -32,6 +36,7 @@ import {
 
 const SEARCH_ANSWER_ACTIVE_MAX = 3;
 export const SEARCH_ANSWER_MAP_PARALLELISM = 3;
+export const SEARCH_ANSWER_FACT_EXTRACTOR_VERSION = "typed-event-v1";
 const SEARCH_ANSWER_TEXT_MAX = 16_000;
 export const SEARCH_ANSWER_REDUCED_CITATION_MAX = 12;
 const SEARCH_ANSWER_CONFLICT_COUNT_MAX = 2_000;
@@ -44,7 +49,7 @@ export const SEARCH_ANSWER_MAP_PROMPT = [
   '{"dedupe_key":"stable real-world identity","group":"entity/person/project","metric":"measurement or status","value":1,"evidence_refs":[1]}',
   "Use value 1 for countable atomic facts. Use a short string for categorical status.",
   "Use the same dedupe_key for the same real-world item repeated in messages.",
-  "evidence_refs must contain only bracket numbers from this batch.",
+  "Each fact must cite exactly one message. evidence_refs must contain one bracket number from this batch.",
   "Return [] when the batch has no relevant facts.",
 ].join("\n");
 
@@ -338,7 +343,8 @@ export class PersonalSearchAnswerService {
           updated_at: new Date().toISOString(),
         };
         await this.putRecord(nextRecord);
-        return mapView(await this.fillMapWindow(nextRecord, new Set()));
+        const routed = await this.ensureCacheRouting(nextRecord);
+        return mapView(await this.fillMapWindow(routed, new Set()));
       }
     }
     const attempt = map.planning_attempt ?? 0;
@@ -413,6 +419,7 @@ export class PersonalSearchAnswerService {
   }
 
   private async advanceMap(record: SearchAnswerRecord): Promise<SearchAnswerView> {
+    record = await this.ensureCacheRouting(record);
     let map = record.scope!.map_reduce!;
     const batches = map.batches!;
     const active = batches.filter((batch) => batch.status === "running");
@@ -440,19 +447,21 @@ export class PersonalSearchAnswerService {
       }
       if (run?.status === "completed" && run.result?.summary) {
         try {
-          const batchRefs = searchAnswerMapBatchRefs(
-            record.event_ids,
-            map,
-            batch.index,
-          );
-          batch.facts = parseMapFacts(
+          const batchRefs = batch.map_event_ids
+            ?? searchAnswerMapBatchRefs(record.event_ids, map, batch.index);
+          const inputs = map.spec
+            ? await this.context.mapBatchInputs(map.snapshot_id, batchRefs)
+            : undefined;
+          const mappedFacts = parseMapFacts(
             run.result.summary,
             batchRefs,
             map.spec,
-            map.spec
-              ? await this.context.mapBatchDedupeMetadata(batchRefs)
-              : undefined,
+            inputs?.map((input) => input.dedupe),
           );
+          batch.facts = [...(batch.cached_facts ?? []), ...mappedFacts];
+          if (map.spec && map.spec_hash && inputs) {
+            await this.putFactCache(map.spec_hash, inputs, mappedFacts);
+          }
           batch.status = "completed";
           changed = true;
           continue;
@@ -509,7 +518,7 @@ export class PersonalSearchAnswerService {
     const candidates = [
       ...running.filter((batch) => resumable.has(batch.index)),
       ...batches.filter((batch) => batch.status === "pending"),
-    ].slice(0, freeSlots);
+    ];
     const launches: Array<{
       batch: SearchAnswerMapBatch;
       prepared: Awaited<ReturnType<PersonalWorkService["prepareAuxiliaryExecution"]>>;
@@ -518,13 +527,37 @@ export class PersonalSearchAnswerService {
     for (const batch of candidates) {
       const id = batch.work_item_id
         ?? mapWorkItemId(record.id, batch.index, batch.attempt);
-      const evidence = await this.context.mapBatchEvidence(
-        map.snapshot_id,
-        searchAnswerMapBatchRefs(record.event_ids, map, batch.index),
-        record.query,
-        map.spec,
-        map.spec_hash,
-      );
+      const batchRefs = searchAnswerMapBatchRefs(record.event_ids, map, batch.index);
+      let evidence: string;
+      if (map.spec && map.spec_hash) {
+        const mapEventIds = batch.map_event_ids
+          ?? searchAnswerMapBatchRefs(record.event_ids, map, batch.index);
+        if (mapEventIds.length === 0) {
+          batch.facts = batch.cached_facts ?? [];
+          batch.status = "completed";
+          continue;
+        }
+        if (launches.length >= freeSlots) continue;
+        const inputs = await this.context.mapBatchInputs(
+          map.snapshot_id,
+          mapEventIds,
+        );
+        evidence = mapBatchEvidenceText(
+          inputs,
+          record.query,
+          map.spec,
+          map.spec_hash,
+        );
+      } else {
+        if (launches.length >= freeSlots) continue;
+        evidence = await this.context.mapBatchEvidence(
+          map.snapshot_id,
+          batchRefs,
+          record.query,
+          map.spec,
+          map.spec_hash,
+        );
+      }
       const prepared = batch.work_item_id
         ? await this.work.prepareExistingAuxiliaryExecution(id)
         : await this.prepareMapExecution({
@@ -570,6 +603,78 @@ export class PersonalSearchAnswerService {
     return record;
   }
 
+  private async ensureCacheRouting(
+    record: SearchAnswerRecord,
+  ): Promise<SearchAnswerRecord> {
+    const map = record.scope?.map_reduce;
+    if (!map?.spec || !map.spec_hash || !map.batches) return record;
+    const expectedManifest = {
+      version: 1 as const,
+      extractor_version: SEARCH_ANSWER_FACT_EXTRACTOR_VERSION,
+      spec_hash: map.spec_hash,
+    };
+    if (
+      map.cache_manifest?.version === expectedManifest.version
+      && map.cache_manifest.extractor_version === expectedManifest.extractor_version
+      && map.cache_manifest.spec_hash === expectedManifest.spec_hash
+      && map.batches.every((batch) =>
+        batch.map_event_ids !== undefined
+        && batch.cache_hits !== undefined
+        && batch.cache_misses !== undefined)
+    ) {
+      return record;
+    }
+
+    const manifest = await this.context.mapSnapshotManifest(
+      map.snapshot_id,
+      record.event_ids,
+    );
+    const cached = await this.cachedFacts(map.spec_hash, manifest, map.spec);
+    await this.context.validateMapManifest(manifest.filter((entry) =>
+      cached.event_ids.has(entry.event_id)));
+    const cachedFactsByEvent = new Map<string, SearchAnswerFact[]>();
+    for (const fact of cached.facts) {
+      const eventId = fact.event_ids[0];
+      const facts = cachedFactsByEvent.get(eventId) ?? [];
+      facts.push(fact);
+      cachedFactsByEvent.set(eventId, facts);
+    }
+    for (const batch of map.batches) {
+      if (
+        batch.map_event_ids !== undefined
+        && batch.cache_hits !== undefined
+        && batch.cache_misses !== undefined
+      ) {
+        continue;
+      }
+      const batchRefs = searchAnswerMapBatchRefs(
+        record.event_ids,
+        map,
+        batch.index,
+      );
+      const cachedFacts = batchRefs.flatMap((eventId) =>
+        cachedFactsByEvent.get(eventId) ?? []);
+      const mapEventIds = batchRefs.filter((eventId) =>
+        !cached.event_ids.has(eventId));
+      batch.cached_facts = cachedFacts;
+      batch.map_event_ids = mapEventIds;
+      batch.cache_hits = batchRefs.length - mapEventIds.length;
+      batch.cache_misses = mapEventIds.length;
+      if (
+        mapEventIds.length === 0
+        && (batch.status === "pending" || batch.status === "running")
+      ) {
+        batch.facts = cachedFacts;
+        batch.status = "completed";
+        delete batch.work_item_id;
+      }
+    }
+    map.cache_manifest = expectedManifest;
+    const routed = withMap(record, synchronizeMapAggregates(map));
+    await this.putRecord(routed);
+    return routed;
+  }
+
   private async beginReduce(record: SearchAnswerRecord): Promise<SearchAnswerView> {
     const map = synchronizeMapAggregates(record.scope!.map_reduce!);
     const conflictCount = reduceFactsWithDiagnostics(
@@ -593,7 +698,8 @@ export class PersonalSearchAnswerService {
     const finalWorkItemId = `${SEARCH_ANSWER_WORK_ITEM_PREFIX}${record.id}`;
     const completedMapWorkItemId = map.batches
       ?.find((batch) => batch.status === "completed" && batch.work_item_id)
-      ?.work_item_id;
+      ?.work_item_id
+      ?? record.work_item_id;
     if (!completedMapWorkItemId) {
       throw new Error("Completed aggregate map has no durable work item");
     }
@@ -696,6 +802,57 @@ export class PersonalSearchAnswerService {
 
   private putRecord(record: SearchAnswerRecord): Promise<SearchAnswerRecord> {
     return this.runtime.requireHost().get("authority").putSearchAnswer(record);
+  }
+
+  private async cachedFacts(
+    specHash: string,
+    inputs: readonly Pick<MapBatchInput, "event_id" | "content_hash">[],
+    spec: AggregateSpec,
+  ): Promise<{ event_ids: Set<string>; facts: SearchAnswerFact[] }> {
+    const authority = this.runtime.requireHost().get("authority");
+    const records = [];
+    for (let offset = 0; offset < inputs.length; offset += 500) {
+      records.push(...await authority.getAggregateFactCache(
+        this.runtime.orgId(),
+        specHash,
+        SEARCH_ANSWER_FACT_EXTRACTOR_VERSION,
+        inputs.slice(offset, offset + 500).map((input) => input.event_id),
+      ));
+    }
+    const inputById = new Map(inputs.map((input) => [input.event_id, input]));
+    const eventIds = new Set<string>();
+    const facts: SearchAnswerFact[] = [];
+    for (const record of records) {
+      const input = inputById.get(record.event_id);
+      if (!input || input.content_hash !== record.content_hash) continue;
+      if (!record.facts.every((fact) => isValidCachedFact(fact, spec, record.event_id))) {
+        continue;
+      }
+      eventIds.add(record.event_id);
+      facts.push(...record.facts);
+    }
+    return { event_ids: eventIds, facts };
+  }
+
+  private async putFactCache(
+    specHash: string,
+    inputs: readonly MapBatchInput[],
+    facts: readonly SearchAnswerFact[],
+  ): Promise<void> {
+    const now = new Date().toISOString();
+    await this.runtime.requireHost().get("authority").putAggregateFactCache(
+      inputs.map((input) => ({
+        org_id: this.runtime.orgId(),
+        spec_hash: specHash,
+        extractor_version: SEARCH_ANSWER_FACT_EXTRACTOR_VERSION,
+        event_id: input.event_id,
+        content_hash: input.content_hash,
+        facts: facts.filter((fact) =>
+          fact.event_ids.length === 1 && fact.event_ids[0] === input.event_id),
+        created_at: now,
+        updated_at: now,
+      })),
+    );
   }
 
   private async prepareMapExecution(
@@ -946,10 +1103,12 @@ export function parseMapFacts(
       ))
       || (typeof fact.value === "string" && !fact.value.trim())
       || !Array.isArray(refs) || refs.length === 0
+      || (spec !== undefined && refs.length !== 1)
       || refs.some((ref) => !Number.isInteger(ref) || Number(ref) < 1 || Number(ref) > batchRefs.length)
     ) {
       throw new Error("Invalid fact");
     }
+
     const eventIds = [...new Set(
       (refs as number[]).map((ref) => batchRefs[ref - 1]),
     )];
@@ -987,6 +1146,27 @@ export function parseMapFacts(
       event_ids: eventIds,
     };
   });
+}
+
+function isValidCachedFact(
+  fact: SearchAnswerFact,
+  spec: AggregateSpec,
+  eventId: string,
+): boolean {
+  if (
+    !fact
+    || typeof fact.dedupe_key !== "string"
+    || typeof fact.group !== "string"
+    || fact.metric !== spec.metric.id
+    || fact.event_ids.length !== 1
+    || fact.event_ids[0] !== eventId
+  ) {
+    return false;
+  }
+  if (spec.operation === "count") return fact.value === 1;
+  if (typeof fact.value !== "string" || !fact.value) return false;
+  return spec.operation !== "status_summary"
+    || spec.allowed_categories?.some((category) => category.id === fact.value) === true;
 }
 
 export function reduceFacts(
@@ -1281,6 +1461,14 @@ export function searchAnswerProgress(
       );
   const mapping = map.phase === "mapping";
   const retrying = running.filter((batch) => batch.attempt > 0);
+  const cacheHits = map.batches!.reduce(
+    (total, batch) => total + (batch.cache_hits ?? 0),
+    0,
+  );
+  const cacheMisses = map.batches!.reduce(
+    (total, batch) => total + (batch.cache_misses ?? 0),
+    0,
+  );
   return {
     phase: map.phase,
     completed_batches: completedBatches,
@@ -1293,6 +1481,9 @@ export function searchAnswerProgress(
     pending_batches: mapping ? pending.length : 0,
     retrying_batches: mapping ? retrying.length : 0,
     max_parallelism: mapping ? SEARCH_ANSWER_MAP_PARALLELISM : 1,
+    ...(cacheHits > 0 || cacheMisses > 0
+      ? { cache_hits: cacheHits, cache_misses: cacheMisses }
+      : {}),
     ...(record.scope?.conflict_count !== undefined
       ? {
           conflict_count: Math.max(
