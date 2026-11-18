@@ -64,6 +64,11 @@ export interface SearchAnswerMapReduce {
   executor_type?: string;
   spec?: AggregateSpec;
   spec_hash?: string;
+  cache_manifest?: {
+    version: 1;
+    extractor_version: string;
+    spec_hash: string;
+  };
   /** Zero-based attempt. Exactly one safe retry is allowed. */
   planning_attempt?: number;
   /** Records created before typed planning continue with their legacy parser. */

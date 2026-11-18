@@ -75,6 +75,11 @@ export interface MapBatchInput {
   dedupe: MapBatchDedupeMetadata;
 }
 
+export interface MapSnapshotManifestEntry {
+  event_id: string;
+  content_hash: string;
+}
+
 export function mapBatchEvidenceText(
   inputs: readonly MapBatchInput[],
   query: string,
@@ -425,18 +430,66 @@ export class PersonalConversationContextService {
     return mapBatchEvidenceText(inputs, query, spec, specHash);
   }
 
+  async mapSnapshotManifest(
+    snapshotId: string,
+    eventIds: readonly string[],
+  ): Promise<MapSnapshotManifestEntry[]> {
+    const bundle = await this.replayAggregateSnapshot(snapshotId);
+    const wanted = new Set(eventIds);
+    const byId = new Map(bundle.sections.flatMap((section) => section.items)
+      .filter((item) => item.kind === "event" && wanted.has(item.resource_id))
+      .map((item) => {
+        const evidence = item.evidence.find((entry) =>
+          entry.event_id === item.resource_id);
+        return [item.resource_id, evidence?.content_hash];
+      }));
+    if (
+      byId.size !== wanted.size
+      || eventIds.some((eventId) => !byId.get(eventId))
+    ) {
+      throw new PersonalContextError(
+        "context_changed",
+        HttpStatus.CONFLICT,
+        "Aggregate context snapshot is incomplete",
+      );
+    }
+    return eventIds.map((eventId) => ({
+      event_id: eventId,
+      content_hash: byId.get(eventId)!,
+    }));
+  }
+
+  async validateMapManifest(
+    entries: readonly MapSnapshotManifestEntry[],
+  ): Promise<void> {
+    const hashes = entries.map((entry) => entry.content_hash);
+    const host = this.runtime.requireHost();
+    for (let offset = 0; offset < hashes.length; offset += 500) {
+      const chunk = hashes.slice(offset, offset + 500);
+      const [bodies, inventory] = await Promise.all([
+        host.get("blobs").getMany(chunk),
+        host.get("authority").findBlobs(chunk),
+      ]);
+      if (chunk.some((hash) => {
+        const bytes = bodies.get(hash);
+        return !inventory.has(hash)
+          || !bytes
+          || createHash("sha256").update(bytes).digest("hex") !== hash;
+      })) {
+        throw new PersonalContextError(
+          "context_changed",
+          HttpStatus.CONFLICT,
+          "Aggregate evidence changed; search again",
+        );
+      }
+    }
+  }
+
   async mapBatchInputs(
     snapshotId: string,
     eventIds: readonly string[],
   ): Promise<MapBatchInput[]> {
-    const bundle = await this.runtime.requireHost().get("context").replay({
-      org_id: this.runtime.orgId(),
-      snapshot_id: snapshotId,
-      principal: { actor_type: "human", actor_id: this.runtime.orgId() },
-      consumer_id: "personal-search-answer-complete",
-      purpose: "answer an exhaustive time-bounded search question",
-      allowed_uses: ["reason"],
-    });
+    const bundle = await this.replayAggregateSnapshot(snapshotId);
     const wanted = new Set(eventIds);
     const byId = new Map(bundle.sections.flatMap((section) => section.items)
       .filter((item) => item.kind === "event" && wanted.has(item.resource_id))
@@ -497,6 +550,17 @@ export class PersonalConversationContextService {
           },
         };
       });
+  }
+
+  private replayAggregateSnapshot(snapshotId: string) {
+    return this.runtime.requireHost().get("context").replay({
+      org_id: this.runtime.orgId(),
+      snapshot_id: snapshotId,
+      principal: { actor_type: "human", actor_id: this.runtime.orgId() },
+      consumer_id: "personal-search-answer-complete",
+      purpose: "answer an exhaustive time-bounded search question",
+      allowed_uses: ["reason"],
+    });
   }
 
   async mapBatchDedupeMetadata(

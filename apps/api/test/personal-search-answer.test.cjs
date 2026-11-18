@@ -1,4 +1,5 @@
 const assert = require("node:assert/strict");
+const { createHash } = require("node:crypto");
 const { describe, it } = require("node:test");
 const {
   PersonalSearchAnswerService,
@@ -19,6 +20,7 @@ const {
   searchAnswerIdFromWorkItem,
 } = require("../dist/personal-system-work");
 const {
+  PersonalConversationContextService,
   adaptiveMapBatchOffsets,
   mapBatchMessageLine,
 } = require("../dist/personal-conversation-context.service");
@@ -341,6 +343,28 @@ describe("adaptive aggregate map batches", () => {
       assert.ok(offsets[batch + 1] - offsets[batch] <= 100);
     }
     assert.match(mapBatchMessageLine(messages[0], 0), /\[attachment: brief\.pdf\]/);
+  });
+
+  describe("aggregate cache manifest validation", () => {
+    it("fails closed when cached evidence bytes are missing or corrupt", async () => {
+      const bytes = Buffer.from("authorized evidence");
+      const hash = createHash("sha256").update(bytes).digest("hex");
+      let stored = bytes;
+      const service = new PersonalConversationContextService({
+        requireHost: () => ({
+          get: (name) => name === "blobs"
+            ? { getMany: async () => new Map([[hash, stored]]) }
+            : { findBlobs: async () => new Map([[hash, {}]]) },
+        }),
+      });
+
+      await service.validateMapManifest([{ event_id: "e1", content_hash: hash }]);
+      stored = Buffer.from("corrupt evidence");
+      await assert.rejects(
+        service.validateMapManifest([{ event_id: "e1", content_hash: hash }]),
+        (error) => error.code === "context_changed",
+      );
+    });
   });
 
   it("uses persisted offsets when slicing a resumed batch", () => {
@@ -719,6 +743,10 @@ describe("persistent aggregate planning", () => {
       harness.started.filter((id) => id.startsWith("search-answer-map:")).length,
       0,
     );
+    assert.equal(harness.manifestReads, 1);
+    assert.equal(harness.bodyReads, 0);
+    assert.deepEqual(harness.validated, ["e1", "e2", "e3", "e4"]);
+    assert.equal(harness.record.scope.map_reduce.cache_manifest.version, 1);
   });
 
   it("treats a changed content hash as a cache miss", async () => {
@@ -734,6 +762,16 @@ describe("persistent aggregate planning", () => {
       harness.started.filter((id) => id.startsWith("search-answer-map:")).length,
       1,
     );
+    assert.equal(harness.manifestReads, 1);
+    assert.equal(harness.bodyReads, 1);
+    assert.deepEqual(harness.validated, ["e2", "e3", "e4"]);
+    assert.deepEqual(
+      harness.record.scope.map_reduce.batches.map((batch) => batch.map_event_ids),
+      [["e1"], [], [], []],
+    );
+
+    await harness.service().get("answer-plan");
+    assert.equal(harness.manifestReads, 1);
   });
 
   it("retries invalid JSON once without embedding the invalid output", async () => {
@@ -857,6 +895,9 @@ function planningHarness(initialRun, options = {}) {
     started,
     evidence,
     cancelled,
+    manifestReads: 0,
+    bodyReads: 0,
+    validated: [],
   };
   states.set(
     harness.record.work_item_id,
@@ -897,12 +938,25 @@ function planningHarness(initialRun, options = {}) {
   };
   const context = {
     mapBatchEvidence: async () => "typed evidence",
-    mapBatchInputs: async (_snapshotId, ids) => ids.map((event_id) => ({
-      event_id,
-      content_hash: `hash-${event_id}`,
-      message: { event_id, text: `message ${event_id}` },
-      dedupe: { event_id },
-    })),
+    mapSnapshotManifest: async (_snapshotId, ids) => {
+      harness.manifestReads += 1;
+      return ids.map((event_id) => ({
+        event_id,
+        content_hash: `hash-${event_id}`,
+      }));
+    },
+    validateMapManifest: async (entries) => {
+      harness.validated.push(...entries.map((entry) => entry.event_id));
+    },
+    mapBatchInputs: async (_snapshotId, ids) => {
+      harness.bodyReads += 1;
+      return ids.map((event_id) => ({
+        event_id,
+        content_hash: `hash-${event_id}`,
+        message: { event_id, text: `message ${event_id}` },
+        dedupe: { event_id },
+      }));
+    },
     mapBatchDedupeMetadata: async (ids) =>
       ids.map((event_id) => ({ event_id })),
   };
