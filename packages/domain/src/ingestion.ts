@@ -123,20 +123,30 @@ export class BlobGenerationConflictError extends Error {
   }
 }
 
+const BLOB_GET_CONCURRENCY = 32;
+
 export async function collectAvailableBlobs(
   get: (hash: string) => Promise<Uint8Array>,
   hashes: readonly string[],
 ): Promise<Map<string, Uint8Array>> {
+  const unique = [...new Set(hashes.filter((hash) => hash.length > 0))];
   const found = new Map<string, Uint8Array>();
-  await Promise.all(
-    [...new Set(hashes.filter((hash) => hash.length > 0))].map(async (hash) => {
+  let next = 0;
+  const workers = Math.min(BLOB_GET_CONCURRENCY, unique.length);
+  await Promise.all(Array.from({ length: workers }, async () => {
+    while (next < unique.length) {
+      const hash = unique[next];
+      next += 1;
+      if (!hash) {
+        continue;
+      }
       try {
         found.set(hash, await get(hash));
       } catch {
         // Missing or unreadable blobs stay absent; callers treat that as empty.
       }
-    }),
-  );
+    }
+  }));
   return found;
 }
 

@@ -197,6 +197,43 @@ describe("ContextProjectionCoordinator", () => {
     );
   });
 
+  it("does not reread every blob when the lexical generation is already current", async () => {
+    let reads = 0;
+    let blobReads = 0;
+    const index = {
+      async getStatus() {
+        return {
+          available: true,
+          algorithm_version: "literal-unicode-v2",
+          generation: "continuous-v1",
+          watermark: "authority:1",
+        };
+      },
+      async replaceOrganization() {
+        throw new Error("A current generation should not be replaced");
+      },
+      async upsertDocuments() {
+        throw new Error("An empty event list should not upsert");
+      },
+    };
+    const coordinator = new ContextProjectionCoordinator({
+      async openContextRead() {
+        reads += 1;
+        return authority().openContextRead();
+      },
+    }, artifactsWithExistingEventBlob(), new MemoryContextProjectorRegistry(), {
+      async getMany() {
+        blobReads += 1;
+        return new Map();
+      },
+    }, index);
+
+    await coordinator.syncLexicalIndex("example-org", "continuous-v1");
+
+    assert.equal(reads, 0);
+    assert.equal(blobReads, 0);
+  });
+
   it("bootstraps the lexical index when an Event blob is missing", async () => {
     const calls = [];
     const index = {
