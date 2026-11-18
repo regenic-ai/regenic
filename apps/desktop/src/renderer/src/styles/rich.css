@@ -2,8 +2,8 @@
   user-select: text;
   font-size: 14px;
   line-height: 1.55;
-  width: 100%;
-  max-width: 72ch;
+  width: auto;
+  max-width: 100%;
   overflow-wrap: break-word;
   word-break: normal;
 }
@@ -334,7 +334,7 @@
 .composer-dock {
   flex-shrink: 0;
   background: var(--chrome);
-  padding: 12px 32px 20px;
+  padding: 12px 32px 24px;
 }
 
 .sr-only {

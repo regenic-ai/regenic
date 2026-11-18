@@ -25,6 +25,15 @@ import { ThreadFaceTags } from "./ThreadFaceTags";
 import { IdentityAvatar } from "./IdentityAvatar";
 import { useLocale } from "./LocaleContext";
 import {
+  ColumnResizeHandle,
+  LIST_DEFAULT,
+  LIST_MIN,
+  LIST_WIDTH_KEY,
+  THREAD_MIN,
+  readColumnWidth,
+  writeColumnWidth,
+} from "./ColumnResize";
+import {
   ChevronIcon,
   FilterIcon,
   HideIcon,
@@ -148,6 +157,9 @@ export function InboxWorkspace({
   const [ruleFilter, setRuleFilter] = useState<RuleFilter>("all");
   const [titleQuery, setTitleQuery] = useState("");
   const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [listWidth, setListWidth] = useState(() => readColumnWidth(LIST_WIDTH_KEY, LIST_DEFAULT));
+  const [resizingList, setResizingList] = useState(false);
+  const columnsRef = useRef<HTMLDivElement>(null);
   const [recipeNames, setRecipeNames] = useState<Record<string, string>>({});
   const searching = titleQuery.trim().length > 0;
   const pool = searching ? mergeInboxThreadLists(threads, otherThreads) : threads;
@@ -248,10 +260,14 @@ export function InboxWorkspace({
   };
 
   return (
-    <div className="columns">
+    <div
+      ref={columnsRef}
+      className={`columns${resizingList ? " is-resizing" : ""}`}
+      style={{ ["--list-w" as string]: `${listWidth}px` }}
+    >
       <aside className="list" aria-label={t("nav.inbox")}>
         <div className="list-chrome">
-          <div className="list-chrome-primary">
+          <div className="list-toolbar">
             <div className="list-views" role="tablist" aria-label={t("inbox.list")}>
               {([
                 ["shown", t("inbox.viewShown"), shownCount],
@@ -307,40 +323,40 @@ export function InboxWorkspace({
                 }}
               />
             </div>
-          </div>
-          <div className="list-chrome-search">
-            <SearchIcon />
-            <input
-              type="search"
-              className="list-search"
-              value={titleQuery}
-              onChange={(event) => setTitleQuery(event.target.value)}
-              placeholder={t("inbox.searchPlaceholder")}
-              aria-label={t("inbox.search")}
-            />
+            <div className="list-toolbar-row">
+              <div className="list-chrome-search">
+                <SearchIcon />
+                <input
+                  type="search"
+                  className="list-search"
+                  value={titleQuery}
+                  onChange={(event) => setTitleQuery(event.target.value)}
+                  placeholder={t("inbox.searchPlaceholder")}
+                  aria-label={t("inbox.search")}
+                />
+              </div>
+              <div className="sort-toggle" role="group" aria-label={t("inbox.sort")}>
+                <button
+                  type="button"
+                  className={sortMode === "attention" ? "active" : ""}
+                  aria-pressed={sortMode === "attention"}
+                  onClick={() => onSortMode("attention")}
+                >
+                  {t("inbox.attention")}
+                </button>
+                <button
+                  type="button"
+                  className={sortMode === "normal" ? "active" : ""}
+                  aria-pressed={sortMode === "normal"}
+                  onClick={() => onSortMode("normal")}
+                >
+                  {t("inbox.normal")}
+                </button>
+              </div>
+            </div>
           </div>
           {pool.length > 0 && refineOpen ? (
             <div className="list-refine-panel" id="inbox-refine">
-              <LabeledFilter label={t("inbox.sort")}>
-                <div className="sort-toggle" role="group" aria-label={t("inbox.sort")}>
-                  <button
-                    type="button"
-                    className={sortMode === "attention" ? "active" : ""}
-                    aria-pressed={sortMode === "attention"}
-                    onClick={() => onSortMode("attention")}
-                  >
-                    {t("inbox.attention")}
-                  </button>
-                  <button
-                    type="button"
-                    className={sortMode === "normal" ? "active" : ""}
-                    aria-pressed={sortMode === "normal"}
-                    onClick={() => onSortMode("normal")}
-                  >
-                    {t("inbox.normal")}
-                  </button>
-                </div>
-              </LabeledFilter>
               <LabeledFilter
                 label={t("inbox.channel")}
                 filtered={channelFilter !== "all"}
@@ -546,6 +562,17 @@ export function InboxWorkspace({
             </div>
           ))}
         </ListBody>
+        <ColumnResizeHandle
+          label={t("shell.resizeList")}
+          width={listWidth}
+          min={LIST_MIN}
+          max={() => (columnsRef.current?.clientWidth ?? window.innerWidth) - THREAD_MIN}
+          onWidth={(width) => {
+            setListWidth(width);
+            writeColumnWidth(LIST_WIDTH_KEY, width);
+          }}
+          onDragChange={setResizingList}
+        />
       </aside>
       <section className="thread">
         {selected ? (

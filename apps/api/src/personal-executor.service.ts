@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { Inject, Injectable } from "@nestjs/common";
 import {
   ChannelDriverRegistry,
+  asConnectorHost,
   DEFAULT_COPY_LOCALE,
   resolveCopyText,
   resolveExecutorCatalog,
@@ -234,11 +235,16 @@ export class PersonalExecutorService {
     }
     const capabilities = driver.capabilities(installation);
     if (
-      installation.status !== "enabled" ||
       capabilities.execute !== true ||
       capabilities.create === true ||
       !this.localBinding(installation)
     ) {
+      if (installation.status === "enabled" && capabilities.execute !== true) {
+        await this.removeConnectorExecutors(installationId);
+      }
+      return;
+    }
+    if (installation.status !== "enabled") {
       return;
     }
     const rows = await this.runtime
@@ -261,6 +267,42 @@ export class PersonalExecutorService {
       name,
       config: { installation_id: installationId },
     });
+  }
+
+  async setConnectorExecutorsStatus(
+    installationId: string,
+    status: "enabled" | "disabled",
+  ): Promise<void> {
+    const authority = this.runtime.requireHost().get("authority");
+    const rows = await authority.listExecutorInstallations(this.runtime.orgId());
+    for (const row of rows) {
+      if (
+        row.kind === "local_connector" &&
+        executorConfigText(row.config, "installation_id") === installationId &&
+        row.status !== status
+      ) {
+        await authority.putExecutorInstallation({
+          ...row,
+          status,
+          updated_at: new Date().toISOString(),
+        });
+      }
+    }
+    await this.remount();
+  }
+
+  async removeConnectorExecutors(installationId: string): Promise<void> {
+    const authority = this.runtime.requireHost().get("authority");
+    const rows = await authority.listExecutorInstallations(this.runtime.orgId());
+    for (const row of rows) {
+      if (
+        row.kind === "local_connector" &&
+        executorConfigText(row.config, "installation_id") === installationId
+      ) {
+        await authority.deleteExecutorInstallation(this.runtime.orgId(), row.id);
+      }
+    }
+    await this.remount();
   }
 
   async install(input: ExecutorInput): Promise<EngineExecutorView> {
@@ -550,6 +592,13 @@ export class PersonalExecutorService {
       ? connectorIsAgent(driver.capabilities(connector))
       : false;
     const plugin =
+      (connector && driver?.bindExecutor
+        ? await driver.bindExecutor(
+            connector,
+            asConnectorHost(this.runtime.requireHost()),
+            process.env,
+          )
+        : undefined) ??
       binding?.plugin ??
       (boundAgent
         ? createSessionTaskExecutor({
@@ -636,9 +685,10 @@ export class PersonalExecutorService {
     if (
       installation.status !== "enabled" ||
       capabilities.execute !== true ||
-      !plugin ||
-      plugin.catalog().source !== driver.source ||
-      !plugin.capabilities().start
+      (!driver.bindExecutor &&
+        (!plugin ||
+          plugin.catalog().source !== driver.source ||
+          !plugin.capabilities().start))
     ) {
       return undefined;
     }

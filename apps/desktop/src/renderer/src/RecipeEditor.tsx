@@ -224,7 +224,7 @@ export function MatchPreview({
       ? t("recipes.previewSamples", { names: preview.samples.join(" · ") })
       : null;
   return (
-    <div className="recipe-preview">
+    <div className={`recipe-preview${preview.ready ? "" : " is-pending"}`}>
       <p className="recipe-preview-body">{body}
         {preview.ready ? <>{" "}<InfoTip label={t("recipes.previewTitle")}>
           {t(draft.trigger_kind === "push" && (draft.text_contains.trim() || draft.text_excludes.trim())

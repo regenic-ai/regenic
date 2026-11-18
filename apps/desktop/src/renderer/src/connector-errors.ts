@@ -34,6 +34,9 @@ export function connectorActionError(error: unknown): string {
   if (text.includes("teardown has not completed")) {
     return t("error.connector.stillStopping");
   }
+  if (text.includes("public_url_required")) {
+    return t("error.connector.publicUrlRequired");
+  }
   return message;
 }
 

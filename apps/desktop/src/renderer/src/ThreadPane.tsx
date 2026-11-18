@@ -22,7 +22,6 @@ import type { CreateTarget } from "./inbox-drafts";
 import { WorkContextStrip } from "./WorkContextStrip";
 import { WorkResultCard } from "./WorkResultCard";
 import { AgentReadsCard } from "./AgentReadsCard";
-import { ThreadContextPanel } from "./ThreadContextPanel";
 import { PromptHandoffDock } from "./PromptHandoffDock";
 import { ThreadPromptPanel } from "./ThreadPromptPanel";
 import { threadSyncLabel, threadSyncTone } from "./format";
@@ -435,9 +434,6 @@ export const ThreadPane = memo(function ThreadPane({
         ? workNextStepCopy(thread)
         : null;
   const heading = threadTitle(thread);
-  const contextSourceRevision = merged
-    .map((item) => `${item.event.id}:${item.event.content_hash ?? ""}:${item.event.operation}`)
-    .join("|");
   const workResult = resultSummary ? (
     <WorkResultCard key={`${thread.id}:${resultSummary}`} text={resultSummary} />
   ) : null;
@@ -707,11 +703,6 @@ export const ThreadPane = memo(function ThreadPane({
           ) : null}
           {/* When a prompt is up, fold the result into the dock — avoid two dense cards. */}
           {!conversationClosed && !awaitingPrompt ? workResult : null}
-          <ThreadContextPanel
-            threadId={thread.id}
-            sourceRevision={contextSourceRevision}
-            onLocateEvidence={(eventId) => listRef.current?.scrollToEvent(eventId) ?? false}
-          />
         </div>
       </header>
       {locateUnavailable ? <p role="status" className="muted">{t("search.locateUnavailable")}</p> : null}

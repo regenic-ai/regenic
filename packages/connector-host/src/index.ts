@@ -10,6 +10,7 @@ import {
   type DshRpcHttpResult,
 } from "@regenic/dsh-connector";
 import { feishuChatDriver } from "@regenic/feishu-connector";
+import { serverAppDriver } from "@regenic/server-app-connector";
 import { createDshHostRpcServices } from "./dsh-host-services";
 
 export { createDshHostRpcServices };
@@ -22,6 +23,7 @@ export const BUILTIN_CONNECTOR_SPECS = [
   "@regenic/dsh-connector",
   "@regenic/feishu-connector",
   "@regenic/cursor-connector",
+  "@regenic/server-app-connector",
 ] as const;
 
 export function builtinChannelDrivers(): ChannelDriver[] {
@@ -29,6 +31,7 @@ export function builtinChannelDrivers(): ChannelDriver[] {
     dshSessionDriver,
     feishuChatDriver,
     cursorAgentDriver,
+    serverAppDriver,
   ];
 }
 
@@ -54,4 +57,5 @@ export {
   dropDshPromptStore,
   feishuChatDriver,
   questionPromptId,
+  serverAppDriver,
 };

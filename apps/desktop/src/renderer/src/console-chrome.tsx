@@ -11,6 +11,10 @@ import {
   SidebarIcon,
 } from "./Icons";
 import { statusSummary, type ShellStatus, type ShellStatusRow } from "./shell-status";
+import {
+  ColumnResizeHandle,
+  SIDEBAR_MIN,
+} from "./ColumnResize";
 import type { NavId } from "./types";
 
 const MAC = typeof navigator !== "undefined" && /Mac/i.test(navigator.platform);
@@ -193,19 +197,27 @@ function StatusMenu({
 export function Sidebar({
   nav,
   collapsed,
+  width,
   workCount,
   status,
   onNav,
   onSearch,
   onToggle,
+  onWidth,
+  onResizeDrag,
+  resizeMax,
 }: {
   nav: NavId;
   collapsed: boolean;
+  width: number;
   workCount: number;
   status: ShellStatus;
   onNav: (nav: NavId) => void;
   onSearch: () => void;
   onToggle: () => void;
+  onWidth: (width: number) => void;
+  onResizeDrag: (dragging: boolean) => void;
+  resizeMax: () => number;
 }) {
   const toggleLabel = collapsed ? t("shell.expand") : t("shell.collapse");
   return (
@@ -279,6 +291,16 @@ export function Sidebar({
           onClick={() => onNav("settings")}
         />
       </div>
+      {collapsed ? null : (
+        <ColumnResizeHandle
+          label={t("shell.resizeSidebar")}
+          width={width}
+          min={SIDEBAR_MIN}
+          max={resizeMax}
+          onWidth={onWidth}
+          onDragChange={onResizeDrag}
+        />
+      )}
     </nav>
   );
 }

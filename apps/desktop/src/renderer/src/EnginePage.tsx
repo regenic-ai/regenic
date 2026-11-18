@@ -8,7 +8,6 @@ import {
   installConnector,
   rollbackConnectorFromMarket,
   retryConnectorMarketRegistration,
-  installExecutor,
   retryConnectorQuarantines,
   setConnectorStatus,
   setExecutorStatus,
@@ -16,14 +15,10 @@ import {
   uninstallConnectorFromMarket,
   uninstallConnector,
   updateConnectorFromMarket,
-  uninstallExecutor,
   updateConnectorConfig,
-  updateExecutorConfig,
 } from "./api";
-import { CatalogDocs, uniqueCatalogDocs } from "./CatalogDocs";
 import { ConnectorKind } from "./ConnectorSettings";
-import { InfoTip } from "./InfoTip";
-import { ExecutorKind } from "./ExecutorSettings";
+import { AgentList } from "./ExecutorSettings";
 import { connectorActionError, formatChatTime } from "./format";
 import { useLocale } from "./LocaleContext";
 import type {
@@ -50,9 +45,6 @@ export function EnginePage({
   const [installingType, setInstallingType] = useState<string | null>(null);
   const [pairingCodes, setPairingCodes] = useState<Record<string, string>>({});
   const [pendingUninstallIds, setPendingUninstallIds] = useState<string[]>([]);
-  const [installingExecutor, setInstallingExecutor] = useState<string | null>(
-    null,
-  );
   const [actionError, setActionError] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [tab, setTab] = useState<"sources" | "handlers">("sources");
@@ -82,7 +74,7 @@ export function EnginePage({
 
   if (!engine) {
     return (
-      <div className="page page-wide">
+      <div className="page page-wide page-apps">
         <header className="page-hero">
           <p className="page-eyebrow">{t("engine.eyebrow")}</p>
           <h1>{t("engine.title")}</h1>
@@ -100,7 +92,7 @@ export function EnginePage({
   );
 
   return (
-    <div className="page page-wide">
+    <div className="page page-wide page-apps">
       <header className="page-hero">
         <p className="page-eyebrow">{t("engine.eyebrow")}</p>
         <h1>{t("engine.title")}</h1>
@@ -258,10 +250,7 @@ export function EnginePage({
           <section className="card engine-connectors" id="engine-connector-config">
             <div className="card-head">
               <div className="card-title">
-                <h2 className="settings-heading">{t("engine.connectors")}
-                  <InfoTip label={t("engine.connectors")}>{t("engine.connectorsLead")}</InfoTip>
-                </h2>
-                <CatalogDocs docs={uniqueCatalogDocs(engine.catalog ?? [])} />
+                <h2 className="settings-heading">{t("engine.connectors")}</h2>
               </div>
               {syncable.length > 1 ? (
                 <button
@@ -430,58 +419,24 @@ export function EnginePage({
         <section className="card engine-connectors">
           <div className="card-head">
             <div className="card-title">
-              <h2 className="settings-heading">{t("engine.executors")}
-                <InfoTip label={t("engine.executors")}>{t("engine.executorsLead")}</InfoTip>
-              </h2>
-              <CatalogDocs docs={uniqueCatalogDocs(engine.executor_catalog ?? [])} />
+              <h2 className="settings-heading">{t("engine.executors")}</h2>
             </div>
           </div>
-          {(engine.executor_catalog ?? []).map((kind) => (
-            <ExecutorKind
-              key={kind.kind}
-              kind={kind}
-              installations={(engine.executor_installations ?? []).filter(
-                (item) => item.kind === kind.kind,
-              )}
-              busyId={busyId}
-              installing={installingExecutor === kind.kind}
-              onOpenInstall={() => setInstallingExecutor(kind.kind)}
-              onCloseInstall={() => setInstallingExecutor(null)}
-              onInstall={(config) =>
-                void runAction(`ex:${kind.kind}`, async () => {
-                  await installExecutor(kind.kind, config);
-                  setInstallingExecutor(null);
-                })
-              }
-              onToggle={(installation) =>
-                void runAction(`ex:${installation.id}`, async () => {
-                  await setExecutorStatus(
-                    installation.id,
-                    installation.status === "disabled" ? "enabled" : "disabled",
-                  );
-                })
-              }
-              onUpdate={(installation, config) =>
-                runAction(`ex:${installation.id}`, async () => {
-                  await updateExecutorConfig(installation.id, config);
-                })
-              }
-              onUninstall={(installation) => {
-                if (
-                  !window.confirm(
-                    t("engine.uninstallExecutorConfirm", {
-                      name: installation.label,
-                    }),
-                  )
-                ) {
-                  return;
-                }
-                void runAction(`ex:${installation.id}`, async () => {
-                  await uninstallExecutor(installation.id);
-                });
-              }}
-            />
-          ))}
+          <p className="muted">{t("engine.executorsLead")}</p>
+          <AgentList
+            agents={engine.executor_installations ?? []}
+            apps={engine.installations}
+            busyId={busyId}
+            onToggle={(agent) =>
+              void runAction(`ex:${agent.id}`, async () => {
+                await setExecutorStatus(
+                  agent.id,
+                  agent.status === "disabled" ? "enabled" : "disabled",
+                );
+              })
+            }
+          />
+          {actionError ? <p className="action-error">{actionError}</p> : null}
         </section>
       )}
     </div>
@@ -504,7 +459,6 @@ function ConnectorMarketplace({
   const [search, setSearch] = useState("");
   const [installing, setInstalling] = useState<string | null>(null);
   const [installJob, setInstallJob] = useState<ConnectorInstallJob | null>(null);
-  const [selectedVersions, setSelectedVersions] = useState<Record<string, string>>({});
   const [installNotice, setInstallNotice] = useState<Record<string, {
     message: string;
     error?: boolean;
@@ -800,7 +754,7 @@ function ConnectorMarketplace({
   return (
     <section className="card engine-connectors">
       <div className="card-head">
-        <h2>{market?.title ?? t("market.title")}</h2>
+        <h2>{t("market.title")}</h2>
         <button
           type="button"
           className="ghost"
@@ -845,10 +799,7 @@ function ConnectorMarketplace({
           {visibleConnectors.map((item) => {
             const latest = item.versions[0];
             const compatibleReleases = item.versions.filter((release) => release.compatible);
-            const defaultInstallRelease = compatibleReleases[0];
-            const installRelease = item.versions.find(
-              (release) => release.version === selectedVersions[item.name],
-            ) ?? defaultInstallRelease;
+            const installRelease = compatibleReleases[0];
             const plugin = plugins.find(
               (candidate) =>
                 candidate.origin === "extra" &&
@@ -867,112 +818,44 @@ function ConnectorMarketplace({
             const job = installJob?.package_name === item.name ? installJob : null;
             const source = item.repository ?? item.homepage ?? `https://www.npmjs.com/package/${item.name}`;
             const publisher = item.author ?? t("market.unknownPublisher");
-            const status: { tone: string; label: string } = job || installing === item.name
-              ? { tone: "syncing", label: t("market.statusInstalling") }
-              : plugin
-                ? plugin.status === "loaded"
-                  ? { tone: "running", label: t("market.pluginLoaded") }
-                  : plugin.status === "uninstall_pending"
-                    ? { tone: "stopped", label: t("market.uninstallPendingRestart") }
-                    : plugin.status === "update_pending"
-                      ? {
-                          tone: "stopped",
-                          label: t("market.versionChangePendingRestart", {
-                            version: plugin.pending_version ?? "",
-                          }),
-                        }
-                      : plugin.status === "skipped"
-                        ? { tone: "stopped", label: t("market.pluginSkipped") }
-                        : { tone: "error", label: t("market.pluginLoadFailed") }
-                : installedPackages.has(item.name)
-                  ? { tone: "syncing", label: t("market.installedRefreshPending") }
-                  : { tone: "", label: t("market.pluginNotFound") };
-            const capabilities: Array<{ key: string; label: string; detail: string }> = plugin
-              ? [
-                  ...plugin.drivers.map((type) => ({
-                    key: `driver:${type}`,
-                    label: t("market.capabilityDriver"),
-                    detail: type,
-                  })),
-                  ...plugin.executors.map((executorSource) => ({
-                    key: `executor:${executorSource}`,
-                    label: t("market.capabilityExecutor"),
-                    detail: executorSource,
-                  })),
-                ]
-              : [
-                  ...(latest?.driver_exports.length
-                    ? [{
-                        key: "driver",
-                        label: t("market.capabilityDriver"),
-                        detail: latest.driver_exports.join(", "),
-                      }]
-                    : []),
-                  ...(latest?.executor_exports.length
-                    ? [{
-                        key: "executor",
-                        label: t("market.capabilityExecutor"),
-                        detail: latest.executor_exports.join(", "),
-                      }]
-                    : []),
-                ];
-            const facts = [
-              plugin?.version
-                ? t("market.localVersion", { version: plugin.version })
-                : latest
-                  ? t("market.latestVersion", { version: latest.version })
-                  : null,
-              plugin?.version && installRelease && plugin.version !== installRelease.version
-                ? t("market.availableVersion", { version: installRelease.version })
-                : null,
-              t("market.releaseCount", { count: item.versions.length }),
-              latest?.compatible ? t("market.supportedProtocol") : null,
-              item.author ? t("market.author", { name: item.author }) : null,
-              plugin
-                ? plugin.install_source === "market"
-                  ? t("market.sourceMarket")
-                  : plugin.install_source === "local"
-                    ? t("market.sourceLocal")
-                    : t("market.sourceBuiltIn")
-                : null,
-              plugin?.pending_operation
-                ? plugin.pending_operation === "rollback"
-                  ? t("market.rollbackPending")
-                  : t("market.updatePending")
-                : null,
-            ].filter((fact): fact is string => fact !== null);
             const confirmHere = confirm?.packageName === item.name ? confirm : null;
             return (
               <article
                 className={`connector-kind market-card${plugin?.status === "loaded" ? " is-installed" : ""}`}
                 key={item.name}
               >
-                <div className="market-card-head">
-                  <div className="market-card-title">
-                    <h3>{item.title}</h3>
-                    <code>{item.name}</code>
+                <div className="app-row">
+                  <div className="app-row-copy">
+                    <strong>{item.title}</strong>
+                    {item.description ? <p>{item.description}</p> : null}
                   </div>
-                  <span className={`chip${status.tone ? ` ${status.tone}` : ""}`}>
-                    {status.tone ? <span className="dot" /> : null}
-                    {status.label}
-                  </span>
+                  <div className="app-row-actions">
+                    {!plugin && !installedPackages.has(item.name) && installRelease ? (
+                      <button
+                        type="button"
+                        className="primary"
+                        disabled={installing !== null || installJob !== null || confirmHere !== null}
+                        onClick={() => setConfirm({
+                          packageName: item.name,
+                          title: t("market.confirmInstallTitle", {
+                            name: item.title,
+                            version: installRelease.version,
+                          }),
+                          facts: [
+                            [t("market.confirmPackage"), `${item.name}@${installRelease.version}`],
+                            [t("market.confirmPublisher"), publisher],
+                            [t("market.confirmSource"), source],
+                          ],
+                          body: t("market.confirmInstallRisk"),
+                          confirmLabel: t("market.confirmInstall"),
+                          run: () => startInstall(item.name, installRelease.version),
+                        })}
+                      >
+                        {installing === item.name ? t("market.installing") : t("connector.install")}
+                      </button>
+                    ) : null}
+                  </div>
                 </div>
-                {item.description ? <p className="market-card-desc">{item.description}</p> : null}
-                {capabilities.length ? (
-                  <div className="market-capabilities">
-                    {capabilities.map((capability) => (
-                      <span className="market-capability" key={capability.key} title={capability.detail}>
-                        <strong>{capability.label}</strong>
-                        <code>{capability.detail}</code>
-                      </span>
-                    ))}
-                  </div>
-                ) : null}
-                <p className="market-facts">
-                  {facts.map((fact, index) => (
-                    <span key={fact}>{index > 0 ? " · " : ""}{fact}</span>
-                  ))}
-                </p>
                 {latest && !latest.compatible ? (
                   <p className="action-error">
                     {t("market.unsupportedProtocol", { version: latest.engines_regenic })}
@@ -1028,55 +911,6 @@ function ConnectorMarketplace({
                   </div>
                 ) : null}
                 <div className="market-actions">
-                  {(!plugin || plugin.install_source === "market") &&
-                    plugin?.status !== "update_pending" &&
-                    plugin?.status !== "uninstall_pending" &&
-                    compatibleReleases.length > 1 ? (
-                    <label className="field">
-                      <span>{t("market.installVersion")}</span>
-                      <select
-                        value={installRelease?.version ?? ""}
-                        onChange={(event) => setSelectedVersions((current) => ({
-                          ...current,
-                          [item.name]: event.currentTarget.value,
-                        }))}
-                      >
-                        {compatibleReleases.map((release) => (
-                          <option key={release.version} value={release.version}>
-                            {release.version}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  ) : null}
-                  {!plugin && !installedPackages.has(item.name) && installRelease ? (
-                    <button
-                      type="button"
-                      className="primary"
-                      disabled={installing !== null || installJob !== null || confirmHere !== null}
-                      onClick={() => setConfirm({
-                        packageName: item.name,
-                        title: t("market.confirmInstallTitle", {
-                          name: item.title,
-                          version: installRelease.version,
-                        }),
-                        facts: [
-                          [t("market.confirmPackage"), `${item.name}@${installRelease.version}`],
-                          [t("market.confirmPublisher"), publisher],
-                          [t("market.confirmSource"), source],
-                        ],
-                        body: t("market.confirmInstallRisk"),
-                        confirmLabel: t("market.confirmInstall"),
-                        run: () => startInstall(item.name, installRelease.version),
-                      })}
-                    >
-                      {installing === item.name
-                        ? t("market.installing")
-                        : t("market.installVersionButton", {
-                            version: installRelease.version,
-                          })}
-                    </button>
-                  ) : null}
                   {plugin?.install_source === "market" &&
                     plugin.status !== "update_pending" &&
                     plugin.status !== "uninstall_pending" &&
@@ -1161,25 +995,6 @@ function ConnectorMarketplace({
                         : t("market.uninstall")}
                     </button>
                   ) : null}
-                  <span className="market-links">
-                    {item.homepage ? (
-                      <a href={item.homepage} target="_blank" rel="noreferrer">
-                        {t("market.homepage")}
-                      </a>
-                    ) : null}
-                    {item.repository ? (
-                      <a href={item.repository} target="_blank" rel="noreferrer">
-                        {t("market.repository")}
-                      </a>
-                    ) : null}
-                    <a
-                      href={`https://www.npmjs.com/package/${item.name}`}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      {t("market.npm")}
-                    </a>
-                  </span>
                   {plugin?.install_source === "market" && installedInstanceCount > 0 ? (
                     <div className="muted market-blockers">
                       <p>{t("market.uninstallInstancesFirst", { count: installedInstanceCount })}</p>
@@ -1307,9 +1122,6 @@ function ConnectorMarketplace({
                     ) : null}
                   </p>
                 ) : null}
-                {item.versions.length > 1 ? (
-                  <ConnectorReleaseDetails releases={item.versions} />
-                ) : null}
               </article>
             );
           })}
@@ -1346,37 +1158,6 @@ type MarketConfirm = {
   danger?: boolean;
   run: () => void;
 };
-
-function ConnectorReleaseDetails({
-  releases,
-}: {
-  releases: ConnectorMarketView["connectors"][number]["versions"];
-}) {
-  const { t } = useLocale();
-  const [open, setOpen] = useState(false);
-  return (
-    <details onToggle={(event) => setOpen(event.currentTarget.open)}>
-      <summary>{t("market.allReleases")}</summary>
-      {open ? (
-        <ul>
-          {releases.map((release) => (
-            <li key={release.version}>
-              <code>{release.version}</code>
-              {" · "}
-              {release.published_at.slice(0, 10)}
-              {" · "}
-              {release.compatible
-                ? t("market.supportedProtocol")
-                : t("market.unsupportedProtocol", {
-                    version: release.engines_regenic,
-                  })}
-            </li>
-          ))}
-        </ul>
-      ) : null}
-    </details>
-  );
-}
 
 function unsignedPluginCount(engine: PersonalEngineView): number {
   return (engine.plugins ?? []).filter(

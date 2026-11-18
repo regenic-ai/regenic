@@ -82,35 +82,32 @@ export function ConnectorKind({
 }) {
   const { t } = useLocale();
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [managing, setManaging] = useState(false);
+  const summary = installations.length > 0
+    ? installations.map((item) => item.label).filter(Boolean).join("、")
+    : kind.description?.trim() || null;
+  const serverApp = kind.connector_type === "server-app";
   return (
     <div
       id={`connector-type-${kind.connector_type}`}
       className={`connector-kind${kind.installed ? " is-installed" : ""}`}
     >
-      <div className="install">
-        <div>
-          <span className="settings-label">
-            <strong>{kind.title}</strong>
-            {kind.description || kind.credential_hint || kind.import_files ? (
-              <InfoTip label={kind.title}>
-                {kind.description ? <p>{kind.description}</p> : null}
-                {kind.credential_hint ? <p>{t("connector.credentials", { hint: kind.credential_hint })}</p> : null}
-                {kind.import_files ? <p>{kind.import_files.description ?? kind.import_files.title}</p> : null}
-              </InfoTip>
-            ) : null}
-          </span>
-          <div className="install-meta">
-            <span className={`chip ${kind.installed ? "running" : ""}`.trim()}>
-              {kind.installed
-                ? t("connector.installed", { count: kind.instance_count })
-                : t("connector.notInstalled")}
-            </span>
-          </div>
-          <PrerequisiteList
-            items={visiblePrerequisites(kind, defaultFieldValues(kind))}
-          />
+      <div className="app-row">
+        <div className="app-row-copy">
+          <strong>{kind.title}</strong>
+          {summary ? <p>{summary}</p> : null}
         </div>
-        <div className="install-actions">
+        <div className="app-row-actions">
+          {installations.length > 0 ? (
+            <button
+              type="button"
+              className="ghost"
+              aria-expanded={managing}
+              onClick={() => setManaging((current) => !current)}
+            >
+              {t("connector.manage")}
+            </button>
+          ) : null}
           {!kind.singleton || !kind.installed ? (
             <button
               type="button"
@@ -119,9 +116,9 @@ export function ConnectorKind({
               onClick={onOpenInstall}
             >
               {busyId === kind.connector_type
-                ? t("connector.installing")
+                ? t(serverApp ? "serverApp.connecting" : "connector.installing")
                 : kind.setup_ready
-                  ? t("connector.install")
+                  ? t(serverApp ? "serverApp.connect" : "connector.install")
                   : t("connector.setup")}
             </button>
           ) : null}
@@ -139,21 +136,23 @@ export function ConnectorKind({
       ) : null}
       {installing ? (
         <ConnectorSettingsDialog
-          title={t(
-            kind.setup_ready ? "connector.installTitle" : "connector.setupTitle",
-            { title: kind.title },
-          )}
+          title={serverApp
+            ? t("serverApp.connectTitle")
+            : t(
+                kind.setup_ready ? "connector.installTitle" : "connector.setupTitle",
+                { title: kind.title },
+              )}
           kind={kind}
           busy={busyId === kind.connector_type}
           error={error}
-          submitLabel={t("connector.install")}
-          busyLabel={t("connector.installing")}
+          submitLabel={t(serverApp ? "serverApp.connect" : "connector.install")}
+          busyLabel={t(serverApp ? "serverApp.connecting" : "connector.installing")}
           showSetup
           onSubmit={onInstall}
           onClose={onCloseInstall}
         />
       ) : null}
-      {installations.map((installation) => (
+      {managing ? installations.map((installation) => (
         <ConnectorRow
           key={installation.id}
           id={`connector-installation-${installation.id}`}
@@ -181,7 +180,7 @@ export function ConnectorKind({
           onUninstall={() => onUninstall(installation)}
           onPairingCode={onPairingCode}
         />
-      ))}
+      )) : null}
     </div>
   );
 }
@@ -317,6 +316,9 @@ function ConnectorSettingsDialog({
             {t("connector.close")}
           </button>
         </div>
+        {kind.connector_type === "server-app" ? (
+          <p className="dialog-lead">{kind.description}</p>
+        ) : null}
         <ConnectorSettingsForm
           kind={kind}
           busy={busy}

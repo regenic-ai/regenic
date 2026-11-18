@@ -1,5 +1,5 @@
 import type { Plugin, PluginHandle } from "@regenic/plugin-host";
-import type { WorkMcpServer } from "./executor";
+import type { TaskExecutor, WorkMcpServer } from "./executor";
 import type {
   AttentionAck,
   MessageReceipt,
@@ -18,6 +18,7 @@ import type {
   ChannelConnector,
   ConnectorInstallation,
   IngestBatch,
+  JsonValue,
   NewConnectorInstallation,
   ConnectorSourceMode,
 } from "./ingest";
@@ -425,7 +426,7 @@ export interface ChannelDriverCore {
     config: Record<string, unknown>;
     now: string;
     secrets?: ConnectorSecrets;
-  }): NewConnectorInstallation;
+  }): NewConnectorInstallation | Promise<NewConnectorInstallation>;
   matchesThread(
     installation: ConnectorInstallation,
     thread: ConversationThread,
@@ -522,6 +523,14 @@ export interface ConnectorStopContext {
   signal: AbortSignal;
 }
 
+export interface ConnectorConnectionContext {
+  ingest?: {
+    url: string;
+    header: "x-regenic-ingest-token";
+    token: string;
+  };
+}
+
 export interface ChannelDriver
   extends ChannelDriverCore, ChannelSourcePort, Partial<ChannelSinkPort> {
   /**
@@ -534,6 +543,22 @@ export interface ChannelDriver
     installation: ConnectorInstallation,
     host: ConnectorHost,
   ): Promise<void>;
+  /**
+   * Complete an out-of-process connector handshake after the installation is
+   * durable. Returned values are merged into the non-secret installation config.
+   */
+  connectInstallation?(
+    installation: ConnectorInstallation,
+    host: ConnectorHost,
+    env: NodeJS.ProcessEnv,
+    context: ConnectorConnectionContext,
+  ): Promise<Record<string, JsonValue> | void>;
+  /** Build a task executor owned by this installation. */
+  bindExecutor?(
+    installation: ConnectorInstallation,
+    host: ConnectorHost,
+    env: NodeJS.ProcessEnv,
+  ): Promise<TaskExecutor>;
   /**
    * Awaitably stop local collection and owned processes, not remote logout or
    * credential deletion. Must be idempotent and reject if stopping fails.

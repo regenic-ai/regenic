@@ -1,14 +1,14 @@
 .thread-run {
   flex: 0 0 auto;
-  height: 24px;
-  padding: 0 9px;
-  font-size: 11px;
+  height: 32px;
+  padding: 0 12px;
+  font-size: 13px;
   white-space: nowrap;
 }
 
 .thread-run.primary {
-  height: 24px;
-  padding: 0 10px;
+  height: 32px;
+  padding: 0 12px;
 }
 
 .work-hint {
@@ -220,13 +220,21 @@
   line-height: 1.55;
 }
 
-.thread h1,
-.page h1 {
+.thread h1 {
   margin: 0 0 8px;
   font-size: 22px;
   line-height: 28px;
-  font-weight: 500;
+  font-weight: 600;
   letter-spacing: -0.012em;
+  color: var(--text);
+}
+
+.page h1 {
+  margin: 0;
+  font-size: var(--text-title);
+  line-height: 34px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
   color: var(--text);
 }
 
@@ -246,7 +254,7 @@
 .thread-head {
   flex-shrink: 0;
   margin: 0;
-  padding: 14px 32px 12px;
+  padding: 20px 32px 16px;
   border-bottom: 1px solid var(--line-8);
   background: var(--chrome);
 }
@@ -427,8 +435,7 @@
 .thread-pane .thread-head-main,
 .thread-pane .thread-scroll > *,
 .thread-pane .composer-dock > * {
-  max-width: 880px;
-  margin-inline: auto;
+  max-width: none;
 }
 
 .thread-head h1 {
@@ -503,8 +510,9 @@
 .body-text {
   white-space: pre-wrap;
   user-select: text;
-  font-size: 14px;
-  max-width: 68ch;
+  font-size: var(--text-body);
+  line-height: 1.55;
+  max-width: none;
   color: var(--text);
 }
 
@@ -638,7 +646,7 @@
 
 .chat-main {
   width: fit-content;
-  max-width: min(78%, 68ch);
+  max-width: 100%;
   min-width: 0;
   padding: 10px 14px 12px;
   border-radius: var(--radius-bubble);
@@ -880,7 +888,7 @@
 
 .chat-ticket {
   padding: 4px 2px 16px;
-  max-width: 72ch;
+  max-width: none;
 }
 
 .chat-ticket .chat-meta {

@@ -1,7 +1,7 @@
 .settings-layout {
   display: grid;
-  grid-template-columns: 168px minmax(0, 1fr);
-  gap: 28px;
+  grid-template-columns: 200px minmax(0, 1fr);
+  gap: 36px;
   align-items: start;
 }
 
@@ -14,7 +14,7 @@
 
 .settings-nav-group {
   display: grid;
-  gap: 2px;
+  gap: 4px;
 }
 
 .settings-nav-label {
@@ -26,14 +26,14 @@
 }
 
 .settings-nav button {
-  height: 30px;
-  padding: 0 10px;
+  height: var(--nav-h);
+  padding: 0 12px;
   border: 0;
   border-radius: var(--radius-control);
   background: none;
   color: var(--muted);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--text-body);
   text-align: left;
   cursor: pointer;
 }

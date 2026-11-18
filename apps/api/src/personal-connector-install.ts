@@ -47,7 +47,7 @@ export async function install(state: ConnectorState, input: ConnectorInstallInpu
     }
   }
   const now = new Date().toISOString();
-  const { drafted, catalog, credentialChanges } = buildInstallation(state, input, now);
+  const { drafted, catalog, credentialChanges } = await buildInstallation(state, input, now);
   const created = await store.createInstallation({
     ...drafted,
     config: persistInstallSecrets({
@@ -82,13 +82,13 @@ export async function updateConfig(
   const form = prepareConnectorForm(catalog, config, true, credentials, true);
   let nextConfig: ConnectorInstallation["config"];
   try {
-    nextConfig = driver.install({
+    nextConfig = (await driver.install({
       id: current.id,
       org_id: current.org_id,
       config: form.config,
       now: new Date().toISOString(),
       secrets: state.installSecrets(),
-    }).config;
+    })).config;
   } catch (error) {
     throw wrapDriverError(error, "invalid_config");
   }
@@ -204,7 +204,7 @@ function nextUpdatedAt(installation: ConnectorInstallation): string {
   return new Date(Math.max(Date.now(), Date.parse(installation.updated_at) + 1)).toISOString();
 }
 
-function buildInstallation(
+async function buildInstallation(
   state: ConnectorState,
   input: ConnectorInstallInput,
   now: string,
@@ -220,7 +220,7 @@ function buildInstallation(
   const catalog = driver.installCatalog?.({ env: process.env });
   const form = prepareConnectorForm(catalog, input.config ?? {}, false, {}, true);
   try {
-    const drafted = driver.install({
+    const drafted = await driver.install({
       id: randomUUID(),
       org_id: state.runtime.orgId(),
       config: form.config,

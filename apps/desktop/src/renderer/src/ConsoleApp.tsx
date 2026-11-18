@@ -1,5 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  LIST_MIN,
+  SIDEBAR_DEFAULT,
+  SIDEBAR_WIDTH_KEY,
+  THREAD_MIN,
+  readColumnWidth,
+  writeColumnWidth,
+} from "./ColumnResize";
+import {
   liveReceiptFocusRequest,
   mediaDrainFocusRequest,
   openThreadFocusRequest,
@@ -139,6 +147,11 @@ export function ConsoleApp() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(
     () => localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1",
   );
+  const [sidebarWidth, setSidebarWidth] = useState(() =>
+    readColumnWidth(SIDEBAR_WIDTH_KEY, SIDEBAR_DEFAULT),
+  );
+  const [resizingSidebar, setResizingSidebar] = useState(false);
+  const shellRef = useRef<HTMLDivElement>(null);
   const [inbox, setInbox] = useState<InboxViewItem[]>([]);
   const [messagesByThread, setMessagesByThread] = useState<
     Record<string, InboxViewItem[]>
@@ -1712,15 +1725,28 @@ export function ConsoleApp() {
   }, [engine]);
 
   return (
-    <div className={`shell${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
+    <div
+      ref={shellRef}
+      className={`shell${sidebarCollapsed ? " sidebar-collapsed" : ""}${resizingSidebar ? " is-resizing" : ""}`}
+      style={sidebarCollapsed ? undefined : { ["--sidebar-w" as string]: `${sidebarWidth}px` }}
+    >
       <Sidebar
         nav={nav}
         collapsed={sidebarCollapsed}
+        width={sidebarWidth}
         workCount={workCount}
         status={shellStatus}
         onNav={setNav}
         onSearch={openSearch}
         onToggle={toggleSidebar}
+        onWidth={(width) => {
+          setSidebarWidth(width);
+          writeColumnWidth(SIDEBAR_WIDTH_KEY, width);
+        }}
+        onResizeDrag={setResizingSidebar}
+        resizeMax={() =>
+          (shellRef.current?.clientWidth ?? window.innerWidth) - LIST_MIN - THREAD_MIN
+        }
       />
       <div className="workspace">
         <div className="workspace-drag" aria-hidden="true" />

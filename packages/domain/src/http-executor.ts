@@ -19,6 +19,7 @@ export interface HttpExecutorOptions {
   description?: string;
   base_url: string;
   auth_env?: string;
+  auth_token?: string;
   timeout_ms?: number;
   fetch?: typeof fetch;
 }
@@ -65,6 +66,7 @@ export function createHttpTaskExecutor(options: HttpExecutorOptions): TaskExecut
         url: `${baseUrl}/v1/runs`,
         method: "POST",
         authEnv: options.auth_env,
+        authToken: options.auth_token,
         timeoutMs,
         env: ctx.env,
         payload: {
@@ -88,6 +90,7 @@ export function createHttpTaskExecutor(options: HttpExecutorOptions): TaskExecut
         url: `${baseUrl}/v1/runs/${encodeURIComponent(runId)}/resume`,
         method: "POST",
         authEnv: options.auth_env,
+        authToken: options.auth_token,
         timeoutMs,
         env: ctx.env,
         payload: {
@@ -105,6 +108,7 @@ export function createHttpTaskExecutor(options: HttpExecutorOptions): TaskExecut
         url: `${baseUrl}/v1/runs/${encodeURIComponent(runId)}`,
         method: "GET",
         authEnv: options.auth_env,
+        authToken: options.auth_token,
         timeoutMs,
         env: ctx.env,
         signal: ctx.signal,
@@ -118,6 +122,7 @@ export function createHttpTaskExecutor(options: HttpExecutorOptions): TaskExecut
         url: `${baseUrl}/v1/runs/${encodeURIComponent(runId)}/cancel`,
         method: "POST",
         authEnv: options.auth_env,
+        authToken: options.auth_token,
         timeoutMs,
         env: ctx.env,
         payload: { work_item_id: run.work_item_id },
@@ -167,6 +172,7 @@ async function callHttpExecutor(
     url: string;
     method: "GET" | "POST";
     authEnv?: string;
+    authToken?: string;
     timeoutMs: number;
     env: NodeJS.ProcessEnv;
     signal?: AbortSignal;
@@ -177,7 +183,9 @@ async function callHttpExecutor(
   const headers: Record<string, string> = {
     accept: "application/json",
   };
-  const token = input.authEnv ? input.env[input.authEnv]?.trim() : "";
+  const token =
+    input.authToken?.trim() ||
+    (input.authEnv ? input.env[input.authEnv]?.trim() : "");
   if (token) {
     headers.authorization = `Bearer ${token}`;
   }

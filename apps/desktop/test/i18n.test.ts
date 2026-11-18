@@ -34,7 +34,7 @@ describe("desktop locale", () => {
     assert.equal(translate("zh", "recipes.previewMany", { count: 3 }), "工作台里约有 3 条会命中。");
     assert.equal(translate("zh", "recipes.params"), "调用参数");
     assert.equal(translate("en", "recipes.prompt"), "Prompt");
-    assert.equal(translate("zh", "recipes.includeContextCheck"), "带上会话上下文");
+    assert.equal(translate("zh", "recipes.includeContextCheck"), "带上上下文");
     assert.equal(translate("en", "recipes.includeContextCheck"), "Include conversation context");
     assert.equal(translate("zh", "recipes.maxConcurrent"), "同时处理");
     assert.equal(translate("en", "recipes.maxConcurrentUnlimited"), "No limit");
@@ -136,7 +136,7 @@ describe("desktop locale", () => {
       /还留着/,
     );
     assert.equal(translate("zh", "connector.import"), "导入文件");
-    assert.equal(translate("zh", "docs.connector"), "连接器规范");
+    assert.equal(translate("zh", "docs.connector"), "说明");
     assert.equal(translate("en", "connector.setup"), "Set up");
     assert.equal(translate("zh", "connector.setupTitle", { title: "飞书" }), "设置 飞书");
     assert.equal(translate("zh", "connector.setupSteps"), "准备步骤");
@@ -153,9 +153,7 @@ describe("desktop locale", () => {
     );
     assert.match(translate("zh", "chrome.sendTimedOut"), /还在发这条/);
     assert.match(translate("en", "chrome.sendTimedOut"), /still sending/);
-    assert.equal(translate("en", "executor.field.baseUrl"), "Base URL");
-    assert.equal(translate("zh", "executor.field.baseUrl"), "接口地址");
-    assert.equal(translate("zh", "executor.detail.autoFirst"), "自动 · 第一个可新建会话的连接器");
+    assert.equal(translate("zh", "executor.detail.autoFirst"), "自动 · 第一个可新建会话的应用");
     assert.equal(translate("zh", "error.connector.feishuConversation"), "至少选一个会话，或改为同步全部。");
     assert.equal(translate("zh", "connector.noOptions"), "还没有可选项");
     assert.equal(translate("zh", "connector.loadingOptions"), "正在加载会话…");

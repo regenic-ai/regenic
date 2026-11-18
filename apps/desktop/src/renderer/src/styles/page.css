@@ -2,7 +2,7 @@
   width: 100%;
   box-sizing: border-box;
   overflow: auto;
-  padding: 28px 32px 56px;
+  padding: 36px 40px 64px;
   background: var(--chrome);
 }
 
@@ -35,7 +35,6 @@
   background: none;
   color: var(--blue-text);
   font: inherit;
-  font-size: 12px;
   cursor: pointer;
 }
 
@@ -46,23 +45,23 @@
 .page-hero {
   width: 100%;
   max-width: none;
-  margin-bottom: 8px;
+  margin-bottom: 20px;
 }
 
 .page-eyebrow {
-  margin: 0 0 4px;
+  margin: 0 0 6px;
   color: var(--subtle);
-  font-size: 12px;
-  line-height: 16px;
+  font-size: 13px;
+  line-height: 18px;
   font-weight: 500;
 }
 
 .page-lead {
-  margin: 0;
+  margin: 8px 0 0;
   max-width: 48em;
   color: var(--muted);
-  font-size: 14px;
-  line-height: 20px;
+  font-size: var(--text-body);
+  line-height: 22px;
 }
 
 .step-grid {
@@ -131,7 +130,8 @@
   }
 
   .page-recipes > .page-hero,
-  .page-recipes > .recipe-guide,
+  .page-recipes > .recipe-start,
+  .page-recipes > .recipe-empty,
   .page-recipes > .recipe-page-notice {
     grid-column: 1 / -1;
   }
@@ -139,10 +139,6 @@
   .page-recipes > .card:only-of-type,
   .page-recipes:not(:has(.recipe-saved)) > .recipe-editor {
     grid-column: 1 / -1;
-  }
-
-  .recipe-starter-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 
@@ -158,7 +154,7 @@
     grid-template-columns: 1fr;
   }
 
-  .recipe-steps {
+  .recipe-how {
     grid-template-columns: 1fr;
     gap: 10px;
   }
@@ -171,6 +167,28 @@
   .recipe-more-toggle,
   .recipe-try-hint {
     margin-left: 0;
+  }
+
+  .recipe-section {
+    padding: 20px 20px 20px 60px;
+  }
+
+  .recipe-section-head {
+    margin-left: -40px;
+  }
+
+  .recipe-section::before {
+    left: 33px;
+  }
+
+  .recipe-form-foot {
+    padding: 18px 20px 20px;
+  }
+
+  .recipe-form-foot > .recipe-actions,
+  .recipe-form-foot > .recipe-try-hint {
+    grid-column: 1 / -1;
+    grid-row: auto;
   }
 
   .page-recipes .seg {
@@ -251,8 +269,8 @@
   border: 0;
   border-radius: var(--radius-bubble);
   box-shadow: var(--shadow-inline);
-  padding: 18px;
-  margin-top: 14px;
+  padding: 22px 24px;
+  margin-top: 20px;
   width: 100%;
   max-width: none;
   box-sizing: border-box;
@@ -332,8 +350,8 @@
 
 .card h2 {
   margin: 0 0 8px;
-  font-size: 15px;
-  line-height: 22px;
+  font-size: var(--text-section);
+  line-height: 26px;
   font-weight: 600;
 }
 
@@ -437,6 +455,87 @@
 .connector-kind.is-installed {
   background: var(--elevated);
   box-shadow: 0 0 0 1px var(--line-12);
+}
+
+.page-apps .connector-kind {
+  margin-top: 12px;
+  padding: 18px 20px;
+}
+
+.page-apps .app-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.page-apps .app-row-copy {
+  min-width: 0;
+}
+
+.page-apps .app-row-copy strong {
+  display: block;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 22px;
+}
+
+.page-apps .app-row-copy p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.page-apps .app-row-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 8px;
+}
+
+.page-apps .app-row-actions .primary,
+.page-apps .app-row-actions .ghost,
+.page-apps .market-actions .primary,
+.page-apps .market-actions .ghost {
+  height: 36px;
+  padding: 0 16px;
+  font-size: 14px;
+}
+
+.page-apps .market-card {
+  display: block;
+  margin-top: 4px;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.page-apps .executor-kind {
+  margin-top: 4px;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.page-apps .executor-kind .app-row-copy p,
+.page-apps .market-card .app-row-copy p {
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.page-apps .market-actions {
+  grid-column: 2;
+  grid-row: 1;
+  justify-content: flex-end;
+}
+
+.page-apps .market-card .action-error,
+.page-apps .market-progress,
+.page-apps .market-confirm,
+.page-apps .market-blockers {
+  grid-column: 1 / -1;
 }
 
 .market-search {
@@ -1057,6 +1156,14 @@
   letter-spacing: -0.008em;
 }
 
+.dialog-lead {
+  margin: 8px 0 0;
+  padding: 0 20px;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 20px;
+}
+
 .dialog .install-form {
   padding: 12px 20px 20px;
 }
@@ -1302,23 +1409,23 @@ button.store-stat:hover {
 
 .page-tabs {
   display: flex;
-  gap: 2px;
-  margin: 14px 0 2px;
-  padding: 3px;
+  gap: 4px;
+  margin: 0 0 8px;
+  padding: 4px;
   width: fit-content;
-  border-radius: calc(var(--radius-control) + 3px);
+  border-radius: calc(var(--radius-control) + 4px);
   background: var(--wash-6);
 }
 
 .page-tabs button {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  height: 28px;
-  padding: 0 12px;
+  gap: 8px;
+  height: var(--control-h);
+  padding: 0 14px;
   border-radius: var(--radius-control);
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--text-body);
   font-weight: 500;
 }
 

@@ -27,7 +27,7 @@ async function rendererSmoke() {
       if (await window.webContents.executeJavaScript(`(() => {
         if (document.querySelector(".recipe-form-foot")) return true;
         const start = [...document.querySelectorAll("button")]
-          .find((item) => item.textContent.trim() === "Start blank");
+          .find((item) => item.textContent.trim() === "New automation");
         start?.click();
         return false;
       })()`)) break;
