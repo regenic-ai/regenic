@@ -38,6 +38,14 @@ export type SearchAnswerMapBatchStatus =
   | "completed"
   | "failed";
 
+export interface SearchAnswerMapInputProof {
+  event_id: string;
+  content_hash: string;
+  external_id?: string;
+  url?: string;
+  business_id?: string;
+}
+
 export interface SearchAnswerMapBatch {
   index: number;
   start_offset: number;
@@ -53,6 +61,8 @@ export interface SearchAnswerMapBatch {
   cached_facts?: SearchAnswerFact[];
   /** Authorized cache misses included in the current model execution. */
   map_event_ids?: string[];
+  /** Validated identities used by this exact model execution; bodies are never persisted here. */
+  map_inputs?: SearchAnswerMapInputProof[];
   cache_hits?: number;
   cache_misses?: number;
 }
