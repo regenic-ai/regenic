@@ -11,6 +11,7 @@ import {
 } from "@regenic/domain";
 import { PersonalConnectorService } from "./personal-connector.service";
 import { PersonalRuntimeService } from "./personal-runtime.service";
+import { isWorkTickShutdown } from "./personal-work-support";
 import { PersonalWorkSupervise } from "./personal-work-supervise";
 
 const WAIT_COALESCE_MS = 20;
@@ -169,9 +170,11 @@ export class PersonalWorkWait {
       return;
     }
     this.waking.add(itemId);
+    let item: WorkItem | null = null;
+    let run: WorkRun | null = null;
     try {
       const host = this.runtime.requireHost();
-      const item = await host.get("authority").getWorkItem(
+      item = await host.get("authority").getWorkItem(
         this.runtime.orgId(),
         itemId,
       );
@@ -179,7 +182,7 @@ export class PersonalWorkWait {
         return;
       }
       const recipe = await host.get("authority").getRecipe(item.org_id, item.recipe_id);
-      const run = await host.get("authority").getActiveWorkRun(item.org_id, item.id);
+      run = await host.get("authority").getActiveWorkRun(item.org_id, item.id);
       if (!recipe || !run) {
         return;
       }
@@ -203,6 +206,15 @@ export class PersonalWorkWait {
       const latestRun = await host.get("authority").getActiveWorkRun(item.org_id, item.id);
       if (!latest || !isActiveWorkStatus(latest.status) || !latestRun) {
         this.drop(run.id);
+      }
+    } catch (error) {
+      if (!isWorkTickShutdown(error)) {
+        console.error("personal work run refresh failed", {
+          org_id: item?.org_id ?? this.runtime.orgId(),
+          work_item_id: item?.id ?? itemId,
+          run_id: run?.id,
+          executor_type: run?.executor_type,
+        }, error);
       }
     } finally {
       this.waking.delete(itemId);

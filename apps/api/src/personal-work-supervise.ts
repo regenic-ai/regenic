@@ -137,7 +137,48 @@ export class PersonalWorkSupervise {
     if (item.status !== "skipped" && isStaleWork(item.created_at, now, workReapStaleMs()) && handle.status === "running") {
       handle = await this.reapIfInboxEnded(item, run, handle, executor, ctx, now);
     }
-    await this.applyHandle(item, recipe, run, handle);
+    await this.applyFreshHandle(item, recipe, run, handle);
+  }
+
+  /**
+   * Follow and the wait loop can commit thread state after this run was read.
+   * Reload the same run before observing it, and once more if that commit loses the race.
+   */
+  private async applyFreshHandle(
+    item: WorkItem,
+    recipe: Recipe | null,
+    run: WorkRun,
+    handle: ExecutorRunHandle,
+  ): Promise<void> {
+    const target = await this.loadObservationTarget(item, run);
+    try {
+      await this.applyHandle(target.item, recipe, target.run, handle);
+    } catch (error) {
+      if (!isStaleObservation(error)) throw error;
+      const latest = await this.loadObservationTarget(item, run);
+      await this.applyHandle(latest.item, recipe, latest.run, handle);
+    }
+  }
+
+  private async loadObservationTarget(
+    item: WorkItem,
+    run: WorkRun,
+  ): Promise<{ item: WorkItem; run: WorkRun }> {
+    const authority = this.runtime.requireHost().get("authority");
+    const freshItem = await authority.getWorkItem(item.org_id, item.id);
+    const freshRun = freshItem
+      ? await authority.getWorkRun(item.org_id, run.id)
+      : null;
+    if (!freshItem || !freshRun
+      || freshItem.current_run_id !== run.id
+      || freshRun.work_item_id !== item.id) {
+      throw new PersonalConnectorError(
+        "execution_observation_conflict",
+        "Work changed while its executor was being observed. Refresh the work item before applying another observation.",
+        409,
+      );
+    }
+    return { item: freshItem, run: freshRun };
   }
 
   private async reconcileUncertainStart(
@@ -363,6 +404,12 @@ export class PersonalWorkSupervise {
       this.workUpdated?.(item.id);
     }
   }
+}
+
+function isStaleObservation(error: unknown): boolean {
+  return error instanceof PersonalConnectorError
+    && error.code === "execution_observation_conflict"
+    && error.message.startsWith("Work changed while its executor was being observed.");
 }
 
 function hasPositiveStartEvidence(handle: ExecutorRunHandle): boolean {
