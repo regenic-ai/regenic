@@ -524,6 +524,7 @@ export class PersonalSearchAnswerService {
       prepared: Awaited<ReturnType<PersonalWorkService["prepareAuxiliaryExecution"]>>;
       evidence: string;
     }> = [];
+    let cacheStateChanged = false;
     for (const batch of candidates) {
       const id = batch.work_item_id
         ?? mapWorkItemId(record.id, batch.index, batch.attempt);
@@ -535,6 +536,7 @@ export class PersonalSearchAnswerService {
         if (mapEventIds.length === 0) {
           batch.facts = batch.cached_facts ?? [];
           batch.status = "completed";
+          cacheStateChanged = true;
           continue;
         }
         if (launches.length >= freeSlots) continue;
@@ -570,6 +572,10 @@ export class PersonalSearchAnswerService {
             max_concurrent: SEARCH_ANSWER_MAP_PARALLELISM,
           });
       launches.push({ batch, prepared, evidence });
+    }
+    if (cacheStateChanged) {
+      record = withMap(record, synchronizeMapAggregates(map));
+      await this.putRecord(record);
     }
     if (launches.length === 0) return record;
     for (const { batch } of launches) {
