@@ -459,6 +459,37 @@ describe("work observation transaction boundaries", () => {
     assert.deepEqual(await f.authority.getWorkItem(ORG, f.item.id), f.item);
   });
 
+  it("records a failed executor handle after follow changes the same work item", async () => {
+    const f = await fixture();
+    const stored = await f.authority.getWorkItem(ORG, f.item.id);
+    const run = await f.authority.getWorkRun(ORG, f.run.id);
+    const supervisor = new PersonalWorkSupervise({
+      requireHost: () => ({ get: (name) => ({
+        authority: f.authority,
+        executors: { get: () => ({
+          status: async () => {
+            const current = await f.authority.getWorkItem(ORG, f.item.id);
+            seedTestWorkItemSnapshot(f.authority, {
+              ...current,
+              head_event_id: "followed-event",
+              version: (current.version ?? 0) + 1,
+              updated_at: "2026-11-09T08:05:00.000Z",
+            });
+            return f.handle("failed", { result: { summary: "DSH failed" } });
+          },
+        }) },
+      })[name] }),
+    }, { contextFor: () => ({ org_id: ORG }) });
+    await supervisor.refreshOne(stored, f.recipe, run);
+    const savedRun = await f.authority.getWorkRun(ORG, run.id);
+    const savedItem = await f.authority.getWorkItem(ORG, f.item.id);
+    assert.equal(savedRun.status, "failed");
+    assert.equal(savedRun.result.summary, "DSH failed");
+    assert.equal(savedItem.status, "failed");
+    assert.equal(savedItem.head_event_id, "followed-event");
+    assert.equal(savedItem.current_run_id, run.id);
+  });
+
   it("does not apply an ignored observation to the successor started during its status query", async () => {
     const f = await fixture();
     const dismissed = await f.authority.dismissWorkItem({ expected_item: f.item, now: NOW });
