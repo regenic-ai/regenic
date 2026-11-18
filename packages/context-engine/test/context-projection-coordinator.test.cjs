@@ -240,7 +240,7 @@ describe("ContextProjectionCoordinator", () => {
   it("rejects an artifact kind outside the projector's declared capabilities", async () => {
     const artifacts = artifactsWithExistingEventBlob();
     const registry = new MemoryContextProjectorRegistry();
-    registry.register(projector((artifact) => ({ ...artifact, kind: "daily_digest" })));
+    registry.register(projector((artifact) => ({ ...artifact, kind: "claim_extraction" })));
     await assert.rejects(
       new ContextProjectionCoordinator(authority(), artifacts, registry).project("example-org", "generation-1"),
       /invalid context artifact proposal/,

@@ -27,12 +27,12 @@ import { fetchRuntimePulse } from "./runtime-pulse-fetch.ts";
 import {
   type KernelReachability,
 } from "../../shared/connection-state.ts";
-import { BrandBadge } from "./Brand";
-import { EngineChip, RailButton } from "./console-chrome";
+import { NAV_SHORTCUTS, Sidebar } from "./console-chrome";
 import { connectorAlerts } from "./connector-alerts";
 import { engineRevision } from "./console-refresh";
 import { EnginePage } from "./EnginePage";
-import { engineChip, memoryWatchCopy, releaseOtherLivePulls } from "./format";
+import { engineChip, releaseOtherLivePulls } from "./format";
+import { buildShellStatus } from "./shell-status";
 import {
   evictThreadCache,
   groupInboxThreads,
@@ -59,12 +59,12 @@ import { t as translate } from "../../shared/i18n.ts";
 import { useLocale } from "./LocaleContext";
 import { InboxWorkspace } from "./InboxWorkspace";
 import { connectPersonalEvents } from "./personal-events";
-import { EngineIcon, InboxIcon, RecipesIcon, SettingsIcon, SearchIcon } from "./Icons";
 import { SearchPage } from "./SearchPage";
 import { threadTitle } from "./message-view";
 import { recipeConversationOptions } from "./recipe-conversations";
 import { RecipesPage } from "./RecipesPage";
 import { SettingsPage } from "./SettingsPage";
+import { StatusPage } from "./StatusPage";
 import {
   InboxListStore,
   isActivePrefWrite,
@@ -131,10 +131,14 @@ const LIVE_FETCH_MS = 12_000;
 /** Skip live receipt fetches when the user leaves before this dwell. */
 const RECEIPT_DWELL_MS = 400;
 const RECEIPT_REFRESH_MS = 15_000;
+const SIDEBAR_COLLAPSED_KEY = "regenic.sidebar.collapsed";
 
 export function ConsoleApp() {
   const { t, locale } = useLocale();
   const [nav, setNav] = useState<NavId>("inbox");
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(
+    () => localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1",
+  );
   const [inbox, setInbox] = useState<InboxViewItem[]>([]);
   const [messagesByThread, setMessagesByThread] = useState<
     Record<string, InboxViewItem[]>
@@ -1284,6 +1288,44 @@ export function ConsoleApp() {
   const chip = engineChip(engine, reachability);
   const alerts = connectorAlerts(engine);
   const alert = alerts[0];
+  const shellStatus = buildShellStatus(engine, host, chip, alerts);
+  const workCount =
+    engine?.inbox_count ?? (listView === "shown" ? listThreads.length : 0);
+  const toggleSidebar = useCallback(() => {
+    setSidebarCollapsed((value) => {
+      localStorage.setItem(SIDEBAR_COLLAPSED_KEY, value ? "0" : "1");
+      return !value;
+    });
+  }, []);
+  const openSearch = useCallback(() => {
+    setNav("search");
+    window.requestAnimationFrame(() => {
+      document.getElementById("context-query")?.focus();
+    });
+  }, []);
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return;
+      const key = event.key.toLowerCase();
+      if (key === "k") {
+        event.preventDefault();
+        openSearch();
+        return;
+      }
+      if (key === "\\") {
+        event.preventDefault();
+        toggleSidebar();
+        return;
+      }
+      const target = NAV_SHORTCUTS[key];
+      if (target) {
+        event.preventDefault();
+        setNav(target);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [openSearch, toggleSidebar]);
   const createTargets = createConversationTargets(engine);
 
   const startConversation = async (installationId: string) => {
@@ -1670,63 +1712,18 @@ export function ConsoleApp() {
   }, [engine]);
 
   return (
-    <div className="shell">
-      <header className="titlebar">
-        <div className="titlebar-traffic" aria-hidden="true" />
-        <div className="titlebar-brand" title="Regenic">
-          <BrandBadge />
-        </div>
-        <button type="button" className="search" onClick={() => setNav("search")}>{t("nav.search")}</button>
-        <div className="titlebar-meta">
-          <EngineChip state={chip} />
-          {host && host.memory.kind !== "ok" ? (
-            <span className="chip stopped">{memoryWatchCopy(host.memory)}</span>
-          ) : null}
-          <span className="chip">
-            {t("chrome.currentWorkCount", {
-              count: engine?.inbox_count ?? (listView === "shown" ? listThreads.length : 0),
-            })}
-          </span>
-        </div>
-      </header>
-      <nav className="rail" aria-label="Main">
-        <div className="rail-top">
-          <RailButton label={t("nav.search")} active={nav === "search"} onClick={() => setNav("search")}>
-            <SearchIcon />
-          </RailButton>
-          <RailButton
-            label={t("nav.inbox")}
-            active={nav === "inbox"}
-            onClick={() => setNav("inbox")}
-          >
-            <InboxIcon />
-          </RailButton>
-          <RailButton
-            label={t("nav.recipes")}
-            active={nav === "recipes"}
-            onClick={() => setNav("recipes")}
-          >
-            <RecipesIcon />
-          </RailButton>
-          <RailButton
-            label={t("nav.engine")}
-            active={nav === "engine"}
-            onClick={() => setNav("engine")}
-          >
-            <EngineIcon />
-          </RailButton>
-        </div>
-        <div className="rail-bottom">
-          <RailButton
-            label={t("nav.settings")}
-            active={nav === "settings"}
-            onClick={() => setNav("settings")}
-          >
-            <SettingsIcon />
-          </RailButton>
-        </div>
-      </nav>
+    <div className={`shell${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
+      <Sidebar
+        nav={nav}
+        collapsed={sidebarCollapsed}
+        workCount={workCount}
+        status={shellStatus}
+        onNav={setNav}
+        onSearch={openSearch}
+        onToggle={toggleSidebar}
+      />
       <div className="workspace">
+        <div className="workspace-drag" aria-hidden="true" />
         {alert ? (
           <div className="connector-alert" role="alert">
             <div className="connector-alert-body">
@@ -1815,6 +1812,7 @@ export function ConsoleApp() {
             onAcknowledgeWork={acknowledgeSelectedWork}
             onBindRecipe={bindSelectedRecipe}
             onForwardCreated={openForwardedConversation}
+            onOpenConnections={() => setNav("engine")}
           />
         ) : null}
         {nav === "recipes" ? (
@@ -1834,7 +1832,6 @@ export function ConsoleApp() {
         {nav === "engine" ? (
           <EnginePage
             engine={engine}
-            host={host}
             error={error}
             onChanged={refresh}
           />
@@ -1849,6 +1846,9 @@ export function ConsoleApp() {
           setLocatedEvent({ thread_id: thread.id, event_id: item.event.id });
           setNav("inbox");
         }} /> : null}
+        {nav === "status" ? (
+          <StatusPage status={shellStatus} onOpenConnections={() => setNav("engine")} />
+        ) : null}
         {nav === "settings" ? (
           <SettingsPage onChanged={refresh} onStoreCleared={resetWorkspace} />
         ) : null}

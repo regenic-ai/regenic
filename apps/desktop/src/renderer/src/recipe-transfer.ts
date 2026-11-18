@@ -1,10 +1,11 @@
+import { flowConfigFromFields, type FlowWireConfig } from "./flow-wire.ts";
 import type {
   RecipeMatch,
   RecipeTrigger,
   RecipeView,
 } from "./types";
 
-export const RECIPE_BUNDLE_VERSION = 1;
+export const RECIPE_BUNDLE_VERSION = 2;
 
 export interface RecipeTransferItem {
   name: string;
@@ -21,6 +22,12 @@ export interface RecipeTransferItem {
 }
 
 export interface RecipeBundle {
+  version: number;
+  exported_at: string;
+  flows: Array<{ name: string; config: FlowWireConfig }>;
+}
+
+export interface ParsedRecipeBundle {
   version: number;
   exported_at: string;
   recipes: RecipeTransferItem[];
@@ -55,7 +62,10 @@ export function buildRecipeBundle(
   return {
     version: RECIPE_BUNDLE_VERSION,
     exported_at: now,
-    recipes: recipes.map(recipeToTransferItem),
+    flows: recipes.map((recipe) => {
+      const item = recipeToTransferItem(recipe);
+      return { name: item.name, config: flowConfigFromFields(item) };
+    }),
   };
 }
 
@@ -145,61 +155,7 @@ function parseTrigger(value: unknown): RecipeTrigger | null {
   return null;
 }
 
-function parseTransferItem(value: unknown): RecipeTransferItem | null {
-  if (!isRecord(value)) {
-    return null;
-  }
-  if (typeof value.name !== "string" || !value.name.trim()) {
-    return null;
-  }
-  if (typeof value.executor_type !== "string" || !value.executor_type.trim()) {
-    return null;
-  }
-  if (
-    value.write_back_thread_id !== undefined &&
-    (typeof value.write_back_thread_id !== "string" || !value.write_back_thread_id.trim())
-  ) {
-    return null;
-  }
-  const match = parseMatch(value.match);
-  const trigger = parseTrigger(value.trigger);
-  if (!match || !trigger) {
-    return null;
-  }
-  const executor_config: Record<string, string> = {};
-  if (isRecord(value.executor_config)) {
-    for (const [key, entry] of Object.entries(value.executor_config)) {
-      if (typeof entry === "string") {
-        executor_config[key] = entry;
-      }
-    }
-  }
-  const max =
-    value.max_concurrent === null || value.max_concurrent === undefined
-      ? null
-      : typeof value.max_concurrent === "number" &&
-          Number.isFinite(value.max_concurrent) &&
-          value.max_concurrent >= 1
-        ? Math.floor(value.max_concurrent)
-        : null;
-  return {
-    name: value.name.trim(),
-    match,
-    trigger,
-    executor_type: value.executor_type.trim(),
-    executor_config,
-    can_write_back: value.can_write_back === true,
-    ...(typeof value.write_back_thread_id === "string"
-      ? { write_back_thread_id: value.write_back_thread_id.trim() }
-      : {}),
-    hide_on_success: value.hide_on_success === true,
-    include_context: value.include_context === true,
-    max_concurrent: max,
-    enabled: value.enabled !== false,
-  };
-}
-
-export function parseRecipeBundle(raw: string): RecipeBundle {
+export function parseRecipeBundle(raw: string): ParsedRecipeBundle {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -209,28 +165,95 @@ export function parseRecipeBundle(raw: string): RecipeBundle {
   if (!isRecord(parsed)) {
     throw new Error("invalid_bundle");
   }
-  const version = Number(parsed.version);
-  if (!Number.isFinite(version) || version < 1) {
+  if (parsed.version !== RECIPE_BUNDLE_VERSION) {
     throw new Error("unsupported_version");
   }
-  if (!Array.isArray(parsed.recipes) || parsed.recipes.length === 0) {
+  if (!Array.isArray(parsed.flows) || parsed.flows.length === 0) {
     throw new Error("empty_recipes");
   }
   const recipes: RecipeTransferItem[] = [];
-  for (const item of parsed.recipes) {
-    const next = parseTransferItem(item);
+  for (const item of parsed.flows) {
+    const next = parseFlowItem(item);
     if (!next) {
       throw new Error("invalid_recipe");
     }
     recipes.push(next);
   }
   return {
-    version,
+    version: RECIPE_BUNDLE_VERSION,
     exported_at:
       typeof parsed.exported_at === "string" && parsed.exported_at.trim()
         ? parsed.exported_at
         : new Date().toISOString(),
     recipes,
+  };
+}
+
+function parseFlowItem(value: unknown): RecipeTransferItem | null {
+  if (!isRecord(value) || typeof value.name !== "string" || !value.name.trim() || !isRecord(value.config)) {
+    return null;
+  }
+  const config = value.config;
+  const handler = config.handler;
+  const scope = config.scope;
+  if (
+    !isRecord(handler) ||
+    handler.kind !== "agent" ||
+    typeof handler.executor_type !== "string" ||
+    !handler.executor_type.trim() ||
+    !isRecord(scope) ||
+    scope.kind !== "new_messages"
+  ) {
+    return null;
+  }
+  const match = parseMatch(scope.match);
+  const trigger = parseTrigger(config.trigger);
+  if (!match || !trigger || typeof config.hide_on_success !== "boolean" || typeof config.include_context !== "boolean") {
+    return null;
+  }
+  const destination = config.destination;
+  if (destination !== undefined) {
+    if (
+      !isRecord(destination) ||
+      destination.kind !== "reply" ||
+      typeof destination.thread !== "string" ||
+      !destination.thread.trim() ||
+      destination.confirm !== false ||
+      typeof destination.send !== "boolean"
+    ) {
+      return null;
+    }
+  }
+  const executor_config: Record<string, string> = {};
+  if (isRecord(handler.params)) {
+    for (const [key, entry] of Object.entries(handler.params)) {
+      if (typeof entry !== "string") {
+        return null;
+      }
+      executor_config[key] = entry;
+    }
+  }
+  const max = config.max_concurrent === undefined
+    ? null
+    : typeof config.max_concurrent === "number" && Number.isFinite(config.max_concurrent) && config.max_concurrent >= 1
+      ? Math.floor(config.max_concurrent)
+      : null;
+  if (config.max_concurrent !== undefined && max === null) {
+    return null;
+  }
+  const reply = isRecord(destination) ? destination : undefined;
+  return {
+    name: value.name.trim(),
+    match,
+    trigger,
+    executor_type: handler.executor_type.trim(),
+    executor_config,
+    can_write_back: reply?.send === true,
+    ...(reply && reply.thread !== "origin" ? { write_back_thread_id: String(reply.thread).trim() } : {}),
+    hide_on_success: config.hide_on_success,
+    include_context: config.include_context,
+    max_concurrent: max,
+    enabled: config.enabled !== false,
   };
 }
 

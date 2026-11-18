@@ -1,4 +1,4 @@
-export const LATEST_SCHEMA_VERSION = 86;
+export const LATEST_SCHEMA_VERSION = 88;
 
 export const PRE_MERGE_LIFECYCLE_REPAIR_SQL = `
   ALTER TABLE work_items ADD COLUMN current_run_id TEXT REFERENCES work_runs(id);
@@ -1686,6 +1686,21 @@ export const MIGRATIONS = [
       );
       CREATE UNIQUE INDEX IF NOT EXISTS search_answers_work_item_idx
         ON search_answers (org_id, work_item_id);
+    `,
+  },
+  {
+    version: 87,
+    sql: `
+      DELETE FROM context_artifact_states
+        WHERE (org_id, artifact_id) IN (SELECT org_id, id FROM context_artifacts WHERE kind = 'daily_digest');
+      DELETE FROM context_artifacts WHERE kind = 'daily_digest';
+    `,
+  },
+  {
+    version: 88,
+    sql: `
+      ALTER TABLE recipes ADD COLUMN flow_json TEXT
+        CHECK (flow_json IS NULL OR json_valid(flow_json));
     `,
   },
 ] as const;

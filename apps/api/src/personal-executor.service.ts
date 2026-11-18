@@ -3,7 +3,6 @@ import { Inject, Injectable } from "@nestjs/common";
 import {
   ChannelDriverRegistry,
   DEFAULT_COPY_LOCALE,
-  DEFAULT_LOCAL_EXECUTOR_ID,
   resolveCopyText,
   resolveExecutorCatalog,
   type CopyLocale,
@@ -118,7 +117,9 @@ export class PersonalExecutorService {
       host.get("authority").listExecutorInstallations(orgId),
       host.get("authority").listInstallations(orgId),
     ]);
-    const views = rows.map((row) => this.toView(row, connectors, locale));
+    const views = rows
+      .filter((row) => this.installationVisible(row, connectors))
+      .map((row) => this.toView(row, connectors, locale));
     const executors = host.get("executors");
     const channel = new PersonalWorkChannel(this.runtime, this.drivers);
     await Promise.all(views.map(async (view) => {
@@ -150,7 +151,7 @@ export class PersonalExecutorService {
             key: "name",
             label: "Name",
             required: false,
-            placeholder: "Office DSH",
+            placeholder: "Local agent",
           },
           {
             key: "installation_id",
@@ -299,7 +300,7 @@ export class PersonalExecutorService {
     const config =
       input.config !== undefined
         ? await this.validatedConfig(existing.kind, input.config, {
-            requirePin: existing.id !== DEFAULT_LOCAL_EXECUTOR_ID,
+            requirePin: Boolean(executorConfigText(existing.config, "installation_id")),
           })
         : existing.config;
     const updated: ExecutorInstallation = {
@@ -407,13 +408,18 @@ export class PersonalExecutorService {
     await authority.putUiPref(orgId, EXECUTOR_DEFAULTS_SEEDED_PREF, "1", now);
   }
 
-  /** Any Agent can be an executor. A plain connector cannot. */
+  /**
+   * Any Agent can be an executor. A plain connector cannot.
+   * The unbound default already runs the first creatable connector of its
+   * source, so that connector does not get a second agent.
+   */
   private async ensureAgentExecutors(orgId: string): Promise<void> {
     const authority = this.runtime.requireHost().get("authority");
     const [installations, rows] = await Promise.all([
       authority.listInstallations(orgId),
       authority.listExecutorInstallations(orgId),
     ]);
+    const coveredId = this.unboundCoveredInstallationId(rows, installations);
     for (const installation of installations) {
       if (installation.status !== "enabled" || installation.org_id !== orgId) {
         continue;
@@ -427,7 +433,7 @@ export class PersonalExecutorService {
           row.kind === "local_connector" &&
           executorConfigText(row.config, "installation_id") === installation.id,
       );
-      if (pinned) {
+      if (pinned || installation.id === coveredId) {
         continue;
       }
       const catalog = driver.installCatalog?.({ env: process.env });
@@ -452,6 +458,70 @@ export class PersonalExecutorService {
     }
   }
 
+  /**
+   * The seeded DSH row stays so an existing `dsh` recipe can run again once a
+   * connector exists. Until then it is not an Agent and must not be listed.
+   */
+  private installationVisible(
+    row: ExecutorInstallation,
+    installations: ConnectorInstallation[],
+  ): boolean {
+    if (row.kind !== "local_connector") {
+      return true;
+    }
+    if (executorConfigText(row.config, "installation_id")) {
+      return true;
+    }
+    return this.defaultSourceHasCreatable(installations);
+  }
+
+  private defaultSourceHasCreatable(
+    installations: ConnectorInstallation[],
+  ): boolean {
+    const source = this.localPlugins.default()?.catalog().source?.trim();
+    return Boolean(source && this.drivers.findCreatable(installations, source));
+  }
+
+  private async unboundDefaultRuntime(row: ExecutorInstallation) {
+    const plugin = this.localPlugins.default();
+    const source = plugin?.catalog().source?.trim();
+    if (!plugin || !source) {
+      return undefined;
+    }
+    const installations = await this.runtime
+      .requireHost()
+      .get("authority")
+      .listInstallations(row.org_id);
+    if (!this.drivers.findCreatable(installations, source)) {
+      return undefined;
+    }
+    return createLocalConnectorExecutor({
+      executor_type: row.id,
+      label: row.name,
+      source,
+      agent: plugin.catalog().agent === true,
+      plugin,
+    });
+  }
+
+  private unboundCoveredInstallationId(
+    rows: ExecutorInstallation[],
+    installations: ConnectorInstallation[],
+  ): string | undefined {
+    const unbound = rows.some(
+      (row) =>
+        row.kind === "local_connector" &&
+        row.status === "enabled" &&
+        !executorConfigText(row.config, "installation_id"),
+    );
+    if (!unbound) {
+      return undefined;
+    }
+    const source =
+      this.localPlugins.default()?.catalog().source?.trim() || undefined;
+    return this.drivers.findCreatable(installations, source)?.installation.id;
+  }
+
   private async createRuntime(row: ExecutorInstallation) {
     if (row.kind === "http") {
       const timeout = row.config.timeout_ms;
@@ -465,9 +535,13 @@ export class PersonalExecutorService {
       });
     }
     const pin = executorConfigText(row.config, "installation_id");
-    const connector = pin
-      ? await this.runtime.requireHost().get("authority").findInstallation(pin)
-      : undefined;
+    if (!pin) {
+      return this.unboundDefaultRuntime(row);
+    }
+    const connector = await this.runtime
+      .requireHost()
+      .get("authority")
+      .findInstallation(pin);
     const binding = connector ? this.localBinding(connector) : undefined;
     if (pin && !binding) return undefined;
     const driver = binding?.driver;
@@ -484,14 +558,13 @@ export class PersonalExecutorService {
             label: row.name,
           })
         : undefined) ??
-      this.localPlugins.default() ??
       createSessionTaskExecutor({ source });
     const executor = createLocalConnectorExecutor({
       executor_type: row.id,
       label: row.name,
       source: boundAgent ? source : (plugin.catalog().source ?? source),
       installation_id: pin || undefined,
-      agent: boundAgent || plugin.catalog().agent === true,
+      agent: boundAgent || binding?.plugin?.catalog().agent === true,
       plugin,
     });
     return connector && driver
@@ -622,9 +695,9 @@ export class PersonalExecutorService {
       detail = hostOf(executorConfigText(row.config, "base_url"));
     } else if (connector) {
       detail = toInstallationView(connector, null, this.drivers, locale).label;
-    } else if (row.id === DEFAULT_LOCAL_EXECUTOR_ID) {
+    } else if (!pin) {
       detail = "Auto · first creatable connector";
-    } else if (pin) {
+    } else {
       detail = "Connector missing";
     }
     return {

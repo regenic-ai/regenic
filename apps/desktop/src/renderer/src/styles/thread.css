@@ -213,17 +213,11 @@
   min-height: 0;
 }
 
-.thread-empty,
 .page-empty {
   color: var(--muted);
   max-width: 42ch;
   padding: 48px 32px;
   line-height: 1.55;
-}
-
-.thread-empty {
-  margin: auto;
-  text-align: center;
 }
 
 .thread h1,

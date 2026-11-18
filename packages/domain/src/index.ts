@@ -119,6 +119,7 @@ export * from "./record-class";
 export * from "./thread-facet";
 export * from "./unit-kind";
 export * from "./work";
+export * from "./flow";
 export * from "./recipe-match";
 export * from "./specification";
 export * from "./recipe-trigger";

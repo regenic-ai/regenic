@@ -6,7 +6,6 @@ import type {
   ContextArtifactLifecycleStore,
   ContextArtifactState,
   ContextArtifactSupersession,
-  ContextArtifactProposedSupersession,
 } from "./context-artifact-lifecycle";
 import type { ContextBundle, ContextBundleItem } from "./context-bundle";
 import type { ContextSectionKind } from "./context-budget";
@@ -97,10 +96,6 @@ export interface ContextArtifactStore extends ContextArtifactLifecycleStore {
   supersedeArtifact(input: ContextArtifactSupersession): Promise<{
     superseded: ContextArtifactState;
     accepted: ContextArtifactState;
-  }>;
-  supersedeProposedArtifact(input: ContextArtifactProposedSupersession): Promise<{
-    superseded: ContextArtifactState;
-    replacement: ContextArtifactState;
   }>;
   putSnapshot(snapshot: ContextSnapshot): Promise<void>;
   getSnapshot(orgId: string, id: string): Promise<ContextSnapshot | null>;

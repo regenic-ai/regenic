@@ -47,6 +47,11 @@ import type {
   CancellationJobView,
   WorkIdentityDiagnosticView,
 } from "./types";
+import {
+  flowConfigFromFields,
+  recipeFromFlowRecord,
+  type FlowWireRecord,
+} from "./flow-wire.ts";
 import { activeLocale } from "../../shared/i18n.ts";
 import { throwKernelError } from "./kernel-request.ts";
 import { normalizeListTitle } from "./types";
@@ -1310,12 +1315,12 @@ function replyErrorMessage(
 }
 
 export async function fetchRecipes(): Promise<RecipeView[]> {
-  const response = await fetch(`${origin()}/v1/me/recipes`);
+  const response = await fetch(`${origin()}/v1/me/flows`);
   if (!response.ok) {
-    throw new Error(`recipes ${response.status}`);
+    throw new Error(`flows ${response.status}`);
   }
-  const items = (await response.json()) as RecipeView[];
-  return Array.isArray(items) ? items : [];
+  const items = (await response.json()) as FlowWireRecord[];
+  return Array.isArray(items) ? items.map(recipeFromFlowRecord) : [];
 }
 
 export async function installExecutor(
@@ -1423,26 +1428,26 @@ export async function saveRecipe(
   id?: string,
 ): Promise<RecipeView> {
   const response = await fetch(
-    id ? `${origin()}/v1/me/recipes/${id}` : `${origin()}/v1/me/recipes`,
+    id ? `${origin()}/v1/me/flows/${id}` : `${origin()}/v1/me/flows`,
     {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(input),
+      body: JSON.stringify({ name: input.name, config: flowConfigFromFields(input) }),
     },
   );
-  const body = (await response.json()) as RecipeView | { error?: { message?: string } };
+  const body = (await response.json()) as FlowWireRecord | { error?: { message?: string } };
   if (!response.ok) {
     throw new Error(
       "error" in body && body.error?.message
         ? body.error.message
-        : `recipe ${response.status}`,
+        : `flow ${response.status}`,
     );
   }
-  return body as RecipeView;
+  return recipeFromFlowRecord(body as FlowWireRecord);
 }
 
 export async function deleteRecipe(id: string): Promise<void> {
-  const response = await fetch(`${origin()}/v1/me/recipes/${id}`, {
+  const response = await fetch(`${origin()}/v1/me/flows/${id}`, {
     method: "DELETE",
   });
   if (!response.ok) {
@@ -1455,7 +1460,7 @@ export async function tryRecipe(
   id: string,
   input?: { thread_id?: string; write_back?: boolean },
 ): Promise<{ thread_id: string }> {
-  const response = await fetch(`${origin()}/v1/me/recipes/${id}/try`, {
+  const response = await fetch(`${origin()}/v1/me/flows/${id}/try`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(input ?? {}),

@@ -45,11 +45,7 @@ export function SearchAnswerCard({ query, conversations, intent, filters, onCite
         if (!live) return;
         const agents = list.filter((entry) => entry.agent === true);
         setExecutors(agents);
-        setExecutor(
-          agents.find((entry) => entry.executor_type === "dsh")?.executor_type
-            ?? agents[0]?.executor_type
-            ?? "",
-        );
+        setExecutor(agents[0]?.executor_type ?? "");
       })
       .catch(() => { if (live) setExecutors([]); });
     return () => { live = false; };

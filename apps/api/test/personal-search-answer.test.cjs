@@ -747,6 +747,40 @@ describe("persistent aggregate planning", () => {
     assert.equal(harness.bodyReads, 0);
     assert.deepEqual(harness.validated, ["e1", "e2", "e3", "e4"]);
     assert.equal(harness.record.scope.map_reduce.cache_manifest.version, 1);
+    assert.deepEqual(harness.cacheVersions, ["typed-event-v1:dsh"]);
+  });
+
+  it("does not reuse an empty or expired fact list", async () => {
+    const empty = planningHarness(completedRun(validPlan), {
+      cached: true,
+      emptyEventId: "e4",
+    });
+    const emptyResult = await empty.service().get("answer-plan");
+    assert.equal(emptyResult.progress.cache_hits, 3);
+    assert.equal(emptyResult.progress.cache_misses, 1);
+
+    const expired = planningHarness(completedRun(validPlan), {
+      cached: true,
+      cacheUpdatedAt: "2020-01-01T00:00:00.000Z",
+    });
+    const expiredResult = await expired.service().get("answer-plan");
+    assert.equal(expiredResult.progress.cache_hits, 0);
+    assert.equal(expiredResult.progress.cache_misses, 4);
+  });
+
+  it("recomputes legacy routing and cancels a running cached batch", async () => {
+    const harness = planningHarness(completedRun(validPlan), { cached: true });
+    await harness.service().get("answer-plan");
+    const batch = harness.record.scope.map_reduce.batches[0];
+    batch.status = "running";
+    batch.work_item_id = "orphan-map";
+    delete harness.record.scope.map_reduce.cache_manifest;
+    await harness.service().get("answer-plan");
+
+    assert.equal(harness.manifestReads, 2);
+    assert.deepEqual(harness.cancelled, ["orphan-map"]);
+    assert.equal(batch.status, "completed");
+    assert.equal(batch.work_item_id, undefined);
   });
 
   it("treats a changed content hash as a cache miss", async () => {
@@ -872,6 +906,7 @@ function planningHarness(initialRun, options = {}) {
           strategy: "map_reduce",
           phase: "planning",
           snapshot_id: "private-snapshot",
+          executor_type: "dsh",
           batch_offsets: [0, 1, 2, 3, 4],
           total_batches: 4,
           planning_attempt: attempt,
@@ -898,6 +933,7 @@ function planningHarness(initialRun, options = {}) {
     manifestReads: 0,
     bodyReads: 0,
     validated: [],
+    cacheVersions: [],
   };
   states.set(
     harness.record.work_item_id,
@@ -909,8 +945,9 @@ function planningHarness(initialRun, options = {}) {
       harness.record = structuredClone(record);
       return harness.record;
     },
-    getAggregateFactCache: async (_orgId, specHash, extractorVersion, ids) =>
-      options.cached
+    getAggregateFactCache: async (_orgId, specHash, extractorVersion, ids) => {
+      harness.cacheVersions.push(extractorVersion);
+      return options.cached
         ? ids.map((event_id) => ({
             org_id: "org-1",
             spec_hash: specHash,
@@ -919,17 +956,18 @@ function planningHarness(initialRun, options = {}) {
             content_hash: event_id === options.staleEventId
               ? `stale-hash-${event_id}`
               : `hash-${event_id}`,
-            facts: event_id === "e4" ? [] : [{
+            facts: event_id === options.emptyEventId ? [] : [{
               dedupe_key: `event_id:${event_id}`,
               group: "all",
               metric: "task_count",
               value: 1,
               event_ids: [event_id],
             }],
-            created_at: "2026-01-01T00:00:00.000Z",
-            updated_at: "2026-01-01T00:00:00.000Z",
+            created_at: options.cacheUpdatedAt ?? new Date().toISOString(),
+            updated_at: options.cacheUpdatedAt ?? new Date().toISOString(),
           }))
-        : [],
+        : [];
+    },
     putAggregateFactCache: async () => {},
   };
   const runtime = {

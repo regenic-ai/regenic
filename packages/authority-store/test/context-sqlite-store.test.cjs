@@ -184,7 +184,7 @@ describe("SQLite context artifact store", () => {
     const root = await createRoot();
     const path = join(root, "authority.db");
     let store = new SqliteAuthorityStore(path);
-    const now = "2026-08-30T00:00:00.000Z";
+    const now = new Date().toISOString();
     await store.putAggregateFactCache([
       {
         org_id: "example-org",
@@ -235,6 +235,43 @@ describe("SQLite context artifact store", () => {
       )).length,
       0,
     );
+    store.close();
+  });
+
+  it("drops aggregate facts that are older than the retention window", async () => {
+    const root = await createRoot();
+    const path = join(root, "authority.db");
+    const store = new SqliteAuthorityStore(path);
+    const fresh = new Date().toISOString();
+    await store.putAggregateFactCache([
+      {
+        org_id: "example-org",
+        spec_hash: HASH_A,
+        extractor_version: "typed-event-v1",
+        event_id: "event-stale",
+        content_hash: HASH_B,
+        facts: [],
+        created_at: "2020-01-01T00:00:00.000Z",
+        updated_at: "2020-01-01T00:00:00.000Z",
+      },
+      {
+        org_id: "example-org",
+        spec_hash: HASH_A,
+        extractor_version: "typed-event-v1",
+        event_id: "event-fresh",
+        content_hash: HASH_B,
+        facts: [],
+        created_at: fresh,
+        updated_at: fresh,
+      },
+    ]);
+    const records = await store.getAggregateFactCache(
+      "example-org",
+      HASH_A,
+      "typed-event-v1",
+      ["event-stale", "event-fresh"],
+    );
+    assert.deepEqual(records.map((record) => record.event_id), ["event-fresh"]);
     store.close();
   });
 
@@ -309,7 +346,7 @@ describe("SQLite context artifact store", () => {
     store.close();
   });
 
-  it("persists daily digest input metadata through direct, restart, and split reads", async () => {
+  it("persists event input metadata through direct, restart, and split reads", async () => {
     const root = await createRoot();
     const path = join(root, "authority.db");
     const metadata = {
@@ -1398,35 +1435,46 @@ describe("SQLite context artifact store", () => {
       INSERT INTO context_artifact_states (org_id, artifact_id, status, decided_at)
       VALUES (?, ?, 'proposed', ?)
     `).run("example-org", "legacy-summary", "2026-08-30T00:01:00.000Z");
+    legacy.prepare(`
+      INSERT INTO context_artifacts (
+        org_id, id, kind, status, generation, recorded_at, payload_json
+      ) VALUES (?, 'legacy-digest', 'daily_digest', 'proposed', 'generation-1', ?, '{}')
+    `).run("example-org", "2026-08-30T00:02:00.000Z");
+    legacy.prepare(`
+      INSERT INTO context_artifact_states (org_id, artifact_id, status, decided_at)
+      VALUES (?, 'legacy-digest', 'proposed', ?)
+    `).run("example-org", "2026-08-30T00:02:00.000Z");
     legacy.close();
 
     const store = new SqliteAuthorityStore(path);
-    const legacyIndex = (await store.listArtifactIndexes({ org_id: "example-org" }))[0];
+    const legacyIndexes = await store.listArtifactIndexes({ org_id: "example-org" });
+    assert.deepEqual(legacyIndexes.map((index) => index.id), ["legacy-summary"]);
+    assert.equal(await store.getArtifactState("example-org", "legacy-digest"), null);
+    const legacyIndex = legacyIndexes[0];
     assert.equal(legacyIndex.preview.last_text, "time-newest");
     assert.equal(legacyIndex.preview.readable_count, 2);
     assert.equal(legacyIndex.preview.thread_id, "chat-legacy");
     assert.equal(JSON.stringify(legacyIndex.preview).includes("stored last"), false);
 
-    const digest = artifact({
-      id: "digest-1",
-      kind: "daily_digest",
+    const summary = artifact({
+      id: "summary-1",
       recorded_at: "2026-08-30T00:03:00.000Z",
       attrs: {
-        utc_date: "2026-08-30",
-        item_count: 1,
-        directions: [{ items: [{ text: "digest line", occurred_at: "2026-08-30T00:00:00.000Z" }] }],
+        thread_id: "chat-1",
+        messages: [{ text: "summary line", occurred_at: "2026-08-30T00:00:00.000Z" }],
       },
     });
     const memory = new MemoryContextArtifactStore();
-    await store.putArtifact(digest);
-    await memory.putArtifact(digest);
+    await store.putArtifact(summary);
+    await memory.putArtifact(summary);
+    const query = { org_id: "example-org", kinds: ["thread_summary"], statuses: ["accepted"] };
     assert.deepEqual(
-      await store.listArtifactIndexes({ org_id: "example-org", kinds: ["daily_digest"] }),
-      await memory.listArtifactIndexes({ org_id: "example-org", kinds: ["daily_digest"] }),
+      (await store.listArtifactIndexes(query)).filter((index) => index.id === "summary-1"),
+      await memory.listArtifactIndexes(query),
     );
     assert.equal(
-      (await store.listArtifactIndexes({ org_id: "example-org", kinds: ["daily_digest"] }))[0].preview.last_text,
-      "digest line",
+      (await store.listArtifactIndexes(query)).find((index) => index.id === "summary-1").preview.last_text,
+      "summary line",
     );
     store.close();
   });

@@ -24,22 +24,7 @@ import { CatalogDocs, uniqueCatalogDocs } from "./CatalogDocs";
 import { ConnectorKind } from "./ConnectorSettings";
 import { InfoTip } from "./InfoTip";
 import { ExecutorKind } from "./ExecutorSettings";
-import {
-  connectorActionError,
-  diskWatchCopy,
-  formatChatTime,
-  memoryWatchCopy,
-  networkWatchHint,
-  networkWatchLabel,
-  pullStatusLabel,
-  aggregateInstallationSync,
-  syncEtaSummary,
-  syncFreshnessSummary,
-  syncProgressSummary,
-  syncProgressTone,
-  syncReadinessTone,
-} from "./format";
-import type { HostStats } from "../../shared/host-watch.ts";
+import { connectorActionError, formatChatTime } from "./format";
 import { useLocale } from "./LocaleContext";
 import type {
   ConnectorMarketView,
@@ -52,12 +37,10 @@ import type {
 
 export function EnginePage({
   engine,
-  host,
   error,
   onChanged,
 }: {
   engine: PersonalEngineView | null;
-  host: HostStats | null;
   error: string | null;
   onChanged: () => Promise<void>;
 }) {
@@ -72,6 +55,7 @@ export function EnginePage({
   );
   const [actionError, setActionError] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [tab, setTab] = useState<"sources" | "handlers">("sources");
   const actionLock = useRef(false);
 
   const runAction = async (id: string, action: () => Promise<void>) => {
@@ -111,22 +95,6 @@ export function EnginePage({
   const unsignedPlugins = unsignedPluginCount(engine);
   const failedPlugins = failedPluginCount(engine);
   const syncable = engine.installations.filter((item) => item.syncable);
-  const coverage = aggregateInstallationSync(engine.installations);
-  const pullCopy = [
-    pullStatusLabel(engine.pull),
-    engine.pull?.last_tick_at ? formatChatTime(engine.pull.last_tick_at) : "",
-    engine.pull?.last_accepted_count ? `+${engine.pull.last_accepted_count}` : "",
-  ]
-    .filter(Boolean)
-    .join(" · ");
-  const networkCopy = [
-    networkWatchLabel(engine.pull?.network?.kind),
-    engine.pull?.network?.kind !== "ok" && engine.pull?.network?.proxy
-      ? engine.pull.network.proxy
-      : "",
-  ]
-    .filter(Boolean)
-    .join(" · ");
   const visibleRuns = (engine.sync_runs ?? []).filter((run) =>
     ["queued", "running", "paused", "failed"].includes(run.status),
   );
@@ -138,461 +106,384 @@ export function EnginePage({
         <h1>{t("engine.title")}</h1>
         <p className="page-lead">{t("engine.lead")}</p>
       </header>
-      <section className="card engine-kernel">
-        <div className="card-head">
-          <h2>{t("engine.kernel")}</h2>
-          <span className={`chip ${engine.kernel === "running" ? "running" : "stopped"}`}>
-            <span className="dot" />
-            {engine.kernel === "running" ? t("engine.running") : t("engine.stopped")}
-          </span>
-        </div>
-        <div className="engine-stats">
-          <EngineStat
-            label={t("engine.currentWork")}
-            value={String(engine.inbox_count)}
-            tone="ok"
-            emphasis
-          />
-          <EngineStat
-            label={t("engine.coverage")}
-            value={coverage ? syncProgressSummary(coverage) : "—"}
-            tone={syncProgressTone(coverage)}
-          />
-          <EngineStat
-            label={t("engine.freshness")}
-            value={syncFreshnessSummary(engine.sync_readiness)}
-            tone={
-              engine.sync_readiness?.freshness_source === "poll" ||
-              engine.sync_readiness?.freshness_source === "push"
-                ? "ok"
-                : undefined
-            }
-          />
-          <EngineStat
-            label={t("engine.eta")}
-            value={syncEtaSummary(engine.sync_readiness)}
-            tone={syncReadinessTone(engine.sync_readiness)}
-          />
-          <EngineStat
-            label={t("engine.livePull")}
-            value={pullCopy}
-            tone={
-              engine.pull?.last_error
-                ? "risk"
-                : engine.pull?.phase === "pulling" ||
-                    (engine.pull?.catching_up_count ?? 0) > 0
-                  ? "warn"
-                  : "ok"
-            }
-          />
-          <EngineStat
-            label={t("engine.network")}
-            value={networkCopy}
-            tone={watchTone(engine.pull?.network?.kind)}
-          />
-          <EngineStat
-            label={t("engine.disk")}
-            value={host ? diskWatchCopy(host.disk) : "—"}
-            tone={watchTone(host?.disk.kind)}
-          />
-          <EngineStat
-            label={t("engine.memory")}
-            value={host ? memoryWatchCopy(host.memory) : "—"}
-            tone={watchTone(host?.memory.kind)}
-          />
-        </div>
-        <dl className="engine-meta">
-          <div>
-            <dt>{t("engine.org")}</dt>
-            <dd>{engine.org_id}</dd>
-          </div>
-          <div>
-            <dt>{t("engine.database")}</dt>
-            <dd>
-              <code title={engine.database_path ?? undefined}>
-                {engine.database_path ?? "—"}
-              </code>
-            </dd>
-          </div>
-          <div>
-            <dt>{t("engine.pluginDir")}</dt>
-            <dd>
-              <code title={engine.plugin_dir ?? undefined}>
-                {engine.plugin_dir ?? "—"}
-              </code>
-            </dd>
-          </div>
-        </dl>
-        {engine.pull?.last_error ? (
-          <p className="action-error">{engine.pull.last_error}</p>
-        ) : null}
-        {engine.pull?.last_error_hint || engine.pull?.network?.hint ? (
-          <p className="action-hint">
-            {networkWatchHint(
-              engine.pull.last_error_hint ?? engine.pull.network?.hint,
-            )}
-          </p>
-        ) : null}
-        {host?.disk.hint ? <p className="action-hint">{host.disk.hint}</p> : null}
-        {host?.memory.hint ? (
-          <p className="action-hint">{host.memory.hint}</p>
-        ) : null}
-      </section>
-      {visibleRuns.length > 0 ? (
-        <section className="card engine-sync-runs">
-          <div className="card-head">
-            <h2>{t("sync.runs")}</h2>
-          </div>
-          <div className="connector-kind">
-            {visibleRuns.map((run) => {
-              const completed = run.completed_work + run.failed_work;
-              const installation = engine.installations.find(
-                (item) => item.id === run.installation_id,
-              );
-              const progress =
-                run.total_work > 0
-                  ? `${completed}/${run.total_work}`
-                  : t("sync.totalUnknown");
-              return (
-                <div className="install install-instance" key={run.id}>
-                  <div>
-                    <strong>{t(`sync.mode.${syncModeKey(run.mode)}`)}</strong>
-                    <div className="install-meta">
-                      <span className="muted">
-                        {installation?.channel_label ?? installation?.label ?? run.installation_id}
-                      </span>
-                      <time
-                        className="muted"
-                        dateTime={run.created_at}
-                        title={new Date(run.created_at).toLocaleString()}
-                      >
-                        {t("sync.started", { when: formatChatTime(run.started_at ?? run.created_at) })}
-                      </time>
-                      <span className={`chip ${run.status === "running" ? "running" : ""}`}>
-                        {t(`sync.status.${run.status}`)}
-                      </span>
-                      <span className="muted">{progress}</span>
-                      <span className="muted">
-                        {t("sync.accepted", { count: run.accepted_count })}
-                      </span>
-                    </div>
-                    {run.last_error ? (
-                      <p className="action-error">
-                        {run.last_error === "sync_work_pending"
-                          ? t("sync.workPending")
-                          : run.last_error}
-                      </p>
-                    ) : null}
-                  </div>
-                  <div className="install-actions">
-                    {run.status === "running" || run.status === "queued" ? (
-                      <button
-                        type="button"
-                        className="ghost"
-                        onClick={() =>
-                          void runAction(`run:${run.id}`, async () => {
-                            await commandSyncRun(run.id, "pause");
-                          })
-                        }
-                      >
-                        {t("sync.pause")}
-                      </button>
-                    ) : null}
-                    {run.status === "paused" ? (
-                      <button
-                        type="button"
-                        className="ghost"
-                        onClick={() =>
-                          void runAction(`run:${run.id}`, async () => {
-                            await commandSyncRun(run.id, "resume");
-                          })
-                        }
-                      >
-                        {t("sync.resume")}
-                      </button>
-                    ) : null}
-                    {run.status !== "failed" ? (
-                      <button
-                        type="button"
-                        className="ghost danger"
-                        onClick={() =>
-                          void runAction(`run:${run.id}`, async () => {
-                            await commandSyncRun(run.id, "cancel");
-                          })
-                        }
-                      >
-                        {t("sync.cancel")}
-                      </button>
-                    ) : null}
-                    {isDeletableRun(run.status) && confirmDeleteId === run.id ? (
-                      <button
-                        type="button"
-                        className="ghost"
-                        onClick={() => setConfirmDeleteId(null)}
-                      >
-                        {t("sync.cancel")}
-                      </button>
-                    ) : null}
-                    {isDeletableRun(run.status) ? (
-                      <button
-                        type="button"
-                        className="ghost danger"
-                        disabled={busyId === `run:${run.id}`}
-                        onClick={() => {
-                          if (confirmDeleteId !== run.id) {
-                            setConfirmDeleteId(run.id);
-                            return;
-                          }
-                          void (async () => {
-                            const started = await runAction(`run:${run.id}`, async () => {
-                              await deleteSyncRun(run.id);
-                            });
-                            if (started) {
-                              setConfirmDeleteId(null);
-                            } else if (actionLock.current) {
-                              setActionError(t("sync.deleteBusy"));
-                            }
-                          })();
-                        }}
-                      >
-                        {confirmDeleteId === run.id
-                          ? t("sync.deleteConfirm")
-                          : t("sync.delete")}
-                      </button>
-                    ) : null}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </section>
-      ) : null}
-      <section className="card engine-connectors" id="engine-connector-config">
-        <div className="card-head">
-          <div className="card-title">
-            <h2 className="settings-heading">{t("engine.connectors")}
-              <InfoTip label={t("engine.connectors")}>{t("engine.connectorsLead")}</InfoTip>
-            </h2>
-            <CatalogDocs docs={uniqueCatalogDocs(engine.catalog ?? [])} />
-          </div>
-          {syncable.length > 1 ? (
-            <button
-              type="button"
-              className="ghost"
-              disabled={busyId !== null || syncingAll}
-              onClick={() => {
-                void (async () => {
-                  setSyncingAll(true);
-                  setActionError(null);
-                  try {
-                    await Promise.all(
-                      syncable.map((item) =>
-                        syncConnector(item.id, { mode: "quick_start" }),
-                      ),
-                    );
-                    await onChanged();
-                  } catch (caught) {
-                    setActionError(
-                      caught instanceof Error
-                        ? connectorActionError(caught)
-                        : t("engine.syncFailed"),
-                    );
-                  } finally {
-                    setSyncingAll(false);
-                  }
-                })();
-              }}
-            >
-              {syncingAll ? t("engine.syncing") : t("engine.syncAll")}
-            </button>
-          ) : null}
-        </div>
-        {unsignedPlugins > 0 ? (
-          <p className="action-hint">
-            {t("engine.unsignedPlugins", { count: unsignedPlugins })}
-          </p>
-        ) : null}
-        {failedPlugins > 0 ? (
-          <p className="action-error">
-            {t("engine.failedPlugins", { count: failedPlugins })}
-          </p>
-        ) : null}
-        {(engine.catalog ?? []).map((kind) => (
-          <ConnectorKind
-            key={kind.connector_type}
-            kind={kind}
-            installations={engine.installations.filter(
-              (item) =>
-                item.connector_type === kind.connector_type &&
-                !pendingUninstallIds.includes(item.id),
-            )}
-            busyId={busyId}
-            syncingAll={syncingAll}
-            installing={installingType === kind.connector_type}
-            pendingUninstall={engine.installations.some(
-              (item) =>
-                item.connector_type === kind.connector_type &&
-                pendingUninstallIds.includes(item.id),
-            )}
-            pairingCode={pairingCodes}
-            onOpenInstall={() => {
-              if (actionLock.current || busyId !== null || syncingAll) {
-                return;
-              }
-              setInstallingType(kind.connector_type);
-            }}
-            onCloseInstall={() => {
-              if (actionLock.current || busyId === kind.connector_type) {
-                return;
-              }
-              setInstallingType(null);
-            }}
-            onInstall={(config) =>
-              void runAction(kind.connector_type, async () => {
-                const installed = await installConnector(
-                  kind.connector_type,
-                  config,
-                );
-                if (installed.pairing_code?.trim()) {
-                  setPairingCodes((current) => ({
-                    ...current,
-                    [installed.id]: installed.pairing_code!.trim(),
-                  }));
-                }
-                setInstallingType(null);
-              })
-            }
-            onSync={(id, mode) =>
-              void runAction(id, async () => {
-                await syncConnector(id, { mode });
-              })
-            }
-            onRetryQuarantines={(id) =>
-              void runAction(id, async () => {
-                await retryConnectorQuarantines(id);
-              })
-            }
-            onEnable={(installation) =>
-              void runAction(installation.id, async () => {
-                await setConnectorStatus(
-                  installation.id,
-                  "enabled",
-                );
-              })
-            }
-            onUpdate={(installation, config) =>
-              runAction(installation.id, async () => {
-                await updateConnectorConfig(installation.id, config);
-              })
-            }
-            error={actionError}
-            onRefresh={onChanged}
-            onPairingCode={(id, code) => {
-              setPairingCodes((current) => ({ ...current, [id]: code }));
-            }}
-            onUninstall={(installation) => {
-              if (
-                actionLock.current ||
-                busyId !== null ||
-                pendingUninstallIds.includes(installation.id)
-              ) {
-                return;
-              }
-              if (
-                !window.confirm(
-                  t("engine.uninstallConfirm", {
-                    type: kind.title,
-                    name: installation.label,
-                  }),
-                )
-              ) {
-                return;
-              }
-              setPendingUninstallIds((current) =>
-                current.includes(installation.id)
-                  ? current
-                  : [...current, installation.id],
-              );
-              void runAction(installation.id, async () => {
-                await uninstallConnector(installation.id);
-                setPairingCodes((current) => {
-                  const next = { ...current };
-                  delete next[installation.id];
-                  return next;
-                });
-              }).then((ok) => {
-                if (!ok) {
-                  setPendingUninstallIds((current) =>
-                    current.filter((id) => id !== installation.id),
+      <div className="page-tabs" role="tablist" aria-label={t("engine.title")}>
+        {([
+          ["sources", t("engine.tabSources"), engine.installations.length],
+          ["handlers", t("engine.tabHandlers"), (engine.executor_installations ?? []).length],
+        ] as const).map(([id, label, count]) => (
+          <button
+            key={id}
+            type="button"
+            role="tab"
+            aria-selected={tab === id}
+            className={tab === id ? "active" : ""}
+            onClick={() => setTab(id)}
+          >
+            {label}
+            <span className="page-tab-count">{count}</span>
+          </button>
+        ))}
+      </div>
+      {tab === "sources" ? (
+        <>
+          {visibleRuns.length > 0 ? (
+            <section className="card engine-sync-runs">
+              <div className="card-head">
+                <h2>{t("sync.runs")}</h2>
+              </div>
+              <div className="connector-kind">
+                {visibleRuns.map((run) => {
+                  const completed = run.completed_work + run.failed_work;
+                  const installation = engine.installations.find(
+                    (item) => item.id === run.installation_id,
                   );
+                  const progress =
+                    run.total_work > 0
+                      ? `${completed}/${run.total_work}`
+                      : t("sync.totalUnknown");
+                  return (
+                    <div className="install install-instance" key={run.id}>
+                      <div>
+                        <strong>{t(`sync.mode.${syncModeKey(run.mode)}`)}</strong>
+                        <div className="install-meta">
+                          <span className="muted">
+                            {installation?.channel_label ?? installation?.label ?? run.installation_id}
+                          </span>
+                          <time
+                            className="muted"
+                            dateTime={run.created_at}
+                            title={new Date(run.created_at).toLocaleString()}
+                          >
+                            {t("sync.started", { when: formatChatTime(run.started_at ?? run.created_at) })}
+                          </time>
+                          <span className={`chip ${run.status === "running" ? "running" : ""}`}>
+                            {t(`sync.status.${run.status}`)}
+                          </span>
+                          <span className="muted">{progress}</span>
+                          <span className="muted">
+                            {t("sync.accepted", { count: run.accepted_count })}
+                          </span>
+                        </div>
+                        {run.last_error ? (
+                          <p className="action-error">
+                            {run.last_error === "sync_work_pending"
+                              ? t("sync.workPending")
+                              : run.last_error}
+                          </p>
+                        ) : null}
+                      </div>
+                      <div className="install-actions">
+                        {run.status === "running" || run.status === "queued" ? (
+                          <button
+                            type="button"
+                            className="ghost"
+                            onClick={() =>
+                              void runAction(`run:${run.id}`, async () => {
+                                await commandSyncRun(run.id, "pause");
+                              })
+                            }
+                          >
+                            {t("sync.pause")}
+                          </button>
+                        ) : null}
+                        {run.status === "paused" ? (
+                          <button
+                            type="button"
+                            className="ghost"
+                            onClick={() =>
+                              void runAction(`run:${run.id}`, async () => {
+                                await commandSyncRun(run.id, "resume");
+                              })
+                            }
+                          >
+                            {t("sync.resume")}
+                          </button>
+                        ) : null}
+                        {run.status !== "failed" ? (
+                          <button
+                            type="button"
+                            className="ghost danger"
+                            onClick={() =>
+                              void runAction(`run:${run.id}`, async () => {
+                                await commandSyncRun(run.id, "cancel");
+                              })
+                            }
+                          >
+                            {t("sync.cancel")}
+                          </button>
+                        ) : null}
+                        {isDeletableRun(run.status) && confirmDeleteId === run.id ? (
+                          <button
+                            type="button"
+                            className="ghost"
+                            onClick={() => setConfirmDeleteId(null)}
+                          >
+                            {t("sync.cancel")}
+                          </button>
+                        ) : null}
+                        {isDeletableRun(run.status) ? (
+                          <button
+                            type="button"
+                            className="ghost danger"
+                            disabled={busyId === `run:${run.id}`}
+                            onClick={() => {
+                              if (confirmDeleteId !== run.id) {
+                                setConfirmDeleteId(run.id);
+                                return;
+                              }
+                              void (async () => {
+                                const started = await runAction(`run:${run.id}`, async () => {
+                                  await deleteSyncRun(run.id);
+                                });
+                                if (started) {
+                                  setConfirmDeleteId(null);
+                                } else if (actionLock.current) {
+                                  setActionError(t("sync.deleteBusy"));
+                                }
+                              })();
+                            }}
+                          >
+                            {confirmDeleteId === run.id
+                              ? t("sync.deleteConfirm")
+                              : t("sync.delete")}
+                          </button>
+                        ) : null}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+          ) : null}
+          <section className="card engine-connectors" id="engine-connector-config">
+            <div className="card-head">
+              <div className="card-title">
+                <h2 className="settings-heading">{t("engine.connectors")}
+                  <InfoTip label={t("engine.connectors")}>{t("engine.connectorsLead")}</InfoTip>
+                </h2>
+                <CatalogDocs docs={uniqueCatalogDocs(engine.catalog ?? [])} />
+              </div>
+              {syncable.length > 1 ? (
+                <button
+                  type="button"
+                  className="ghost"
+                  disabled={busyId !== null || syncingAll}
+                  onClick={() => {
+                    void (async () => {
+                      setSyncingAll(true);
+                      setActionError(null);
+                      try {
+                        await Promise.all(
+                          syncable.map((item) =>
+                            syncConnector(item.id, { mode: "quick_start" }),
+                          ),
+                        );
+                        await onChanged();
+                      } catch (caught) {
+                        setActionError(
+                          caught instanceof Error
+                            ? connectorActionError(caught)
+                            : t("engine.syncFailed"),
+                        );
+                      } finally {
+                        setSyncingAll(false);
+                      }
+                    })();
+                  }}
+                >
+                  {syncingAll ? t("engine.syncing") : t("engine.syncAll")}
+                </button>
+              ) : null}
+            </div>
+            {unsignedPlugins > 0 ? (
+              <p className="action-hint">
+                {t("engine.unsignedPlugins", { count: unsignedPlugins })}
+              </p>
+            ) : null}
+            {failedPlugins > 0 ? (
+              <p className="action-error">
+                {t("engine.failedPlugins", { count: failedPlugins })}
+              </p>
+            ) : null}
+            {(engine.catalog ?? []).map((kind) => (
+              <ConnectorKind
+                key={kind.connector_type}
+                kind={kind}
+                installations={engine.installations.filter(
+                  (item) =>
+                    item.connector_type === kind.connector_type &&
+                    !pendingUninstallIds.includes(item.id),
+                )}
+                busyId={busyId}
+                syncingAll={syncingAll}
+                installing={installingType === kind.connector_type}
+                pendingUninstall={engine.installations.some(
+                  (item) =>
+                    item.connector_type === kind.connector_type &&
+                    pendingUninstallIds.includes(item.id),
+                )}
+                pairingCode={pairingCodes}
+                onOpenInstall={() => {
+                  if (actionLock.current || busyId !== null || syncingAll) {
+                    return;
+                  }
+                  setInstallingType(kind.connector_type);
+                }}
+                onCloseInstall={() => {
+                  if (actionLock.current || busyId === kind.connector_type) {
+                    return;
+                  }
+                  setInstallingType(null);
+                }}
+                onInstall={(config) =>
+                  void runAction(kind.connector_type, async () => {
+                    const installed = await installConnector(
+                      kind.connector_type,
+                      config,
+                    );
+                    if (installed.pairing_code?.trim()) {
+                      setPairingCodes((current) => ({
+                        ...current,
+                        [installed.id]: installed.pairing_code!.trim(),
+                      }));
+                    }
+                    setInstallingType(null);
+                  })
                 }
-              });
-            }}
+                onSync={(id, mode) =>
+                  void runAction(id, async () => {
+                    await syncConnector(id, { mode });
+                  })
+                }
+                onRetryQuarantines={(id) =>
+                  void runAction(id, async () => {
+                    await retryConnectorQuarantines(id);
+                  })
+                }
+                onEnable={(installation) =>
+                  void runAction(installation.id, async () => {
+                    await setConnectorStatus(
+                      installation.id,
+                      "enabled",
+                    );
+                  })
+                }
+                onUpdate={(installation, config) =>
+                  runAction(installation.id, async () => {
+                    await updateConnectorConfig(installation.id, config);
+                  })
+                }
+                error={actionError}
+                onRefresh={onChanged}
+                onPairingCode={(id, code) => {
+                  setPairingCodes((current) => ({ ...current, [id]: code }));
+                }}
+                onUninstall={(installation) => {
+                  if (
+                    actionLock.current ||
+                    busyId !== null ||
+                    pendingUninstallIds.includes(installation.id)
+                  ) {
+                    return;
+                  }
+                  if (
+                    !window.confirm(
+                      t("engine.uninstallConfirm", {
+                        type: kind.title,
+                        name: installation.label,
+                      }),
+                    )
+                  ) {
+                    return;
+                  }
+                  setPendingUninstallIds((current) =>
+                    current.includes(installation.id)
+                      ? current
+                      : [...current, installation.id],
+                  );
+                  void runAction(installation.id, async () => {
+                    await uninstallConnector(installation.id);
+                    setPairingCodes((current) => {
+                      const next = { ...current };
+                      delete next[installation.id];
+                      return next;
+                    });
+                  }).then((ok) => {
+                    if (!ok) {
+                      setPendingUninstallIds((current) =>
+                        current.filter((id) => id !== installation.id),
+                      );
+                    }
+                  });
+                }}
+              />
+            ))}
+            {actionError ? <p className="action-error">{actionError}</p> : null}
+          </section>
+          <ConnectorMarketplace
+            plugins={engine.plugins ?? []}
+            installations={engine.installations}
+            onChanged={onChanged}
           />
-        ))}
-        {actionError ? <p className="action-error">{actionError}</p> : null}
-      </section>
-      <ConnectorMarketplace
-        plugins={engine.plugins ?? []}
-        installations={engine.installations}
-        onChanged={onChanged}
-      />
-      <section className="card engine-connectors">
-        <div className="card-head">
-          <div className="card-title">
-            <h2 className="settings-heading">{t("engine.executors")}
-              <InfoTip label={t("engine.executors")}>{t("engine.executorsLead")}</InfoTip>
-            </h2>
-            <CatalogDocs docs={uniqueCatalogDocs(engine.executor_catalog ?? [])} />
+        </>
+      ) : (
+        <section className="card engine-connectors">
+          <div className="card-head">
+            <div className="card-title">
+              <h2 className="settings-heading">{t("engine.executors")}
+                <InfoTip label={t("engine.executors")}>{t("engine.executorsLead")}</InfoTip>
+              </h2>
+              <CatalogDocs docs={uniqueCatalogDocs(engine.executor_catalog ?? [])} />
+            </div>
           </div>
-        </div>
-        {(engine.executor_catalog ?? []).map((kind) => (
-          <ExecutorKind
-            key={kind.kind}
-            kind={kind}
-            installations={(engine.executor_installations ?? []).filter(
-              (item) => item.kind === kind.kind,
-            )}
-            busyId={busyId}
-            installing={installingExecutor === kind.kind}
-            onOpenInstall={() => setInstallingExecutor(kind.kind)}
-            onCloseInstall={() => setInstallingExecutor(null)}
-            onInstall={(config) =>
-              void runAction(`ex:${kind.kind}`, async () => {
-                await installExecutor(kind.kind, config);
-                setInstallingExecutor(null);
-              })
-            }
-            onToggle={(installation) =>
-              void runAction(`ex:${installation.id}`, async () => {
-                await setExecutorStatus(
-                  installation.id,
-                  installation.status === "disabled" ? "enabled" : "disabled",
-                );
-              })
-            }
-            onUpdate={(installation, config) =>
-              runAction(`ex:${installation.id}`, async () => {
-                await updateExecutorConfig(installation.id, config);
-              })
-            }
-            onUninstall={(installation) => {
-              if (
-                !window.confirm(
-                  t("engine.uninstallExecutorConfirm", {
-                    name: installation.label,
-                  }),
-                )
-              ) {
-                return;
+          {(engine.executor_catalog ?? []).map((kind) => (
+            <ExecutorKind
+              key={kind.kind}
+              kind={kind}
+              installations={(engine.executor_installations ?? []).filter(
+                (item) => item.kind === kind.kind,
+              )}
+              busyId={busyId}
+              installing={installingExecutor === kind.kind}
+              onOpenInstall={() => setInstallingExecutor(kind.kind)}
+              onCloseInstall={() => setInstallingExecutor(null)}
+              onInstall={(config) =>
+                void runAction(`ex:${kind.kind}`, async () => {
+                  await installExecutor(kind.kind, config);
+                  setInstallingExecutor(null);
+                })
               }
-              void runAction(`ex:${installation.id}`, async () => {
-                await uninstallExecutor(installation.id);
-              });
-            }}
-          />
-        ))}
-      </section>
+              onToggle={(installation) =>
+                void runAction(`ex:${installation.id}`, async () => {
+                  await setExecutorStatus(
+                    installation.id,
+                    installation.status === "disabled" ? "enabled" : "disabled",
+                  );
+                })
+              }
+              onUpdate={(installation, config) =>
+                runAction(`ex:${installation.id}`, async () => {
+                  await updateExecutorConfig(installation.id, config);
+                })
+              }
+              onUninstall={(installation) => {
+                if (
+                  !window.confirm(
+                    t("engine.uninstallExecutorConfirm", {
+                      name: installation.label,
+                    }),
+                  )
+                ) {
+                  return;
+                }
+                void runAction(`ex:${installation.id}`, async () => {
+                  await uninstallExecutor(installation.id);
+                });
+              }}
+            />
+          ))}
+        </section>
+      )}
     </div>
   );
 }
@@ -1487,29 +1378,6 @@ function ConnectorReleaseDetails({
   );
 }
 
-function EngineStat({
-  label,
-  value,
-  tone,
-  emphasis = false,
-}: {
-  label: string;
-  value: string;
-  tone?: "ok" | "warn" | "risk";
-  emphasis?: boolean;
-}) {
-  return (
-    <div
-      className={`engine-stat${tone ? ` is-${tone}` : ""}${
-        emphasis ? " is-emphasis" : ""
-      }`}
-    >
-      <span className="engine-stat-label">{label}</span>
-      <strong className="engine-stat-value">{value}</strong>
-    </div>
-  );
-}
-
 function unsignedPluginCount(engine: PersonalEngineView): number {
   return (engine.plugins ?? []).filter(
     (item) =>
@@ -1521,19 +1389,6 @@ function unsignedPluginCount(engine: PersonalEngineView): number {
 
 function failedPluginCount(engine: PersonalEngineView): number {
   return (engine.plugins ?? []).filter((item) => item.status === "failed").length;
-}
-
-function watchTone(kind?: string): "ok" | "warn" | "risk" | undefined {
-  if (kind === "critical" || kind === "blocked") {
-    return "risk";
-  }
-  if (kind === "attention" || kind === "proxy") {
-    return "warn";
-  }
-  if (kind === "ok") {
-    return "ok";
-  }
-  return undefined;
 }
 
 function syncModeKey(

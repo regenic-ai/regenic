@@ -21,6 +21,9 @@ export interface SearchAnswerFact {
   event_ids: string[];
 }
 
+export const AGGREGATE_FACT_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+export const AGGREGATE_FACT_CACHE_MAX_ROWS = 20_000;
+
 export interface AggregateFactCacheRecord {
   org_id: string;
   spec_hash: string;

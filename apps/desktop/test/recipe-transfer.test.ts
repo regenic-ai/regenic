@@ -52,9 +52,13 @@ describe("recipe transfer", () => {
   it("rejects malformed text filters rather than importing an unfiltered rule", () => {
     for (const key of ["text_contains", "text_excludes"]) {
       for (const value of [42, null, [], {}, true, "", "   "]) {
+        const flow = buildRecipeBundle([sample]).flows[0];
         assert.throws(() => parseRecipeBundle(JSON.stringify({
-          version: 1,
-          recipes: [{ ...recipeToTransferItem(sample), match: { ...sample.match, [key]: value } }],
+          version: 2,
+          flows: [{
+            ...flow,
+            config: { ...flow?.config, scope: { kind: "new_messages", match: { ...sample.match, [key]: value } } },
+          }],
         })), /invalid_recipe/);
       }
     }
@@ -88,13 +92,10 @@ describe("recipe transfer", () => {
       ).recipes;
       assert.equal(parsed?.hide_on_success, hide_on_success);
     }
-    const legacy = { ...recipeToTransferItem(sample) };
-    delete legacy.hide_on_success;
-    const parsed = parseRecipeBundle(JSON.stringify({
+    assert.throws(() => parseRecipeBundle(JSON.stringify({
       version: 1,
-      recipes: [legacy],
-    }));
-    assert.equal(parsed.recipes[0]?.hide_on_success, false);
+      recipes: [recipeToTransferItem(sample)],
+    })), /unsupported_version/);
   });
 
   it("preserves unavailable destination intent, including while keeping results local", () => {
@@ -108,17 +109,24 @@ describe("recipe transfer", () => {
 
   it("rejects malformed destinations instead of silently reverting to the source", () => {
     for (const destination of [42, null, "", "   "]) {
+      const flow = buildRecipeBundle([sample]).flows[0];
       assert.throws(() => parseRecipeBundle(JSON.stringify({
-        version: 1,
-        recipes: [{ ...recipeToTransferItem(sample), write_back_thread_id: destination }],
+        version: 2,
+        flows: [{
+          ...flow,
+          config: {
+            ...flow?.config,
+            destination: { kind: "reply", thread: destination, confirm: false, send: true },
+          },
+        }],
       })), /invalid_recipe/);
     }
   });
 
   it("round-trips a recipe bundle without ids", () => {
     const bundle = buildRecipeBundle([sample], "2026-09-05T12:00:00.000Z");
-    assert.equal(bundle.version, 1);
-    assert.equal(bundle.recipes.length, 1);
+    assert.equal(bundle.version, 2);
+    assert.equal(bundle.flows.length, 1);
     assert.equal("id" in recipeToTransferItem(sample), false);
     const raw = stringifyRecipeBundle(bundle);
     const parsed = parseRecipeBundle(raw);
@@ -134,15 +142,15 @@ describe("recipe transfer", () => {
   it("rejects empty or broken bundles", () => {
     assert.throws(() => parseRecipeBundle("{"), /invalid_json/);
     assert.throws(
-      () => parseRecipeBundle(JSON.stringify({ version: 1, recipes: [] })),
+      () => parseRecipeBundle(JSON.stringify({ version: 2, flows: [] })),
       /empty_recipes/,
     );
     assert.throws(
       () =>
         parseRecipeBundle(
           JSON.stringify({
-            version: 1,
-            recipes: [{ name: "x", executor_type: "dsh" }],
+            version: 2,
+            flows: [{ name: "x", config: { handler: { kind: "agent", executor_type: "dsh" } } }],
           }),
         ),
       /invalid_recipe/,

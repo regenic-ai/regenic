@@ -29,7 +29,6 @@ import type {
   ContextArtifactState,
   ContextArtifactDecision,
   ContextArtifactSupersession,
-  ContextArtifactProposedSupersession,
   ContextSnapshot,
   ContextSnapshotIndexEntry,
   ContextSnapshotIndexQuery,
@@ -225,7 +224,6 @@ import {
   putSnapshot,
   putSnapshotIndex,
   supersedeArtifact,
-  supersedeProposedArtifact,
 } from "./context-artifacts";
 import {
   claimContextProjectionJobs,
@@ -352,6 +350,7 @@ import {
   putExecutorInstallation,
   putRecipe,
   putSearchAnswer,
+  backfillRecipeFlowJson,
 } from "./work";
 import {
   acquireLease,
@@ -580,10 +579,6 @@ export class SqliteAuthorityStore
     return supersedeArtifact(this.database, input);
   }
 
-  async supersedeProposedArtifact(input: ContextArtifactProposedSupersession): Promise<{ superseded: ContextArtifactState; replacement: ContextArtifactState }> {
-    this.assertWritable();
-    return supersedeProposedArtifact(this.database, input);
-  }
 
   async putSnapshot(snapshot: ContextSnapshot): Promise<void> {
     this.assertWritable();
@@ -1906,6 +1901,9 @@ export class SqliteAuthorityStore
         } else if (migration.version === 78) {
           this.repairPreMergeLifecycleSchema();
           this.database.exec(migration.sql);
+        } else if (migration.version === 88) {
+          this.database.exec(migration.sql);
+          backfillRecipeFlowJson(this.database);
         } else {
           this.database.exec(migration.sql);
         }

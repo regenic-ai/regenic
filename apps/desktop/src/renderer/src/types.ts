@@ -1,6 +1,6 @@
 import type { DriverCatalogField, DriverCatalogFieldWhen, ConnectorCatalogFieldOption } from "@regenic/connector-contract";
 
-export type NavId = "inbox" | "search" | "recipes" | "engine" | "settings";
+export type NavId = "inbox" | "search" | "recipes" | "engine" | "status" | "settings";
 
 export interface PersonalSyncSettings {
   quota_tokens: number;

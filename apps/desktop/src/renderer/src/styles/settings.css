@@ -9,7 +9,20 @@
   position: sticky;
   top: 0;
   display: grid;
+  gap: 14px;
+}
+
+.settings-nav-group {
+  display: grid;
   gap: 2px;
+}
+
+.settings-nav-label {
+  padding: 0 10px 4px;
+  color: var(--subtle);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
 }
 
 .settings-nav button {

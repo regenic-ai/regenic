@@ -549,31 +549,49 @@ export function conversationChoices(
   return options;
 }
 
-export function recipeCardLine(
+export type RecipeChainStage = "trigger" | "source" | "handler" | "destination";
+
+export function recipeChain(
   recipe: RecipeView,
   sources: RecipeSourceOption[],
   conversations: RecipeConversationOption[],
   executor: string,
   t: Translate,
-): string {
-  const outcome = recipe.can_write_back
-    ? t("recipes.outcomeBack")
-    : t("recipes.outcomeKeep");
-  const concurrent =
+): Array<{ stage: RecipeChainStage; label: string }> {
+  const kind = recipe.trigger?.kind ?? "push";
+  let source: string;
+  if (kind === "pull") {
+    source =
+      conversations.find((item) => item.id === recipe.match.thread_id)?.label ??
+      (recipe.match.thread_id ? shortThread(recipe.match.thread_id) : t("recipes.thisConversation"));
+  } else {
+    source = [
+      matchWhenCopy(recipe, sources, conversations, t),
+      ...(kind === "push" && recipe.match.text_contains
+        ? [t("recipes.filterContainsSummary", { text: recipe.match.text_contains })]
+        : []),
+      ...(kind === "push" && recipe.match.text_excludes
+        ? [t("recipes.filterExcludesSummary", { text: recipe.match.text_excludes })]
+        : []),
+    ].join(" · ");
+  }
+  const trigger =
+    kind === "pull"
+      ? scheduleCopy(recipe.trigger, t)
+      : t(kind === "manual" ? "recipes.triggerManual" : "recipes.triggerPush");
+  const handler =
     recipe.max_concurrent && recipe.max_concurrent > 0
-      ? t("recipes.outcomeConcurrent", { count: String(recipe.max_concurrent) })
-      : "";
-  return t("recipes.cardLine", {
-    when: whenCopy(recipe, sources, conversations, t),
-    executor,
-    outcome: [
-      `${outcome}${concurrent}`,
-      ...((recipe.trigger?.kind ?? "push") === "push" ? [
-       ...(recipe.match.text_contains ? [t("recipes.filterContainsSummary", { text: recipe.match.text_contains })] : []),
-       ...(recipe.match.text_excludes ? [t("recipes.filterExcludesSummary", { text: recipe.match.text_excludes })] : []),
-      ] : []),
-    ].join(" · "),
-  });
+      ? `${executor} · ${t("recipes.outcomeConcurrent", { count: String(recipe.max_concurrent) })}`
+      : executor;
+  return [
+    { stage: "trigger", label: trigger },
+    { stage: "source", label: source },
+    { stage: "handler", label: handler },
+    {
+      stage: "destination",
+      label: t(recipe.can_write_back ? "recipes.outcomeBack" : "recipes.outcomeKeep"),
+    },
+  ];
 }
 
 export function writeBackAvailable(
@@ -670,32 +688,6 @@ export function nextRunCopy(recipe: RecipeView, t: Translate): string | null {
     return t("recipes.nextRun", { when: next });
   }
   return null;
-}
-
-function whenCopy(
-  recipe: RecipeView,
-  sources: RecipeSourceOption[],
-  conversations: RecipeConversationOption[],
-  t: Translate,
-): string {
-  const kind = recipe.trigger?.kind ?? "push";
-  const matchWhen = matchWhenCopy(recipe, sources, conversations, t);
-  if (kind === "pull") {
-    const title =
-      conversations.find((item) => item.id === recipe.match.thread_id)?.label ??
-      (recipe.match.thread_id ? shortThread(recipe.match.thread_id) : t("recipes.thisConversation"));
-    return t("recipes.whenPull", {
-      interval: scheduleCopy(recipe.trigger, t),
-      thread: title,
-    });
-  }
-  if (kind === "manual") {
-    return t("recipes.whenManual", { when: matchWhen });
-  }
-  if (recipe.match.thread_id) {
-    return t("recipes.whenPush", { when: matchWhen });
-  }
-  return t("recipes.whenPush", { when: matchWhen });
 }
 
 function matchWhenCopy(

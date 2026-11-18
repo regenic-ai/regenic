@@ -174,7 +174,7 @@ function ExecutorRow({
           kind={kind}
           busy={busy}
           initialValues={valuesFromInstallation(installation)}
-          optionalPin={installation.id === "dsh"}
+          optionalPin={!installation.connector_id}
           submitLabel={t("connector.save")}
           busyLabel={t("connector.saving")}
           onSubmit={onSave}

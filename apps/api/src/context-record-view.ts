@@ -66,10 +66,6 @@ function contextRecordTitle(index: ContextArtifactIndex): string {
   if (line) {
     return clip(line);
   }
-  const date = collapse(index.preview.utc_date);
-  if (date) {
-    return clip(date);
-  }
   const threadId = collapse(index.preview.thread_id);
   if (threadId) {
     return clip(threadId);

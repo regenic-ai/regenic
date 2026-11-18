@@ -24,17 +24,56 @@ export function InboxIcon() {
   );
 }
 
-export function EngineIcon() {
+export function ConnectIcon() {
   return (
     <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
-      <circle cx="9" cy="9" r="3" fill="none" stroke="currentColor" strokeWidth="1.4" />
       <path
-        d="M9 2.4v1.8M9 13.8v1.8M2.4 9h1.8M13.8 9h1.8M4.3 4.3l1.3 1.3M12.4 12.4l1.3 1.3M13.7 4.3l-1.3 1.3M5.6 12.4l-1.3 1.3"
+        d="M6.2 3v3M11.8 3v3M4.6 6h8.8v2.4a4.4 4.4 0 0 1-8.8 0V6ZM9 12.8V15.4"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+export function FlowIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
+      <circle cx="4.4" cy="4.6" r="1.9" fill="none" stroke="currentColor" strokeWidth="1.4" />
+      <circle cx="13.6" cy="13.4" r="1.9" fill="none" stroke="currentColor" strokeWidth="1.4" />
+      <path
+        d="M6.3 4.6h4.2a2.3 2.3 0 0 1 0 4.6h-3a2.3 2.3 0 0 0 0 4.6h4.2"
         fill="none"
         stroke="currentColor"
         strokeWidth="1.4"
         strokeLinecap="round"
       />
+    </svg>
+  );
+}
+
+export function FilterIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
+      <path
+        d="M2.5 4h11M4.5 8h7M6.5 12h3"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+export function SidebarIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+      <rect x="2" y="3" width="12" height="10" rx="2" fill="none" stroke="currentColor" strokeWidth="1.3" />
+      <path d="M6.2 3v10" stroke="currentColor" strokeWidth="1.3" />
     </svg>
   );
 }
@@ -179,30 +218,6 @@ export function ChevronIcon() {
         strokeWidth="1.4"
         strokeLinecap="round"
         strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
-export function RecipesIcon() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
-      <rect
-        x="4"
-        y="3.2"
-        width="10"
-        height="11.6"
-        rx="1.6"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.4"
-      />
-      <path
-        d="M6.4 6.4h5.2M6.4 9h5.2M6.4 11.6h3.4"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.4"
-        strokeLinecap="round"
       />
     </svg>
   );

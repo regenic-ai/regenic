@@ -1,4 +1,4 @@
-export const PG_SCHEMA_VERSION = 86;
+export const PG_SCHEMA_VERSION = 88;
 
 /** Applied when an existing postgres authority DB is already at a prior baseline. */
 export const PG_MIGRATIONS = [
@@ -1017,6 +1017,18 @@ ON CONFLICT DO NOTHING;
         ON search_answers (org_id, work_item_id);
     `,
   },
+  {
+    version: 87,
+    sql: `
+      DELETE FROM context_artifact_states
+        WHERE (org_id, artifact_id) IN (SELECT org_id, id FROM context_artifacts WHERE kind = 'daily_digest');
+      DELETE FROM context_artifacts WHERE kind = 'daily_digest';
+    `,
+  },
+  {
+    version: 88,
+    sql: `ALTER TABLE recipes ADD COLUMN IF NOT EXISTS flow_json JSONB`,
+  },
 ] as const;
 
 export const PG_BASELINE_SQL = `
@@ -1255,6 +1267,7 @@ CREATE TABLE recipes (
   trigger_coalesce BOOLEAN NOT NULL DEFAULT TRUE,
   max_concurrent INTEGER,
   next_run_at TIMESTAMPTZ,
+  flow_json JSONB,
   created_at TIMESTAMPTZ NOT NULL,
   updated_at TIMESTAMPTZ NOT NULL
 );

@@ -7,7 +7,6 @@ import type {
   ContextArtifactState,
   ContextArtifactDecision,
   ContextArtifactSupersession,
-  ContextArtifactProposedSupersession,
   ContextSnapshot,
   ContextSnapshotIndexEntry,
   ContextSnapshotIndexQuery,
@@ -356,25 +355,6 @@ export async function supersedeArtifact(db: Database.Database, input: ContextArt
       return {
         superseded: { ...current, status: "superseded" as const, decided_at: input.decided_at, superseded_by: input.replacement_id },
         accepted: { ...replacement, status: "accepted" as const, decided_at: input.decided_at },
-      };
-    })();
-  }
-
-export async function supersedeProposedArtifact(db: Database.Database, input: ContextArtifactProposedSupersession): Promise<{ superseded: ContextArtifactState; replacement: ContextArtifactState }> {
-    
-    return db.transaction(() => {
-      const current = getArtifactStateSync(db, input.org_id, input.artifact_id);
-      const replacement = artifactStateForTransition(db, input.org_id, input.replacement_id);
-      const currentArtifact = getContextJson<Pick<ContextArtifact, "kind">>(db, "context_artifacts", "org_id = ? AND id = ?", [input.org_id, input.artifact_id]);
-      const replacementArtifact = getContextJson<Pick<ContextArtifact, "kind" | "supersedes_id">>(db, "context_artifacts", "org_id = ? AND id = ?", [input.org_id, input.replacement_id]);
-      if (!current || current.status !== "proposed" || !currentArtifact || !replacementArtifact || currentArtifact.kind !== "daily_digest" || replacementArtifact.kind !== "daily_digest" || replacementArtifact.supersedes_id !== input.artifact_id) {
-        throw new Error("Invalid proposed daily digest supersession");
-      }
-      db.prepare(`UPDATE context_artifact_states SET status = 'superseded', decided_at = ?, superseded_by = ? WHERE org_id = ? AND artifact_id = ?`).run(input.decided_at, input.replacement_id, input.org_id, input.artifact_id);
-      db.prepare(`UPDATE context_artifact_states SET status = 'proposed', decided_at = ?, superseded_by = NULL WHERE org_id = ? AND artifact_id = ?`).run(input.decided_at, input.org_id, input.replacement_id);
-      return {
-        superseded: { ...current, status: "superseded" as const, decided_at: input.decided_at, superseded_by: input.replacement_id },
-        replacement: { ...replacement, status: "proposed" as const, decided_at: input.decided_at },
       };
     })();
   }

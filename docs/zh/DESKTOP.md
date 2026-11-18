@@ -9,7 +9,7 @@ Regenic 个人阶段的主界面是本机 Electron 应用。它不是第二个�
 
 完整安装、手动服务、环境变量和排障步骤见[本地模型服务配置](LOCAL_MODEL_SERVICE.md)。
 
-顶栏和左侧「搜索」打开独立搜索页。支持自然语言查询、精确来源 / 会话 ID 过滤、
+侧栏「搜索」或 ⌘K 打开独立搜索页。支持自然语言查询、精确来源 / 会话 ID 过滤、
 10–100 条返回上限；结果展示安全文本片段、时间、来源、证据 Event 和 snapshot 追踪。
 查询中的“最近/近/过去 N 天、周、月”及对应英文 rolling-period 表述会转换为
 `occurred_after/before` 授权范围，并从向量查询文本中移除；页面明确显示实际时间窗口。
@@ -69,14 +69,14 @@ stub 仅用于功能回归，不代表真实模型质量或资源/性能评测�
 | 飞书桌面端 | 三栏工作面、图标栏、线程、关窗进托盘 | 频道瀑布流、聊天身份、紫/蓝品牌铬 |
 | Docker Desktop | 托盘引擎层、内核 Running/Syncing/Stopped、本机 sidecar | 容器/镜像列表、引擎设置向导 |
 
-默认只显示**未折叠**的会话；过滤栏可切到「不显示」。不显示是列表表面状态，不是删除，也不是工单完结或源侧 tombstone。人可以主动折叠；机器在工单结束或身份被撤回后按策略折叠。人折叠后新消息不会自动回来；策略折叠后若再有桌上的活会自动回到显示列表。渠道仍在原处；回复发回原渠道。线程能不能发由内核 `can_send` 决定（连接器 `ChannelDriver` 声明），桌面不按「是不是 DSH」开关输入框。能发的线程用 Composer 回写（所见即所得格式、图片、文件）；驱动 `canReply: false` 时回写 501。发送走 `installation + thread → egress.send(ContentPart[])`。发送后内核按该线程 follow/pull，等到新的 inbound、`working` 或 `awaiting_user`，不必只等一条有正文的 Agent 回复。连接器通过 `surface.activity` 声明对端状态（`working` / `awaiting_user`），通过 `capabilities.await_reply` 声明发送后要不要等对端，通过 `capabilities.list_title` 声明列表标题用会话名、第一条用户消息还是可见消息，通过 `create_with_task` 声明新建是立刻建空会话还是等第一条任务，通过 `hold_while_working` 声明跟发是已送达还是由连接器暂存。桌面只读这些声明，用状态条表示「已发送 / 对端还在处理 / 原渠道在等你」，不按渠道名写死。飞书不声明 `await_reply`，发出去就不挂等待条。`working` 不画成聊天气泡。不必再去引擎页点 Sync。引擎 Sync 只负责追平其他会话或首次拉齐。同一句本地出站与渠道 history 回声只保留一条 Event。
+默认只显示**未折叠**的会话；过滤栏可切到「不显示」。不显示是列表表面状态，不是删除，也不是工单完结或源侧 tombstone。人可以主动折叠；机器在工单结束或身份被撤回后按策略折叠。人折叠后新消息不会自动回来；策略折叠后若再有桌上的活会自动回到显示列表。渠道仍在原处；回复发回原渠道。线程能不能发由内核 `can_send` 决定（连接器 `ChannelDriver` 声明），桌面不按「是不是 DSH」开关输入框。能发的线程用 Composer 回写（所见即所得格式、图片、文件）；驱动 `canReply: false` 时回写 501。发送走 `installation + thread → egress.send(ContentPart[])`。发送后内核按该线程 follow/pull，等到新的 inbound、`working` 或 `awaiting_user`，不必只等一条有正文的 Agent 回复。连接器通过 `surface.activity` 声明对端状态（`working` / `awaiting_user`），通过 `capabilities.await_reply` 声明发送后要不要等对端，通过 `capabilities.list_title` 声明列表标题用会话名、第一条用户消息还是可见消息，通过 `create_with_task` 声明新建是立刻建空会话还是等第一条任务，通过 `hold_while_working` 声明跟发是已送达还是由连接器暂存。桌面只读这些声明，用状态条表示「已发送 / 对端还在处理 / 原渠道在等你」，不按渠道名写死。飞书不声明 `await_reply`，发出去就不挂等待条。`working` 不画成聊天气泡。不必再去「接入」页点 Sync。「接入」页的同步 只负责追平其他会话或首次拉齐。同一句本地出站与渠道 history 回声只保留一条 Event。
 
-## 规则结果去向
+## 链路去向
 
-规则编辑器的「发回 / 留在本地」表示用户意图，始终可以切换。选择「发回」后才显示
+链路编辑器第五步「去向」的「发回原会话 / 留在工作台」表示用户意图，始终可以切换。选择「发回」后才显示
 目标选择器，候选只包含内核明确返回 `can_send: true` 的会话；原会话不可发送不影响
 选择其他可发送目标。没有候选时显示「暂无可用的会话」，不自动改成留在本地，也不
-替换为另一个目标。新配置缺少有效目标时不可保存或发送试跑。历史规则的失效目标
+替换为另一个目标。新配置缺少有效目标时不可保存或发送试跑。历史链路的失效目标
 明确标为不可用，无关保存仍保留发送意图与目标；重新开启或更改目标时 API 会重新
 校验，发送试跑也会按实际目标（未另选目标时按试跑样本）校验。普通试跑不发送。
 导出保留发送意图及目标；导入使用同一保存 API，不支持的发送目标会报错而非静默降级。
@@ -93,19 +93,19 @@ Electron profile、合成会话和模拟 API 验证编辑、保存、目标切�
 浅色 Sand。表面、墨水阶、身份色、形状和动效的完整样张见 [桌面设计规范](DESKTOP_DESIGN.html)。
 
 - 表面只差几级中性灰：侧栏 `#f5f5f5`，画布 `#fcfcfc`，抬升面 `#ffffff`。选中是 8% 墨水洗，不铺彩色底。
-- 彩色只属于身份。会话和联系人头像按 id 取色；助手是黑色带眼睛的圆。链接、焦点环和未读点用固定蓝。你的气泡是 `#126fd4`，白字。
+- 彩色只属于身份。会话和联系人头像按 id 取色；Agent 是黑色带眼睛的圆。链接、焦点环和未读点用固定蓝。你的气泡是 `#126fd4`，白字。
 - 输入条和芯片是全圆。气泡圆角 18，列表选中约 10。主按钮是墨水底。
 - 颜色过渡 150ms，按下 100ms。减弱动态时位移时长为 0。
 - 标识按 Electron / macOS 常见三套用法：
   - Dock / 任务栏：**两套图**。macOS 与微信 / Cursor / 系统备忘录一样，1024 画板里预切 824 squircle（约 10% 透明边，Dock 不会再切一刀）；Windows / Linux 用铺满的不透明方标（多尺寸 `.ico`），任务栏由系统圆角，带透明通道的 ico 在 Shell 里经常是空白。开发态不要设自定义 AppUserModelId（没有开始菜单快捷方式时任务栏会丢图标）。生成脚本：`apps/desktop/scripts/build-app-icon.py`
   - 菜单栏托盘：16×16 / 32×32 template，只有斜切圆
-  - 窗口内：22px / 28px 圆角方块，中间放标，旁边是 **Regenic** 字标
-- 顶栏高 52px，macOS 红绿灯在左上 `{x: 18, y: 19}`。侧栏从标题栏下方开始，避免窗口按钮和标识挤在一起
+  - 窗口内不放标识
+- 没有独立顶栏。macOS 红绿灯在左上 `{x: 18, y: 19}`，嵌在侧栏头部，旁边只有收起侧栏按钮。侧栏头、页头、列表头和线程头可拖动窗口，其中的按钮和输入框不可拖
 
 ## 双层表面
 
-- **主窗口：** 左图标栏（工作 / 规则 / 引擎 / 设置），中列表，右线程。顶栏是引擎芯片与进行中计数。关窗不退出。设置页可切界面语言（英文 / 中文，默认英文），记在本机 `desktop-settings.json`。设置页可选本机数据目录（库和附件，默认 `~/.regenic`）；改目录会停本机 sidecar、按选择拷贝或接管，再按新路径拉起。迁移或覆盖成功后，设置页会记住原来的目录，让人选择保留拷贝或只删掉源上的库和附件来腾空间（`regenic.relocated.json` 和文件夹里其它文件不动；开发仓库根不提供删除）。指针留在 `desktop-settings.json`，不搬 Electron `userData`。`REGENIC_DATABASE` / `REGENIC_BLOB_ROOT` 仍优先。设置页也可清理当前内核的本机数据：清空会话、工单和导入，保留连接器与 Recipes。
-- **当前工作按会话列，不按单条消息列。** 一条会话在列表里是一行；右侧线程窗按时间展开该会话里进入当前工作的消息。底层 `/v1/me/inbox` 仍是 Event 列表（含 `can_send`、`await_reply`、`list_title`、自定义 `title`、`pinned`、连接器写入的 `conversation_label` / `conversation_kind` / `unit_kind` / `unit_kind_label` / `actor_label`，以及 Thread Surface 的 `prompts` / `unread` / `unread_count`，打开的线程另带 `can_receipt` / `receipt`），聚合只发生在桌面表面。列表未读点只读内核算好的 `unread`（我还没看对方）。出站气泡上的 Sent/Read 只在 `can_receipt` / `receipt` 出现时画，表示对方是否已读我发出的那条，不复用 `unread`。有未决 `prompts` 时，线程里的通用 Prompt 面板接管 Composer（choice / approval / plan_review），`plan_review` 只点出带 `emphasized` 的选项，答题走 `POST /v1/me/conversations/prompts`，不再走 `session.prompt` / egress。打开会话会 `POST /v1/me/conversations/attention` 写本地游标；驱动声明了 `attention` 再 ack 来源。桌面不按渠道名分支。标题可双击或用铅笔手改，置顶用图钉；二者写入内核 `conversation_prefs`，轮询不会用首条消息把自定义标题冲掉。清空标题则按 `list_title` 回退：聊天渠道用会话名（群名或单聊对方），没有会话名才用会话 id；会话 Agent 渠道用第一条用户消息。引擎页的安装和改同步范围用同一套 catalog 弹窗，不按连接器写死表单。列表按来源渠道过滤，置顶用图钉开关；置顶会话排在前面。列表和标题醒目标出**来源渠道**；有 `unit_kind` 时用 catalog 文案画类型芯片，不按渠道名分支。角色与发送格式由内核 `message-contract` 规定，连接器负责翻译。对话窗按发言人展开：每条消息保留自己的名字和时间。悬停或右键可复制正文（markdown 与附件名）；划选文字后右键走系统 Copy。能回的线程另有回复。消息或会话头可转发到另一条 `can_send` 会话，也可勾选多条再转发（编译 + 发送，见 [RFC 0010](rfcs/0010-cross-channel-forward.md)）。目标气泡带出处 chip；源侧气泡带「已转发到 {channel_label}」。同一人连续发言只收起头像和名字，不把不同人的正文拼成一块。线程窗只挂可视区域附近的消息，长会话可以滚动，不会一次性把几千上万条都画进 DOM。同步时按 React 的 keyed list 对账：先对前缀、再对后缀，剩下的才建 key map；key 相同且 props 未变就复用原对象。拉取追加时只脏对应会话，其它会话不重建。打开的对话不会因为别的会话在拉而整段重建；本会话只是追加时也只更新尾部。新建的空会话按打开时间排到未置顶最前，不用 locale 相关的 `~` 哨兵。发送写入的 outbound 和渠道拉回来的同一句只显示一次。桌面列表只拉 `heads=1&split=1` 的最近一页（默认约 40 条 `live` 会话脸；置顶和进行中工单走旁路，不占翻页游标）。滚到底用 `next_before` 要更早的一页。digest 里事件或会话偏好变了，轮询走 `changed=1&since_digest=` 只补被碰到的脸（`patch`），再按 `thread_id` 重排 live；换列表、只有 `&s=` 变、或 45 秒兜底仍拉整页。已翻过的 history 留在身份目录里。每个会话最后一条可见消息的短脸，不含附件，也不叠全文。列表在会话名下可出一条预览；点开会话才拉 `thread_id` 全文，之后只跟该会话的 `since` 增量。内核 `listInbox` 按会话/时间/heads 收窄，引擎摘要只算 `inbox_digest` 不再水合全部 Event。`inbox_count` 是进行中会话数；改标题或置顶也会推进 digest。打开会话先出最近一页文字（约 20 条），不挡在飞书全量附件或已读回执上；图片预览只带最近几张，其余文件名先占位。本地没有消息时立刻返回，后台种最近一批，桌面短轮询直到出现。打开过的会话正文只缓存最近几条，关掉后会丢掉。空闲后轮询放到 8 秒。列表轮询走 `engine?detail=0`，已打开的会话才跟增量。托盘只拉最近几条会话脸，计数走 `inbox_count`，不再为角标拉全量列表。开会话时停在最新一条；往上翻历史时新消息不把滚动位置拽回去。没有 `actor_label` 时才回退 You / Agent / Runtime。引用条、runtime 居中折叠。底部是 Cursor 式 Composer：多行编辑、图片缩略图、拖入/粘贴附件，以及飞书常用的加粗/斜体/删除线/行内代码/列表（⌘B / ⌘I / ⌘⇧X）。Enter 发送，Shift+Enter 换行。能发时回复写回原渠道线程。安装声明了 `can_create` 时，列表里有「新建」，按钮带上该安装的 `channel_label`。多条都能建时，先跟当前渠道过滤，否则弹出选择。桌面仍不写死渠道名。飞书不能新建。列表顶栏按功能分行：上一行是显示/不显示（列表表面）和新建；下一行才是排序、渠道过滤和置顶针。两个来源渠道用芯片；多于两个改成下拉，渠道很多时可搜索。行上和线程头可「不显示」或「显示」。不写「当前工作」标题。不随列表滚动。列表行先扫会话名，再看来源渠道和预览。
+- **主窗口：** 左侧栏（228px，可收起到 76px，⌘\ 切换，状态记在本机）。侧栏自上而下是搜索（⌘K）、工作台（带进行中计数，⌘1）、链路（⌘2）、接入（⌘3）；底部是状态菜单和设置（⌘,）。状态菜单平时只显示一个点和一句话（运行正常 / 同步中 / 需要留意），点开才看实时同步、补齐、新鲜度、网络、内存、磁盘和告警，基础设施不占主界面。菜单里的「查看完整状态」打开状态页：运行概况、需要处理的接入、取消任务与工单运行身份核对、路径与标识。设置页只放偏好、本机服务和数据，不再放诊断。工作台是中列表 + 右线程。关窗不退出。设置页可切界面语言（英文 / 中文，默认英文），记在本机 `desktop-settings.json`。设置页可选本机数据目录（库和附件，默认 `~/.regenic`）；改目录会停本机 sidecar、按选择拷贝或接管，再按新路径拉起。迁移或覆盖成功后，设置页会记住原来的目录，让人选择保留拷贝或只删掉源上的库和附件来腾空间（`regenic.relocated.json` 和文件夹里其它文件不动；开发仓库根不提供删除）。指针留在 `desktop-settings.json`，不搬 Electron `userData`。`REGENIC_DATABASE` / `REGENIC_BLOB_ROOT` 仍优先。设置页也可清理当前内核的本机数据：清空会话、工单和导入，保留连接器与链路。
+- **工作台按会话列，不按单条消息列。** 一条会话在列表里是一行；右侧线程窗按时间展开该会话里进入工作台的消息。底层 `/v1/me/inbox` 仍是 Event 列表（含 `can_send`、`await_reply`、`list_title`、自定义 `title`、`pinned`、连接器写入的 `conversation_label` / `conversation_kind` / `unit_kind` / `unit_kind_label` / `actor_label`，以及 Thread Surface 的 `prompts` / `unread` / `unread_count`，打开的线程另带 `can_receipt` / `receipt`），聚合只发生在桌面表面。列表未读点只读内核算好的 `unread`（我还没看对方）。出站气泡上的 Sent/Read 只在 `can_receipt` / `receipt` 出现时画，表示对方是否已读我发出的那条，不复用 `unread`。有未决 `prompts` 时，线程里的通用 Prompt 面板接管 Composer（choice / approval / plan_review），`plan_review` 只点出带 `emphasized` 的选项，答题走 `POST /v1/me/conversations/prompts`，不再走 `session.prompt` / egress。打开会话会 `POST /v1/me/conversations/attention` 写本地游标；驱动声明了 `attention` 再 ack 来源。桌面不按渠道名分支。标题可双击或用铅笔手改，置顶用图钉；二者写入内核 `conversation_prefs`，轮询不会用首条消息把自定义标题冲掉。清空标题则按 `list_title` 回退：聊天渠道用会话名（群名或单聊对方），没有会话名才用会话 id；会话 Agent 渠道用第一条用户消息。「接入」页的安装和改同步范围用同一套 catalog 弹窗，不按连接器写死表单。列表按来源渠道过滤，置顶用图钉开关；置顶会话排在前面。列表和标题醒目标出**来源渠道**；有 `unit_kind` 时用 catalog 文案画类型芯片，不按渠道名分支。角色与发送格式由内核 `message-contract` 规定，连接器负责翻译。对话窗按发言人展开：每条消息保留自己的名字和时间。悬停或右键可复制正文（markdown 与附件名）；划选文字后右键走系统 Copy。能回的线程另有回复。消息或会话头可转发到另一条 `can_send` 会话，也可勾选多条再转发（编译 + 发送，见 [RFC 0010](rfcs/0010-cross-channel-forward.md)）。目标气泡带出处 chip；源侧气泡带「已转发到 {channel_label}」。同一人连续发言只收起头像和名字，不把不同人的正文拼成一块。线程窗只挂可视区域附近的消息，长会话可以滚动，不会一次性把几千上万条都画进 DOM。同步时按 React 的 keyed list 对账：先对前缀、再对后缀，剩下的才建 key map；key 相同且 props 未变就复用原对象。拉取追加时只脏对应会话，其它会话不重建。打开的对话不会因为别的会话在拉而整段重建；本会话只是追加时也只更新尾部。新建的空会话按打开时间排到未置顶最前，不用 locale 相关的 `~` 哨兵。发送写入的 outbound 和渠道拉回来的同一句只显示一次。桌面列表只拉 `heads=1&split=1` 的最近一页（默认约 40 条 `live` 会话脸；置顶和进行中工单走旁路，不占翻页游标）。滚到底用 `next_before` 要更早的一页。digest 里事件或会话偏好变了，轮询走 `changed=1&since_digest=` 只补被碰到的脸（`patch`），再按 `thread_id` 重排 live；换列表、只有 `&s=` 变、或 45 秒兜底仍拉整页。已翻过的 history 留在身份目录里。每个会话最后一条可见消息的短脸，不含附件，也不叠全文。列表在会话名下可出一条预览；点开会话才拉 `thread_id` 全文，之后只跟该会话的 `since` 增量。内核 `listInbox` 按会话/时间/heads 收窄，引擎摘要只算 `inbox_digest` 不再水合全部 Event。`inbox_count` 是进行中会话数；改标题或置顶也会推进 digest。打开会话先出最近一页文字（约 20 条），不挡在飞书全量附件或已读回执上；图片预览只带最近几张，其余文件名先占位。本地没有消息时立刻返回，后台种最近一批，桌面短轮询直到出现。打开过的会话正文只缓存最近几条，关掉后会丢掉。空闲后轮询放到 8 秒。列表轮询走 `engine?detail=0`，已打开的会话才跟增量。托盘只拉最近几条会话脸，计数走 `inbox_count`，不再为角标拉全量列表。开会话时停在最新一条；往上翻历史时新消息不把滚动位置拽回去。没有 `actor_label` 时才回退 You / Agent / Runtime。引用条、runtime 居中折叠。底部是 Cursor 式 Composer：多行编辑、图片缩略图、拖入/粘贴附件，以及飞书常用的加粗/斜体/删除线/行内代码/列表（⌘B / ⌘I / ⌘⇧X）。Enter 发送，Shift+Enter 换行。能发时回复写回原渠道线程。安装声明了 `can_create` 时，列表里有「新建」，按钮带上该安装的 `channel_label`。多条都能建时，先跟当前渠道过滤，否则弹出选择。桌面仍不写死渠道名。飞书不能新建。列表顶栏分两行：上一行是「当前 / 已隐藏」分段（带数量）、筛选按钮和新建；下一行是搜索框。排序、渠道、状态、链路和只看置顶收进筛选面板，按钮上标出已生效的筛选数；面板收起时若有筛选，列表上方显示「已筛选 N 项 · 清除」。行上和线程头可「不显示」或「显示」。不写「工作台」标题。不随列表滚动。列表行先扫会话名，再看来源渠道和预览。
 - **托盘：** 点击打开小窗，显示内核状态、计数、最近 3 个会话；可「打开控制台」。退出只在托盘菜单。
 
 ## 工单与分层
@@ -115,8 +115,8 @@ Electron profile、合成会话和模拟 API 验证编辑、保存、目标切�
 - 列表行带 `thread_facet`、`attention`、`work`。默认的 `chat` / `direct` 不打标；进行中的工单标 `Running` / `Waiting` / `Failed`。
 - 会话名下可出最后一条预览；标题和正文相同时不重复。
 - 排序：`normal` 为置顶 + 最近活动；`attention` 为等人 / 运行中 / 未读优先，并在档位不同时分组（只排已经加载进列表的这一窗，与 Slack 侧栏相同）。选择写入 `ui_prefs.inbox_sort`。过滤栏「显示 / 不显示」写入 `ui_prefs.inbox_list`。折叠写入 `conversation_prefs.hidden`（`human` 或 `policy`），与 `current_work`、tombstone、WorkItem 状态解耦。
-- 显示/不显示与新建钉在列表顶第一行；排序、渠道滤、置顶针在第二行。只有会话列表滚动。
-- Recipes 单独一页：用白话说明「这类工作出现时用哪个执行器」，并为每个执行器提供公共任务说明；执行器专属参数只渲染 `GET /v1/me/executors` 的 `catalog().fields`，不按执行器名特判。DSH 可选配置 `skill`，任务说明与工单原文一起传入；Cursor / bioby-agent 后接同一协议。默认看所有 task，或某一来源的 task，或一条会话。`include_context` 打开时，能挂 MCP 的本地执行器（Cursor、本机 DSH）拿到只读凭据自己查阅会话，其他执行器收到该会话最近一页可见历史（长会话截断）；默认只带最近这条工单。无论开关，都会带上这件事以往的处理结果。执行器卡片显示“可自行查阅会话记录 / 会话记录随任务一起发送”，会话里可展开“Agent 查阅了 N 次会话记录”。匹配到的会话在 Current work 里 **Start run**；DSH mux 出现 `turn/end` 后内核 reap，history poll 只做兜底。聊天回复不是退出。人不想跟的 Job 从当前工作 **拿掉**，不冒充执行器结束。没有 `can_write_back` 不得 egress；写回只发生在真 `exited`。
+- 当前/已隐藏、筛选与新建钉在列表顶第一行，搜索在第二行；排序、渠道、置顶在筛选面板里。只有会话列表滚动。
+- 链路单独一页。一条链路按五步编辑：触发 → 来源 → 范围 → 处理者 → 去向；列表卡片用同样顺序的芯片概括一条链路。处理者只能是 Agent，并有公共任务说明；Agent 专属参数只渲染 `GET /v1/me/executors` 的 `catalog().fields`，不按 Agent 名特判。DSH 可选配置 `skill`，任务说明与工单原文一起传入；Cursor / bioby-agent 后接同一协议。默认看所有 task，或某一来源的 task，或一条会话。`include_context` 打开时，能挂 MCP 的本机 Agent（Cursor、本机 DSH）拿到只读凭据自己查阅会话，其他 Agent 收到该会话最近一页可见历史（长会话截断）；默认只带最近这条工单。无论开关，都会带上这件事以往的处理结果。Agent 卡片显示“可自行查阅会话记录 / 会话记录随任务一起发送”，会话里可展开“Agent 查阅了 N 次会话记录”。匹配到的会话在工作台里 **Start run**；DSH mux 出现 `turn/end` 后内核 reap，history poll 只做兜底。聊天回复不是退出。人不想跟的 Job 从工作台 **拿掉**，不冒充 Agent 结束。没有 `can_write_back` 不得 egress；写回只发生在真 `exited`。
 
 ## 进程
 
@@ -126,7 +126,7 @@ sidecar **就绪**只表示进程在、端口已听、`/health` 的 `mode=person
 
 `/v1/me` 默认只在数值回环监听时开放（`LISTEN_HOST` 为 `127.0.0.1` 或 `::1`）。Sealos 等公网部署需设 `REGENIC_PERSONAL_API=1`。若未设 `REGENIC_PERSONAL_API_KEY`，首次启动会在数据库目录旁生成 `.regenic-personal-api-key`（JSON，含 30 分钟 bootstrap 窗口）；**仅第一台桌面**可在此窗口内自动配对，成功后 pairing 立即关闭。之后需粘贴部署 secret 中的 key，或临时设 `REGENIC_PERSONAL_PAIRING=1` 给新设备。手工设 `REGENIC_PERSONAL_API_KEY` 时 pairing 默认关闭。桌面 sidecar 会丢掉父进程里的 `REGENIC_PERSONAL_API`，以免外壳 `=0` 把内核个人面关掉。个人模式 CORS 只回显 `file://`、`null` 和本机 Origin；配置了 Personal API key 时，带 Origin 的 `/v1/me` 请求还必须携带该 key。安装 DSH 时不接收 `command` / `workdir`。本机表单里的 `base_url` 必须是回环 URL。托管 API（Sealos 等）用环境变量 `REGENIC_DSH_BASE_URL` 指向集群内网 dsh web（例如 `http://regenic-dsh:3080`），目录不再要公网地址；已存的 CLI 安装也会按 web 认会话、允许回复。
 
-默认数据：若设置里有 `dataRoot`，则用 `dataRoot/regenic.db` 与 `dataRoot/blobs`；未打包的开发检出若仓库里已有 `regenic.db` 则内核用它，设置页会单独标出，产品默认仍是 `~/.regenic`；打包后的应用不会把仓库根当数据目录。再否则 `~/.regenic/regenic.db` 与 `~/.regenic/blobs`。环境变量 `REGENIC_DATABASE` / `REGENIC_BLOB_ROOT` 覆盖以上全部；两者不在同一目录时设置页分开显示，不能在这里一起搬走。Windows 选盘符根（`D:\`）时实际写入 `D:\Regenic`。选普通文件夹时同样落到其中的 `Regenic`；文件夹名已是 `Regenic` / `.regenic`，或里面已有 `regenic.db`，则不再套一层。接管已有目录会检查 `regenic.db` 的 SQLite 头。迁走或覆盖成功后，源目录写 `regenic.relocated.json`（指向新位置和 `storeId`），新目录写 `regenic.store.json`；未保存 `dataRoot` 时会跟着指针走，目标不在或 `storeId` 对不上则仍用旧目录。设置里同时记下 `previousDataRoot`：只有源上的 relocated 指向当前目录且 `storeId` 对得上，才允许删源上的库、WAL/SHM、附件和锁；删完后指针清掉，下次打开设置不再追问。点「保留拷贝」也只清这个指针。在已迁走的旧目录上再拉起内核会清掉指针并换新 `storeId`，避免两份库假装是同一份。桌面单实例；数据目录旁写 `regenic.store.lock`（本进程 pid），改目录前要拿到这份锁。引擎 Kernel 卡片的 Disk 跟正在连的内核走：本机 sidecar 显示库/附件和盘剩余；只有真正连上自定义内核时才不统计本机目录（显示 —，不显示 0 B）。`regenic.store.lock` / `regenic.store.json` / `regenic.relocated.json` 与 `*.db` 一样不进 git。Memory 由桌面主进程用 pid / `ps` 采样内核和自身，不经过 sidecar 的 HTTP；内核涨得太高或进程没了，顶栏也会标出来。
+默认数据：若设置里有 `dataRoot`，则用 `dataRoot/regenic.db` 与 `dataRoot/blobs`；未打包的开发检出若仓库里已有 `regenic.db` 则内核用它，设置页会单独标出，产品默认仍是 `~/.regenic`；打包后的应用不会把仓库根当数据目录。再否则 `~/.regenic/regenic.db` 与 `~/.regenic/blobs`。环境变量 `REGENIC_DATABASE` / `REGENIC_BLOB_ROOT` 覆盖以上全部；两者不在同一目录时设置页分开显示，不能在这里一起搬走。Windows 选盘符根（`D:\`）时实际写入 `D:\Regenic`。选普通文件夹时同样落到其中的 `Regenic`；文件夹名已是 `Regenic` / `.regenic`，或里面已有 `regenic.db`，则不再套一层。接管已有目录会检查 `regenic.db` 的 SQLite 头。迁走或覆盖成功后，源目录写 `regenic.relocated.json`（指向新位置和 `storeId`），新目录写 `regenic.store.json`；未保存 `dataRoot` 时会跟着指针走，目标不在或 `storeId` 对不上则仍用旧目录。设置里同时记下 `previousDataRoot`：只有源上的 relocated 指向当前目录且 `storeId` 对得上，才允许删源上的库、WAL/SHM、附件和锁；删完后指针清掉，下次打开设置不再追问。点「保留拷贝」也只清这个指针。在已迁走的旧目录上再拉起内核会清掉指针并换新 `storeId`，避免两份库假装是同一份。桌面单实例；数据目录旁写 `regenic.store.lock`（本进程 pid），改目录前要拿到这份锁。侧栏状态菜单里的磁盘跟正在连的内核走：本机 sidecar 显示库/附件和盘剩余；只有真正连上自定义内核时才不统计本机目录（显示 —，不显示 0 B）。`regenic.store.lock` / `regenic.store.json` / `regenic.relocated.json` 与 `*.db` 一样不进 git。Memory 由桌面主进程用 pid / `ps` 采样内核和自身，不经过 sidecar 的 HTTP；内核涨得太高或进程没了，侧栏状态点也会标出来。
 
 ## `/v1/me`
 
@@ -135,10 +135,10 @@ sidecar **就绪**只表示进程在、端口已听、`/health` 的 `mode=person
 | GET | `/v1/me/inbox` | 默认显示列表（桌上的活且未 hidden）；`list=hidden` 为不显示的会话。可选 `body_text`。`heads=1` 每个会话最后一条可见消息的短脸，不含附件；可加 `limit` / `before` / `before_id` 按会话脸分页（不传 `limit` 仍一次返回全部，兼容旧客户端）。`split=1` 时 heads 回 `{ pinned, live, active_work, next_before, has_older }`：置顶和进行中工单不进 `live`，翻页游标只从 `live` 出。`changed=1&since_digest=` 只回 digest 之后碰到的脸，并带 `patch` / `gone`。`thread_id` 只返回该会话全文；`since` / `since_id` 做增量。`live=1` 才走渠道 overlay（已读回执等慢路径）；heads 与打开线程的默认读法只查 SQLite。每项带 `prompts`、`unread`、`unread_count`、`record_class`、`thread_facet`、`attention`、`work`、`hidden`；打开的线程另带 `can_receipt` / `receipt`。见下节 **inbox 读请求的副作用** |
 | GET | `/v1/me/events` | **应用内 SSE**（不是渠道 webhook）。事件：`inbox.digest`（`{ digest }`，与 `/v1/me/engine` 的 `inbox_digest` 同形）、`thread.updated`（`{ thread_id }`，connector hydrate 或 ingest 后）。30s heartbeat。桌面连上后列表轮询退到 60s；断线指数退避重连 |
 | GET | `/v1/me/inbox/:event_id` | 单条 + 出处 + 正文 |
-| GET | `/v1/me/engine` | 内核、库路径、live pull 间隔/上次 tick、已安装连接器、未安装目录、已安装执行器与执行器种类目录。目录项带 `docs`。`inbox_count` 是显示列表里的会话数。本接口只读本机快照 + 上次 catalog 探测缓存，不候 CLI / 远端。`detail=0` 跳过 attempt 列表，仍带 `inbox_digest`（含最新 Event、conversation prefs；有 live surface 时追加 `&s=`）以及执行器安装 |
+| GET | `/v1/me/engine` | 内核、库路径、live pull 间隔/上次 tick、已安装连接器、未安装目录、已安装 Agent 与 Agent 种类目录。目录项带 `docs`。`inbox_count` 是显示列表里的会话数。本接口只读本机快照 + 上次 catalog 探测缓存，不候 CLI / 远端。`detail=0` 跳过 attempt 列表，仍带 `inbox_digest`（含最新 Event、conversation prefs；有 live surface 时追加 `&s=`）以及执行器安装 |
 | GET | `/v1/me/engine/catalog-options` | 安装/编辑弹层的下拉选项（如飞书 `chat_ids`）。`connector_type` + `locale`。有硬超时，超时返回已拿到的页 |
-| GET | `/v1/me/store` | 当前内核本机数据盘点：会话 / 消息 / 工单 / 附件 / 规则 / 连接器 / 执行器数量 |
-| POST | `/v1/me/store/clear` | 清空当前工作、导入历史、附件和工单，重置连接器游标。保留已安装连接器、执行器和 Recipes。已启用的连接器会从头再拉。设置页二次确认后调用 |
+| GET | `/v1/me/store` | 当前内核本机数据盘点：会话 / 消息 / 工单 / 附件 / 链路 / 连接器 / Agent 数量 |
+| POST | `/v1/me/store/clear` | 清空工作台、导入历史、附件和工单，重置连接器游标。保留已安装连接器、Agent 和链路。已启用的连接器会从头再拉。设置页二次确认后调用 |
 | POST | `/v1/me/connectors` | 从目录安装（DSH / 飞书 / Cursor），不接收 token；安装后立刻种最近一批，响应不等待历史拉完 |
 | POST | `/v1/me/connectors/:id/config` | 改已安装连接器的非密钥配置（同一套 catalog 字段），不丢游标；enabled 时立刻再开始 pull，响应不等待追平 |
 | DELETE | `/v1/me/connectors/:id` | 卸载安装记录和游标，保留已入库消息 |
@@ -150,28 +150,29 @@ sidecar **就绪**只表示进程在、端口已听、`/health` 的 `mode=person
 | POST | `/v1/me/conversations/attention` | 写本地已读游标；驱动声明了 `attention` 再 ack 来源 |
 | POST | `/v1/me/conversations/focus` | **调度 connector 副作用**（不读 SQLite）：`hydrate` 冷开 hydrate、`live` 交互 focus（回执 overlay）、`pull_older`+`before` 上滚补历史、默认 `present` 记人在看。见下节 |
 | POST | `/v1/me/conversations/prompts` | 回答未决 Prompt。禁止再走 egress。`not-pending` 视为已解决 |
-| GET/POST | `/v1/me/recipes` | 列出 / 创建 Recipe |
-| POST | `/v1/me/recipes/:id` | 更新 Recipe |
-| DELETE | `/v1/me/recipes/:id` | 删除 Recipe |
-| GET | `/v1/me/executors` | 已启用执行器的调用目录（规则页用） |
-| POST | `/v1/me/executors` | 安装执行器：`local_connector`（选能新建会话的本机连接器）或 `http`（`base_url` + 可选 `auth_env`） |
+| GET/POST | `/v1/me/flows` | 列出 / 创建链路配置 |
+| POST | `/v1/me/flows/:id` | 更新链路配置 |
+| DELETE | `/v1/me/flows/:id` | 删除链路配置 |
+| POST | `/v1/me/flows/:id/try` | 用一条样本试跑，默认不发送 |
+| GET | `/v1/me/executors` | 已启用 Agent 的调用目录（链路页用） |
+| POST | `/v1/me/executors` | 安装 Agent：`local_connector`（选能新建会话的本机连接器）或 `http`（`base_url` + 可选 `auth_env`） |
 | POST | `/v1/me/executors/:id/config` | 改名称或绑定（钉死连接器 / 改 URL）。不收 token |
-| DELETE | `/v1/me/executors/:id` | 卸载执行器安装；规则仍在，指向它会失败 |
+| DELETE | `/v1/me/executors/:id` | 卸载 Agent 安装；链路仍在，指向它会失败 |
 | POST | `/v1/me/executors/:id/enable` | 启用并挂上目录 |
-| POST | `/v1/me/executors/:id/disable` | 停用并从规则目录拿掉 |
+| POST | `/v1/me/executors/:id/disable` | 停用并从链路的 Agent 目录拿掉 |
 | POST | `/v1/me/work-items/:id/run` | 手动启动一条工单（桌面 Start run） |
-| POST | `/v1/me/work-items/:id/dismiss` | 从当前工作拿掉并按策略折叠到不显示；不写回 |
+| POST | `/v1/me/work-items/:id/dismiss` | 从工作台拿掉并按策略折叠到不显示；不写回 |
 | POST | `/v1/me/work-items/:id/complete` | dismiss 的别名；不冒充 DSH 退出 |
 | GET/POST | `/v1/me/prefs` | `inbox_sort`：`attention` 或 `normal`；`inbox_list`：`shown` 或 `hidden` |
 | POST | `/v1/me/replies` | 把回复发回原渠道。API 按 installation + thread 找 `ChannelDriver`，再 `egress.send`。入库后 follow 该线程直到出现新的 inbound / `working` / `awaiting_user` 或短暂超时；驱动 `canReply: false` 时 501 |
 | POST | `/v1/me/forwards` | 把源线程的 utterance 编译后发到**另一条** `can_send` 线程，或 `create: true` 在 `can_create` 安装上新建（DSH 先 `createThread` 再 send；Cursor `create_with_task` 把第一包当任务，只 ingest 出站）。可多选 `event_ids`。编译正文按句带 `[Attached: 文件名]`，bytes 仍走附件。目标气泡用 `forwarded_from.channel_label` 画出处 chip。不改 `thread_id`，不扩展 replies。不能建会话的安装仍 501。见 [RFC 0010](rfcs/0010-cross-channel-forward.md) |
 | POST | `/v1/me/imports` | 按 catalog `import_files` 导入用户自选文件。`{ connector_type, content, file_name }`。驱动 `parseImport` 译成 ingest batch，内核写 Event。不必先安装该连接器。 |
 | GET | `/v1/me/engine` | 含 `plugin_dir`（默认 `~/.regenic/plugins`）和 `plugins` 库存。 |
-| GET | `/v1/me/plugins` | 插件库存：已加载 / 跳过 / 失败。第一方 `trust=core`，额外包 `trust=unsigned`。引擎页也会带上这份列表。 |
+| GET | `/v1/me/plugins` | 插件库存：已加载 / 跳过 / 失败。第一方 `trust=core`，额外包 `trust=unsigned`。「接入」页也会带上这份列表。 |
 | POST | `/v1/me/plugins/reload` | 扫描 extra 插件目录，只注册尚未存在的 `connector_type` / executor source。不替换已加载驱动。 |
 | GET | `/health` | 个人模式查 SQLite 是否已打开；不探 Postgres，也不探 DSH。`mode=personal` 即 sidecar 就绪 |
 
-不返回连接器 token 或 quarantine 正文。内核在跑且连接器 enabled 时按约 10 秒 pull 一次（`REGENIC_CONNECTOR_PULL_MS` 可改）。声明了 `pace.idle_ms` 或安装配置了通用 `sync_mode` 的流，按 Core 意图预设分层 idle：`conversation`（当前会话优先，新装飞书默认）/ `balanced`（均衡）/ `context`（后台慢慢检查）。未声明 `pace` 且无 `sync_mode` 的流（DSH）仍每 tick 跟。单次 poll 触达内核 deadline（默认 20s）视为软失败：退避重试，不进「需要处理」横幅；缺凭证等硬错误仍会告警。人在操作时同 tick 串行、优先跟打开中的会话；空闲时再补一页历史。`pace.idle_ms` 与 `sync_mode` 都是通用键，内核不按渠道名分支；飞书 catalog 暴露检查频率，收取范围（selection）与频率独立。对话窗发送后会更快跟当前会话。引擎 Sync 只是漏了再追平。凭证只读环境变量。
+不返回连接器 token 或 quarantine 正文。内核在跑且连接器 enabled 时按约 10 秒 pull 一次（`REGENIC_CONNECTOR_PULL_MS` 可改）。声明了 `pace.idle_ms` 或安装配置了通用 `sync_mode` 的流，按 Core 意图预设分层 idle：`conversation`（当前会话优先，新装飞书默认）/ `balanced`（均衡）/ `context`（后台慢慢检查）。未声明 `pace` 且无 `sync_mode` 的流（DSH）仍每 tick 跟。单次 poll 触达内核 deadline（默认 20s）视为软失败：退避重试，不进「需要处理」横幅；缺凭证等硬错误仍会告警。人在操作时同 tick 串行、优先跟打开中的会话；空闲时再补一页历史。`pace.idle_ms` 与 `sync_mode` 都是通用键，内核不按渠道名分支；飞书 catalog 暴露检查频率，收取范围（selection）与频率独立。对话窗发送后会更快跟当前会话。「接入」页的同步 只是漏了再追平。凭证只读环境变量。
 
 ### inbox 读请求的副作用
 
@@ -190,27 +191,27 @@ sidecar **就绪**只表示进程在、端口已听、`/health` 的 `mode=person
 
 ## 连接器：同步范围与前置步骤
 
-安装和前置检查都由 `/v1/me/engine` 的 **catalog** 驱动：每个驱动用 `installCatalog()` 声明标题、`fields`（含默认值、是否必填、`visible_when`）、`prerequisites` 和可选的 `import_files`。DSH、飞书、Cursor 和额外插件同一套。`ready` / `hint` 来自后台缓存的 `probeCatalog()`；会话下拉等表单选项在打开弹层时走 `/v1/me/engine/catalog-options`。已装行的文案由 `presentInstall` 提供，API 只合并，引擎页只渲染，不按连接器类型写死 UI。
+安装和前置检查都由 `/v1/me/engine` 的 **catalog** 驱动：每个驱动用 `installCatalog()` 声明标题、`fields`（含默认值、是否必填、`visible_when`）、`prerequisites` 和可选的 `import_files`。DSH、飞书、Cursor 和额外插件同一套。`ready` / `hint` 来自后台缓存的 `probeCatalog()`；会话下拉等表单选项在打开弹层时走 `/v1/me/engine/catalog-options`。已装行的文案由 `presentInstall` 提供，API 只合并，「接入」页只渲染，不按连接器类型写死 UI。
 
 | 连接器 | 安装要填 | 前置 | 同步范围 |
 | --- | --- | --- | --- |
 | DSH web（本机） | `base_url` 默认 `http://127.0.0.1:3080`；`session_id` **可选** | 目录会探测 `dsh web`，但探测失败不挡安装。装完后要本机 `dsh web --port 3080` 在跑，内核才能拉。`REGENIC_DSH_TOKEN` 仅在 DSH 要求 Bearer 时需要 | 未填 session 时用 DSH `session.list` 拉齐全部会话，每个 session 走自己的 `session:${id}` 游标。安装后立刻拉，之后内核轮询。填了则只跟那一条 |
 | DSH web（托管） | 只填可选 `session_id`；不填 `base_url` | 内核环境变量 `REGENIC_DSH_BASE_URL`（集群 DNS） | 同上；核心只走内网，不要填 Sealos 公网 URL |
 | DSH CLI | mailbox 可选 | 本机 `dsh` 命令 | 该 mailbox 一条流 |
-| 飞书 | 弹窗里默认选「最近活跃」；也可自选会话，或改成全部群和单聊（需二次确认）。安装后随时点「编辑范围」 | 没装则 `npx @larksuite/cli@latest install`；装了未登录则 `lark-cli config init` 和 `lark-cli auth login --recommend`。内核不代装 | 默认只跟最近活跃会话和当前工作；全量同步需明确确认。入站同步文本、图片和文件；回写同样支持。图片走 `im images create`（`image_type=message`）再发 `msg_type=image`，和正文同一用户身份；不把图塞进富文本 post |
+| 飞书 | 弹窗里默认选「最近活跃」；也可自选会话，或改成全部群和单聊（需二次确认）。安装后随时点「编辑范围」 | 没装则 `npx @larksuite/cli@latest install`；装了未登录则 `lark-cli config init` 和 `lark-cli auth login --recommend`。内核不代装 | 默认只跟最近活跃会话和工作台；全量同步需明确确认。入站同步文本、图片和文件；回写同样支持。图片走 `im images create`（`image_type=message`）再发 `msg_type=image`，和正文同一用户身份；不把图塞进富文本 post |
 
 DSH Web 的 token 可在安装表单按安装配置，并保存在系统凭证存储中；`REGENIC_DSH_TOKEN` 仍可回退使用。安装不接收 `command` / `workdir`。本机 `base_url` 必须是回环；托管内核忽略表单里的公网 URL，一律用 `REGENIC_DSH_BASE_URL`。
 
-## 执行器：本机连接器与 HTTP
+## Agent：本机连接器与 HTTP
 
-引擎页的执行器和连接器分开管。规则页只列出**已启用**的安装。执行器目录同样声明 `docs`，在「执行器」标题旁打开执行器规范与 RFC 0009。
+只有 Agent 能当处理者。DSH、Cursor 这类能新建会话的连接器本身就是 Agent；外部运行时经 HTTP 协议接入，也按 Agent 对待。「接入」页分「来源」「Agent」两个标签：来源管连接器、同步和插件市场，Agent 管处理者安装。链路页只列出**已启用**的 Agent。Agent 目录同样声明 `docs`，在「Agent」标题旁打开执行器规范与 RFC 0009。
 
 | 种类 | 安装要填 | 运行时 |
 | --- | --- | --- |
 | 本机连接器 | 选一个 `create: true` 的已装连接器（现在是 DSH） | 在该安装上 `createThread`，再经 `ExecutorContext` 写 stdin / 读 transcript。空绑定（默认 `dsh`）仍自动找第一个能建会话的 DSH |
 | HTTP API | `base_url`；可选 `auth_env`（Bearer 所在环境变量名，表单不收 token） | `POST {base}/v1/runs`、`GET {base}/v1/runs/:id`、`POST {base}/v1/runs/:id/resume`。内核把 `executor_config` 当不透明袋转交，不读 key |
 
-升级后若还没有执行器安装，内核会写入一条 id 为 `dsh` 的本机绑定，旧规则不用改。私有 Agent 仍不得 import 进内核；外部运行时走这条 HTTP 协议或以后的插件包。
+升级后若还没有 Agent 安装，内核会写入一条 id 为 `dsh` 的本机绑定，旧链路不用改。私有 Agent 仍不得 import 进内核；外部运行时走这条 HTTP 协议或以后的插件包。
 
 ## 启动
 
@@ -218,7 +219,7 @@ DSH Web 的 token 可在安装表单按安装配置，并保存在系统凭证�
 pnpm dev:desktop
 ```
 
-需已能 `pnpm --filter @regenic/api... build`。无 Inbox 数据时，在引擎页安装连接器，内核会自己拉。
+需已能 `pnpm --filter @regenic/api... build`。无 Inbox 数据时，在「接入」页安装连接器，内核会自己拉。
 
 ## 本版不做
 

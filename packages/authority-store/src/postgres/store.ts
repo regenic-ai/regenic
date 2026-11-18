@@ -38,7 +38,6 @@ import type {
   ContextArtifactState,
   ContextArtifactDecision,
   ContextArtifactSupersession,
-  ContextArtifactProposedSupersession,
   ContextSnapshot,
   ContextSnapshotIndexEntry,
   ContextSnapshotIndexQuery,
@@ -278,7 +277,6 @@ import {
   putSnapshot,
   putSnapshotIndex,
   supersedeArtifact,
-  supersedeProposedArtifact,
 } from "./context-artifacts";
 import {
   claimContextProjectionJobs,
@@ -585,9 +583,6 @@ export class PostgresAuthorityStore
     return supersedeArtifact(this.sql, input);
   }
 
-  async supersedeProposedArtifact(input: ContextArtifactProposedSupersession): Promise<{ superseded: ContextArtifactState; replacement: ContextArtifactState }> {
-    return supersedeProposedArtifact(this.sql, input);
-  }
 
   async putSnapshot(snapshot: ContextSnapshot): Promise<void> {
     return putSnapshot(this.sql, snapshot);

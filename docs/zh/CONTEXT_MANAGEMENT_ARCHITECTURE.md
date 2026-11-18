@@ -163,7 +163,6 @@ interface ContextArtifact {
   org_id: string;
   kind:
     | "thread_summary"
-    | "daily_digest"
     | "claim_extraction"
     | "identity_link"
     | "topic_assignment"
@@ -549,76 +548,18 @@ transaction 会同时接受 replacement 并将旧 Artifact 标为 superseded。�
 authorized source view 中，并要求 scope 恰好是 evidence scope 的并集。任一条件无法验证时，
 必须隐藏 Artifact，不能回退到旧 summary。
 
-### 8.2 本地日级 digest D0
-
-个人版基线提供显式日历日期的 D0 projector。调用方必须指定 `YYYY-MM-DD`，系统绝不使用
-宿主时区或隐式“今天”。版本化 organization policy 提供 IANA time zone，默认 `UTC`；它选择
-`occurred_at` 落在该本地日期内、当前且未 tombstone 的 lifecycle head，为每个选中 lifecycle
-保留全部 Event 作为 evidence，并生成确定性的 `daily_digest` proposal。Canonical body 按稳定顺序
-列出每个 thread 的 current head，并由
-Artifact ID、input hash、scope 并集和 body hash 绑定。
-
-Event 仍以 UTC 存储。每个 digest 记录 local date、time zone 以及解析后的 `[utc_start, utc_end)`
-period，包含 DST 切换日。旧 `utc_date` API/CLI 名称仍表示显式兼容 date label；针对非 UTC policy，
-Personal API 还接受 `local_date`。
+### 8.2 Event 投影输入 metadata
 
 每个 Event 还会随 immutable lifecycle metadata 持久保存经校验、由来源提供的
 `direction_tags`、`weight_hints` 与 JSON `attrs`。它们可在 authority read epoch 中供
 确定性投影使用，重启后和经 SQLite split reader 读取时也会保留。这些值只属于投影输入：
 它们不授予 scope 访问权限，也不能覆盖 ACL、lifecycle、Artifact acceptance 或 policy
-decision。后续支持方向和权重的 D0 版本必须显式定义受控词表及解释规则，不能将来源
+decision。使用方向和权重的投影必须显式定义受控词表及解释规则，不能将来源
 metadata 当作可信 authority。
 
-D0 v3 只路由 RFC 0007 规定的受控方向（`product`、`sales`、`customer`、`org`、
-`finance`、`risk`）；未知来源 tag 不会进入任何方向。每个方向内，它按确定性权重分数
-对 current head 做 thread 折叠，只输出 metric、bad-news 或高权重 hypothesis 信号，
-最多保留七项，并在有候选时保留一个 bad-news 席位。选中 head 的完整 lifecycle 仍是
-Artifact evidence，因此评分不会削弱 revision、tombstone 或 ACL 要求。同一方向中，高
-role-tier 的 `support`/`oppose` 或 `positive`/`negative` stance 对会替换为一条
-`clarify_request`，并保留双方 evidence。
-固定的 evidence multiplier 为 metric $4$、demo $3$、user-verbatim 与 decision-record
-$2.5$、opinion $1$；在排序或 hash 前，分数统一归一化到小数点后六位。
-显式 `role_tier` 至少为 3.5 时，即使未提供 urgency 与 importance hint，也足以产生一条
-hypothesis。
-保守的 starter lexicon（`outage`、`incident`、`breach`、`rollback`、`blocked`）也会将
-已授权且已物化正文归类为 `bad_news`。它是确定性 fallback，不会覆盖 policy；按组织配置
-词表仍是后续工作。
+### 8.3 Proposal 与 Decision
 
-每个组织可持久化版本化 D0 policy，用于配置已启用的受控 direction、每方向上限、
-bad-news term、evidence weight 和 hypothesis threshold。没有记录时使用兼容默认值。规范化
-policy 会参与 digest identity；Artifact attrs 仅保留其版本与稳定 hash，不会膨胀可检索正文。
-
-投影只创建 proposal。只有经普通 Artifact lifecycle accepted 后，Personal API 或 CLI 才会
-返回它。revision 与 tombstone 的正确性因此复用 Context retrieval 的 lifecycle-head 验证。
-当后续运行改变同一 UTC period 时，它会写入一个显式 supersede 原有 `proposed` daily digest 的
-replacement proposal，然后原子地将旧 proposal 标记为 `superseded`。自动重跑绝不会改写已
-accepted 的 Artifact。
-
-D4 coverage 会比较全部 eligible current high-signal head 与最终 item 及
-`clarify_request` conflict evidence 所代表的 Event ID。因 thread folding 或每方向配额而
-未被纳入的 head，会生成一条按 generation 隔离、幂等的 `omitted_high_signal` alert。Alert
-API 与 CLI 只暴露 alert identity、日期、generation、reason、状态和时间戳；source Event ID
-与正文仍留在 authority 边界内。Resolve 必须由人显式执行，且不会改变 source Event 或 Digest。
-
-这仍是受限的 RFC 0007 D0 子集。组织本地日界、可配置的 role/source/lexicon policy、
-append-only decision history、artifact as-of retrieval 与持久化自动调度
-仍是后续工作。
-
-日级 D0 执行使用独立的持久化队列，键为 `(org_id, utc_date, generation)`，不复用 Event
-projection outbox。Personal API 开始监听后，worker 会幂等地入队当前 UTC 日期、领取带
-lease 的批次，并持久记录完成或有界重试退避。投影执行期间会续租；一旦失去 lease，worker
-不会结算该 job。因此重启会补跑尚未完成的当天运行，且不会重复同一周期。这不提供按组织本地
-午夜的调度。持久化的 schedule cursor 每个 tick 最多推进七个 UTC 日期，因此有限的离线缺口
-会按日期顺序入队，且不会重新发现或重复既有周期。组织本地午夜调度仍需要持久化 timezone
-配置。
-
-### 8.3 Digest 到 Proposal intake
-
-个人版提供最小 RFC 0003 Proposal vertical slice。人可以把 accepted 且 hash 有效的 daily
-Digest item 转为一个幂等 draft Proposal。Proposal 将 Digest 和该 item 的 source lifecycle
-固定为非 `other` evidence。`hypothesis` 映射为 hypothesis Proposal；未来的 `new_judgment`
-与 `standard_amendment` item 分别映射为新建/修订 Standard Proposal。Metric、bad-news 与
-clarify item 不能自动晋升。
+个人版提供最小 RFC 0003 Proposal vertical slice。
 
 Proposal lifecycle 支持 `draft -> submitted -> in_review`、review rejection，以及 outcome 前
 withdrawal。Submit 会重新校验 evidence gate。Decision 与 Standard Proposal 必须绑定
@@ -768,7 +709,7 @@ pointer 和精确 citation-count/ledger 不一致会 fail closed；旧版本 usa
 `context-standard-health` CLI 使用专用 SQLite `query_only` host。它不会运行 migration，也不
 会挂载 lexical sidecar，因此 scan 不会执行应用层 database 或 sidecar 写入。
 
-投影依赖形成显式 DAG。例如 daily digest 可以依赖已接受的 thread summary，但 lexical
+投影依赖形成显式 DAG。例如某个汇总投影可以依赖已接受的 thread summary，但 lexical
 Event retriever 不依赖它。Coordinator 必须拒绝依赖环。
 
 ## 9. ACL 与隐私

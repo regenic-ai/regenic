@@ -996,9 +996,9 @@ describe("personal context API", () => {
     assert.ok((await ledger.listHiddenExecutorThreadIds("local-owner")).includes("dsh:answer-1"));
     const systemRecipeId = item.recipe_id;
     ledger.close();
-    const visibleRecipes = await (await fetch(`${origin}/v1/me/recipes`)).json();
+    const visibleRecipes = await (await fetch(`${origin}/v1/me/flows`)).json();
     assert.ok(visibleRecipes.every((recipe) => !recipe.id.startsWith("system:")));
-    const systemRecipeUrl = `${origin}/v1/me/recipes/${encodeURIComponent(systemRecipeId)}`;
+    const systemRecipeUrl = `${origin}/v1/me/flows/${encodeURIComponent(systemRecipeId)}`;
     assert.equal((await postJson(systemRecipeUrl, {})).response.status, 404);
     assert.equal((await postJson(`${systemRecipeUrl}/try`, {})).response.status, 404);
     assert.equal((await fetch(systemRecipeUrl, { method: "DELETE" })).status, 404);

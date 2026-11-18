@@ -152,51 +152,10 @@ interface ContextRequest {
   purpose: string;
   allowed_uses: Array<"display" | "reason" | "draft" | "execute">;
   query?: string;
-
-Each Event also preserves validated source-provided `direction_tags`,
-`weight_hints`, and JSON `attrs` alongside its immutable lifecycle metadata.
-They are available to deterministic projections at the authority read epoch,
-including after restart or through the split SQLite reader. These values are
-projection inputs only: they neither grant scope access nor override ACL,
-lifecycle, Artifact acceptance, or policy decisions. A later direction-aware
-or weighted D0 version must define its controlled vocabulary and interpretation
-explicitly rather than treating source metadata as trusted authority.
-
-D0 v3 routes only the RFC 0007 controlled directions (`product`, `sales`,
-`customer`, `org`, `finance`, and `risk`); unknown source tags are not routed.
-Within each direction it folds current heads by thread using a deterministic
-weight score, emits only metric, bad-news, or high-weight hypothesis signals,
-caps the result at seven items, and reserves one bad-news seat when available.
-Its fixed evidence multipliers are metric $4$, demo $3$, user-verbatim and
-decision-record $2.5$, and opinion $1$; scores are normalized to six decimal
-places before ordering or hashing.
-An explicit `role_tier` of at least 3.5 is also sufficient for a hypothesis,
-even when urgency and importance hints are absent.
-The selected head's complete lifecycle remains Artifact evidence, so scoring
-never weakens revision, tombstone, or ACL requirements. Opposing high-tier
-`support`/`oppose` or `positive`/`negative` stance pairs in one direction are
-replaced with one `clarify_request` that retains both sides as evidence.
-A conservative starter lexicon (`outage`, `incident`, `breach`, `rollback`,
-and `blocked`) also classifies authorized materialized text as `bad_news`.
-It is a deterministic fallback, not a policy override; organization-configured
-lexicons remain separate work.
-
-Each organization may persist a versioned D0 policy that configures enabled
-controlled directions, per-direction limits, bad-news terms, evidence weights,
-and hypothesis thresholds. An absent record uses the compatible default. The
-normalized policy participates in digest identity; Artifact attrs retain only
-its version and stable hash, rather than expanding the retrievable body.
   anchors?: Array<{
     kind: "event" | "conversation" | "work_item" | "decision" | "entity";
     id: string;
   }>;
-
-每个 Event 还会随 immutable lifecycle metadata 持久保存经校验、由来源提供的
-`direction_tags`、`weight_hints` 与 JSON `attrs`。它们可在 authority read epoch 中供
-确定性投影使用，重启后和经 SQLite split reader 读取时也会保留。这些值只属于投影输入：
-它们不授予 scope 访问权限，也不能覆盖 ACL、lifecycle、Artifact acceptance 或 policy
-decision。后续支持方向和权重的 D0 版本必须显式定义受控词表及解释规则，不能将来源
-metadata 当作可信 authority。
   filters?: {
     sources?: string[];
     thread_ids?: string[];
@@ -229,7 +188,6 @@ interface ContextArtifact {
   org_id: string;
   kind:
     | "thread_summary"
-    | "daily_digest"
     | "claim_extraction"
     | "identity_link"
     | "topic_assignment"
@@ -656,72 +614,20 @@ view, and requires an exact evidence-scope union. Failure to verify any of
 these conditions withholds the Artifact rather than falling back to a prior
 summary.
 
-### 8.2 Local-day daily digest D0
-
-The Personal baseline includes an explicit calendar-day D0 projector. A caller names
-the `YYYY-MM-DD` period; the system never substitutes the host timezone or an
-implicit "today". A versioned organization policy supplies an IANA time zone,
-defaulting to `UTC`, and selects current non-tombstoned lifecycle heads whose
-`occurred_at` falls in that local date. It retains every Event in each selected
-lifecycle as evidence and emits a deterministic `daily_digest` proposal. The
-canonical body lists the current head per thread in stable order and is bound by
-an Artifact ID, input hash, scope union, and body hash.
-
-Events remain stored in UTC. Each digest records its local date, time zone, and
-resolved `[utc_start, utc_end)` period, including DST transition days. The
-legacy `utc_date` API/CLI label remains an explicit compatible date label;
-`local_date` is accepted by the Personal API for non-UTC policies.
+### 8.2 Event projection metadata
 
 Each Event also preserves validated source-provided `direction_tags`,
 `weight_hints`, and JSON `attrs` alongside its immutable lifecycle metadata.
 They are available to deterministic projections at the authority read epoch,
 including after restart or through the split SQLite reader. These values are
 projection inputs only: they neither grant scope access nor override ACL,
-lifecycle, Artifact acceptance, or policy decisions. A later direction-aware
-or weighted D0 version must define its controlled vocabulary and interpretation
+lifecycle, Artifact acceptance, or policy decisions. A direction-aware or
+weighted projection must define its controlled vocabulary and interpretation
 explicitly rather than treating source metadata as trusted authority.
 
-Projection creates a proposal only. The ordinary Artifact lifecycle must accept
-it before the Personal API or CLI returns it. Revision and tombstone correctness
-therefore comes from the same lifecycle-head validation as Context retrieval.
-When a later run changes the same UTC period, it writes a replacement proposal
-that explicitly supersedes the prior `proposed` daily digest, then atomically
-marks the prior proposal `superseded`. Accepted Artifacts are never changed by
-automatic reruns.
+### 8.3 Proposals and decisions
 
-D4 coverage compares every eligible current high-signal head with the Event IDs
-represented by final items and `clarify_request` conflict evidence. A head lost
-to thread folding or the per-direction quota creates one generation-scoped,
-idempotent `omitted_high_signal` alert. Alert APIs and CLI output expose only
-the alert identity, date, generation, reason, status, and timestamps; source
-Event IDs and bodies remain inside the authority boundary. Resolution is an
-explicit human action and never changes the source Event or Digest.
-
-This remains a bounded RFC 0007 D0 subset. Organization-local time windows,
-configurable role/source/lexicon policy,
-append-only decision history, artifact as-of retrieval, and durable automatic
-scheduling remain separate work.
-
-Daily D0 execution uses a separate durable queue keyed by `(org_id, utc_date,
-generation)`, not the Event projection outbox. After the Personal API begins
-listening, its worker idempotently enqueues the current UTC date, claims a
-leased batch, and persists completion or bounded retry backoff. The worker
-renews each lease while projection runs; if it loses the lease, it does not
-settle that job. A restart thus catches up an unfinished current-day run without
-duplicating the period. A persisted schedule cursor advances up to seven UTC
-days per tick, so a bounded offline gap is enqueued in chronological order
-without rediscovering or duplicating prior periods. This does not provide
-organization-local midnight scheduling; that requires persisted timezone
-configuration.
-
-### 8.3 Digest-to-Proposal intake
-
-Personal provides a minimal RFC 0003 Proposal vertical slice. A human may turn
-an item in an accepted, hash-valid daily Digest into one idempotent draft
-Proposal. The Proposal pins the Digest and the item's source lifecycle as
-non-`other` evidence. `hypothesis` maps to a hypothesis Proposal; future
-`new_judgment` and `standard_amendment` items map to new/revised-standard
-Proposals. Metric, bad-news, and clarify items cannot auto-promote.
+Personal provides a minimal RFC 0003 Proposal vertical slice.
 
 The Proposal lifecycle supports `draft -> submitted -> in_review`, rejection
 from review, and withdrawal before an outcome. Submission revalidates the
@@ -921,7 +827,7 @@ The `context-standard-health` CLI uses a dedicated SQLite `query_only` host.
 It does not run migrations or mount the lexical sidecar, so the scan does not
 perform application-level database or sidecar writes.
 
-Projection dependencies form a declared DAG. For example, a daily digest may
+Projection dependencies form a declared DAG. For example, a summarizing projection may
 depend on accepted thread summaries, but a lexical Event retriever does not.
 The coordinator rejects dependency cycles.
 

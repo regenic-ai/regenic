@@ -77,12 +77,12 @@ describe("context ports", () => {
     const store = new MemoryContextArtifactStore();
     const value = artifact();
     await store.putArtifact(value);
-    value.kind = "daily_digest";
+    value.kind = "changed";
 
     const stored = await store.getArtifact("example-org", "artifact-1");
     assert.equal(stored.kind, "thread_summary");
     assert.equal((await store.listArtifacts({ org_id: "example-org" })).length, 1);
-    stored.kind = "daily_digest";
+    stored.kind = "changed";
     assert.equal((await store.getArtifact("example-org", "artifact-1")).kind, "thread_summary");
     await assert.rejects(
       store.putArtifact({ ...artifact(), algorithm_version: "rules-v2" }),

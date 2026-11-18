@@ -1,6 +1,11 @@
 import type { PoolClient } from "pg";
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
+import {
+  flowConfigFromRecipe,
+  parseFlowConfig,
+  recipeFieldsFromFlow,
+} from "@regenic/domain";
 import type {
   Recipe,
   WorkItem,
@@ -24,6 +29,8 @@ import type {
   SearchAnswerRecord,
 } from "@regenic/domain";
 import {
+  AGGREGATE_FACT_CACHE_MAX_ROWS,
+  AGGREGATE_FACT_CACHE_TTL_MS,
   conversationId,
   isWorkTriggerDecision,
   isFinishedWorkTriggerDecision,
@@ -200,8 +207,8 @@ async function writeRecipe(db: PgSql, recipe: Recipe, client?: PoolClient, inser
           can_write_back, include_context, enabled, trigger_kind,
           trigger_interval_ms, trigger_at_minute, trigger_weekdays, trigger_timezone,
           trigger_coalesce, max_concurrent, next_run_at, created_at, updated_at,
-          write_back_thread_id, hide_on_success
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
+          write_back_thread_id, hide_on_success, flow_json
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
         ON CONFLICT (id) DO ${insertOnly ? "NOTHING" : `UPDATE SET
           name = EXCLUDED.name,
           match_json = EXCLUDED.match_json,
@@ -220,6 +227,7 @@ async function writeRecipe(db: PgSql, recipe: Recipe, client?: PoolClient, inser
           max_concurrent = EXCLUDED.max_concurrent,
           next_run_at = EXCLUDED.next_run_at,
           hide_on_success = EXCLUDED.hide_on_success,
+          flow_json = EXCLUDED.flow_json,
           updated_at = EXCLUDED.updated_at`}
       `,
       [
@@ -244,6 +252,7 @@ async function writeRecipe(db: PgSql, recipe: Recipe, client?: PoolClient, inser
         recipe.updated_at,
         recipe.write_back_thread_id ?? null,
         recipe.hide_on_success !== false,
+        jsonb(flowConfigFromRecipe(recipe)),
       ],
       client,
     );
@@ -1889,6 +1898,28 @@ export async function putAggregateFactCache(
         record.updated_at,
       ], client);
     }
+    const cutoff = new Date(Date.now() - AGGREGATE_FACT_CACHE_TTL_MS).toISOString();
+    for (const orgId of new Set(records.map((record) => record.org_id))) {
+      await db.execute(
+        `DELETE FROM aggregate_fact_cache
+         WHERE org_id = $1 AND updated_at < $2::timestamptz`,
+        [orgId, cutoff],
+        client,
+      );
+      await db.execute(
+        `DELETE FROM aggregate_fact_cache
+         WHERE org_id = $1
+           AND (spec_hash, extractor_version, event_id) NOT IN (
+             SELECT spec_hash, extractor_version, event_id
+             FROM aggregate_fact_cache
+             WHERE org_id = $1
+             ORDER BY updated_at DESC, event_id DESC
+             LIMIT $2
+           )`,
+        [orgId, AGGREGATE_FACT_CACHE_MAX_ROWS],
+        client,
+      );
+    }
   });
 }
 
@@ -2231,8 +2262,19 @@ interface RecipeRow {
   trigger_coalesce: unknown;
   max_concurrent: number | null;
   next_run_at: unknown;
+  flow_json: unknown;
   created_at: unknown;
   updated_at: unknown;
+}
+
+export async function backfillRecipeFlowJson(client: PoolClient): Promise<void> {
+  const rows = await client.query<RecipeRow>("SELECT * FROM recipes WHERE flow_json IS NULL");
+  for (const row of rows.rows) {
+    await client.query("UPDATE recipes SET flow_json = $1::jsonb WHERE id = $2", [
+      JSON.stringify(flowConfigFromRecipe(recipeFromColumns(row))),
+      row.id,
+    ]);
+  }
 }
 
 interface WorkItemRow {
@@ -2340,6 +2382,22 @@ function toExecutorInstallation(row: ExecutorRow): ExecutorInstallation {
 }
 
 function toRecipe(row: RecipeRow): Recipe {
+  if (row.flow_json != null && row.flow_json !== "") {
+    const fields = recipeFieldsFromFlow(parseFlowConfig(asJson(row.flow_json)));
+    return {
+      id: row.id,
+      org_id: row.org_id,
+      name: row.name,
+      ...fields,
+      ...(row.next_run_at ? { next_run_at: toIso(row.next_run_at) } : {}),
+      created_at: toIso(row.created_at),
+      updated_at: toIso(row.updated_at),
+    };
+  }
+  return recipeFromColumns(row);
+}
+
+function recipeFromColumns(row: RecipeRow): Recipe {
   const match = asJson<Recipe["match"]>(row.match_json);
   const kind = isRecipeTriggerKind(row.trigger_kind) ? row.trigger_kind : undefined;
   return {

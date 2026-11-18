@@ -14,6 +14,46 @@ const SqliteDatabase = require(require.resolve("better-sqlite3", {
 const { Client } = require("pg");
 const { FsBlobStore } = require("@regenic/blob-store");
 const { ChannelDriverRegistry, INGEST_SCHEMA_VERSION, IngestionService, channelRecord } = require("@regenic/domain");
+
+function flowJson(body) {
+  if (
+    !body || typeof body !== "object" || body.config || body.connector_type || body.kind ||
+    body.inbox_sort ||
+    (!body.match && !body.executor_type && !body.executor_config && !body.trigger &&
+      body.can_write_back === undefined && body.write_back_thread_id === undefined)
+  ) {
+    return JSON.stringify(body);
+  }
+  const params = body.executor_config ?? {};
+  const task = typeof params.prompt === "string" ? params.prompt
+    : typeof params.instruction === "string" ? params.instruction : undefined;
+  const thread = typeof body.write_back_thread_id === "string" && body.write_back_thread_id
+    ? body.write_back_thread_id : undefined;
+  const send = body.can_write_back === undefined
+    ? body.trigger?.kind === "pull"
+    : body.can_write_back === true;
+  return JSON.stringify({
+    ...(body.name ? { name: body.name } : {}),
+    config: {
+      source: { installations: "all" },
+      scope: { kind: "new_messages", match: body.match ?? {} },
+      handler: {
+        kind: "agent",
+        executor_type: body.executor_type ?? "",
+        ...(task !== undefined ? { task } : {}),
+        ...(Object.keys(params).length ? { params } : {}),
+      },
+      ...((send || thread) ? {
+        destination: { kind: "reply", thread: thread || "origin", confirm: false, send },
+      } : {}),
+      trigger: body.trigger ?? { kind: "push", coalesce: true },
+      hide_on_success: body.hide_on_success === true,
+      include_context: body.include_context === true || body.trigger?.kind === "pull",
+      ...(body.max_concurrent ? { max_concurrent: body.max_concurrent } : {}),
+      enabled: body.enabled !== false,
+    },
+  });
+}
 const { PersonalRuntimeService } = require("../dist/personal-runtime.service");
 const { PersonalWorkService } = require("../dist/personal-work.service");
 const {
@@ -2019,15 +2059,16 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
       });
       assert.equal(installed.status, 201);
       const executors = await (await fetch(`${origin}/v1/me/executors`)).json();
+      assert.equal(executors.length, 1);
       assert.equal(executors[0].executor_type, "dsh");
       assert.equal(executors[0].source, "dsh");
       assert.equal(executors[0].attach, "absentee");
       assert.equal(executors[0].fields[0].key, "skill");
       assert.equal(executors[0].fields.some((field) => field.key === "prompt"), false);
-      const missingInstruction = await fetch(`${origin}/v1/me/recipes`, {
+      const missingInstruction = await fetch(`${origin}/v1/me/flows`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
+        body: flowJson({
           name: "Missing instruction",
           match: { record_class: "task", source: "feishu" },
           executor_type: "dsh",
@@ -2038,10 +2079,10 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
         { prompt: "   " },
         { instruction: "" },
       ]) {
-        const blankInstruction = await fetch(`${origin}/v1/me/recipes`, {
+        const blankInstruction = await fetch(`${origin}/v1/me/flows`, {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({
+          body: flowJson({
             name: "Blank instruction",
             match: { record_class: "task", source: "feishu" },
             executor_type: "dsh",
@@ -2050,20 +2091,20 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
         });
         assert.equal(blankInstruction.status, 400);
       }
-      const emptyMatch = await fetch(`${origin}/v1/me/recipes`, {
+      const emptyMatch = await fetch(`${origin}/v1/me/flows`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
+        body: flowJson({
           name: "Too broad",
           match: {},
           executor_type: "dsh",
         }),
       });
       assert.equal(emptyMatch.status, 400);
-      const sourceOnly = await fetch(`${origin}/v1/me/recipes`, {
+      const sourceOnly = await fetch(`${origin}/v1/me/flows`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
+        body: flowJson({
           name: "All chat",
           match: { source: "feishu" },
           executor_type: "dsh",
@@ -2072,10 +2113,10 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
       assert.equal(sourceOnly.status, 400);
       for (const key of ["text_contains", "text_excludes"]) {
         for (const value of [42, null, "", "   "]) {
-          const invalidFilter = await fetch(`${origin}/v1/me/recipes`, {
+          const invalidFilter = await fetch(`${origin}/v1/me/flows`, {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({
+            body: flowJson({
               name: "Invalid filter",
               match: { record_class: "task", [key]: value },
               executor_type: "dsh",
@@ -2084,10 +2125,10 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
           assert.equal(invalidFilter.status, 400);
         }
       }
-      const invalidWriteBackDestination = await fetch(`${origin}/v1/me/recipes`, {
+      const invalidWriteBackDestination = await fetch(`${origin}/v1/me/flows`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
+        body: flowJson({
           name: "Invalid destination",
           match: { record_class: "task", source: "feishu" },
           executor_type: "dsh",
@@ -2096,10 +2137,10 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
       });
       assert.equal(invalidWriteBackDestination.status, 400);
       for (const destination of ["unknown:results", "feishu:oc_results"]) {
-        const unavailable = await fetch(`${origin}/v1/me/recipes`, {
+        const unavailable = await fetch(`${origin}/v1/me/flows`, {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({
+          body: flowJson({
             name: "Unavailable destination",
             match: { thread_id: "feishu:oc_chat" },
             executor_type: "dsh",
@@ -2122,10 +2163,10 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
       );
       assert.equal(missingDismiss.status, 404);
       const created = await (
-        await fetch(`${origin}/v1/me/recipes`, {
+        await fetch(`${origin}/v1/me/flows`, {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({
+          body: flowJson({
             name: "Feishu tasks",
             match: { record_class: "task", source: "feishu", text_contains: "confirm", text_excludes: "draft" },
             executor_type: "dsh",
@@ -2136,31 +2177,38 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
           }),
         })
       ).json();
-      assert.equal(created.executor_type, "dsh");
-      assert.equal(created.can_write_back, true);
-      assert.equal(created.write_back_thread_id, "dsh:results");
-      assert.equal(created.include_context, true);
-      assert.equal(created.trigger.kind, "push");
-      assert.equal(created.trigger.coalesce, true);
-      assert.equal(created.match.text_contains, "confirm");
-      assert.equal(created.match.text_excludes, "draft");
-      assert.equal(created.executor_config.skill, "review");
+      assert.equal(created.config.handler.executor_type, "dsh");
+      assert.equal(created.config.destination.send, true);
+      assert.equal(created.config.destination.thread, "dsh:results");
+      assert.equal(created.config.include_context, true);
+      assert.equal(created.config.trigger.kind, "push");
+      assert.equal(created.config.trigger.coalesce, true);
+      assert.equal(created.config.scope.match.text_contains, "confirm");
+      assert.equal(created.config.scope.match.text_excludes, "draft");
+      assert.equal(created.config.handler.params.skill, "review");
       const clearTaskInstruction = await fetch(
-        `${origin}/v1/me/recipes/${created.id}`,
+        `${origin}/v1/me/flows/${created.id}`,
         {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
-            executor_config: { skill: "review", prompt: "   " },
+            config: {
+              ...created.config,
+              handler: {
+                ...created.config.handler,
+                task: "   ",
+                params: { skill: "review", prompt: "   " },
+              },
+            },
           }),
         },
       );
       assert.equal(clearTaskInstruction.status, 400);
       const typed = await (
-        await fetch(`${origin}/v1/me/recipes`, {
+        await fetch(`${origin}/v1/me/flows`, {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({
+          body: flowJson({
             name: "CRM order review",
             match: { unit_kind: "crm.order_review" },
             executor_type: "dsh",
@@ -2168,12 +2216,12 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
           }),
         })
       ).json();
-      assert.equal(typed.match.unit_kind, "crm.order_review");
-      assert.equal(typed.trigger.kind, "push");
-      const pullMissing = await fetch(`${origin}/v1/me/recipes`, {
+      assert.equal(typed.config.scope.match.unit_kind, "crm.order_review");
+      assert.equal(typed.config.trigger.kind, "push");
+      const pullMissing = await fetch(`${origin}/v1/me/flows`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
+        body: flowJson({
           name: "Morning digest",
           match: { record_class: "task" },
           trigger: { kind: "pull", interval_ms: 3_600_000 },
@@ -2184,10 +2232,10 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
       });
       assert.equal(pullMissing.status, 400);
       const pulled = await (
-        await fetch(`${origin}/v1/me/recipes`, {
+        await fetch(`${origin}/v1/me/flows`, {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({
+          body: flowJson({
             name: "Morning digest",
             match: { thread_id: "feishu:oc_chat" },
             trigger: { kind: "pull", interval_ms: 3_600_000 },
@@ -2197,50 +2245,57 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
           }),
         })
       ).json();
-      assert.equal(pulled.trigger.kind, "pull");
-      assert.equal(pulled.trigger.interval_ms, 3_600_000);
-      assert.equal(pulled.can_write_back, true);
-      assert.equal(pulled.include_context, true);
+      assert.equal(pulled.config.trigger.kind, "pull");
+      assert.equal(pulled.config.trigger.interval_ms, 3_600_000);
+      assert.equal(pulled.config.destination.send, true);
+      assert.equal(pulled.config.include_context, true);
       assert.ok(pulled.next_run_at);
-      assert.equal(created.executor_config.prompt, "Reply with a decision.");
-      const recipes = await (await fetch(`${origin}/v1/me/recipes`)).json();
+      assert.equal(created.config.handler.params.prompt, "Reply with a decision.");
+      const recipes = await (await fetch(`${origin}/v1/me/flows`)).json();
       assert.equal(recipes.length, 3);
       const listed = recipes.find((recipe) => recipe.name === "Feishu tasks");
-      assert.equal(listed.executor_config.prompt, "Reply with a decision.");
-      assert.equal(listed.include_context, true);
-      assert.equal(listed.write_back_thread_id, "dsh:results");
-      assert.equal(listed.match.text_contains, "confirm");
-      assert.equal(listed.match.text_excludes, "draft");
+      assert.equal(listed.config.handler.params.prompt, "Reply with a decision.");
+      assert.equal(listed.config.include_context, true);
+      assert.equal(listed.config.destination.thread, "dsh:results");
+      assert.equal(listed.config.scope.match.text_contains, "confirm");
+      assert.equal(listed.config.scope.match.text_excludes, "draft");
       assert.equal(
-        recipes.find((recipe) => recipe.name === "CRM order review")?.match.unit_kind,
+        recipes.find((recipe) => recipe.name === "CRM order review")?.config.scope.match.unit_kind,
         "crm.order_review",
       );
-      const renamed = await fetch(`${origin}/v1/me/recipes/${created.id}`, {
+      const renamed = await fetch(`${origin}/v1/me/flows/${created.id}`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ name: "Renamed filtered rule" }),
       });
       assert.equal(renamed.status, 201);
       const renamedRule = await renamed.json();
-      assert.deepEqual(renamedRule.match, created.match);
-      assert.equal(renamedRule.write_back_thread_id, "dsh:results");
-      const cleared = await fetch(`${origin}/v1/me/recipes/${created.id}`, {
+      assert.deepEqual(renamedRule.config.scope.match, created.config.scope.match);
+      assert.equal(renamedRule.config.destination.thread, "dsh:results");
+      const cleared = await fetch(`${origin}/v1/me/flows/${created.id}`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ match: { record_class: "task", source: "feishu" } }),
+        body: JSON.stringify({
+          config: {
+            ...created.config,
+            scope: { kind: "new_messages", match: { record_class: "task", source: "feishu" } },
+          },
+        }),
       });
       assert.equal(cleared.status, 201);
-      assert.deepEqual((await cleared.json()).match, { record_class: "task", source: "feishu" });
-      const clearedDestination = await fetch(`${origin}/v1/me/recipes/${created.id}`, {
+      assert.deepEqual((await cleared.json()).config.scope.match, { record_class: "task", source: "feishu" });
+      const clearedDestination = await fetch(`${origin}/v1/me/flows/${created.id}`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ can_write_back: false, write_back_thread_id: null }),
+        body: JSON.stringify({
+          config: { ...created.config, destination: undefined },
+        }),
       });
       assert.equal(clearedDestination.status, 201);
-      assert.equal((await clearedDestination.json()).write_back_thread_id, undefined);
-      const afterClear = await (await fetch(`${origin}/v1/me/recipes`)).json();
-      assert.equal(afterClear.find((recipe) => recipe.id === created.id).write_back_thread_id, undefined);
-      assert.equal(afterClear.find((recipe) => recipe.id === pulled.id).write_back_thread_id, "dsh:results");
+      assert.equal((await clearedDestination.json()).config.destination, undefined);
+      const afterClear = await (await fetch(`${origin}/v1/me/flows`)).json();
+      assert.equal(afterClear.find((recipe) => recipe.id === created.id).config.destination, undefined);
+      assert.equal(afterClear.find((recipe) => recipe.id === pulled.id).config.destination.thread, "dsh:results");
       const prefs = await (
         await fetch(`${origin}/v1/me/prefs`, {
           method: "POST",
@@ -2272,8 +2327,7 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
       assert.equal(engine.executor_catalog.length, 2);
       assert.equal(engine.executor_catalog[0].kind, "local_connector");
       assert.equal(engine.executor_catalog[1].kind, "http");
-      assert.equal(engine.executor_installations[0].id, "dsh");
-      assert.equal(engine.executor_installations[0].kind, "local_connector");
+      assert.equal(engine.executor_installations.some((item) => item.id === "dsh"), false);
 
       const missingLocal = await fetch(`${origin}/v1/me/executors`, {
         method: "POST",
@@ -2297,7 +2351,7 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
       assert.equal(remoteBody.base_url, "https://agent.example/exec");
 
       const catalog = await (await fetch(`${origin}/v1/me/executors`)).json();
-      assert.equal(catalog.some((item) => item.executor_type === "dsh"), true);
+      assert.equal(catalog.some((item) => item.executor_type === "dsh"), false);
       assert.equal(
         catalog.some((item) => item.executor_type === remoteBody.id),
         true,
@@ -2339,10 +2393,10 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
       assert.equal(localBody.kind, "local_connector");
       assert.equal(localBody.connector_id, connectorBody.id);
 
-      const recipe = await fetch(`${origin}/v1/me/recipes`, {
+      const recipe = await fetch(`${origin}/v1/me/flows`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
+        body: flowJson({
           name: "Pinned local",
           match: { record_class: "task", source: "feishu" },
           executor_type: localBody.id,
@@ -2351,7 +2405,7 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
       });
       const recipeBody = await recipe.json();
       assert.equal(recipe.status, 201, JSON.stringify(recipeBody));
-      assert.equal(recipeBody.executor_type, localBody.id);
+      assert.equal(recipeBody.config.handler.executor_type, localBody.id);
     } finally {
       await app.close();
     }

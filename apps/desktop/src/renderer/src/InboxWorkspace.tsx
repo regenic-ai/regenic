@@ -26,15 +26,19 @@ import { IdentityAvatar } from "./IdentityAvatar";
 import { useLocale } from "./LocaleContext";
 import {
   ChevronIcon,
+  FilterIcon,
   HideIcon,
+  InboxIcon,
   PencilIcon,
   PinIcon,
   PlusIcon,
+  SearchIcon,
   ShowIcon,
 } from "./Icons";
 import { MenuSelect } from "./MenuSelect";
 import { ThreadPane } from "./ThreadPane";
 import { ThreadTitleField } from "./ThreadTitleField";
+import { EmptyState } from "./EmptyState";
 import {
   shouldLoadMoreHeads,
   shouldRearmLoadMoreHeads,
@@ -90,6 +94,7 @@ export function InboxWorkspace({
   onAcknowledgeWork,
   onBindRecipe,
   onForwardCreated,
+  onOpenConnections,
 }: {
   threads: InboxThread[];
   locateEventId?: string;
@@ -134,6 +139,7 @@ export function InboxWorkspace({
   onAcknowledgeWork: (thread: InboxThread) => Promise<void>;
   onBindRecipe: (thread: InboxThread) => void;
   onForwardCreated: (result: ForwardView) => Promise<void>;
+  onOpenConnections: () => void;
 }) {
   const { t } = useLocale();
   const [pinFilter, setPinFilter] = useState<PinFilter>("all");
@@ -170,10 +176,20 @@ export function InboxWorkspace({
       cancelled = true;
     };
   }, []);
+  const [refineOpen, setRefineOpen] = useState(false);
+  const activeFilters =
+    Number(channelFilter !== "all") +
+    Number(statusFilter !== "all") +
+    Number(ruleFilter !== "all") +
+    Number(pinFilter === "pinned");
   const resetRefine = () => {
     setChannelFilter("all");
     setStatusFilter("all");
     setRuleFilter("all");
+  };
+  const clearFilters = () => {
+    resetRefine();
+    setPinFilter("all");
   };
   const canCreate = createTargets.length > 0;
   const selectedMatches = Boolean(
@@ -237,54 +253,63 @@ export function InboxWorkspace({
         <div className="list-chrome">
           <div className="list-chrome-primary">
             <div className="list-views" role="tablist" aria-label={t("inbox.list")}>
-              <button
-                type="button"
-                role="tab"
-                className={listView === "shown" ? "active" : ""}
-                aria-selected={listView === "shown"}
-                onClick={() => {
-                  if (listView === "shown") {
-                    return;
-                  }
-                  resetRefine();
-                  onListView("shown");
-                }}
-              >
-                {t("inbox.shownCount", { count: shownCount })}
-              </button>
-              <button
-                type="button"
-                role="tab"
-                className={listView === "hidden" ? "active" : ""}
-                aria-selected={listView === "hidden"}
-                onClick={() => {
-                  if (listView === "hidden") {
-                    return;
-                  }
-                  resetRefine();
-                  onListView("hidden");
-                }}
-              >
-                {t("inbox.hiddenCount", { count: hiddenCount })}
-              </button>
+              {([
+                ["shown", t("inbox.viewShown"), shownCount],
+                ["hidden", t("inbox.viewHidden"), hiddenCount],
+              ] as const).map(([id, label, count]) => (
+                <button
+                  key={id}
+                  type="button"
+                  role="tab"
+                  className={listView === id ? "active" : ""}
+                  aria-selected={listView === id}
+                  onClick={() => {
+                    if (listView === id) {
+                      return;
+                    }
+                    resetRefine();
+                    onListView(id);
+                  }}
+                >
+                  {label}
+                  <span className="list-view-count">{count}</span>
+                </button>
+              ))}
             </div>
-            <NewConversationButton
-              targets={createTargets}
-              creating={creating}
-              channelFilter={channelFilter}
-              onCreate={async (installationId) => {
-                const created = await onCreate(installationId);
-                if (
-                  created &&
-                  channelFilter !== "all" &&
-                  channelFilter !== created.channel
-                ) {
-                  setChannelFilter(created.channel);
-                }
-              }}
-            />
+            <div className="list-chrome-actions">
+              {pool.length > 0 ? (
+                <button
+                  type="button"
+                  className={`item-tool list-filter-btn${refineOpen || activeFilters > 0 ? " is-on" : ""}`}
+                  aria-expanded={refineOpen}
+                  aria-controls="inbox-refine"
+                  aria-label={t("inbox.filters")}
+                  title={t("inbox.filters")}
+                  onClick={() => setRefineOpen((open) => !open)}
+                >
+                  <FilterIcon />
+                  {activeFilters > 0 ? <span className="list-filter-count">{activeFilters}</span> : null}
+                </button>
+              ) : null}
+              <NewConversationButton
+                targets={createTargets}
+                creating={creating}
+                channelFilter={channelFilter}
+                onCreate={async (installationId) => {
+                  const created = await onCreate(installationId);
+                  if (
+                    created &&
+                    channelFilter !== "all" &&
+                    channelFilter !== created.channel
+                  ) {
+                    setChannelFilter(created.channel);
+                  }
+                }}
+              />
+            </div>
           </div>
           <div className="list-chrome-search">
+            <SearchIcon />
             <input
               type="search"
               className="list-search"
@@ -294,26 +319,28 @@ export function InboxWorkspace({
               aria-label={t("inbox.search")}
             />
           </div>
-          {pool.length > 0 ? (
-            <div className="list-chrome-refine">
-              <div className="sort-toggle" role="group" aria-label={t("inbox.sort")}>
-                <button
-                  type="button"
-                  className={sortMode === "attention" ? "active" : ""}
-                  aria-pressed={sortMode === "attention"}
-                  onClick={() => onSortMode("attention")}
-                >
-                  {t("inbox.attention")}
-                </button>
-                <button
-                  type="button"
-                  className={sortMode === "normal" ? "active" : ""}
-                  aria-pressed={sortMode === "normal"}
-                  onClick={() => onSortMode("normal")}
-                >
-                  {t("inbox.normal")}
-                </button>
-              </div>
+          {pool.length > 0 && refineOpen ? (
+            <div className="list-refine-panel" id="inbox-refine">
+              <LabeledFilter label={t("inbox.sort")}>
+                <div className="sort-toggle" role="group" aria-label={t("inbox.sort")}>
+                  <button
+                    type="button"
+                    className={sortMode === "attention" ? "active" : ""}
+                    aria-pressed={sortMode === "attention"}
+                    onClick={() => onSortMode("attention")}
+                  >
+                    {t("inbox.attention")}
+                  </button>
+                  <button
+                    type="button"
+                    className={sortMode === "normal" ? "active" : ""}
+                    aria-pressed={sortMode === "normal"}
+                    onClick={() => onSortMode("normal")}
+                  >
+                    {t("inbox.normal")}
+                  </button>
+                </div>
+              </LabeledFilter>
               <LabeledFilter
                 label={t("inbox.channel")}
                 filtered={channelFilter !== "all"}
@@ -366,17 +393,31 @@ export function InboxWorkspace({
                   onChange={setRuleFilter}
                 />
               </LabeledFilter>
-              <button
-                type="button"
-                className={`item-tool list-pin${pinFilter === "pinned" ? " is-on" : ""}`}
-                aria-pressed={pinFilter === "pinned"}
-                aria-label={pinFilter === "pinned" ? t("inbox.showAll") : t("inbox.pinOnly")}
-                title={pinFilter === "pinned" ? t("inbox.showingPinned") : t("inbox.pinnedOnly")}
-                onClick={() =>
-                  setPinFilter((current) => (current === "pinned" ? "all" : "pinned"))
-                }
-              >
-                <PinIcon filled={pinFilter === "pinned"} />
+              <div className="list-refine-foot">
+                <button
+                  type="button"
+                  className={`list-pin-toggle${pinFilter === "pinned" ? " is-on" : ""}`}
+                  aria-pressed={pinFilter === "pinned"}
+                  onClick={() =>
+                    setPinFilter((current) => (current === "pinned" ? "all" : "pinned"))
+                  }
+                >
+                  <PinIcon filled={pinFilter === "pinned"} />
+                  {t("inbox.pinnedOnly")}
+                </button>
+                {activeFilters > 0 ? (
+                  <button type="button" className="list-refine-clear" onClick={clearFilters}>
+                    {t("inbox.clearFilters")}
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+          {pool.length > 0 && !refineOpen && activeFilters > 0 ? (
+            <div className="list-refine-summary">
+              <span>{t("inbox.filtered", { count: activeFilters })}</span>
+              <button type="button" className="list-refine-clear" onClick={clearFilters}>
+                {t("inbox.clearFilters")}
               </button>
             </div>
           ) : null}
@@ -389,18 +430,67 @@ export function InboxWorkspace({
         >
           {error ? <div className="page-empty">{error}</div> : null}
           {!error && !searching && threads.length === 0 ? (
-            <div className="page-empty">
-              {listPending
-                ? t("inbox.loadingList")
-                : listView === "hidden"
-                  ? t("inbox.emptyHidden")
-                  : canCreate
-                    ? t("inbox.emptyCreate")
-                    : t("inbox.emptyInstall")}
-            </div>
+            listPending ? (
+              <div className="page-empty">{t("inbox.loadingList")}</div>
+            ) : (
+              <EmptyState
+                compact
+                icon={<InboxIcon />}
+                title={t(listView === "hidden" ? "inbox.emptyHiddenTitle" : "inbox.emptyTitle")}
+                actions={
+                  listView === "hidden" ? (
+                    <button type="button" className="ghost" onClick={() => onListView("shown")}>
+                      {t("inbox.backToCurrent")}
+                    </button>
+                  ) : canCreate ? (
+                    <NewConversationButton
+                      targets={createTargets}
+                      creating={creating}
+                      channelFilter={channelFilter}
+                      onCreate={async (installationId) => {
+                        const created = await onCreate(installationId);
+                        if (
+                          created &&
+                          channelFilter !== "all" &&
+                          channelFilter !== created.channel
+                        ) {
+                          setChannelFilter(created.channel);
+                        }
+                      }}
+                    />
+                  ) : (
+                    <button type="button" className="primary" onClick={onOpenConnections}>
+                      {t("inbox.openConnections")}
+                    </button>
+                  )
+                }
+              >
+                <p>
+                  {t(listView === "hidden"
+                    ? "inbox.emptyHidden"
+                    : canCreate
+                      ? "inbox.emptyCreate"
+                      : "inbox.emptyInstall")}
+                </p>
+              </EmptyState>
+            )
           ) : null}
           {!error && (searching || threads.length > 0) && visible.length === 0 ? (
-            <div className="page-empty">{t("inbox.noMatch")}</div>
+            <EmptyState
+              compact
+              icon={<SearchIcon />}
+              title={t("inbox.noMatchTitle")}
+              actions={
+                <button type="button" className="ghost" onClick={() => {
+                  setTitleQuery("");
+                  clearFilters();
+                }}>
+                  {t("inbox.clearFilters")}
+                </button>
+              }
+            >
+              <p>{t("inbox.noMatch")}</p>
+            </EmptyState>
           ) : null}
           {(searching
             ? [
@@ -502,7 +592,13 @@ export function InboxWorkspace({
             onForwardCreated={onForwardCreated}
           />
         ) : (
-          <div className="thread-empty">{t("inbox.selectConversation")}</div>
+          <EmptyState
+            icon={<InboxIcon />}
+            title={t("inbox.selectConversationTitle")}
+          >
+            <p>{t("inbox.selectConversation")}</p>
+            <p className="muted">{t("inbox.selectConversationHint")}</p>
+          </EmptyState>
         )}
       </section>
     </div>

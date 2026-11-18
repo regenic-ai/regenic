@@ -619,9 +619,10 @@ test("search selects the Agent pinned to its connector, not the default connecto
   await mounts.ensureMounted();
   const catalog = await mounts.listCatalog();
   const agents = catalog.filter((entry) => entry.agent === true);
-  assert.equal(agents.length, 2);
+  assert.equal(agents.length, 1);
   const cursorAgent = agents.find((entry) => entry.installation_id === "cursor-1");
-  assert.equal(catalog.find((entry) => entry.executor_type === "dsh")?.agent, true);
+  assert.equal(catalog.some((entry) => entry.executor_type === "dsh"), false);
+  assert.equal((await mounts.listViews()).some((entry) => entry.id === "dsh"), false);
   const executor = registry.get(cursorAgent.executor_type);
   const channel = new PersonalWorkChannel(runtime, drivers);
   channel.sendText = async () => {
@@ -640,4 +641,88 @@ test("search selects the Agent pinned to its connector, not the default connecto
   }, channel.contextFor(executor));
   assert.equal(handle.agent_thread_id, "cursor:agent-1");
   assert.deepEqual(calls, [["create", "cursor-1", "Answer this\n\nWORK\nevidence"]]);
+});
+
+test("the unbound default covers its first connector instead of mounting a second agent", async () => {
+  const first = {
+    id: "dsh-1", org_id: "org", connector_type: "dsh-session",
+    status: "enabled", config: {}, updated_at: "1",
+  };
+  const second = {
+    id: "dsh-2", org_id: "org", connector_type: "dsh-session",
+    status: "enabled", config: {}, updated_at: "2",
+  };
+  const rows = [{
+    id: "dsh", org_id: "org", kind: "local_connector", name: "DSH",
+    status: "enabled", config: {},
+  }];
+  const store = {
+    getUiPref: async () => "1",
+    listExecutorInstallations: async () => rows,
+    putExecutorInstallation: async (value) => { rows.push(value); return value; },
+    findInstallation: async (id) => [first, second].find((item) => item.id === id) ?? null,
+    listInstallations: async () => [first, second],
+  };
+  const registry = new MemoryExecutorRegistry();
+  const host = { get: (name) => name === "authority" ? store : registry };
+  const runtime = {
+    isReady: () => true, orgId: () => "org", requireHost: () => host, getOptions: () => ({}),
+  };
+  const driver = {
+    connector_type: "dsh-session",
+    source: "dsh",
+    capabilities: () => ({ create: true, prompts: true, sync: true }),
+  };
+  const mounts = new PersonalExecutorService(
+    runtime,
+    new ChannelDriverRegistry().register(driver),
+    new LocalExecutorPluginRegistry().register(createSessionTaskExecutor({
+      source: "dsh", executor_type: "dsh", label: "DSH",
+    })),
+  );
+  await mounts.ensureMounted();
+  assert.deepEqual(rows.map((row) => row.config.installation_id ?? row.id), ["dsh", "dsh-2"]);
+  const catalog = await mounts.listCatalog();
+  assert.equal(catalog.some((entry) => entry.executor_type === "dsh"), true);
+  assert.equal(catalog.some((entry) => entry.installation_id === "dsh-1"), false);
+  assert.equal((await mounts.listViews()).some((entry) => entry.id === "dsh"), true);
+});
+
+test("the unbound default stays hidden until its source can create a session", async () => {
+  const rows = [{
+    id: "dsh", org_id: "org", kind: "local_connector", name: "DSH",
+    status: "enabled", config: {},
+  }];
+  const cursor = {
+    id: "cursor-1", org_id: "org", connector_type: "cursor",
+    status: "enabled", config: {}, updated_at: "1",
+  };
+  const store = {
+    getUiPref: async () => "1",
+    listExecutorInstallations: async () => rows,
+    putExecutorInstallation: async (value) => { rows.push(value); return value; },
+    findInstallation: async (id) => id === cursor.id ? cursor : null,
+    listInstallations: async () => [cursor],
+  };
+  const registry = new MemoryExecutorRegistry();
+  const host = { get: (name) => name === "authority" ? store : registry };
+  const runtime = {
+    isReady: () => true, orgId: () => "org", requireHost: () => host, getOptions: () => ({}),
+  };
+  const driver = {
+    connector_type: "cursor",
+    source: "cursor",
+    capabilities: () => ({ create: true, create_with_task: true, sync: true }),
+  };
+  const mounts = new PersonalExecutorService(
+    runtime,
+    new ChannelDriverRegistry().register(driver),
+    new LocalExecutorPluginRegistry().register(createSessionTaskExecutor({
+      source: "dsh", executor_type: "dsh", label: "DSH",
+    })),
+  );
+  await mounts.ensureMounted();
+  assert.equal(registry.get("dsh"), undefined);
+  assert.equal((await mounts.listCatalog()).some((entry) => entry.executor_type === "dsh"), false);
+  assert.equal((await mounts.listViews()).some((entry) => entry.id === "dsh"), false);
 });

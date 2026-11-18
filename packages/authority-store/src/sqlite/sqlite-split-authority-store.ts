@@ -22,7 +22,6 @@ import type {
   ContextArtifactState,
   ContextArtifactStore,
   ContextArtifactSupersession,
-  ContextArtifactProposedSupersession,
   ContextAuthorityRead,
   ContextAuthorityReadQuery,
   ContextAuthorityReader,
@@ -318,12 +317,6 @@ export class SqliteSplitAuthorityStore
     return this.writer.call("supersedeArtifact", [input]);
   }
 
-  async supersedeProposedArtifact(input: ContextArtifactProposedSupersession): Promise<{
-    superseded: ContextArtifactState;
-    replacement: ContextArtifactState;
-  }> {
-    return this.writer.call("supersedeProposedArtifact", [input]);
-  }
 
   async putSnapshot(snapshot: ContextSnapshot): Promise<void> {
     await this.writer.call("putSnapshot", [snapshot]);

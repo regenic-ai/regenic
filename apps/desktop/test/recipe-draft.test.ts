@@ -8,12 +8,18 @@ import {
   draftMatch,
   emptyDraft,
   starterDraft,
-  recipeCardLine,
+  recipeChain,
   writeBackAvailable,
   writeBackChoices,
 } from "../src/renderer/src/recipe-draft.ts";
 import type { RecipeView } from "../src/renderer/src/types.ts";
 import { matchingConversations } from "../src/renderer/src/recipe-preview.ts";
+
+function chainText(recipe: RecipeView, executor: string): string {
+  return recipeChain(recipe, [], [], executor, t as never)
+    .map((step) => step.label)
+    .join(" → ");
+}
 
 const t = (key: string, vars?: Record<string, string | number>) =>
   vars ? `${key}:${JSON.stringify(vars)}` : key;
@@ -60,8 +66,8 @@ describe("recipe draft", () => {
     const cleared = draftMatch({ ...draft, text_contains: "", text_excludes: "   " });
     assert.equal(cleared.text_contains, undefined);
     assert.equal(cleared.text_excludes, undefined);
-    assert.match(recipeCardLine(saved, [], [], "Test", t), /filterContainsSummary/);
-    assert.match(recipeCardLine(saved, [], [], "Test", t), /filterExcludesSummary/);
+    assert.match(chainText(saved, "Test"), /filterContainsSummary/);
+    assert.match(chainText(saved, "Test"), /filterExcludesSummary/);
   });
 
   it("enables context for new rules and starters without changing saved rules", () => {
@@ -90,7 +96,7 @@ describe("recipe draft", () => {
       assert.equal(draft.text_excludes, "draft");
       const reloaded = { ...saved, trigger: { kind }, match: draftMatch(draft) };
       draft = draftFromRecipe(reloaded);
-      const summary = recipeCardLine(reloaded, [], [], "Test", t);
+      const summary = chainText(reloaded, "Test");
       if (kind === "push") {
         assert.match(summary, /filterContainsSummary/);
         assert.doesNotMatch(summary, /filterInactiveSummary/);
@@ -247,15 +253,9 @@ describe("recipe draft", () => {
   });
 
   it("always says whether results are sent back", () => {
-    const keep = recipeCardLine(rule, [], [], "DSH", t as never);
+    const keep = chainText(rule, "DSH");
     assert.match(keep, /recipes\.outcomeKeep/);
-    const send = recipeCardLine(
-      { ...rule, can_write_back: true },
-      [],
-      [],
-      "DSH",
-      t as never,
-    );
+    const send = chainText({ ...rule, can_write_back: true }, "DSH");
     assert.match(send, /recipes\.outcomeBack/);
   });
 });

@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { forwardRef, HttpStatus, Inject, Injectable } from "@nestjs/common";
 import {
+  AGGREGATE_FACT_CACHE_TTL_MS,
   aggregateSpecHash,
   aggregateSpecSummary,
   canonicalAggregateId,
@@ -37,6 +38,11 @@ import {
 const SEARCH_ANSWER_ACTIVE_MAX = 3;
 export const SEARCH_ANSWER_MAP_PARALLELISM = 3;
 export const SEARCH_ANSWER_FACT_EXTRACTOR_VERSION = "typed-event-v1";
+
+export function searchAnswerFactExtractorVersion(executorType: string | undefined): string {
+  const executor = executorType?.trim() || "unassigned";
+  return `${SEARCH_ANSWER_FACT_EXTRACTOR_VERSION}:${executor}`;
+}
 const SEARCH_ANSWER_TEXT_MAX = 16_000;
 export const SEARCH_ANSWER_REDUCED_CITATION_MAX = 12;
 const SEARCH_ANSWER_CONFLICT_COUNT_MAX = 2_000;
@@ -460,7 +466,12 @@ export class PersonalSearchAnswerService {
           );
           batch.facts = [...(batch.cached_facts ?? []), ...mappedFacts];
           if (map.spec && map.spec_hash && inputs) {
-            await this.putFactCache(map.spec_hash, inputs, mappedFacts);
+            await this.putFactCache(
+              map.spec_hash,
+              map.executor_type,
+              inputs,
+              mappedFacts,
+            );
           }
           batch.status = "completed";
           changed = true;
@@ -534,9 +545,7 @@ export class PersonalSearchAnswerService {
         const mapEventIds = batch.map_event_ids
           ?? searchAnswerMapBatchRefs(record.event_ids, map, batch.index);
         if (mapEventIds.length === 0) {
-          batch.facts = batch.cached_facts ?? [];
-          batch.status = "completed";
-          cacheStateChanged = true;
+          if (await this.completeCachedBatch(batch)) cacheStateChanged = true;
           continue;
         }
         if (launches.length >= freeSlots) continue;
@@ -616,7 +625,7 @@ export class PersonalSearchAnswerService {
     if (!map?.spec || !map.spec_hash || !map.batches) return record;
     const expectedManifest = {
       version: 1 as const,
-      extractor_version: SEARCH_ANSWER_FACT_EXTRACTOR_VERSION,
+      extractor_version: searchAnswerFactExtractorVersion(map.executor_type),
       spec_hash: map.spec_hash,
     };
     if (
@@ -635,7 +644,12 @@ export class PersonalSearchAnswerService {
       map.snapshot_id,
       record.event_ids,
     );
-    const cached = await this.cachedFacts(map.spec_hash, manifest, map.spec);
+    const cached = await this.cachedFacts(
+      map.spec_hash,
+      map.executor_type,
+      manifest,
+      map.spec,
+    );
     await this.context.validateMapManifest(manifest.filter((entry) =>
       cached.event_ids.has(entry.event_id)));
     const cachedFactsByEvent = new Map<string, SearchAnswerFact[]>();
@@ -646,13 +660,6 @@ export class PersonalSearchAnswerService {
       cachedFactsByEvent.set(eventId, facts);
     }
     for (const batch of map.batches) {
-      if (
-        batch.map_event_ids !== undefined
-        && batch.cache_hits !== undefined
-        && batch.cache_misses !== undefined
-      ) {
-        continue;
-      }
       const batchRefs = searchAnswerMapBatchRefs(
         record.event_ids,
         map,
@@ -670,9 +677,7 @@ export class PersonalSearchAnswerService {
         mapEventIds.length === 0
         && (batch.status === "pending" || batch.status === "running")
       ) {
-        batch.facts = cachedFacts;
-        batch.status = "completed";
-        delete batch.work_item_id;
+        await this.completeCachedBatch(batch);
       }
     }
     map.cache_manifest = expectedManifest;
@@ -810,18 +815,35 @@ export class PersonalSearchAnswerService {
     return this.runtime.requireHost().get("authority").putSearchAnswer(record);
   }
 
+  private async completeCachedBatch(batch: SearchAnswerMapBatch): Promise<boolean> {
+    if (batch.work_item_id && (batch.status === "running" || batch.status === "pending")) {
+      try {
+        await this.work.cancelAuxiliaryExecution(batch.work_item_id);
+      } catch (error) {
+        if (batch.status === "running") return false;
+        if (!isMissingAuxiliaryExecution(error)) throw error;
+      }
+    }
+    batch.facts = batch.cached_facts ?? [];
+    batch.status = "completed";
+    delete batch.work_item_id;
+    return true;
+  }
+
   private async cachedFacts(
     specHash: string,
+    executorType: string | undefined,
     inputs: readonly Pick<MapBatchInput, "event_id" | "content_hash">[],
     spec: AggregateSpec,
   ): Promise<{ event_ids: Set<string>; facts: SearchAnswerFact[] }> {
     const authority = this.runtime.requireHost().get("authority");
+    const now = Date.now();
     const records = [];
     for (let offset = 0; offset < inputs.length; offset += 500) {
       records.push(...await authority.getAggregateFactCache(
         this.runtime.orgId(),
         specHash,
-        SEARCH_ANSWER_FACT_EXTRACTOR_VERSION,
+        searchAnswerFactExtractorVersion(executorType),
         inputs.slice(offset, offset + 500).map((input) => input.event_id),
       ));
     }
@@ -830,8 +852,15 @@ export class PersonalSearchAnswerService {
     const facts: SearchAnswerFact[] = [];
     for (const record of records) {
       const input = inputById.get(record.event_id);
-      if (!input || input.content_hash !== record.content_hash) continue;
-      if (!record.facts.every((fact) => isValidCachedFact(fact, spec, record.event_id))) {
+      const updated = Date.parse(record.updated_at);
+      if (
+        !input
+        || input.content_hash !== record.content_hash
+        || !Number.isFinite(updated)
+        || now - updated > AGGREGATE_FACT_CACHE_TTL_MS
+        || record.facts.length === 0
+        || !record.facts.every((fact) => isValidCachedFact(fact, spec, record.event_id))
+      ) {
         continue;
       }
       eventIds.add(record.event_id);
@@ -842,23 +871,28 @@ export class PersonalSearchAnswerService {
 
   private async putFactCache(
     specHash: string,
+    executorType: string | undefined,
     inputs: readonly MapBatchInput[],
     facts: readonly SearchAnswerFact[],
   ): Promise<void> {
     const now = new Date().toISOString();
-    await this.runtime.requireHost().get("authority").putAggregateFactCache(
-      inputs.map((input) => ({
+    const records = inputs.flatMap((input) => {
+      const eventFacts = facts.filter((fact) =>
+        fact.event_ids.length === 1 && fact.event_ids[0] === input.event_id);
+      if (eventFacts.length === 0) return [];
+      return [{
         org_id: this.runtime.orgId(),
         spec_hash: specHash,
-        extractor_version: SEARCH_ANSWER_FACT_EXTRACTOR_VERSION,
+        extractor_version: searchAnswerFactExtractorVersion(executorType),
         event_id: input.event_id,
         content_hash: input.content_hash,
-        facts: facts.filter((fact) =>
-          fact.event_ids.length === 1 && fact.event_ids[0] === input.event_id),
+        facts: eventFacts,
         created_at: now,
         updated_at: now,
-      })),
-    );
+      }];
+    });
+    if (records.length === 0) return;
+    await this.runtime.requireHost().get("authority").putAggregateFactCache(records);
   }
 
   private async prepareMapExecution(
@@ -1152,6 +1186,13 @@ export function parseMapFacts(
       event_ids: eventIds,
     };
   });
+}
+
+function isMissingAuxiliaryExecution(error: unknown): boolean {
+  return typeof error === "object"
+    && error !== null
+    && "code" in error
+    && (error as { code?: unknown }).code === "not_found";
 }
 
 function isValidCachedFact(
