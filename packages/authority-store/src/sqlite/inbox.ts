@@ -354,6 +354,7 @@ export async function summarizeInbox(db: Database.Database, orgId: string): Prom
                 AND p.thread_id = th.thread_id
                 AND p.hidden = 1
             )
+            AND ${userConversationSql("th")}
         `,
       )
       .get(orgId) as { count: number };
@@ -369,6 +370,7 @@ export async function summarizeInbox(db: Database.Database, orgId: string): Prom
                 AND p.thread_id = th.thread_id
                 AND p.hidden = 1
             )
+            AND ${userConversationSql("th")}
         `,
       )
       .get(orgId) as { count: number };
@@ -982,6 +984,19 @@ function hiddenHeadsSql(db: Database.Database, orgId: string, query?: InboxQuery
       params: [...visible.params, ...hidden.params, ...page.params],
     };
   }
+
+/** A session an Agent opened to do work is not one of the user's conversations. */
+function userConversationSql(head: string): string {
+  return `NOT EXISTS (
+    SELECT 1 FROM work_runs r
+    WHERE r.org_id = ${head}.org_id
+      AND r.agent_thread_id = ${head}.thread_id
+      AND NOT EXISTS (
+        SELECT 1 FROM work_items i
+        WHERE i.org_id = r.org_id AND i.thread_id = r.agent_thread_id
+      )
+  )`;
+}
 
 function completedVisibleWorkSql(eventId: string, orgId: string): string {
   return `EXISTS (

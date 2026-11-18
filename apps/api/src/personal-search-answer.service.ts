@@ -665,6 +665,26 @@ export class PersonalSearchAnswerService {
         map,
         batch.index,
       );
+      if (
+        batch.status === "running"
+        && batch.work_item_id
+        && (
+          batch.map_event_ids === undefined
+          || batch.cache_hits === undefined
+          || batch.cache_misses === undefined
+        )
+      ) {
+        try {
+          await this.work.cancelAuxiliaryExecution(batch.work_item_id);
+          batch.status = "pending";
+          delete batch.work_item_id;
+        } catch {
+          // Keep the original routing until its execution can be cancelled.
+          // Its result was produced from the full batch and must not be parsed
+          // against the cache-miss subset.
+          continue;
+        }
+      }
       const cachedFacts = batchRefs.flatMap((eventId) =>
         cachedFactsByEvent.get(eventId) ?? []);
       const mapEventIds = batchRefs.filter((eventId) =>
@@ -680,7 +700,13 @@ export class PersonalSearchAnswerService {
         await this.completeCachedBatch(batch);
       }
     }
-    map.cache_manifest = expectedManifest;
+    if (map.batches.every((batch) =>
+      batch.map_event_ids !== undefined
+      && batch.cache_hits !== undefined
+      && batch.cache_misses !== undefined)
+    ) {
+      map.cache_manifest = expectedManifest;
+    }
     const routed = withMap(record, synchronizeMapAggregates(map));
     await this.putRecord(routed);
     return routed;

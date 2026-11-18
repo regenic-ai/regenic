@@ -22,9 +22,11 @@ describe("desktop locale", () => {
   it("keeps English as the default catalog", () => {
     assert.equal(translate("en", "settings.language"), "Language");
     assert.equal(translate("zh", "settings.language"), "语言");
-    assert.equal(translate("en", "nav.recipes"), "Flows");
-    assert.equal(translate("zh", "nav.recipes"), "链路");
-    assert.equal(translate("en", "recipes.goEngine"), "Add an Agent in Connections");
+    assert.equal(translate("en", "nav.recipes"), "Automations");
+    assert.equal(translate("zh", "nav.recipes"), "自动化");
+    assert.equal(translate("en", "nav.engine"), "Connected Apps");
+    assert.equal(translate("zh", "nav.engine"), "连接应用");
+    assert.equal(translate("en", "recipes.goEngine"), "Add an Agent in Connected Apps");
     assert.equal(translate("zh", "recipes.startersTitle"), "从模板开始");
     assert.equal(translate("en", "recipes.scopeTasksConfirm"), "This watches every task across all channels. Continue?");
     assert.equal(translate("zh", "recipes.openLastRun"), "打开上次运行");

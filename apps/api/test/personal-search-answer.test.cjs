@@ -783,6 +783,25 @@ describe("persistent aggregate planning", () => {
     assert.equal(batch.work_item_id, undefined);
   });
 
+  it("keeps a running batch's original routing when cancellation fails", async () => {
+    const harness = planningHarness(completedRun(validPlan), {
+      cached: true,
+      cancelError: new Error("executor unavailable"),
+    });
+    const batch = harness.record.scope.map_reduce.batches[0];
+    batch.status = "running";
+    batch.work_item_id = "legacy-map";
+
+    const result = await harness.service().get("answer-plan");
+
+    assert.deepEqual(harness.cancelled, ["legacy-map"]);
+    assert.equal(batch.status, "running");
+    assert.equal(batch.work_item_id, "legacy-map");
+    assert.equal(batch.map_event_ids, undefined);
+    assert.equal(harness.record.scope.map_reduce.cache_manifest, undefined);
+    assert.equal(result.progress.active_batches, 1);
+  });
+
   it("treats a changed content hash as a cache miss", async () => {
     const harness = planningHarness(completedRun(validPlan), {
       cached: true,
@@ -1018,12 +1037,13 @@ function planningHarness(initialRun, options = {}) {
       states.set(id, executionState(run, "running"));
       return { work_item: preparedValue.work_item, run };
     },
-    cancelAuxiliaryExecution: async (id, options = {}) => {
+    cancelAuxiliaryExecution: async (id, cancelOptions = {}) => {
       cancelled.push(id);
-      if (options.searchAnswerTerminal) {
+      if (options.cancelError) throw options.cancelError;
+      if (cancelOptions.searchAnswerTerminal) {
         harness.record = {
           ...harness.record,
-          outcome: options.searchAnswerTerminal.outcome,
+          outcome: cancelOptions.searchAnswerTerminal.outcome,
           updated_at: new Date().toISOString(),
         };
       }

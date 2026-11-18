@@ -39,6 +39,24 @@ export function ConnectIcon() {
   );
 }
 
+export function ConnectedAppsHint() {
+  return (
+    <span className="connected-app-hint" aria-hidden="true">
+      <svg viewBox="0 0 16 16">
+        <rect width="16" height="16" rx="4" fill="#fff" />
+        <path d="M4 3.3 8.1 2l3.9 2.1-2.2 1.4L8 4.6 5.3 5.7 4 3.3Z" fill="#36C5F0" />
+        <path d="m4 3.3 1.3 2.4-1.1 2.7L2.5 6.1 4 3.3Z" fill="#00B96B" />
+        <path d="m4.2 8.4 2.5.6 1.4 2.3-2.8 1.1-2.2-1.7 1.1-2.3Z" fill="#7B61FF" />
+        <path d="m8.1 11.3 1.7-2.1L12.6 9l.2 2.8-2.1 1.8-2.6-2.3Z" fill="#FFB800" />
+      </svg>
+      <svg viewBox="0 0 16 16">
+        <rect width="16" height="16" rx="4" fill="#111" />
+        <path d="m4 5.1 4-2.2 4 2.2v5.8l-4 2.2-4-2.2V5.1Zm2 .9v4l2 1.1 2-1.1V6L8 4.9 6 6Z" fill="#fff" />
+      </svg>
+    </span>
+  );
+}
+
 export function FlowIcon() {
   return (
     <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">

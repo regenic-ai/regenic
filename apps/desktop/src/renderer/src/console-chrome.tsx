@@ -3,6 +3,7 @@ import { t } from "../../shared/i18n.ts";
 import { chipLabel } from "./format";
 import {
   ConnectIcon,
+  ConnectedAppsHint,
   FlowIcon,
   InboxIcon,
   SearchIcon,
@@ -45,6 +46,7 @@ function NavItem({
   collapsed,
   shortcut,
   badge,
+  hint,
   onClick,
 }: {
   label: string;
@@ -53,6 +55,7 @@ function NavItem({
   collapsed: boolean;
   shortcut?: string;
   badge?: number;
+  hint?: ReactNode;
   onClick: () => void;
 }) {
   const tip = shortcut ? `${label}  ${MOD}${shortcut}` : label;
@@ -67,6 +70,7 @@ function NavItem({
     >
       <span className="nav-icon">{icon}</span>
       <span className="nav-label">{label}</span>
+      {hint}
       {badge ? <span className="nav-badge">{badge > 99 ? "99+" : badge}</span> : null}
     </button>
   );
@@ -251,6 +255,7 @@ export function Sidebar({
         <NavItem
           label={t("nav.engine")}
           icon={<ConnectIcon />}
+          hint={<ConnectedAppsHint />}
           active={nav === "engine"}
           collapsed={collapsed}
           shortcut="3"

@@ -415,6 +415,7 @@ export async function summarizeInbox(db: PgSql, orgId: string): Promise<InboxSum
               AND p.thread_id = th.thread_id
               AND p.hidden = TRUE
           )
+          AND ${userConversationSql("th")}
       `,
       [orgId],
     );
@@ -429,6 +430,7 @@ export async function summarizeInbox(db: PgSql, orgId: string): Promise<InboxSum
               AND p.thread_id = th.thread_id
               AND p.hidden = TRUE
           )
+          AND ${userConversationSql("th")}
       `,
       [orgId],
     );
@@ -1194,6 +1196,19 @@ function isCurrentHeadSql(event = "e", heads = "h"): string {
 
 function hiddenThreadIdSql(orgPlaceholder: string): string {
   return `SELECT thread_id FROM conversation_prefs WHERE org_id = ${orgPlaceholder} AND hidden = TRUE`;
+}
+
+/** A session an Agent opened to do work is not one of the user's conversations. */
+function userConversationSql(head: string): string {
+  return `NOT EXISTS (
+    SELECT 1 FROM work_runs r
+    WHERE r.org_id = ${head}.org_id
+      AND r.agent_thread_id = ${head}.thread_id
+      AND NOT EXISTS (
+        SELECT 1 FROM work_items i
+        WHERE i.org_id = r.org_id AND i.thread_id = r.agent_thread_id
+      )
+  )`;
 }
 
 function notHiddenSql(orgPlaceholder: string, event = "e", allowPolicyFold = false): string {

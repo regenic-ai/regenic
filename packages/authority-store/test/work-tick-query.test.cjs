@@ -170,6 +170,32 @@ describe("work tick queries", () => {
     assert.equal(summary.hidden_count, 1);
     store.close();
   });
+
+  it("leaves an Agent's own session out of the conversation count", async () => {
+    const root = await mkdtemp(join(tmpdir(), "regenic-work-tick-"));
+    roots.push(root);
+    const path = join(root, "authority.db");
+    const store = new SqliteAuthorityStore(path);
+    const db = new Database(path);
+    insertCurrent(db, "evt-chat", "slack:chat", ["actionable"]);
+    insertCurrent(db, "evt-agent", "cursor:agent-1", ["actionable"]);
+    seedWorkItem(db, {
+      ...item("search-1", "done", "evt-chat"),
+      thread_id: "slack:chat",
+    });
+    db.prepare(`INSERT INTO work_runs (
+      id, org_id, work_item_id, recipe_id, executor_type, agent_thread_id,
+      status, created_at, updated_at, version
+    ) VALUES (
+      'run-1', 'local-owner', 'search-1', 'system:search-answer:agent', 'cursor',
+      'cursor:agent-1', 'completed', '2026-10-13T00:00:00.000Z', '2026-10-13T00:00:00.000Z', 1
+    )`).run();
+    db.close();
+    const summary = await store.summarizeInbox("local-owner");
+    assert.equal(summary.count, 1);
+    assert.equal(summary.hidden_count, 0);
+    store.close();
+  });
 });
 
 function insertCurrent(db, id, threadId, reasons) {
