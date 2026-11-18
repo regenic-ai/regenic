@@ -343,7 +343,8 @@ export class PersonalSearchAnswerService {
           updated_at: new Date().toISOString(),
         };
         await this.putRecord(nextRecord);
-        return mapView(await this.fillMapWindow(nextRecord, new Set()));
+        const routed = await this.ensureCacheRouting(nextRecord);
+        return mapView(await this.fillMapWindow(routed, new Set()));
       }
     }
     const attempt = map.planning_attempt ?? 0;
@@ -418,6 +419,7 @@ export class PersonalSearchAnswerService {
   }
 
   private async advanceMap(record: SearchAnswerRecord): Promise<SearchAnswerView> {
+    record = await this.ensureCacheRouting(record);
     let map = record.scope!.map_reduce!;
     const batches = map.batches!;
     const active = batches.filter((batch) => batch.status === "running");
@@ -522,38 +524,26 @@ export class PersonalSearchAnswerService {
       prepared: Awaited<ReturnType<PersonalWorkService["prepareAuxiliaryExecution"]>>;
       evidence: string;
     }> = [];
-    let cacheStateChanged = false;
     for (const batch of candidates) {
       const id = batch.work_item_id
         ?? mapWorkItemId(record.id, batch.index, batch.attempt);
       const batchRefs = searchAnswerMapBatchRefs(record.event_ids, map, batch.index);
       let evidence: string;
       if (map.spec && map.spec_hash) {
-        const inputs = await this.context.mapBatchInputs(
-          map.snapshot_id,
-          batchRefs,
-        );
-        let mapInputs = inputs;
-        if (batch.map_event_ids) {
-          const wanted = new Set(batch.map_event_ids);
-          mapInputs = inputs.filter((input) => wanted.has(input.event_id));
-        } else {
-          const cached = await this.cachedFacts(map.spec_hash, inputs, map.spec);
-          mapInputs = inputs.filter((input) => !cached.event_ids.has(input.event_id));
-          batch.cached_facts = cached.facts;
-          batch.map_event_ids = mapInputs.map((input) => input.event_id);
-          batch.cache_hits = cached.event_ids.size;
-          batch.cache_misses = mapInputs.length;
-          cacheStateChanged = true;
-        }
-        if (mapInputs.length === 0) {
+        const mapEventIds = batch.map_event_ids
+          ?? searchAnswerMapBatchRefs(record.event_ids, map, batch.index);
+        if (mapEventIds.length === 0) {
           batch.facts = batch.cached_facts ?? [];
           batch.status = "completed";
           continue;
         }
         if (launches.length >= freeSlots) continue;
+        const inputs = await this.context.mapBatchInputs(
+          map.snapshot_id,
+          mapEventIds,
+        );
         evidence = mapBatchEvidenceText(
-          mapInputs,
+          inputs,
           record.query,
           map.spec,
           map.spec_hash,
@@ -580,10 +570,6 @@ export class PersonalSearchAnswerService {
             max_concurrent: SEARCH_ANSWER_MAP_PARALLELISM,
           });
       launches.push({ batch, prepared, evidence });
-    }
-    if (cacheStateChanged) {
-      record = withMap(record, synchronizeMapAggregates(map));
-      await this.putRecord(record);
     }
     if (launches.length === 0) return record;
     for (const { batch } of launches) {
@@ -615,6 +601,78 @@ export class PersonalSearchAnswerService {
       await this.putRecord(record);
     }
     return record;
+  }
+
+  private async ensureCacheRouting(
+    record: SearchAnswerRecord,
+  ): Promise<SearchAnswerRecord> {
+    const map = record.scope?.map_reduce;
+    if (!map?.spec || !map.spec_hash || !map.batches) return record;
+    const expectedManifest = {
+      version: 1 as const,
+      extractor_version: SEARCH_ANSWER_FACT_EXTRACTOR_VERSION,
+      spec_hash: map.spec_hash,
+    };
+    if (
+      map.cache_manifest?.version === expectedManifest.version
+      && map.cache_manifest.extractor_version === expectedManifest.extractor_version
+      && map.cache_manifest.spec_hash === expectedManifest.spec_hash
+      && map.batches.every((batch) =>
+        batch.map_event_ids !== undefined
+        && batch.cache_hits !== undefined
+        && batch.cache_misses !== undefined)
+    ) {
+      return record;
+    }
+
+    const manifest = await this.context.mapSnapshotManifest(
+      map.snapshot_id,
+      record.event_ids,
+    );
+    const cached = await this.cachedFacts(map.spec_hash, manifest, map.spec);
+    await this.context.validateMapManifest(manifest.filter((entry) =>
+      cached.event_ids.has(entry.event_id)));
+    const cachedFactsByEvent = new Map<string, SearchAnswerFact[]>();
+    for (const fact of cached.facts) {
+      const eventId = fact.event_ids[0];
+      const facts = cachedFactsByEvent.get(eventId) ?? [];
+      facts.push(fact);
+      cachedFactsByEvent.set(eventId, facts);
+    }
+    for (const batch of map.batches) {
+      if (
+        batch.map_event_ids !== undefined
+        && batch.cache_hits !== undefined
+        && batch.cache_misses !== undefined
+      ) {
+        continue;
+      }
+      const batchRefs = searchAnswerMapBatchRefs(
+        record.event_ids,
+        map,
+        batch.index,
+      );
+      const cachedFacts = batchRefs.flatMap((eventId) =>
+        cachedFactsByEvent.get(eventId) ?? []);
+      const mapEventIds = batchRefs.filter((eventId) =>
+        !cached.event_ids.has(eventId));
+      batch.cached_facts = cachedFacts;
+      batch.map_event_ids = mapEventIds;
+      batch.cache_hits = batchRefs.length - mapEventIds.length;
+      batch.cache_misses = mapEventIds.length;
+      if (
+        mapEventIds.length === 0
+        && (batch.status === "pending" || batch.status === "running")
+      ) {
+        batch.facts = cachedFacts;
+        batch.status = "completed";
+        delete batch.work_item_id;
+      }
+    }
+    map.cache_manifest = expectedManifest;
+    const routed = withMap(record, synchronizeMapAggregates(map));
+    await this.putRecord(routed);
+    return routed;
   }
 
   private async beginReduce(record: SearchAnswerRecord): Promise<SearchAnswerView> {
@@ -748,16 +806,19 @@ export class PersonalSearchAnswerService {
 
   private async cachedFacts(
     specHash: string,
-    inputs: readonly MapBatchInput[],
+    inputs: readonly Pick<MapBatchInput, "event_id" | "content_hash">[],
     spec: AggregateSpec,
   ): Promise<{ event_ids: Set<string>; facts: SearchAnswerFact[] }> {
-    const records = await this.runtime.requireHost().get("authority")
-      .getAggregateFactCache(
+    const authority = this.runtime.requireHost().get("authority");
+    const records = [];
+    for (let offset = 0; offset < inputs.length; offset += 500) {
+      records.push(...await authority.getAggregateFactCache(
         this.runtime.orgId(),
         specHash,
         SEARCH_ANSWER_FACT_EXTRACTOR_VERSION,
-        inputs.map((input) => input.event_id),
-      );
+        inputs.slice(offset, offset + 500).map((input) => input.event_id),
+      ));
+    }
     const inputById = new Map(inputs.map((input) => [input.event_id, input]));
     const eventIds = new Set<string>();
     const facts: SearchAnswerFact[] = [];
