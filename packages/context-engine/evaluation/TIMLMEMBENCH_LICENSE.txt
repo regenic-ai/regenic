@@ -1,0 +1,19 @@
+semantic-search-zh-v1.json and semantic-search-zh-v1-events.jsonl are a
+subset of the TimlMemBench Chinese benchmark, adapted to this evaluation schema.
+
+TimlMemBench data is licensed under Creative Commons Attribution 4.0
+International (CC BY 4.0).
+
+Copyright (c) 2026 TimlMemBench authors
+Zhou, Fangxing; Sun, Yifei; Li, Jiachen; Xu, Jinyu; Wang, Yuhan; Li, Ruixin;
+Xie, Qing. TimlMemBench: A Diagnostic Benchmark for Governed Use of Long-Term
+Memory in Dialogue Agents. Findings of EMNLP 2026.
+https://github.com/lyirs/TimlMemBench
+
+Changes: questions were stratified into lookup, anaphora, aggregate, temporal,
+update, and boundary. The message index keeps every turn from the selected
+worlds. Stale ids are the provenance turns of forbidden_memory_ids that restate
+the forbidden value.
+
+You must give appropriate credit, link to the license, and indicate changes.
+https://creativecommons.org/licenses/by/4.0/

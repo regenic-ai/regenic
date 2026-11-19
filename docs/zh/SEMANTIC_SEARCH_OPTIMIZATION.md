@@ -1,6 +1,6 @@
 # 语义搜索准确度优化方案
 
-> 状态：方案，未实施。每一步落地前先用评估集量化收益，再决定是否保留。
+> 状态：步骤 0 已接入两套验收集。英文用 LongMemEval 子集，中文短消息用 TimlMemBench 子集。合成集只保留为评估器接线。步骤 1、3、5 已按 2025 年 11 月及之后的论文修订，尚未改检索实现。步骤 2、4、6 维持原方案。每一步落地前先用评估集量化收益，再决定是否保留。
 
 ## 1. 现状
 
@@ -22,25 +22,42 @@
 | 无交叉编码器重排 | `deterministic-context-engine.ts` 第 845 行产生 `rerank_absent` | 排序只靠排名与启发式公式，不判断 query-文本相关性 |
 | 切块偏小（默认 128 token） | `context-embedding-worker.ts`、`REGENIC_EMBEDDING_CHUNK_TOKENS` | 长消息、文件语义被切碎 |
 | 时间只有"相关性 / 全部按时间"二选一 | `context-search.ts` `orderSearchResult` | 无法兼顾"相关且较新" |
-| 评估器存在但无标注集 | `context-retrieval-evaluator.ts`（已有 recall@k、nDCG@k） | 调参无法量化 |
+| 评估器原先没有贴近消息搜索的标注集 | `context-retrieval-evaluator.ts` | 调参无法量化 |
 
 ## 2. 优化步骤（按投入产出比排序）
 
-### 步骤 0：建立评估集（前置）
+### 步骤 0：建立评估集（已接入）
 
-- 参考：BEIR、Ragas。
-- 从真实数据标注 30–50 条查询及其相关 Event id，覆盖 lookup、aggregate、带时间范围三类，中英文混合。
-- 接入现有 `ContextRetrievalEvaluator`，固定输出 recall@10、nDCG@10、MRR，作为后续每一步的对比基线。
-- 标注集不含敏感正文，只存查询文本与 Event id。
+验收集用 LongMemEval（Di Wu 等，ICLR 2025，cleaned oracle，MIT）。它是带时间戳的多会话聊天，问题要回到具体某几轮，轮次上有官方 `has_answer`。这个形态接近“在自己的消息里查找、汇总、看时间、看事实有没有更新”。
 
-### 步骤 1：上下文化嵌入（Contextual Retrieval）
+LoCoMo 和中文的 PerLTQA 也像个人记忆，但是 CC BY-NC，没有放进这个 MIT 仓库。ConTEB 测的是长文档切块，不拿来验消息搜索。本地飞书和 Cursor 记录是私人会话，不入库。
 
-- 参考：Anthropic Contextual Retrieval（报告仅上下文嵌入即可降低约 35% 检索失败，叠加 BM25 与 rerank 约 67%）；LlamaIndex SentenceWindow；Jina late chunking。
-- 做法：
-  - 文档模板由 `title: none | text: ` 改为 EmbeddingGemma 官方格式 `title: {会话标题 / 渠道 / 发送人} | text: {正文}`。
-  - 正文前后拼接同会话的前后 1–2 条消息作为窗口，命中仍归属当前 Event，`start/end` 偏移只指向本条正文。
-- 改动点：`context-embedding-worker.ts` 生成切块处、provider 模板、`embeddingGeneration` 指纹（模板变化要进入 generation）。
-- 代价：生成新 generation，需要全量重新索引。
+- 标注 `packages/context-engine/evaluation/semantic-search-memory-v1.json`，正文 `semantic-search-memory-v1-events.jsonl`。重建脚本是 `build-semantic-search-memory.mjs`，许可原文在 `LONGMEMEVAL_LICENSE.txt`。
+- 五类分开记分。`lookup` 12 条：用户自己说出事实的单会话。`anaphora` 12 条：问句带 that / remind me / previous 等回指，答案词不在问句里，再留下和证据轮词面重合最低的 12 条。这是指代里最难的一截，不是平均水平。`aggregate` 12 条：跨会话，至少两轮证据。`temporal` 12 条：时间推理。`update` 8 条：事实后来改过。
+- 官方拒答题不放进来。检索总会返回前 k 条，没有“不返回”的阈值，负例选出率只会是 1。拒答放在回答层测。
+- 语料是这些题的证据会话放进同一个索引，1065 条消息。这不是论文里每人几十段干扰历史，词法分会比完整 haystack 好做。会话时间用原数据；同一会话里的轮次只按序号加秒，用来区分先后。
+- `evaluateContextRetrieval` 固定 `k = 10`。任务枚举是 lookup、anaphora、aggregate、temporal、update、boundary。英文集用前五类，中文集六类都用。
+- 当前词法基线（`DeterministicEventRetriever`，k = 10）：总分 recall 0.482、nDCG 0.367、MRR 0.361。lookup recall 0.667 / nDCG 0.477；anaphora 0.333 / 0.261；aggregate 0.375 / 0.252；temporal 0.375 / 0.326；update 0.750 / 0.598。指代和汇总是短板。
+- 英文验收看总分和五类 recall@10 与 nDCG@10。任一类低于上一步，这一步不保留。
+
+中文短消息另用 TimlMemBench（Zhou、Sun、Xie 等，Findings of EMNLP 2026，中文 canonical，CC BY 4.0）。消息中位 25 字。相关轮次用官方 `evidence_turn_ids`。
+
+- 标注 `packages/context-engine/evaluation/semantic-search-zh-v1.json`，正文 `semantic-search-zh-v1-events.jsonl`。重建脚本是 `build-semantic-search-zh.mjs`，许可说明在 `TIMLMEMBENCH_LICENSE.txt`。
+- 68 题，35 段会话世界，2875 条消息。`lookup` 12：信息抽取。`anaphora` 12：问句带“那个 / 上次 / 那边 / 那次”这类指代，不带日期，也不是“X 是谁”；再留下和证据句字面重合最低的 12 条。`aggregate` 12：证据跨至少两个会话。`temporal` 12。`update` 12：当前事实之外还有被标成过时的轮次。`boundary` 8：问的是没有说出口的私事，要找回把话拦住的那几句，找回越多越好。
+- 过时轮次只取真正说出旧事实的句子：被禁止记忆的出处里，和旧事实字面重合不低于 0.15 的句子，至少留重合最高的一句。铺垫和闲聊不算。
+- 词法基线（k = 10）：总分 recall 0.196、nDCG 0.152、MRR 0.236。lookup 0.229 / 0.161；anaphora 0.063 / 0.032；aggregate 0.251 / 0.222；temporal 0.121 / 0.068；update 0.222 / 0.198；boundary 0.333 / 0.266。指代和时间是短板。23 题带过时轮次，词法选中了 4 次，`safety_passed` 为 false。
+- 中文验收看这六类的 recall@10 与 nDCG@10，以及过时轮次被选中的次数。低于上一步，或过时选中次数升高，这一步不保留。
+- `semantic-search-accuracy-v1` 仍是合成接线，不参与验收。`chinese-retrieval` 夹具继续覆盖分词边界。
+
+### 步骤 1：上下文化嵌入（修订）
+
+依据：Conti、Faysse、Bosselut、Colombo，EMNLP 2025（ConTEB / InSeNT）；Eslami 等，Perplexity，2026-10；Yang 等，高通 AI Research，EMNLP 2025。
+
+- 上下文进向量只在块本身指代前文时有大增益。ConTEB 上 late chunking 约 +9 nDCG@10，加上文档内负样本训练后 ModernBERT 从 63.2 到 75.6。Insurance、Football 这类必须靠前文的任务，不带上下文的模型落后 65 和 24 个点。COVID-QA 这种靠术语字面匹配的查询，未训练的 late chunking 掉 21 个点。Perplexity 用另一套训练得到同一方向：上下文模型高于各自的非上下文底座，抽取式匹配仍是非上下文更好。
+- 文件和长消息走 late chunking：整篇编码后按块池化，命中仍归属当前 Event。只在指代类查询上启用，原词查找保持原块向量。`title: none | text:` 改成带会话标题的模板，只留作对照，不作为主方案。
+- 短聊天把上下文放在查询侧：整段对话一起编码，只用当前这句的向量检索。高通在 TopiOCQA 上 MRR 42.2、Hit@100 91.9，高于先用 GPT-4 改写再用 BGE 检索的 37.2，推理时没有改写调用。把历史直接塞进未为此训练的检索器，窗口和全文两种塞法都会在某个数据集上变差。
+- 改动点：`context-embedding-worker.ts` 的切块与池化、查询编码、`embeddingGeneration` 指纹。模板或池化变化都要进入 generation。
+- 代价：长消息需要新 generation 并重新索引。查询侧上下文不改已入库的消息向量。
 
 ### 步骤 2：去掉硬阈值，改归一化加权融合
 
@@ -49,13 +66,19 @@
   - `vector_min_score` 下调到 0.3–0.5 或改为纯 top-k 截断，具体值用评估集确定。
   - 融合前对两路分数做 min-max 归一化，按权重合并（初值向量 0.6 / 词法 0.4），保留 RRF 作为对照 profile。
 - 改动点：`hybrid-event-retriever.ts` 的 profile、融合函数，profile 版本号升级。
+- 2025 年 11 月之后，没有来自有影响力作者、且结论明确的论文改写这一步。
 
-### 步骤 3：交叉编码器重排
+### 步骤 3：交叉编码器重排（修订）
 
-- 参考：RAGFlow、Dify、LlamaIndex 默认 rerank 环节；模型 `BAAI/bge-reranker-v2-m3`（多语言，约 568M）或 Jina reranker v2。
+依据：Alushi、Biemann 等，汉堡大学，2026-02；Huo、Parry、Ganguly、Clarke，SIGIR 2026；Dong、Ounis、Ganguly，SIGIR 2026；Morand、Mothe、Piwowarski，2026-10。
+
+- 保留交叉编码器。汉堡的多轮问答对比里，重排是稳定超过普通向量检索的方法之一，也是答案 F1 最好的一档。`bge-reranker-v2-m3` 仍作为本地参照模型。
+- 深度不写死 50。Clarke 等指出很多查询有一个最优重排深度，再往下效果停住或下降；用第一阶段质量预测深度，平均深度最多降到原来的 1/3，效果保持。查找类用浅重排，指代和带约束的查询再加深。
+- 简单关键词查询不走重的指令式重排。Ounis 等指出指令式重排能救带约束的难查询，在简单关键词查询上会加噪声。
+- 晚交互不是质量上的替代。同等训练下 MICE 与交叉编码器相差不到 0.3 nDCG@10，同体量 ColBERT 平均低 1 个点以上。MICE-P 只作为以后的延迟选项，不替换这一步。
 - 做法：
   - 本地模型服务 `packages/embedding-provider/python/serve.py` 新增 `/rerank` 接口与对应驱动配置。
-  - 对融合后的 top 50 重新打分，再进入会话聚合；rerank 可用时不再产生 `rerank_absent`。
+  - 融合后的候选按查询类型选择深度再打分，然后进入会话聚合；rerank 可用时不再产生 `rerank_absent`。
   - rerank 失败按现有降级标记处理，不静默回退到其他排序。
 
 ### 步骤 4：时间衰减打分
@@ -65,24 +88,29 @@
   - `order = recent` 或带时间范围：较强衰减（例如半衰期 7 天）。
   - 默认：很弱衰减（例如半衰期 180 天），只用于相关性接近时的打破平局。
 - 替代客户端"全部按时间倒序"的硬切换；列表展示仍可按时间排序，但召回排序使用衰减分。
+- 2025 年 11 月之后，没有来自有影响力作者、且结论明确的论文改写这一步。
 
-### 步骤 5：查询改写与多查询（可选）
+### 步骤 5：查询改写（改为非默认）
 
-- 参考：LangChain MultiQueryRetriever、HyDE。
-- 仅对 lookup 类问题，通过已安装执行器把口语问题改写为 2–3 个检索式（或生成假设答案），各路结果 RRF 合并。
-- 代价：多一次模型调用延迟；需要超时后使用原查询。
+依据：Yang 等，高通 AI Research，EMNLP 2025；Alushi、Biemann 等，汉堡大学，2026-02；Zhu、Qiu 等，复旦 / ByteDance，EMNLP 2025。
+
+- 不对查找类问题做通用改写。汉堡的 8 个多轮问答集上，稳定超过普通向量检索的是重排、BM25 混合和 HyDE；查询改写随数据集翻转，在 INSCIT、QReCC、TopiOCQA 上低于不检索。高通在 QReCC 上同样看到改写会丢掉原句里的检索词。
+- 指代问句优先用步骤 1 的查询侧上下文向量。若仍要改写，改写模型必须按检索排序训练：ConvSearch-R1 用 3B、不用人工改写标注，在 TopiOCQA 稠密检索上比此前最好结果平均高约 10 个点，MRR@3 到 50.5。未对齐的提示词改写不进入默认路径。
+- HyDE 在汉堡的实验里是检索最好的一档（8 个数据集里 5 个第一），但 HyDE 之后再重排，多项 MRR 低于单独 HyDE。HyDE 单独做对照臂，不和重排绑在同一步。
+- 代价：改写或 HyDE 都多一次模型调用；超时后使用原查询。
 
 ### 步骤 6：中文分词 BM25 与 MMR 去重
 
 - 词法路以 jieba（或同类）分词 BM25 替换/补充 n-gram，降低误匹配。
 - 结果层用 MMR 去掉高度相似的内容，避免单个会话占满结果。
+- 2025 年 11 月之后，没有来自有影响力作者、且结论明确的论文改写这一步。
 
 ## 3. 推荐落地顺序
 
-1. 步骤 0 → 得到基线。
+1. 步骤 0：英文五类和中文六类都已有词法基线。之后每一步两套一起比。
 2. 步骤 2（零重建成本，先验证阈值影响）。
-3. 步骤 1（需要重新索引）。
-4. 步骤 3（需要本地模型服务新增模型）。
-5. 视评估结果再做步骤 4–6。
+3. 步骤 1（长消息重新索引；短聊天只改查询侧）。
+4. 步骤 3（本地模型服务新增重排，深度按查询类型变）。
+5. 视五类分数再做步骤 4、6。时间和事实更新已经有单独切片，步骤 4 用 `temporal` 和 `update` 看，不和查找类混在一起。步骤 5 只在指代类仍然短板时单独立项，不和步骤 3 绑在一起。
 
-每一步的验收标准：评估集 recall@10 与 nDCG@10 不低于上一步，且现有 context-engine、API、desktop 测试通过。
+每一步的验收标准：英文集的总分和五类 recall@10、nDCG@10 不低于上一步；中文集六类 recall@10、nDCG@10 不低于上一步，过时轮次被选中的次数不升高。现有 context-engine、API、desktop 测试通过。

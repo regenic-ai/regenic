@@ -8,12 +8,17 @@ import {
 
 export const CONTEXT_EVALUATION_SCHEMA_VERSION = "1.0" as const;
 
+export const SEMANTIC_SEARCH_TASKS = ["lookup", "anaphora", "aggregate", "temporal", "update", "boundary"] as const;
+
+export type SemanticSearchTask = (typeof SEMANTIC_SEARCH_TASKS)[number];
+
 export interface ContextEvaluationCase {
   id: string;
   request: ContextRequest;
   relevant_event_ids: string[];
   forbidden_event_ids?: string[];
   stale_event_ids?: string[];
+  task?: SemanticSearchTask;
 }
 
 export interface ContextEvaluationDataset {
@@ -51,8 +56,16 @@ export interface ContextEvaluationReport {
     unauthorized_selections: number;
     stale_selections: number;
     safety_passed: boolean;
+    by_task?: Partial<Record<SemanticSearchTask, ContextEvaluationTaskMetrics>>;
   };
   content_hash: string;
+}
+
+export interface ContextEvaluationTaskMetrics {
+  positive_case_count: number;
+  mean_recall_at_k: number;
+  mean_reciprocal_rank_at_k: number;
+  mean_ndcg_at_k: number;
 }
 
 export async function evaluateContextRetrieval(
@@ -131,6 +144,7 @@ export async function evaluateContextRetrieval(
         stale === 0 &&
         weightedCitationCoverage === 1 &&
         negativeSelectionRate === 0,
+      ...taskBreakdown(dataset, cases),
     },
   };
   return {
@@ -191,11 +205,40 @@ function validateDataset(dataset: ContextEvaluationDataset, k: number): void {
         list.some((eventId) => typeof eventId !== "string" || !eventId.trim()) ||
         new Set(list).size !== list.length,
       ) ||
-      value.relevant_event_ids.some((eventId) => (value.forbidden_event_ids ?? []).includes(eventId))
+      value.relevant_event_ids.some((eventId) => (value.forbidden_event_ids ?? []).includes(eventId)) ||
+      (value.task !== undefined && !SEMANTIC_SEARCH_TASKS.includes(value.task))
     ) {
       throw new Error("Invalid Context evaluation case");
     }
   }
+  const tagged = dataset.cases.filter((value) => value.task !== undefined).length;
+  if (tagged !== 0 && tagged !== dataset.cases.length) {
+    throw new Error("Invalid Context evaluation dataset");
+  }
+}
+
+function taskBreakdown(
+  dataset: ContextEvaluationDataset,
+  cases: ContextEvaluationCaseResult[],
+): { by_task: Partial<Record<SemanticSearchTask, ContextEvaluationTaskMetrics>> } | Record<string, never> {
+  if (!dataset.cases.some((value) => value.task)) {
+    return {};
+  }
+  const taskById = new Map(dataset.cases.map((value) => [value.id, value.task]));
+  const byTask: Partial<Record<SemanticSearchTask, ContextEvaluationTaskMetrics>> = {};
+  for (const task of SEMANTIC_SEARCH_TASKS) {
+    const group = cases.filter((value) => value.has_relevant && taskById.get(value.case_id) === task);
+    if (!dataset.cases.some((value) => value.task === task)) {
+      continue;
+    }
+    byTask[task] = {
+      positive_case_count: group.length,
+      mean_recall_at_k: mean(group.map((value) => value.recall_at_k)),
+      mean_reciprocal_rank_at_k: mean(group.map((value) => value.reciprocal_rank_at_k)),
+      mean_ndcg_at_k: mean(group.map((value) => value.ndcg_at_k)),
+    };
+  }
+  return { by_task: byTask };
 }
 
 function ratio(numerator: number, denominator: number): number {

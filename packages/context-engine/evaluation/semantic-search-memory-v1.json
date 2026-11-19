@@ -1,0 +1,605 @@
+{
+  "schema_version": "1.0",
+  "id": "semantic-search-memory-v1",
+  "source_dataset": "LongMemEval cleaned oracle (https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned)",
+  "license": "MIT",
+  "copyright": "Copyright (c) 2024 Di Wu",
+  "note": "Shared index of selected evidence sessions, not the paper's full haystack. Relevance is the source has_answer flag. single-session-user becomes lookup; multi-session with two or more answer turns becomes aggregate; temporal-reasoning becomes temporal; knowledge-update becomes update. Those four take the first questions in question_id order under the answer-length cap. Anaphora takes referential single-session-assistant questions whose answer words are mostly absent from the question, then the twelve with the lowest content-word overlap between the question and the answer turns. Questions with no answer turn are left out: retrieval always returns its top k, so abstention belongs to the answer layer. Session time is the source session stamp; a turn adds its index in seconds.",
+  "cases": [
+    {
+      "id": "lme-001be529",
+      "task": "lookup",
+      "source_question_id": "001be529",
+      "source_question_type": "single-session-user",
+      "query": "How long did I wait for the decision on my asylum application?",
+      "relevant_event_ids": [
+        "lme-001be529-s0-t4"
+      ]
+    },
+    {
+      "id": "lme-0862e8bf",
+      "task": "lookup",
+      "source_question_id": "0862e8bf",
+      "source_question_type": "single-session-user",
+      "query": "What is the name of my cat?",
+      "relevant_event_ids": [
+        "lme-0862e8bf-s0-t10"
+      ]
+    },
+    {
+      "id": "lme-118b2229",
+      "task": "lookup",
+      "source_question_id": "118b2229",
+      "source_question_type": "single-session-user",
+      "query": "How long is my daily commute to work?",
+      "relevant_event_ids": [
+        "lme-118b2229-s0-t8"
+      ]
+    },
+    {
+      "id": "lme-15745da0",
+      "task": "lookup",
+      "source_question_id": "15745da0",
+      "source_question_type": "single-session-user",
+      "query": "How long have I been collecting vintage cameras?",
+      "relevant_event_ids": [
+        "lme-15745da0-s0-t4"
+      ]
+    },
+    {
+      "id": "lme-19b5f2b3",
+      "task": "lookup",
+      "source_question_id": "19b5f2b3",
+      "source_question_type": "single-session-user",
+      "query": "How long was I in Japan for?",
+      "relevant_event_ids": [
+        "lme-19b5f2b3-s0-t2"
+      ]
+    },
+    {
+      "id": "lme-1e043500",
+      "task": "lookup",
+      "source_question_id": "1e043500",
+      "source_question_type": "single-session-user",
+      "query": "What is the name of the playlist I created on Spotify?",
+      "relevant_event_ids": [
+        "lme-1e043500-s0-t2"
+      ]
+    },
+    {
+      "id": "lme-1faac195",
+      "task": "lookup",
+      "source_question_id": "1faac195",
+      "source_question_type": "single-session-user",
+      "query": "Where does my sister Emily live?",
+      "relevant_event_ids": [
+        "lme-1faac195-s0-t2"
+      ]
+    },
+    {
+      "id": "lme-21436231",
+      "task": "lookup",
+      "source_question_id": "21436231",
+      "source_question_type": "single-session-user",
+      "query": "How many largemouth bass did I catch on my fishing trip to Lake Michigan?",
+      "relevant_event_ids": [
+        "lme-21436231-s0-t2"
+      ]
+    },
+    {
+      "id": "lme-25e5aa4f",
+      "task": "lookup",
+      "source_question_id": "25e5aa4f",
+      "source_question_type": "single-session-user",
+      "query": "Where did I complete my Bachelor's degree in Computer Science?",
+      "relevant_event_ids": [
+        "lme-25e5aa4f-s0-t4"
+      ]
+    },
+    {
+      "id": "lme-29f2956b",
+      "task": "lookup",
+      "source_question_id": "29f2956b",
+      "source_question_type": "single-session-user",
+      "query": "How much time do I dedicate to practicing guitar every day?",
+      "relevant_event_ids": [
+        "lme-29f2956b-s0-t0"
+      ]
+    },
+    {
+      "id": "lme-311778f1",
+      "task": "lookup",
+      "source_question_id": "311778f1",
+      "source_question_type": "single-session-user",
+      "query": "How many hours did I spend watching documentaries on Netflix last month?",
+      "relevant_event_ids": [
+        "lme-311778f1-s0-t2"
+      ]
+    },
+    {
+      "id": "lme-36580ce8",
+      "task": "lookup",
+      "source_question_id": "36580ce8",
+      "source_question_type": "single-session-user",
+      "query": "What health issue did I initially think was just a cold?",
+      "relevant_event_ids": [
+        "lme-36580ce8-s0-t4"
+      ]
+    },
+    {
+      "id": "lme-dc439ea3",
+      "task": "anaphora",
+      "source_question_id": "dc439ea3",
+      "source_question_type": "single-session-assistant",
+      "query": "I was looking back at our previous conversation about Native American powwows and I was wondering, which traditional game did you say was often performed by skilled dancers at powwows?",
+      "relevant_event_ids": [
+        "lme-dc439ea3-s0-t6"
+      ]
+    },
+    {
+      "id": "lme-561fabcd",
+      "task": "anaphora",
+      "source_question_id": "561fabcd",
+      "source_question_type": "single-session-assistant",
+      "query": "I was thinking back to our previous conversation about the Radiation Amplified zombie, and I was wondering if you remembered what we finally decided to name it?",
+      "relevant_event_ids": [
+        "lme-561fabcd-s0-t5"
+      ]
+    },
+    {
+      "id": "lme-1903aded",
+      "task": "anaphora",
+      "source_question_id": "1903aded",
+      "source_question_type": "single-session-assistant",
+      "query": "I think we discussed work from home jobs for seniors earlier. Can you remind me what was the 7th job in the list you provided?",
+      "relevant_event_ids": [
+        "lme-1903aded-s0-t1"
+      ]
+    },
+    {
+      "id": "lme-c4f10528",
+      "task": "anaphora",
+      "source_question_id": "c4f10528",
+      "source_question_type": "single-session-assistant",
+      "query": "I'm planning to visit Bandung again and I was wondering if you could remind me of the name of that restaurant in Cihampelas Walk that serves a great Nasi Goreng?",
+      "relevant_event_ids": [
+        "lme-c4f10528-s0-t7"
+      ]
+    },
+    {
+      "id": "lme-4c36ccef",
+      "task": "anaphora",
+      "source_question_id": "4c36ccef",
+      "source_question_type": "single-session-assistant",
+      "query": "Can you remind me of the name of the romantic Italian restaurant in Rome you recommended for dinner?",
+      "relevant_event_ids": [
+        "lme-4c36ccef-s0-t3"
+      ]
+    },
+    {
+      "id": "lme-ceb54acb",
+      "task": "anaphora",
+      "source_question_id": "ceb54acb",
+      "source_question_type": "single-session-assistant",
+      "query": "In our previous chat, you suggested 'sexual compulsions' and a few other options for alternative terms for certain behaviors. Can you remind me what the other four options were?",
+      "relevant_event_ids": [
+        "lme-ceb54acb-s0-t3"
+      ]
+    },
+    {
+      "id": "lme-778164c6",
+      "task": "anaphora",
+      "source_question_id": "778164c6",
+      "source_question_type": "single-session-assistant",
+      "query": "I was looking back at our previous conversation about Caribbean dishes and I was wondering, what was the name of that Jamaican dish you recommended I try with snapper that has fruit in it?",
+      "relevant_event_ids": [
+        "lme-778164c6-s0-t3"
+      ]
+    },
+    {
+      "id": "lme-3249768e",
+      "task": "anaphora",
+      "source_question_id": "3249768e",
+      "source_question_type": "single-session-assistant",
+      "query": "I'm looking back at our previous conversation about building a cocktail bar. You recommended five bottles to make the widest variety of gin-based cocktails. Can you remind me what the fifth bottle was?",
+      "relevant_event_ids": [
+        "lme-3249768e-s0-t3"
+      ]
+    },
+    {
+      "id": "lme-3e321797",
+      "task": "anaphora",
+      "source_question_id": "3e321797",
+      "source_question_type": "single-session-assistant",
+      "query": "I wanted to follow up on our previous conversation about natural remedies for dark circles under the eyes. You mentioned applying tomato juice mixed with lemon juice, how long did you say I should leave it on for?",
+      "relevant_event_ids": [
+        "lme-3e321797-s0-t1"
+      ]
+    },
+    {
+      "id": "lme-4388e9dd",
+      "task": "anaphora",
+      "source_question_id": "4388e9dd",
+      "source_question_type": "single-session-assistant",
+      "query": "I was going through our previous chat and I was wondering, what was Andy wearing in the script you wrote for the comedy movie scene?",
+      "relevant_event_ids": [
+        "lme-4388e9dd-s0-t0"
+      ]
+    },
+    {
+      "id": "lme-7e00a6cb",
+      "task": "anaphora",
+      "source_question_id": "7e00a6cb",
+      "source_question_type": "single-session-assistant",
+      "query": "I'm planning my trip to Amsterdam again and I was wondering, what was the name of that hostel near the Red Light District that you recommended last time?",
+      "relevant_event_ids": [
+        "lme-7e00a6cb-s0-t1"
+      ]
+    },
+    {
+      "id": "lme-cc539528",
+      "task": "anaphora",
+      "source_question_id": "cc539528",
+      "source_question_type": "single-session-assistant",
+      "query": "I wanted to follow up on our previous conversation about front-end and back-end development. Can you remind me of the specific back-end programming languages you recommended I learn?",
+      "relevant_event_ids": [
+        "lme-cc539528-s0-t7"
+      ]
+    },
+    {
+      "id": "lme-00ca467f",
+      "task": "aggregate",
+      "source_question_id": "00ca467f",
+      "source_question_type": "multi-session",
+      "query": "How many doctor's appointments did I go to in March?",
+      "relevant_event_ids": [
+        "lme-00ca467f-s0-t0",
+        "lme-00ca467f-s2-t0"
+      ]
+    },
+    {
+      "id": "lme-0100672e",
+      "task": "aggregate",
+      "source_question_id": "0100672e",
+      "source_question_type": "multi-session",
+      "query": "How much did I spend on each coffee mug for my coworkers?",
+      "relevant_event_ids": [
+        "lme-0100672e-s0-t0",
+        "lme-0100672e-s1-t0"
+      ]
+    },
+    {
+      "id": "lme-099778bb",
+      "task": "aggregate",
+      "source_question_id": "099778bb",
+      "source_question_type": "multi-session",
+      "query": "What percentage of leadership positions do women hold in the my company?",
+      "relevant_event_ids": [
+        "lme-099778bb-s0-t0",
+        "lme-099778bb-s1-t2"
+      ]
+    },
+    {
+      "id": "lme-09ba9854",
+      "task": "aggregate",
+      "source_question_id": "09ba9854",
+      "source_question_type": "multi-session",
+      "query": "How much will I save by taking the train from the airport to my hotel instead of a taxi?",
+      "relevant_event_ids": [
+        "lme-09ba9854-s0-t4",
+        "lme-09ba9854-s1-t6"
+      ]
+    },
+    {
+      "id": "lme-0a995998",
+      "task": "aggregate",
+      "source_question_id": "0a995998",
+      "source_question_type": "multi-session",
+      "query": "How many items of clothing do I need to pick up or return from a store?",
+      "relevant_event_ids": [
+        "lme-0a995998-s0-t10",
+        "lme-0a995998-s1-t6",
+        "lme-0a995998-s2-t4"
+      ]
+    },
+    {
+      "id": "lme-0ea62687",
+      "task": "aggregate",
+      "source_question_id": "0ea62687",
+      "source_question_type": "multi-session",
+      "query": "How much more miles per gallon was my car getting a few months ago compared to now?",
+      "relevant_event_ids": [
+        "lme-0ea62687-s0-t0",
+        "lme-0ea62687-s1-t0"
+      ]
+    },
+    {
+      "id": "lme-10d9b85a",
+      "task": "aggregate",
+      "source_question_id": "10d9b85a",
+      "source_question_type": "multi-session",
+      "query": "How many days did I spend attending workshops, lectures, and conferences in April?",
+      "relevant_event_ids": [
+        "lme-10d9b85a-s0-t2",
+        "lme-10d9b85a-s1-t0"
+      ]
+    },
+    {
+      "id": "lme-1192316e",
+      "task": "aggregate",
+      "source_question_id": "1192316e",
+      "source_question_type": "multi-session",
+      "query": "What is the total time it takes I to get ready and commute to work?",
+      "relevant_event_ids": [
+        "lme-1192316e-s0-t0",
+        "lme-1192316e-s1-t0"
+      ]
+    },
+    {
+      "id": "lme-129d1232",
+      "task": "aggregate",
+      "source_question_id": "129d1232",
+      "source_question_type": "multi-session",
+      "query": "How much money did I raise in total through all the charity events I participated in?",
+      "relevant_event_ids": [
+        "lme-129d1232-s0-t2",
+        "lme-129d1232-s1-t2",
+        "lme-129d1232-s2-t0"
+      ]
+    },
+    {
+      "id": "lme-157a136e",
+      "task": "aggregate",
+      "source_question_id": "157a136e",
+      "source_question_type": "multi-session",
+      "query": "How many years older is my grandma than me?",
+      "relevant_event_ids": [
+        "lme-157a136e-s0-t2",
+        "lme-157a136e-s1-t0",
+        "lme-157a136e-s1-t2"
+      ]
+    },
+    {
+      "id": "lme-1a8a66a6",
+      "task": "aggregate",
+      "source_question_id": "1a8a66a6",
+      "source_question_type": "multi-session",
+      "query": "How many magazine subscriptions do I currently have?",
+      "relevant_event_ids": [
+        "lme-1a8a66a6-s0-t0",
+        "lme-1a8a66a6-s1-t0",
+        "lme-1a8a66a6-s2-t0"
+      ]
+    },
+    {
+      "id": "lme-1c549ce4",
+      "task": "aggregate",
+      "source_question_id": "1c549ce4",
+      "source_question_type": "multi-session",
+      "query": "What is the total cost of the car cover and detailing spray I purchased?",
+      "relevant_event_ids": [
+        "lme-1c549ce4-s0-t8",
+        "lme-1c549ce4-s1-t10"
+      ]
+    },
+    {
+      "id": "lme-08f4fc43",
+      "task": "temporal",
+      "source_question_id": "08f4fc43",
+      "source_question_type": "temporal-reasoning",
+      "query": "How many days had passed between the Sunday mass at St. Mary's Church and the Ash Wednesday service at the cathedral?",
+      "relevant_event_ids": [
+        "lme-08f4fc43-s0-t0",
+        "lme-08f4fc43-s1-t0"
+      ]
+    },
+    {
+      "id": "lme-0bb5a684",
+      "task": "temporal",
+      "source_question_id": "0bb5a684",
+      "source_question_type": "temporal-reasoning",
+      "query": "How many days before the team meeting I was preparing for did I attend the workshop on 'Effective Communication in the Workplace'?",
+      "relevant_event_ids": [
+        "lme-0bb5a684-s0-t0",
+        "lme-0bb5a684-s1-t0"
+      ]
+    },
+    {
+      "id": "lme-0bc8ad92",
+      "task": "temporal",
+      "source_question_id": "0bc8ad92",
+      "source_question_type": "temporal-reasoning",
+      "query": "How many months have passed since I last visited a museum with a friend?",
+      "relevant_event_ids": [
+        "lme-0bc8ad92-s0-t6",
+        "lme-0bc8ad92-s1-t0",
+        "lme-0bc8ad92-s2-t0"
+      ]
+    },
+    {
+      "id": "lme-0bc8ad93",
+      "task": "temporal",
+      "source_question_id": "0bc8ad93",
+      "source_question_type": "temporal-reasoning",
+      "query": "I mentioned visiting a museum two months ago. Did I visit with a friend or not?",
+      "relevant_event_ids": [
+        "lme-0bc8ad93-s1-t0"
+      ]
+    },
+    {
+      "id": "lme-0db4c65d",
+      "task": "temporal",
+      "source_question_id": "0db4c65d",
+      "source_question_type": "temporal-reasoning",
+      "query": "How many days had passed since I finished reading 'The Seven Husbands of Evelyn Hugo' when I attended the book reading event at the local library, where the author of 'The Silent Patient' is discussing her latest thriller novel?",
+      "relevant_event_ids": [
+        "lme-0db4c65d-s0-t0",
+        "lme-0db4c65d-s1-t0"
+      ]
+    },
+    {
+      "id": "lme-2a1811e2",
+      "task": "temporal",
+      "source_question_id": "2a1811e2",
+      "source_question_type": "temporal-reasoning",
+      "query": "How many days had passed between the Hindu festival of Holi and the Sunday mass at St. Mary's Church?",
+      "relevant_event_ids": [
+        "lme-2a1811e2-s0-t0",
+        "lme-2a1811e2-s1-t0"
+      ]
+    },
+    {
+      "id": "lme-2c63a862",
+      "task": "temporal",
+      "source_question_id": "2c63a862",
+      "source_question_type": "temporal-reasoning",
+      "query": "How many days did it take for me to find a house I loved after starting to work with Rachel?",
+      "relevant_event_ids": [
+        "lme-2c63a862-s0-t8",
+        "lme-2c63a862-s1-t0"
+      ]
+    },
+    {
+      "id": "lme-2ebe6c90",
+      "task": "temporal",
+      "source_question_id": "2ebe6c90",
+      "source_question_type": "temporal-reasoning",
+      "query": "How many days did it take me to finish 'The Nightingale' by Kristin Hannah?",
+      "relevant_event_ids": [
+        "lme-2ebe6c90-s0-t0",
+        "lme-2ebe6c90-s1-t0"
+      ]
+    },
+    {
+      "id": "lme-2ebe6c92",
+      "task": "temporal",
+      "source_question_id": "2ebe6c92",
+      "source_question_type": "temporal-reasoning",
+      "query": "Which book did I finish a week ago?",
+      "relevant_event_ids": [
+        "lme-2ebe6c92-s0-t0",
+        "lme-2ebe6c92-s1-t0"
+      ]
+    },
+    {
+      "id": "lme-370a8ff4",
+      "task": "temporal",
+      "source_question_id": "370a8ff4",
+      "source_question_type": "temporal-reasoning",
+      "query": "How many weeks had passed since I recovered from the flu when I went on my 10th jog outdoors?",
+      "relevant_event_ids": [
+        "lme-370a8ff4-s0-t0",
+        "lme-370a8ff4-s1-t0"
+      ]
+    },
+    {
+      "id": "lme-4dfccbf7",
+      "task": "temporal",
+      "source_question_id": "4dfccbf7",
+      "source_question_type": "temporal-reasoning",
+      "query": "How many days had passed since I started taking ukulele lessons when I decided to take my acoustic guitar to the guitar tech for servicing?",
+      "relevant_event_ids": [
+        "lme-4dfccbf7-s0-t4",
+        "lme-4dfccbf7-s1-t8"
+      ]
+    },
+    {
+      "id": "lme-4dfccbf8",
+      "task": "temporal",
+      "source_question_id": "4dfccbf8",
+      "source_question_type": "temporal-reasoning",
+      "query": "What did I do with Rachel on the Wednesday two months ago?",
+      "relevant_event_ids": [
+        "lme-4dfccbf8-s0-t4"
+      ]
+    },
+    {
+      "id": "lme-01493427",
+      "task": "update",
+      "source_question_id": "01493427",
+      "source_question_type": "knowledge-update",
+      "query": "How many new postcards have I added to my collection since I started collecting again?",
+      "relevant_event_ids": [
+        "lme-01493427-s0-t6",
+        "lme-01493427-s1-t6"
+      ]
+    },
+    {
+      "id": "lme-031748ae",
+      "task": "update",
+      "source_question_id": "031748ae",
+      "source_question_type": "knowledge-update",
+      "query": "How many engineers do I lead when I just started my new role as Senior Software Engineer? How many engineers do I lead now?",
+      "relevant_event_ids": [
+        "lme-031748ae-s0-t10",
+        "lme-031748ae-s1-t2"
+      ]
+    },
+    {
+      "id": "lme-06db6396",
+      "task": "update",
+      "source_question_id": "06db6396",
+      "source_question_type": "knowledge-update",
+      "query": "How many projects have I completed since starting painting classes?",
+      "relevant_event_ids": [
+        "lme-06db6396-s0-t4",
+        "lme-06db6396-s1-t0"
+      ]
+    },
+    {
+      "id": "lme-07741c44",
+      "task": "update",
+      "source_question_id": "07741c44",
+      "source_question_type": "knowledge-update",
+      "query": "Where do I initially keep my old sneakers?",
+      "relevant_event_ids": [
+        "lme-07741c44-s0-t2",
+        "lme-07741c44-s1-t0"
+      ]
+    },
+    {
+      "id": "lme-07741c45",
+      "task": "update",
+      "source_question_id": "07741c45",
+      "source_question_type": "knowledge-update",
+      "query": "Where do I currently keep my old sneakers?",
+      "relevant_event_ids": [
+        "lme-07741c45-s0-t2",
+        "lme-07741c45-s1-t0"
+      ]
+    },
+    {
+      "id": "lme-08e075c7",
+      "task": "update",
+      "source_question_id": "08e075c7",
+      "source_question_type": "knowledge-update",
+      "query": "How long have I been using my Fitbit Charge 3?",
+      "relevant_event_ids": [
+        "lme-08e075c7-s0-t2",
+        "lme-08e075c7-s1-t2"
+      ]
+    },
+    {
+      "id": "lme-0977f2af",
+      "task": "update",
+      "source_question_id": "0977f2af",
+      "source_question_type": "knowledge-update",
+      "query": "What new kitchen gadget did I invest in before getting the Air Fryer?",
+      "relevant_event_ids": [
+        "lme-0977f2af-s0-t2",
+        "lme-0977f2af-s1-t2"
+      ]
+    },
+    {
+      "id": "lme-0ddfec37",
+      "task": "update",
+      "source_question_id": "0ddfec37",
+      "source_question_type": "knowledge-update",
+      "query": "How many autographed baseballs have I added to my collection in the first three months of collection?",
+      "relevant_event_ids": [
+        "lme-0ddfec37-s0-t0",
+        "lme-0ddfec37-s1-t0"
+      ]
+    }
+  ]
+}
