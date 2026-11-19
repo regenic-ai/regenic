@@ -831,7 +831,8 @@ v2 三个集合的负例选择率均为 0。仅用合成 policy 测了授权键�
   返回词法结果及 `vector_index_capacity`，coverage 为 null，不伪造向量成功。
   Authority 正文读取仍未实现两阶段优化；长 Event 仍受完整证据预算约束。
 
-`personal-hybrid-thread-rrf-v4` 保留 v3 的阈值、弱词法命中规则、无上限授权集合和
+默认 profile 现为 `personal-hybrid-thread-minmax-v5`：向量候选只保留 top-k，两路分数 min-max 后按向量 0.6、词法 0.4 融合。`personal-hybrid-thread-rrf-v4` 保留为对照，仍用 0.7 余弦下限和 RRF。
+v4 保留 v3 的阈值、弱词法命中规则、无上限授权集合和
 惰性正文读取，再增加确定性的两阶段 Thread 重排。第一阶段仍按 Event 计算 lexical/vector
 RRF；第二阶段只对已授权候选按 `thread_id` 聚合，使用最佳 Event、查询词覆盖和最多三份
 非重复证据计算 Thread 分。同一 Thread 内能补充新查询词或不同正文的 Event 获得递减的

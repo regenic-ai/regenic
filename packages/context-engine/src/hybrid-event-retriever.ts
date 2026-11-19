@@ -23,14 +23,34 @@ import { ContextEngineError } from "./deterministic-context-engine";
 import { searchMatchesFor, searchSnippet } from "./search-matches";
 
 export const HYBRID_EVENT_RETRIEVER_ID = "event-hybrid";
-export const HYBRID_RETRIEVAL_PROFILE = {
-  version: "personal-hybrid-thread-rrf-v4",
-  score_weights: {
-    anchor: 4, exact_match: 3, lexical: 2, recency: 1,
-    hybrid: 8, thread: 3, evidence_diversity: 1,
-  },
-  vector_min_score: 0.7,
+const HYBRID_SCORE_WEIGHTS = {
+  anchor: 4, exact_match: 3, lexical: 2, recency: 1,
+  hybrid: 8, thread: 3, evidence_diversity: 1,
 };
+export const HYBRID_RRF_PROFILE = {
+  version: "personal-hybrid-thread-rrf-v4",
+  fusion: "rrf" as const,
+  score_weights: HYBRID_SCORE_WEIGHTS,
+  vector_min_score: 0.7,
+  vector_weight: 0.5,
+  lexical_weight: 0.5,
+};
+export const HYBRID_RETRIEVAL_PROFILE = {
+  version: "personal-hybrid-thread-minmax-v5",
+  fusion: "minmax" as const,
+  score_weights: HYBRID_SCORE_WEIGHTS,
+  vector_min_score: -1,
+  vector_weight: 0.6,
+  lexical_weight: 0.4,
+};
+export interface HybridRetrievalProfile {
+  version: string;
+  fusion: "rrf" | "minmax";
+  score_weights: typeof HYBRID_SCORE_WEIGHTS;
+  vector_min_score: number;
+  vector_weight: number;
+  lexical_weight: number;
+}
 const MIN_VECTOR_CANDIDATES = 50;
 const MAX_VECTOR_CANDIDATES = 1000;
 const VECTOR_CANDIDATE_MULTIPLIER = 5;
@@ -47,12 +67,10 @@ export class HybridEventRetriever implements ContextRetriever {
     private readonly index: ContextVectorIndex | undefined,
     private readonly generation: EmbeddingGeneration,
     private readonly generations?: ContextVectorGenerationStore,
-    private readonly profile = HYBRID_RETRIEVAL_PROFILE,
+    private readonly profile: HybridRetrievalProfile = HYBRID_RETRIEVAL_PROFILE,
   ) {
     assertEmbeddingDescriptor(provider.descriptor, generation.model);
-    if (!Number.isFinite(profile.vector_min_score) || profile.vector_min_score < -1 || profile.vector_min_score > 1) {
-      throw new Error("Invalid hybrid similarity threshold");
-    }
+    assertHybridProfile(profile);
   }
 
   capabilities() {
@@ -243,12 +261,22 @@ export class HybridEventRetriever implements ContextRetriever {
         candidates.set(hit.event_id, material);
       }
     }
+    const lexicalRaw = new Map(admittedLexical.map((value) => [value.candidate.resource_id, lexicalScore(value)]));
+    const vectorRaw = new Map(vector.map((hit) => [hit.event_id, hit.score]));
+    const lexicalRange = scoreRange([...lexicalRaw.values()]);
+    const vectorRange = scoreRange([...vectorRaw.values()]);
     for (const [id, value] of candidates) {
       const route = ranks.get(id);
       if (!route) continue;
-      const score = (route.lexical_rank ? 1 / (RRF_K + route.lexical_rank) : 0) +
-        (route.vector_rank ? 1 / (RRF_K + route.vector_rank) : 0);
-      value.candidate.scores = { anchor: value.candidate.scores.anchor ?? 0, hybrid: Number((score * (RRF_K + 1) / 2).toFixed(9)) };
+      value.candidate.scores = {
+        anchor: value.candidate.scores.anchor ?? 0,
+        hybrid: fuseHybridRoute(this.profile, {
+          lexicalRank: route.lexical_rank,
+          lexicalScore: lexicalRaw.get(id),
+          vectorRank: route.vector_rank,
+          vectorScore: vectorRaw.get(id),
+        }, lexicalRange, vectorRange),
+      };
     }
     rerankThreads(candidates, allowed, ranks, plan.request.query);
     trace.routes = [...ranks.values()].sort((a, b) => compare(a.event_id, b.event_id));
@@ -331,6 +359,42 @@ function vectorCandidateLimit(plan: AuthorizedContextRetrievalPlan): number {
     MAX_VECTOR_CANDIDATES,
     Math.max(MIN_VECTOR_CANDIDATES, requested * VECTOR_CANDIDATE_MULTIPLIER),
   );
+}
+
+function assertHybridProfile(profile: HybridRetrievalProfile): void {
+  if ((profile.fusion !== "rrf" && profile.fusion !== "minmax") ||
+    !Number.isFinite(profile.vector_min_score) || profile.vector_min_score < -1 || profile.vector_min_score > 1 ||
+    !Number.isFinite(profile.vector_weight) || profile.vector_weight < 0 || profile.vector_weight > 1 ||
+    !Number.isFinite(profile.lexical_weight) || profile.lexical_weight < 0 || profile.lexical_weight > 1 ||
+    (profile.fusion === "minmax" && Math.abs(profile.vector_weight + profile.lexical_weight - 1) > 1e-9)) {
+    throw new Error("Invalid hybrid retrieval profile");
+  }
+}
+
+export function fuseHybridRoute(
+  profile: HybridRetrievalProfile,
+  route: { lexicalRank?: number; lexicalScore?: number; vectorRank?: number; vectorScore?: number },
+  lexicalRange: { min: number; max: number },
+  vectorRange: { min: number; max: number },
+): number {
+  if (profile.fusion === "rrf") {
+    const score = (route.lexicalRank ? 1 / (RRF_K + route.lexicalRank) : 0) +
+      (route.vectorRank ? 1 / (RRF_K + route.vectorRank) : 0);
+    return Number((score * (RRF_K + 1) / 2).toFixed(9));
+  }
+  const lexical = route.lexicalScore === undefined ? 0 : relativeScore(route.lexicalScore, lexicalRange);
+  const vector = route.vectorScore === undefined ? 0 : relativeScore(route.vectorScore, vectorRange);
+  return Number((profile.lexical_weight * lexical + profile.vector_weight * vector).toFixed(9));
+}
+
+function scoreRange(values: number[]): { min: number; max: number } {
+  if (values.length === 0) return { min: 0, max: 0 };
+  return { min: Math.min(...values), max: Math.max(...values) };
+}
+
+function relativeScore(score: number, range: { min: number; max: number }): number {
+  if (range.max === range.min) return 1;
+  return (score - range.min) / (range.max - range.min);
 }
 
 function lexicalScore(value: RetrievedContextCandidate): number {

@@ -1,16 +1,16 @@
 # 语义搜索准确度优化方案
 
-> 状态：步骤 0 已接入两套验收集。英文用 LongMemEval 子集，中文短消息用 TimlMemBench 子集。合成集只保留为评估器接线。步骤 1、3、5 已按 2025 年 11 月及之后的论文修订，尚未改检索实现。步骤 2、4、6 维持原方案。每一步落地前先用评估集量化收益，再决定是否保留。
+> 状态：步骤 0 已接入两套验收集。步骤 2 已在 EmbeddingGemma（MPS，float32，128 token）上对照过。min-max 加 top-k 的 recall@10 和 nDCG@10 在两类集合的每一类上都高于词法基线；相对 RRF，只有英文 update 的 nDCG 更低。中文过时选中从 4 次升到 13 次，安全门禁没有过。0.3、0.4、0.5 和 top-k 的前 10 名相同。步骤 1、3、5 已按论文修订，尚未改检索实现。步骤 4、6 维持原方案。
 
 ## 1. 现状
 
 检索链路：
 
 1. 桌面端 `planContextSearchQuery`（`apps/desktop/src/renderer/src/context-search.ts`）用正则解析意图（lookup / aggregate / list）、排序（relevance / recent）与时间范围，并从语义查询里去掉"最近"类词。
-2. `HybridEventRetriever`（`packages/context-engine/src/hybrid-event-retriever.ts`，profile `personal-hybrid-thread-rrf-v4`）双路召回：
+2. `HybridEventRetriever`（`packages/context-engine/src/hybrid-event-retriever.ts`，默认 profile `personal-hybrid-thread-minmax-v5`）双路召回：
    - 词法路：CJK 按 n-gram 匹配。
-   - 向量路：EmbeddingGemma（768 维），候选数为预算的 5 倍（50–1000），余弦 `< vector_min_score = 0.7` 直接丢弃。
-3. RRF 融合（`RRF_K = 60`），再按会话重排：`0.8·best + 0.15·term coverage + 0.05·support`。
+   - 向量路：EmbeddingGemma（768 维），候选数为预算的 5 倍（50–1000）。默认不再按余弦下限丢弃，索引返回的 top-k 都进入融合。对照 profile `personal-hybrid-thread-rrf-v4` 仍用 `vector_min_score = 0.7`。
+3. 默认融合把两路分数各自 min-max 到 0–1，再按向量 0.6、词法 0.4 相加。对照 profile 仍用 RRF（`RRF_K = 60`）。之后按会话重排：`0.8·best + 0.15·term coverage + 0.05·support`。
 4. 确定性引擎权重：anchor 4 / exact_match 3 / lexical 2 / recency 1；客户端按 `order` 再做时间倒序。
 
 已识别的问题：
@@ -18,7 +18,7 @@
 | 问题 | 位置 | 影响 |
 | --- | --- | --- |
 | 文档向量无上下文，模板固定 `title: none \| text: ` | `packages/embedding-provider/src/index.ts`、`python/serve.py` | 聊天消息短（"好的，明天发你"），单独嵌入几乎没有语义 |
-| 向量阈值硬编码 0.7 | `hybrid-event-retriever.ts` 第 32、194、209 行 | EmbeddingGemma 中文余弦分布偏低，相关结果被截断，退化为纯词法 |
+| 向量把过时消息带进前 10 | 中文验收集的 stale 计数 | 词法选中 4 次，RRF 14 次，min-max 13 次。recall 和 nDCG 都升了，安全门禁没有过 |
 | 无交叉编码器重排 | `deterministic-context-engine.ts` 第 845 行产生 `rerank_absent` | 排序只靠排名与启发式公式，不判断 query-文本相关性 |
 | 切块偏小（默认 128 token） | `context-embedding-worker.ts`、`REGENIC_EMBEDDING_CHUNK_TOKENS` | 长消息、文件语义被切碎 |
 | 时间只有"相关性 / 全部按时间"二选一 | `context-search.ts` `orderSearchResult` | 无法兼顾"相关且较新" |
@@ -59,13 +59,31 @@ LoCoMo 和中文的 PerLTQA 也像个人记忆，但是 CC BY-NC，没有放进�
 - 改动点：`context-embedding-worker.ts` 的切块与池化、查询编码、`embeddingGeneration` 指纹。模板或池化变化都要进入 generation。
 - 代价：长消息需要新 generation 并重新索引。查询侧上下文不改已入库的消息向量。
 
-### 步骤 2：去掉硬阈值，改归一化加权融合
+### 步骤 2：去掉硬阈值，改归一化加权融合（已接入默认 profile）
 
 - 参考：Weaviate `relativeScoreFusion`、Elastic RRF / linear retriever。
-- 做法：
-  - `vector_min_score` 下调到 0.3–0.5 或改为纯 top-k 截断，具体值用评估集确定。
-  - 融合前对两路分数做 min-max 归一化，按权重合并（初值向量 0.6 / 词法 0.4），保留 RRF 作为对照 profile。
-- 改动点：`hybrid-event-retriever.ts` 的 profile、融合函数，profile 版本号升级。
+- 默认 profile 是 `personal-hybrid-thread-minmax-v5`。向量路用索引已有的 top-k（预算的 5 倍，夹在 50 到 1000），`vector_min_score = -1`，余弦不再单独卡 0.7。两路各自做 min-max，空路记 0，一路里分数都相同则该路记 1，然后向量 0.6、词法 0.4 相加。
+- 对照 profile 是 `personal-hybrid-thread-rrf-v4`：仍是 RRF，`RRF_K = 60`，余弦低于 0.7 不进向量路。
+- EmbeddingGemma 对照（k = 10，分数是 recall / nDCG）。0.3、0.4、0.5 与 top-k 的前 10 名完全相同，所以默认仍用 top-k，不另设中间阈值。
+
+| 集合 | 词法 | RRF 0.7 | min-max top-k |
+| --- | --- | --- | --- |
+| 英文总分 | 0.482 / 0.367 | 0.786 / 0.605 | 0.845 / 0.657 |
+| 英文 lookup | 0.667 / 0.477 | 0.917 / 0.797 | 1.000 / 0.938 |
+| 英文 anaphora | 0.333 / 0.261 | 0.917 / 0.566 | 1.000 / 0.588 |
+| 英文 aggregate | 0.375 / 0.252 | 0.708 / 0.527 | 0.778 / 0.593 |
+| 英文 temporal | 0.375 / 0.326 | 0.583 / 0.461 | 0.625 / 0.493 |
+| 英文 update | 0.750 / 0.598 | 0.813 / 0.710 | 0.813 / 0.681 |
+| 中文总分 | 0.196 / 0.152 | 0.434 / 0.401 | 0.460 / 0.407 |
+| 中文 lookup | 0.229 / 0.161 | 0.500 / 0.434 | 0.556 / 0.441 |
+| 中文 anaphora | 0.063 / 0.032 | 0.382 / 0.360 | 0.403 / 0.381 |
+| 中文 aggregate | 0.251 / 0.222 | 0.396 / 0.396 | 0.429 / 0.401 |
+| 中文 temporal | 0.121 / 0.068 | 0.314 / 0.268 | 0.321 / 0.273 |
+| 中文 update | 0.222 / 0.198 | 0.472 / 0.417 | 0.486 / 0.435 |
+| 中文 boundary | 0.333 / 0.266 | 0.594 / 0.595 | 0.615 / 0.565 |
+
+- 英文 update 的 nDCG 是唯一低于 RRF 的切片：0.681 对 0.710，仍高于词法 0.598。中文过时选中：词法 4，RRF 14，min-max 13。recall 和 nDCG 的门禁过了，过时次数升高，安全门禁没有过。默认 profile 仍用 min-max，因为除这一处 nDCG 外它不低于 RRF，也全面高于词法。
+- 对照脚本是 `packages/context-engine/evaluation/compare-hybrid-fusion.cjs`，需要本机 EmbeddingGemma 服务。词法基线锁定测试不跑模型，数字不变。
 - 2025 年 11 月之后，没有来自有影响力作者、且结论明确的论文改写这一步。
 
 ### 步骤 3：交叉编码器重排（修订）
@@ -108,7 +126,7 @@ LoCoMo 和中文的 PerLTQA 也像个人记忆，但是 CC BY-NC，没有放进�
 ## 3. 推荐落地顺序
 
 1. 步骤 0：英文五类和中文六类都已有词法基线。之后每一步两套一起比。
-2. 步骤 2（零重建成本，先验证阈值影响）。
+2. 步骤 2 已对照完。recall 和 nDCG 过门禁，中文过时选中从 4 升到 13，安全门禁没过。下一步先做步骤 1 的查询侧上下文，过时消息留到步骤 3 的重排再压。
 3. 步骤 1（长消息重新索引；短聊天只改查询侧）。
 4. 步骤 3（本地模型服务新增重排，深度按查询类型变）。
 5. 视五类分数再做步骤 4、6。时间和事实更新已经有单独切片，步骤 4 用 `temporal` 和 `update` 看，不和查找类混在一起。步骤 5 只在指代类仍然短板时单独立项，不和步骤 3 绑在一起。

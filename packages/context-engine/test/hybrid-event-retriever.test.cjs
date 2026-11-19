@@ -8,6 +8,7 @@ const {
 } = require("@regenic/domain");
 const {
   HybridEventRetriever, DeterministicEventRetriever, DeterministicContextEngine, HYBRID_RETRIEVAL_PROFILE,
+  HYBRID_RRF_PROFILE, fuseHybridRoute,
 } = require("../dist");
 
 const descriptor = {
@@ -404,6 +405,58 @@ it("preserves uncovered lexical hits and reports partial authorized coverage", a
 it("rejects an authoritative change observed after model inference instead of storing stale evidence", async () => {
   await assert.rejects(fixture({ changeEpoch: true }).engine.assemble(request),
     (error) => error.code === "source_boundary");
+});
+
+it("normalizes each route before weighting vector above lexical", () => {
+  const lexical = { min: 1, max: 5 };
+  const vector = { min: 0.2, max: 0.8 };
+  assert.equal(fuseHybridRoute(HYBRID_RETRIEVAL_PROFILE, {
+    lexicalScore: 5, vectorScore: 0.8,
+  }, lexical, vector), 1);
+  assert.equal(fuseHybridRoute(HYBRID_RETRIEVAL_PROFILE, {
+    lexicalScore: 1, vectorScore: 0.2,
+  }, lexical, vector), 0);
+  assert.equal(fuseHybridRoute(HYBRID_RETRIEVAL_PROFILE, {
+    lexicalScore: 5, vectorScore: 0.5,
+  }, lexical, vector), 0.7);
+  assert.equal(fuseHybridRoute(HYBRID_RETRIEVAL_PROFILE, {
+    vectorScore: 0.8,
+  }, lexical, vector), 0.6);
+  assert.equal(fuseHybridRoute(HYBRID_RETRIEVAL_PROFILE, {
+    lexicalScore: 3,
+  }, { min: 3, max: 3 }, vector), 0.4);
+  assert.equal(fuseHybridRoute(HYBRID_RRF_PROFILE, {
+    lexicalRank: 1, vectorRank: 1,
+  }, lexical, vector), 1);
+});
+
+it("keeps a below-0.7 semantic hit in the default profile and drops it from the RRF profile", async () => {
+  const semantic = event("semantic", "部署失败时恢复上一版本。");
+  const sources = [semantic];
+  const plan = {
+    request, events: sources, read_epoch: "authority:1",
+    recorded_at: "2026-10-17T00:00:00.000Z", principal_policy_hash: "b".repeat(64),
+  };
+  const index = {
+    async matchAuthorized(input) {
+      return {
+        generation: generation.id, covered: input.authorized,
+        matched: [{ ...input.authorized[0], score: 0.4, chunk_ordinal: 0, start: 0, end: semantic.text.length }],
+      };
+    },
+  };
+  const provider = { descriptor, async countTokens() { return [12]; }, async embed() { return [[1, 0]]; } };
+  const admitted = await new HybridEventRetriever(new DeterministicEventRetriever(), provider, index, generation)
+    .retrieve(plan);
+  assert.equal(admitted.trace.profile, "personal-hybrid-thread-minmax-v5");
+  assert.equal(admitted.trace.mode, "hybrid");
+  assert.equal(admitted.candidates.some((entry) => entry.candidate.resource_id === "semantic"), true);
+  assert.equal(admitted.candidates.find((entry) => entry.candidate.resource_id === "semantic").candidate.scores.hybrid, 0.6);
+  const dropped = await new HybridEventRetriever(
+    new DeterministicEventRetriever(), provider, index, generation, undefined, HYBRID_RRF_PROFILE,
+  ).retrieve(plan);
+  assert.equal(dropped.trace.profile, HYBRID_RRF_PROFILE.version);
+  assert.equal(dropped.candidates.some((entry) => entry.candidate.resource_id === "semantic"), false);
 });
 
 it("does not disguise invalid/oversized query input as a successful lexical fallback", async () => {

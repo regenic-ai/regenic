@@ -67,7 +67,10 @@ authorized source. Policies or retrievers without these declarations retain
 eager materialization for compatibility.
 
 Lexical writes and authorized index lookups have no 10,000-key ceiling.
-The hybrid profile is `personal-hybrid-thread-rrf-v4`. It preserves Event-level
+The comparison profile remains `personal-hybrid-thread-rrf-v4`. The default
+profile is `personal-hybrid-thread-minmax-v5`: the vector route keeps its top-k,
+then both routes are min-max normalized and combined with weights 0.6 vector and
+0.4 lexical. v4 preserves Event-level
 lexical/vector RRF, then groups only authorized results by `thread_id`. The best
 Event, query-term coverage, and up to three non-duplicate evidence items determine
 the Thread score. Within a Thread, newly covered query terms and non-duplicate text
