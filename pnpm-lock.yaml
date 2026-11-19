@@ -697,9 +697,6 @@ importers:
       '@regenic/connector-contract':
         specifier: workspace:*
         version: link:../connector-contract
-      '@regenic/domain':
-        specifier: workspace:*
-        version: link:../domain
       '@regenic/plugin-host':
         specifier: workspace:*
         version: link:../plugin-host

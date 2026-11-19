@@ -1,0 +1,270 @@
+import type { ThreadPrompt } from "./attention";
+import { executorLocaleTables } from "./executor-copy";
+import {
+  taskInstructionOf,
+  type ExecutorCatalogEntry,
+  type ExecutorContext,
+  type ExecutorResumeInput,
+  type ExecutorRunHandle,
+  type ExecutorStartInput,
+  type ResultEnvelope,
+  type TaskExecutor,
+  type WorkRun,
+  type WorkRunStatus,
+} from "./executor";
+import { normalizeExecutorHttpUrl } from "./http-url";
+import type { JsonValue } from "./ingest";
+
+export interface HttpExecutorOptions {
+  executor_type: string;
+  label: string;
+  description?: string;
+  base_url: string;
+  auth_env?: string;
+  auth_token?: string;
+  timeout_ms?: number;
+  fetch?: typeof fetch;
+}
+
+const DEFAULT_TIMEOUT_MS = 15_000;
+
+export function httpExecutorCatalog(
+  options: Pick<HttpExecutorOptions, "executor_type" | "label" | "description">,
+): ExecutorCatalogEntry {
+  return {
+    executor_type: options.executor_type,
+    label: { literal: options.label },
+    description: options.description
+      ? { literal: options.description }
+      : "http.description",
+    attach: "absentee",
+    kind: "http",
+    agent: true,
+    fields: [],
+  };
+}
+
+export function createHttpTaskExecutor(options: HttpExecutorOptions): TaskExecutor {
+  const baseUrl = normalizeExecutorHttpUrl(options.base_url);
+  const request = options.fetch ?? fetch;
+  const timeoutMs = options.timeout_ms ?? DEFAULT_TIMEOUT_MS;
+  return {
+    executor_type: options.executor_type,
+
+    capabilities() {
+      return { start: true, resume: true, status: true, prompts: true };
+    },
+
+    locales() {
+      return executorLocaleTables;
+    },
+
+    catalog() {
+      return httpExecutorCatalog(options);
+    },
+
+    async start(input: ExecutorStartInput, ctx: ExecutorContext) {
+      const body = await callHttpExecutor(request, {
+        url: `${baseUrl}/v1/runs`,
+        method: "POST",
+        authEnv: options.auth_env,
+        authToken: options.auth_token,
+        timeoutMs,
+        env: ctx.env,
+        payload: {
+          work_item_id: input.work_item.id,
+          thread_id: input.work_item.thread_id,
+          recipe_id: input.recipe.id,
+          task_instruction:
+            input.task_instruction ?? taskInstructionOf(input.recipe.executor_config),
+          evidence_text: input.evidence_text,
+          executor_config: input.recipe.executor_config,
+          ...(input.run_id ? { run_id: input.run_id } : {}),
+        },
+        idempotencyKey: input.run_id,
+      });
+      return handleFromHttp(body);
+    },
+
+    async resume(input: ExecutorResumeInput, ctx: ExecutorContext) {
+      const runId = requireExternalRunId(input.run);
+      const body = await callHttpExecutor(request, {
+        url: `${baseUrl}/v1/runs/${encodeURIComponent(runId)}/resume`,
+        method: "POST",
+        authEnv: options.auth_env,
+        authToken: options.auth_token,
+        timeoutMs,
+        env: ctx.env,
+        payload: {
+          work_item_id: input.work_item.id,
+          recipe_id: input.recipe.id,
+          answer: input.answer ?? null,
+        },
+      });
+      return handleFromHttp(body, runId);
+    },
+
+    async status(run: WorkRun, ctx: ExecutorContext) {
+      const runId = requireExternalRunId(run);
+      const body = await callHttpExecutor(request, {
+        url: `${baseUrl}/v1/runs/${encodeURIComponent(runId)}`,
+        method: "GET",
+        authEnv: options.auth_env,
+        authToken: options.auth_token,
+        timeoutMs,
+        env: ctx.env,
+        signal: ctx.signal,
+      });
+      return handleFromHttp(body, runId);
+    },
+
+    async cancel(run: WorkRun, ctx: ExecutorContext) {
+      const runId = requireExternalRunId(run);
+      const body = await callHttpExecutor(request, {
+        url: `${baseUrl}/v1/runs/${encodeURIComponent(runId)}/cancel`,
+        method: "POST",
+        authEnv: options.auth_env,
+        authToken: options.auth_token,
+        timeoutMs,
+        env: ctx.env,
+        payload: { work_item_id: run.work_item_id },
+        signal: ctx.signal,
+      });
+      return handleFromHttp(body, runId);
+    },
+  };
+}
+
+export function handleFromHttp(
+  body: unknown,
+  fallbackId?: string,
+): ExecutorRunHandle {
+  const record = asRecord(body);
+  const status = parseHttpRunStatus(record.status);
+  const external =
+    typeof record.external_run_id === "string" && record.external_run_id.trim()
+      ? record.external_run_id.trim()
+      : fallbackId;
+  if (!external) {
+    throw new Error("HTTP executor returned no external run identity");
+  }
+  const agent =
+    typeof record.agent_thread_id === "string" && record.agent_thread_id.trim()
+      ? record.agent_thread_id.trim()
+      : undefined;
+  return {
+    external_run_id: external,
+    agent_thread_id: agent,
+    status,
+    result: parseHttpResult(record.result),
+    prompts: parseHttpPrompts(record.prompts),
+  };
+}
+
+function requireExternalRunId(run: WorkRun): string {
+  if (!run.external_run_id?.trim()) {
+    throw new Error("HTTP executor requires a known external run identity");
+  }
+  return run.external_run_id;
+}
+
+async function callHttpExecutor(
+  request: typeof fetch,
+  input: {
+    url: string;
+    method: "GET" | "POST";
+    authEnv?: string;
+    authToken?: string;
+    timeoutMs: number;
+    env: NodeJS.ProcessEnv;
+    signal?: AbortSignal;
+    payload?: Record<string, unknown>;
+    idempotencyKey?: string;
+  },
+): Promise<unknown> {
+  const headers: Record<string, string> = {
+    accept: "application/json",
+  };
+  const token =
+    input.authToken?.trim() ||
+    (input.authEnv ? input.env[input.authEnv]?.trim() : "");
+  if (token) {
+    headers.authorization = `Bearer ${token}`;
+  }
+  const init: RequestInit = {
+    method: input.method,
+    headers,
+    signal: input.signal
+      ? AbortSignal.any([AbortSignal.timeout(input.timeoutMs), input.signal])
+      : AbortSignal.timeout(input.timeoutMs),
+  };
+  if (input.idempotencyKey) {
+    headers["idempotency-key"] = input.idempotencyKey;
+  }
+  if (input.payload) {
+    headers["content-type"] = "application/json";
+    init.body = JSON.stringify(input.payload);
+  }
+  let response: Response;
+  try {
+    response = await request(input.url, init);
+  } catch (error) {
+    throw new Error("HTTP executor request could not be confirmed", { cause: error });
+  }
+  if (!response.ok) {
+    throw new Error(`HTTP executor returned HTTP ${response.status}`);
+  }
+  try {
+    return await response.json();
+  } catch (error) {
+    throw new Error("HTTP executor returned invalid JSON", { cause: error });
+  }
+}
+
+function parseHttpRunStatus(value: unknown): WorkRunStatus {
+  if (
+    value === "running" ||
+    value === "waiting_human" ||
+    value === "completed" ||
+    value === "failed" ||
+    value === "cancelled"
+  ) {
+    return value;
+  }
+  throw new Error("HTTP executor returned an invalid run status");
+}
+
+function parseHttpResult(value: unknown): ResultEnvelope | undefined {
+  const record = asRecord(value);
+  if (typeof record.summary !== "string" || !record.summary.trim()) {
+    return undefined;
+  }
+  return {
+    summary: record.summary.trim(),
+    evidence_event_ids: Array.isArray(record.evidence_event_ids)
+      ? record.evidence_event_ids.filter(
+          (item): item is string => typeof item === "string",
+        )
+      : undefined,
+  };
+}
+
+function parseHttpPrompts(value: unknown): ThreadPrompt[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const prompts = value.filter(
+    (item): item is ThreadPrompt =>
+      Boolean(item) &&
+      typeof (item as ThreadPrompt).prompt_id === "string" &&
+      Array.isArray((item as ThreadPrompt).questions),
+  );
+  return prompts.length > 0 ? prompts : undefined;
+}
+
+function asRecord(value: unknown): Record<string, JsonValue> {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, JsonValue>;
+  }
+  return {};
+}
