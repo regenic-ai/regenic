@@ -33,17 +33,19 @@
 LoCoMo 和中文的 PerLTQA 也像个人记忆，但是 CC BY-NC，没有放进这个 MIT 仓库。ConTEB 测的是长文档切块，不拿来验消息搜索。本地飞书和 Cursor 记录是私人会话，不入库。
 
 - 标注 `packages/context-engine/evaluation/semantic-search-memory-v1.json`，正文 `semantic-search-memory-v1-events.jsonl`。重建脚本是 `build-semantic-search-memory.mjs`，许可原文在 `LONGMEMEVAL_LICENSE.txt`。
-- 五类分开记分。`lookup` 12 条：用户自己说出事实的单会话。`anaphora` 12 条：问句带 that / remind me / previous 等回指，答案词不在问句里，再留下和证据轮词面重合最低的 12 条。`aggregate` 12 条：跨会话，至少两轮证据。`temporal` 12 条：时间推理。`update` 8 条：事实后来改过。另有 6 条官方拒答，`relevant_event_ids` 为空。
-- 语料是这些题的证据会话放进同一个索引，1171 条消息。这不是论文里每人几十段干扰历史，词法分会比完整 haystack 好做。会话时间用原数据；同一会话里的轮次只按序号加秒，用来区分先后。
-- `evaluateContextRetrieval` 固定 `k = 10`。任务枚举是 lookup、anaphora、aggregate、temporal、update、abstain。英文集用前五类，中文集六类都用。
-- 当前词法基线（`DeterministicEventRetriever`，k = 10）：总分 recall 0.482、nDCG 0.356、MRR 0.349。lookup recall 0.667 / nDCG 0.445；anaphora 0.333 / 0.261；aggregate 0.375 / 0.252；temporal 0.375 / 0.325；update 0.750 / 0.565。指代和汇总是短板。6 条拒答都被词法返回了别的会话，`negative_selection_rate` 为 1，`safety_passed` 为 false。
-- 英文验收看总分、五类 recall@10 与 nDCG@10，以及负例选出率。任一类低于上一步，或负例选出率升高，这一步不保留。
+- 五类分开记分。`lookup` 12 条：用户自己说出事实的单会话。`anaphora` 12 条：问句带 that / remind me / previous 等回指，答案词不在问句里，再留下和证据轮词面重合最低的 12 条。这是指代里最难的一截，不是平均水平。`aggregate` 12 条：跨会话，至少两轮证据。`temporal` 12 条：时间推理。`update` 8 条：事实后来改过。
+- 官方拒答题不放进来。检索总会返回前 k 条，没有“不返回”的阈值，负例选出率只会是 1。拒答放在回答层测。
+- 语料是这些题的证据会话放进同一个索引，1065 条消息。这不是论文里每人几十段干扰历史，词法分会比完整 haystack 好做。会话时间用原数据；同一会话里的轮次只按序号加秒，用来区分先后。
+- `evaluateContextRetrieval` 固定 `k = 10`。任务枚举是 lookup、anaphora、aggregate、temporal、update、boundary。英文集用前五类，中文集六类都用。
+- 当前词法基线（`DeterministicEventRetriever`，k = 10）：总分 recall 0.482、nDCG 0.367、MRR 0.361。lookup recall 0.667 / nDCG 0.477；anaphora 0.333 / 0.261；aggregate 0.375 / 0.252；temporal 0.375 / 0.326；update 0.750 / 0.598。指代和汇总是短板。
+- 英文验收看总分和五类 recall@10 与 nDCG@10。任一类低于上一步，这一步不保留。
 
-中文短消息另用 TimlMemBench（Zhou、Sun、Xie 等，Findings of EMNLP 2026，中文 canonical，CC BY 4.0）。消息中位 25 字。相关轮次用官方 `evidence_turn_ids`。旧说法来自 `forbidden_memory_ids` 指向的出处，放进 `stale_event_ids`。
+中文短消息另用 TimlMemBench（Zhou、Sun、Xie 等，Findings of EMNLP 2026，中文 canonical，CC BY 4.0）。消息中位 25 字。相关轮次用官方 `evidence_turn_ids`。
 
 - 标注 `packages/context-engine/evaluation/semantic-search-zh-v1.json`，正文 `semantic-search-zh-v1-events.jsonl`。重建脚本是 `build-semantic-search-zh.mjs`，许可说明在 `TIMLMEMBENCH_LICENSE.txt`。
-- 68 题，38 段会话世界，3127 条消息。`lookup` 12：信息抽取。`anaphora` 12：40 字上下、带“这个 / 那个 / 上次 / 他 / 她”的短问。`aggregate` 12：证据跨至少两个会话。`temporal` 12。`update` 12：当前事实之外还有被标成过时的轮次。`abstain` 8：问的是没有说出口的私事，证据是把话拦住的那几句，不是空结果。
-- 词法基线（k = 10）：总分 recall 0.221、nDCG 0.174、MRR 0.280。lookup 0.229 / 0.161；anaphora 0.243 / 0.168；aggregate 0.224 / 0.200；temporal 0.121 / 0.067；update 0.214 / 0.213；abstain 0.333 / 0.266。时间类是短板。24 题带过时轮次，词法仍选中了 6 次，`safety_passed` 为 false。
+- 68 题，35 段会话世界，2875 条消息。`lookup` 12：信息抽取。`anaphora` 12：问句带“那个 / 上次 / 那边 / 那次”这类指代，不带日期，也不是“X 是谁”；再留下和证据句字面重合最低的 12 条。`aggregate` 12：证据跨至少两个会话。`temporal` 12。`update` 12：当前事实之外还有被标成过时的轮次。`boundary` 8：问的是没有说出口的私事，要找回把话拦住的那几句，找回越多越好。
+- 过时轮次只取真正说出旧事实的句子：被禁止记忆的出处里，和旧事实字面重合不低于 0.15 的句子，至少留重合最高的一句。铺垫和闲聊不算。
+- 词法基线（k = 10）：总分 recall 0.196、nDCG 0.152、MRR 0.236。lookup 0.229 / 0.161；anaphora 0.063 / 0.032；aggregate 0.251 / 0.222；temporal 0.121 / 0.068；update 0.222 / 0.198；boundary 0.333 / 0.266。指代和时间是短板。23 题带过时轮次，词法选中了 4 次，`safety_passed` 为 false。
 - 中文验收看这六类的 recall@10 与 nDCG@10，以及过时轮次被选中的次数。低于上一步，或过时选中次数升高，这一步不保留。
 - `semantic-search-accuracy-v1` 仍是合成接线，不参与验收。`chinese-retrieval` 夹具继续覆盖分词边界。
 
@@ -111,4 +113,4 @@ LoCoMo 和中文的 PerLTQA 也像个人记忆，但是 CC BY-NC，没有放进�
 4. 步骤 3（本地模型服务新增重排，深度按查询类型变）。
 5. 视五类分数再做步骤 4、6。时间和事实更新已经有单独切片，步骤 4 用 `temporal` 和 `update` 看，不和查找类混在一起。步骤 5 只在指代类仍然短板时单独立项，不和步骤 3 绑在一起。
 
-每一步的验收标准：英文集的总分和五类 recall@10、nDCG@10 不低于上一步，负例选出率不升高；中文集六类 recall@10、nDCG@10 不低于上一步，过时轮次被选中的次数不升高。现有 context-engine、API、desktop 测试通过。
+每一步的验收标准：英文集的总分和五类 recall@10、nDCG@10 不低于上一步；中文集六类 recall@10、nDCG@10 不低于上一步，过时轮次被选中的次数不升高。现有 context-engine、API、desktop 测试通过。

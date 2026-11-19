@@ -22,11 +22,11 @@ function engine(fixture) {
 describe("Semantic search Chinese baseline", () => {
   it("scores the TimlMemBench subset at k=10", async (t) => {
     const fixture = semanticSearchZhFixture();
-    const counts = Object.fromEntries(["lookup", "anaphora", "aggregate", "temporal", "update", "abstain"].map((task) => [
+    const counts = Object.fromEntries(["lookup", "anaphora", "aggregate", "temporal", "update", "boundary"].map((task) => [
       task,
       fixture.labels.cases.filter((value) => value.task === task).length,
     ]));
-    assert.deepEqual(counts, { lookup: 12, anaphora: 12, aggregate: 12, temporal: 12, update: 12, abstain: 8 });
+    assert.deepEqual(counts, { lookup: 12, anaphora: 12, aggregate: 12, temporal: 12, update: 12, boundary: 8 });
     assert.equal(fixture.events.length > 1000, true);
     const report = await evaluateContextRetrieval(engine(fixture), fixture.dataset, { k: 10 });
     t.diagnostic(JSON.stringify({
@@ -48,11 +48,11 @@ describe("Semantic search Chinese baseline", () => {
     assert.equal(report.metrics.unauthorized_selections, 0);
     assert.equal(report.metrics.citation_coverage, 1);
     assert.equal(report.metrics.negative_selection_rate, 0);
-    assert.equal(report.metrics.stale_selections, 6);
+    assert.equal(report.metrics.stale_selections, 4);
     assert.equal(report.metrics.safety_passed, false);
-    assert.equal(report.metrics.mean_recall_at_k, 0.221078431372);
-    assert.equal(report.metrics.mean_ndcg_at_k, 0.1741960511);
-    assert.equal(report.metrics.mean_reciprocal_rank_at_k, 0.279686041083);
+    assert.equal(report.metrics.mean_recall_at_k, 0.195588235294);
+    assert.equal(report.metrics.mean_ndcg_at_k, 0.151564030967);
+    assert.equal(report.metrics.mean_reciprocal_rank_at_k, 0.236093604108);
     assert.deepEqual(report.metrics.by_task, {
       lookup: {
         positive_case_count: 12,
@@ -62,29 +62,29 @@ describe("Semantic search Chinese baseline", () => {
       },
       anaphora: {
         positive_case_count: 12,
-        mean_recall_at_k: 0.243055555555,
-        mean_reciprocal_rank_at_k: 0.262962962963,
-        mean_ndcg_at_k: 0.168163476228,
+        mean_recall_at_k: 0.0625,
+        mean_reciprocal_rank_at_k: 0.030092592593,
+        mean_ndcg_at_k: 0.031798685611,
       },
       aggregate: {
         positive_case_count: 12,
-        mean_recall_at_k: 0.223611111111,
-        mean_reciprocal_rank_at_k: 0.322222222222,
-        mean_ndcg_at_k: 0.20027735358,
+        mean_recall_at_k: 0.251388888889,
+        mean_reciprocal_rank_at_k: 0.364814814815,
+        mean_ndcg_at_k: 0.22248076303,
       },
       temporal: {
         positive_case_count: 12,
         mean_recall_at_k: 0.120833333333,
-        mean_reciprocal_rank_at_k: 0.077876984127,
-        mean_ndcg_at_k: 0.066564717883,
+        mean_reciprocal_rank_at_k: 0.080654761905,
+        mean_ndcg_at_k: 0.067561671109,
       },
       update: {
         positive_case_count: 12,
-        mean_recall_at_k: 0.213888888889,
-        mean_reciprocal_rank_at_k: 0.489583333333,
-        mean_ndcg_at_k: 0.213221228431,
+        mean_recall_at_k: 0.222222222222,
+        mean_reciprocal_rank_at_k: 0.43005952381,
+        mean_ndcg_at_k: 0.198137542287,
       },
-      abstain: {
+      boundary: {
         positive_case_count: 8,
         mean_recall_at_k: 0.333333333333,
         mean_reciprocal_rank_at_k: 0.303571428571,

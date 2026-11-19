@@ -27,7 +27,7 @@ describe("Semantic search memory baseline", () => {
       fixture.labels.cases.filter((value) => value.task === task && value.relevant_event_ids.length > 0).length,
     ]));
     assert.deepEqual(counts, { lookup: 12, anaphora: 12, aggregate: 12, temporal: 12, update: 8 });
-    assert.equal(fixture.labels.cases.filter((value) => value.relevant_event_ids.length === 0).length, 6);
+    assert.equal(fixture.labels.cases.filter((value) => value.relevant_event_ids.length === 0).length, 0);
     const report = await evaluateContextRetrieval(engine(fixture), fixture.dataset, { k: 10 });
     t.diagnostic(JSON.stringify({
       recall: report.metrics.mean_recall_at_k,
@@ -42,21 +42,21 @@ describe("Semantic search memory baseline", () => {
     assert.equal(report.dataset_id, "semantic-search-memory-v1");
     assert.equal(report.k, 10);
     assert.equal(report.metrics.positive_case_count, 56);
-    assert.equal(report.metrics.negative_case_count, 6);
+    assert.equal(report.metrics.negative_case_count, 0);
     assert.equal(report.metrics.unauthorized_selections, 0);
     assert.equal(report.metrics.stale_selections, 0);
     assert.equal(report.metrics.citation_coverage, 1);
-    assert.equal(report.metrics.negative_selection_rate, 1);
-    assert.equal(report.metrics.safety_passed, false);
+    assert.equal(report.metrics.negative_selection_rate, 0);
+    assert.equal(report.metrics.safety_passed, true);
     assert.equal(report.metrics.mean_recall_at_k, 0.482142857143);
-    assert.equal(report.metrics.mean_ndcg_at_k, 0.355574589933);
-    assert.equal(report.metrics.mean_reciprocal_rank_at_k, 0.349007936508);
+    assert.equal(report.metrics.mean_ndcg_at_k, 0.367307174459);
+    assert.equal(report.metrics.mean_reciprocal_rank_at_k, 0.361231575964);
     assert.deepEqual(report.metrics.by_task, {
       lookup: {
         positive_case_count: 12,
         mean_recall_at_k: 0.666666666667,
-        mean_reciprocal_rank_at_k: 0.371527777778,
-        mean_ndcg_at_k: 0.444931990923,
+        mean_reciprocal_rank_at_k: 0.414682539683,
+        mean_ndcg_at_k: 0.477176882837,
       },
       anaphora: {
         positive_case_count: 12,
@@ -74,13 +74,13 @@ describe("Semantic search memory baseline", () => {
         positive_case_count: 12,
         mean_recall_at_k: 0.375,
         mean_reciprocal_rank_at_k: 0.402777777778,
-        mean_ndcg_at_k: 0.325294472693,
+        mean_ndcg_at_k: 0.325905840193,
       },
       update: {
         positive_case_count: 8,
         mean_recall_at_k: 0.75,
-        mean_reciprocal_rank_at_k: 0.5125,
-        mean_ndcg_at_k: 0.564968738792,
+        mean_reciprocal_rank_at_k: 0.533333333333,
+        mean_ndcg_at_k: 0.597812441354,
       },
     });
   });

@@ -4,7 +4,7 @@
   "source_dataset": "LongMemEval cleaned oracle (https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned)",
   "license": "MIT",
   "copyright": "Copyright (c) 2024 Di Wu",
-  "note": "Shared index of selected evidence sessions, not the paper's full haystack. Relevance is the source has_answer flag. single-session-user becomes lookup; multi-session with two or more answer turns becomes aggregate; temporal-reasoning becomes temporal; knowledge-update becomes update. Those four take the first questions in question_id order under the answer-length cap. Anaphora takes referential single-session-assistant questions whose answer words are mostly absent from the question, then the twelve with the lowest content-word overlap between the question and the answer turns. Questions with no answer turn are abstentions. Session time is the source session stamp; a turn adds its index in seconds.",
+  "note": "Shared index of selected evidence sessions, not the paper's full haystack. Relevance is the source has_answer flag. single-session-user becomes lookup; multi-session with two or more answer turns becomes aggregate; temporal-reasoning becomes temporal; knowledge-update becomes update. Those four take the first questions in question_id order under the answer-length cap. Anaphora takes referential single-session-assistant questions whose answer words are mostly absent from the question, then the twelve with the lowest content-word overlap between the question and the answer turns. Questions with no answer turn are left out: retrieval always returns its top k, so abstention belongs to the answer layer. Session time is the source session stamp; a turn adds its index in seconds.",
   "cases": [
     {
       "id": "lme-001be529",
@@ -600,54 +600,6 @@
         "lme-0ddfec37-s0-t0",
         "lme-0ddfec37-s1-t0"
       ]
-    },
-    {
-      "id": "lme-031748ae_abs",
-      "task": "update",
-      "source_question_id": "031748ae_abs",
-      "source_question_type": "knowledge-update",
-      "query": "How many engineers do I lead when I just started my new role as Software Engineer Manager?",
-      "relevant_event_ids": []
-    },
-    {
-      "id": "lme-0862e8bf_abs",
-      "task": "lookup",
-      "source_question_id": "0862e8bf_abs",
-      "source_question_type": "single-session-user",
-      "query": "What is the name of my hamster?",
-      "relevant_event_ids": []
-    },
-    {
-      "id": "lme-0ddfec37_abs",
-      "task": "update",
-      "source_question_id": "0ddfec37_abs",
-      "source_question_type": "knowledge-update",
-      "query": "How many autographed football have I added to my collection in the first three months of collection?",
-      "relevant_event_ids": []
-    },
-    {
-      "id": "lme-15745da0_abs",
-      "task": "lookup",
-      "source_question_id": "15745da0_abs",
-      "source_question_type": "single-session-user",
-      "query": "How long have I been collecting vintage films?",
-      "relevant_event_ids": []
-    },
-    {
-      "id": "lme-19b5f2b3_abs",
-      "task": "lookup",
-      "source_question_id": "19b5f2b3_abs",
-      "source_question_type": "single-session-user",
-      "query": "How long was I in Korea for?",
-      "relevant_event_ids": []
-    },
-    {
-      "id": "lme-2133c1b5_abs",
-      "task": "update",
-      "source_question_id": "2133c1b5_abs",
-      "source_question_type": "knowledge-update",
-      "query": "How long have I been living in my current apartment in Shinjuku?",
-      "relevant_event_ids": []
     }
   ]
 }

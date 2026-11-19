@@ -11,7 +11,7 @@ const LABEL_KEYS = new Set([
   "relevant_event_ids",
   "stale_event_ids",
 ]);
-const TASKS = ["lookup", "anaphora", "aggregate", "temporal", "update", "abstain"];
+const TASKS = ["lookup", "anaphora", "aggregate", "temporal", "update", "boundary"];
 
 function semanticSearchZhFixture() {
   const root = join(__dirname, "../../evaluation");

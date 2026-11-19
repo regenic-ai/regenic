@@ -8,7 +8,7 @@ import {
 
 export const CONTEXT_EVALUATION_SCHEMA_VERSION = "1.0" as const;
 
-export const SEMANTIC_SEARCH_TASKS = ["lookup", "anaphora", "aggregate", "temporal", "update", "abstain"] as const;
+export const SEMANTIC_SEARCH_TASKS = ["lookup", "anaphora", "aggregate", "temporal", "update", "boundary"] as const;
 
 export type SemanticSearchTask = (typeof SEMANTIC_SEARCH_TASKS)[number];
 

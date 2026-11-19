@@ -6,7 +6,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 const ANAPHORA = /\b(that|those|the one|remind me|previous|last time|earlier)\b/i;
 const STOP = new Set("a an the of to and or in on for with me you we our my your that this those these what was were is are be been can could would should how many much when where who whom which about from by at it its as into over after before again last time previous earlier remind conversation chat one did say".split(" "));
 const QUOTA = { lookup: 12, anaphora: 12, aggregate: 12, temporal: 12, update: 8 };
-const NEGATIVE_QUOTA = 6;
+const NEGATIVE_QUOTA = 0;
 const ANSWER_CHAR_CAP = { lookup: 600, anaphora: 1800, aggregate: 800, temporal: 800, update: 800 };
 
 const sourcePath = process.argv[2];
@@ -111,7 +111,7 @@ const labels = {
   source_dataset: "LongMemEval cleaned oracle (https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned)",
   license: "MIT",
   copyright: "Copyright (c) 2024 Di Wu",
-  note: "Shared index of selected evidence sessions, not the paper's full haystack. Relevance is the source has_answer flag. single-session-user becomes lookup; multi-session with two or more answer turns becomes aggregate; temporal-reasoning becomes temporal; knowledge-update becomes update. Those four take the first questions in question_id order under the answer-length cap. Anaphora takes referential single-session-assistant questions whose answer words are mostly absent from the question, then the twelve with the lowest content-word overlap between the question and the answer turns. Questions with no answer turn are abstentions. Session time is the source session stamp; a turn adds its index in seconds.",
+  note: "Shared index of selected evidence sessions, not the paper's full haystack. Relevance is the source has_answer flag. single-session-user becomes lookup; multi-session with two or more answer turns becomes aggregate; temporal-reasoning becomes temporal; knowledge-update becomes update. Those four take the first questions in question_id order under the answer-length cap. Anaphora takes referential single-session-assistant questions whose answer words are mostly absent from the question, then the twelve with the lowest content-word overlap between the question and the answer turns. Questions with no answer turn are left out: retrieval always returns its top k, so abstention belongs to the answer layer. Session time is the source session stamp; a turn adds its index in seconds.",
   cases,
 };
 writeFileSync(new URL("./semantic-search-memory-v1.json", import.meta.url), `${JSON.stringify(labels, null, 2)}\n`);
