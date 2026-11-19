@@ -354,7 +354,7 @@ describe("connector catalog hints", () => {
     assert.deepEqual(catalog.map((item) => item.connector_type), []);
     assert.deepEqual(
       firstParty({}).map((item) => item.connector_type),
-      ["dsh-session", "feishu-chat", "cursor-agent"],
+      ["dsh-session", "feishu-chat", "cursor-agent", "server-app"],
     );
     assert.equal(connectorAllowsMultiple("dsh-session", firstParty()), true);
     assert.equal(connectorAllowsMultiple("extra-review"), true);

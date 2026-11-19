@@ -178,6 +178,8 @@ export function ConsoleApp() {
   const [host, setHost] = useState<HostStats | null>(null);
   const [sortMode, setSortMode] = useState<InboxSortMode>("normal");
   const [listView, setListView] = useState<InboxListView>("shown");
+  const sortModeChosen = useRef(false);
+  const listViewChosen = useRef(false);
   const [recipeSeed, setRecipeSeed] = useState<RecipeSeed | null>(null);
   const draftsRef = useRef(drafts);
   draftsRef.current = drafts;
@@ -1094,8 +1096,13 @@ export function ConsoleApp() {
     let cancelled = false;
     void fetchUiPrefs()
       .then((prefs) => {
-        if (!cancelled) {
+        if (cancelled) {
+          return;
+        }
+        if (!sortModeChosen.current) {
           setSortMode(prefs.inbox_sort);
+        }
+        if (!listViewChosen.current) {
           applyListView(prefs.inbox_list);
         }
       })
@@ -1574,10 +1581,12 @@ export function ConsoleApp() {
     [persistPrefs],
   );
   const changeSortMode = useCallback((mode: InboxSortMode) => {
+    sortModeChosen.current = true;
     setSortMode(mode);
     void saveUiPrefs({ inbox_sort: mode }).catch(() => undefined);
   }, []);
   const changeListView = useCallback((next: InboxListView) => {
+    listViewChosen.current = true;
     applyListView(next);
     void saveUiPrefs({ inbox_list: next }).catch(() => undefined);
   }, []);

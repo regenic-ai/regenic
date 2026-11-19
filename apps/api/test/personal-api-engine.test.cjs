@@ -97,7 +97,7 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
       assert.equal(engine.installations[0].can_reply, false);
       assert.equal(engine.installations[0].can_create, false);
       assert.equal(engine.installations[0].last_attempt, null);
-      assert.equal(engine.catalog.length, 3);
+      assert.equal(engine.catalog.length, 4);
       const legacySync = await fetch(`${origin}/v1/me/connectors/slack-1/sync`, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -127,10 +127,16 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
       assert.equal(engine.catalog[2].fields[1].options[0].value, "composer-2.5");
       assert.equal(engine.catalog[2].prerequisites[0].key, "CURSOR_API_KEY");
       assert.equal(engine.catalog[2].prerequisites[0].required, false);
+      assert.equal(engine.catalog[3].connector_type, "server-app");
+      assert.equal(engine.catalog[3].installed, false);
+      assert.equal(engine.catalog[3].fields[0].key, "base_url");
+      assert.equal(engine.catalog[3].fields[0].required, true);
+      assert.equal(engine.catalog[3].fields[1].key, "token");
+      assert.equal(engine.catalog[3].fields[1].secret, true);
       assert.equal(engine.catalog[0].import_files, undefined);
       assert.equal(engine.catalog[0].singleton, false);
       const firstParty = engine.plugins.filter((item) => item.origin === "first_party");
-      assert.equal(firstParty.length, 3);
+      assert.equal(firstParty.length, 4);
       assert.ok(firstParty.every((item) => item.trust === "core" && item.status === "loaded"));
       assert.equal(typeof engine.plugin_dir, "string");
       const listed = await (await fetch(`${origin}/v1/me/plugins`)).json();
