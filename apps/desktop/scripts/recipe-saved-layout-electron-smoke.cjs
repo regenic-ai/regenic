@@ -56,11 +56,14 @@ async function rendererSmoke() {
             const separated = actions.top >= hit.bottom - 1 || actions.left >= hit.right - 1;
             if (!separated) problems.push(name + ": actions overlap the summary");
             if (hit.width < 220) problems.push(name + ": summary squeezed to " + Math.round(hit.width) + "px");
-            for (const value of card.querySelectorAll(".recipe-chain-value")) {
-              if (value.clientWidth < 80 && value.scrollWidth > value.clientWidth + 1) {
-                problems.push(name + ": chain value '" + value.textContent + "' squeezed to " + value.clientWidth + "px");
-              }
+            const summary = card.querySelector(".recipe-card-summary");
+            if (!summary) problems.push(name + ": missing one-line summary");
+            else if (summary.getClientRects().length > 1) problems.push(name + ": summary wraps");
+            if (card.querySelector(".recipe-chain, .recipe-run-history, .recipe-card-how")) {
+              problems.push(name + ": list still expands the chain, instruction, or run history");
             }
+            const rowHeight = Math.round(card.getBoundingClientRect().height);
+            if (rowHeight > 84) problems.push(name + ": row is " + rowHeight + "px tall");
             for (const button of card.querySelectorAll(".install-actions button")) {
               if (button.scrollWidth > button.clientWidth + 1) {
                 problems.push(name + ": action '" + button.textContent.trim() + "' is clipped");

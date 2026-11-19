@@ -1902,7 +1902,11 @@ export class SqliteAuthorityStore
           this.repairPreMergeLifecycleSchema();
           this.database.exec(migration.sql);
         } else if (migration.version === 88) {
-          this.database.exec(migration.sql);
+          // Upgrade fixtures rewind user_version on a database that already
+          // has this column. A real older database still receives the ALTER.
+          if (!this.columnExists("recipes", "flow_json")) {
+            this.database.exec(migration.sql);
+          }
           backfillRecipeFlowJson(this.database);
         } else {
           this.database.exec(migration.sql);

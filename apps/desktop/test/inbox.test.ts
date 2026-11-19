@@ -14,6 +14,9 @@ import {
   holdOpenedThread,
   filterInboxThreads,
   filterInboxThreadsByTitle,
+  shouldScanInboxSearch,
+  inboxSearchAwaitingOlder,
+  INBOX_SEARCH_AUTO_PAGES,
   inboxRuleOptions,
   mergeInboxThreadLists,
   adjacentInboxThreadId,
@@ -203,6 +206,48 @@ describe("inbox title search", () => {
       ),
       ["dsh:named", "dsh:label"],
     );
+  });
+
+  it("keeps scanning unloaded pages while a title search is active, then stops at the cap", () => {
+    const base = {
+      searching: true,
+      hasOlder: true,
+      loading: false,
+      pinnedOnly: false,
+      scannedPages: 0,
+      budget: INBOX_SEARCH_AUTO_PAGES,
+    };
+    assert.equal(shouldScanInboxSearch(base), true);
+    assert.equal(shouldScanInboxSearch({ ...base, loading: true }), false);
+    assert.equal(shouldScanInboxSearch({ ...base, pinnedOnly: true }), false);
+    assert.equal(shouldScanInboxSearch({ ...base, hasOlder: false }), false);
+    assert.equal(shouldScanInboxSearch({ ...base, searching: false }), false);
+    assert.equal(
+      shouldScanInboxSearch({ ...base, scannedPages: INBOX_SEARCH_AUTO_PAGES }),
+      false,
+    );
+    assert.equal(
+      shouldScanInboxSearch({
+        ...base,
+        scannedPages: INBOX_SEARCH_AUTO_PAGES,
+        budget: INBOX_SEARCH_AUTO_PAGES * 2,
+      }),
+      true,
+    );
+  });
+
+  it("offers older pages only when the loaded rows missed the title", () => {
+    const base = {
+      searching: true,
+      hasOlder: true,
+      pinnedOnly: false,
+      titleHits: 0,
+    };
+    assert.equal(inboxSearchAwaitingOlder(base), true);
+    assert.equal(inboxSearchAwaitingOlder({ ...base, titleHits: 2 }), false);
+    assert.equal(inboxSearchAwaitingOlder({ ...base, pinnedOnly: true }), false);
+    assert.equal(inboxSearchAwaitingOlder({ ...base, hasOlder: false }), false);
+    assert.equal(inboxSearchAwaitingOlder({ ...base, searching: false }), false);
   });
 
   it("stays on the current thread at the ends of the visible list", () => {

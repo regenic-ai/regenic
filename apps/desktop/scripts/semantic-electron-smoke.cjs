@@ -321,7 +321,7 @@ async function main() {
       clearTimeout(timer);
       pageLoad = undefined;
     }
-    await waitFor(() => evaluate('Boolean(document.querySelector(\'nav button[aria-label="Inbox"]\'))'),
+    await waitFor(() => evaluate('Boolean(document.querySelector(\'nav button[aria-label="Workbench"]\'))'),
       "reloaded console navigation");
   }
   async function api(path, body) {
@@ -499,7 +499,7 @@ async function main() {
     }
     const lifecycleWork = await seedLifecycleWork(installedExecutor.id);
     await reloadRenderer();
-    await click('nav button[aria-label="Inbox"]');
+    await click('nav button[aria-label="Workbench"]');
     for (const fixture of lifecycleWork) {
       const source = await api(`/v1/me/inbox/${fixture.event.id}`);
       assert.equal(source.work.run_id, fixture.run.id);
@@ -573,7 +573,7 @@ async function main() {
       }, "restarted desktop API");
       assert.equal(JSON.parse(readFileSync(lockPath, "utf8")).pid, child.pid);
       await checkLifecycleWork(lifecycleWork);
-      await click('nav button[aria-label="Inbox"]');
+      await click('nav button[aria-label="Workbench"]');
       for (const fixture of lifecycleWork) {
         const source = await api(`/v1/me/inbox/${fixture.event.id}`);
         assert.equal(source.work.acknowledged_run_id, fixture.run.id);
@@ -607,7 +607,7 @@ async function main() {
       }
       const [fixture] = await seedLifecycleWork(installedExecutor.id, ["inflight"]);
       executionStates.set(fixture.run.external_run_id, { status: "running" });
-      await click('nav button[aria-label="Inbox"]');
+      await click('nav button[aria-label="Workbench"]');
       const source = await api(`/v1/me/inbox/${fixture.event.id}`);
       await waitFor(() => evaluate('Boolean(document.querySelector(".list-views button"))'),
         "in-flight acknowledgment inbox tabs");
@@ -690,7 +690,7 @@ async function main() {
       assert.deepEqual(await readState(), before);
       const recoveredSource = await api(`/v1/me/inbox/${fixture.event.id}`);
       assert.equal(recoveredSource.work.acknowledged_run_id, undefined);
-      await click('nav button[aria-label="Inbox"]');
+      await click('nav button[aria-label="Workbench"]');
       await waitFor(() => evaluate('Boolean(document.querySelector(".list-views button"))'),
         "recovered in-flight acknowledgment inbox tabs");
       await click(`.list-views button:nth-child(${recoveredSource.hidden ? 2 : 1})`);
@@ -845,14 +845,14 @@ process.on("SIGTERM",() => server.close(() => process.exit(0)));
       console.log("PASS: combined startup applies selected permission and all launch parameters; running opt-out reloads text-only inference (synthetic managed model)");
     }
     await checkLifecycleWork(lifecycleWork);
-    await click('nav button[aria-label="Inbox"]');
+    await click('nav button[aria-label="Workbench"]');
     await waitFor(() => evaluate('Boolean(document.querySelector(".list-views button:nth-child(2)"))'),
       "reviewed-result list preference before reload");
     await click(".list-views button:nth-child(2)");
     await waitFor(async () => (await api("/v1/me/prefs")).inbox_list === "hidden",
       "reviewed-result hidden preference saved before reload");
     await reloadRenderer();
-    await click('nav button[aria-label="Inbox"]');
+    await click('nav button[aria-label="Workbench"]');
     await waitFor(() => evaluate('Boolean(document.querySelector(".list-views button:nth-child(2)"))'),
       "hidden inbox after desktop-triggered kernel restart");
     await click(".list-views button:nth-child(2)");
@@ -898,7 +898,7 @@ process.on("SIGTERM",() => server.close(() => process.exit(0)));
       status: "failed", result: { summary: "Reviewed failure can be explicitly retried." },
     });
     manualRetryWorkItemId = retryFixture.item.id;
-    await click('nav button[aria-label="Inbox"]');
+    await click('nav button[aria-label="Workbench"]');
     const retrySource = await api(`/v1/me/inbox/${retryFixture.event.id}`);
     await waitFor(() => evaluate('Boolean(document.querySelector(".list-views button"))'),
       "manual retry inbox tabs");
@@ -1000,7 +1000,7 @@ process.on("SIGTERM",() => server.close(() => process.exit(0)));
       await waitFor(async () => (await api("/v1/me/prefs")).inbox_list === "shown",
         `${fixture.marker} shown-list preference saved before reload`);
       await reloadRenderer();
-      await click('nav button[aria-label="Inbox"]');
+      await click('nav button[aria-label="Workbench"]');
       await waitFor(() => evaluate('Boolean(document.querySelector(".list-views button"))'), "delivery inbox tabs");
       await click(".list-views button:nth-child(1)");
       const findRow = `[...document.querySelectorAll(".item")].find(row => row.textContent.includes(${JSON.stringify(fixture.marker)}))`;
@@ -1099,7 +1099,7 @@ process.on("SIGTERM",() => server.close(() => process.exit(0)));
     await waitFor(async () => (await api("/v1/me/prefs")).inbox_list === "shown",
       "keep-visible shown-list preference saved");
     await reloadRenderer();
-    await click('nav button[aria-label="Inbox"]');
+    await click('nav button[aria-label="Workbench"]');
     const keptRow = `[...document.querySelectorAll(".item")].find(row => row.textContent.includes(${JSON.stringify(kept.marker)}))`;
     await waitFor(() => evaluate(`Boolean(${keptRow})`), "keep-visible running task");
     await evaluate(`${keptRow}.click()`);
@@ -1153,7 +1153,7 @@ process.on("SIGTERM",() => server.close(() => process.exit(0)));
       "automatic completion restored by the restarted desktop API");
     assert.notEqual(child.pid, previousPid);
     assert.equal(JSON.parse(readFileSync(join(data, "regenic.store.lock"), "utf8")).pid, child.pid);
-    await click('nav button[aria-label="Inbox"]');
+    await click('nav button[aria-label="Workbench"]');
     await waitFor(() => evaluate('Boolean(document.querySelector(".list-views button:nth-child(2)"))'),
       "automatic completion hidden-list tabs after clean restart");
     await click(".list-views button:nth-child(2)");
