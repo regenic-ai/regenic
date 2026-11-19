@@ -1,0 +1,1034 @@
+{
+  "schema_version": "1.0",
+  "id": "semantic-search-zh-v1",
+  "source_dataset": "TimlMemBench Chinese canonical questions (https://github.com/lyirs/TimlMemBench)",
+  "license": "CC BY 4.0",
+  "copyright": "Copyright (c) 2026 TimlMemBench authors",
+  "recorded_at": "2027-03-23T12:11:00.000Z",
+  "note": "Short Chinese chats from TimlMemBench. Relevance is evidence_turn_ids. Stale ids are provenance turns of forbidden_memory_ids. Anaphora is a short prompt containing 这个、那个、上次、他 or 她. Aggregate evidence spans at least two sessions. Lookup is information extraction. Temporal and update keep the source question type; update also needs a forbidden memory. Abstain questions are marked unanswerable and the evidence turns are the messages that show the fact was withheld. Each task prefers distinct worlds, then fills by question_id. The index is every turn in the selected worlds. A turn time written as a range uses the start.",
+  "cases": [
+    {
+      "id": "zh-dialogue_smoke_20260421T0001Z__q004_direction_passed",
+      "task": "anaphora",
+      "source_question_id": "dialogue_smoke_20260421T0001Z__q004_direction_passed",
+      "source_question_type": "information_extraction",
+      "query": "在这个项目里，“方向过了”能不能等同于马上要上线？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0001Z__s006_t004",
+        "dialogue_smoke_20260421T0001Z__s006_t005",
+        "dialogue_smoke_20260421T0001Z__s006_t006",
+        "dialogue_smoke_20260421T0001Z__s006_t007"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0003Z__q007_hospital_boundary",
+      "task": "anaphora",
+      "source_question_id": "dialogue_smoke_20260421T0003Z__q007_hospital_boundary",
+      "source_question_type": "boundary_preservation",
+      "query": "A 半夜状态不好时提到上次去医院的经历，B 应该怎么回应才不越界？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0003Z__s007_t001",
+        "dialogue_smoke_20260421T0003Z__s007_t003",
+        "dialogue_smoke_20260421T0003Z__s007_t004",
+        "dialogue_smoke_20260421T0003Z__s007_t005"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0010Z__q004_small_room_use",
+      "task": "anaphora",
+      "source_question_id": "dialogue_smoke_20260421T0010Z__q004_small_room_use",
+      "source_question_type": "knowledge_update",
+      "query": "那个小间现在应该按什么用途处理？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0010Z__s007_t006",
+        "dialogue_smoke_20260421T0010Z__s007_t007",
+        "dialogue_smoke_20260421T0010Z__s007_t008",
+        "dialogue_smoke_20260421T0010Z__s007_t009"
+      ],
+      "stale_event_ids": [
+        "dialogue_smoke_20260421T0010Z__s003_t010",
+        "dialogue_smoke_20260421T0010Z__s003_t011"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0030Z__q004_zhouyi_family_boundary",
+      "task": "anaphora",
+      "source_question_id": "dialogue_smoke_20260421T0030Z__q004_zhouyi_family_boundary",
+      "source_question_type": "scope_or_boundary",
+      "query": "B 能不能拿 A 提到的医院/家里那点信息，去替周漪对外解释，或者直接拿这个去问她本人？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0030Z__s006_t001",
+        "dialogue_smoke_20260421T0030Z__s006_t002",
+        "dialogue_smoke_20260421T0030Z__s006_t004",
+        "dialogue_smoke_20260421T0030Z__s006_t006"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0035Z__q001_guji_privacy_boundary",
+      "task": "anaphora",
+      "source_question_id": "dialogue_smoke_20260421T0035Z__q001_guji_privacy_boundary",
+      "source_question_type": "scope_or_boundary",
+      "query": "如果群里有人问顾霁为什么这周不接夜场，B 能不能直接说她妈妈一直在治疗、来回跑医院？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0035Z__s001_t007",
+        "dialogue_smoke_20260421T0035Z__s001_t008",
+        "dialogue_smoke_20260421T0035Z__s001_t009",
+        "dialogue_smoke_20260421T0035Z__s004_t011"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0040Z__q002_move_plan_current",
+      "task": "anaphora",
+      "source_question_id": "dialogue_smoke_20260421T0040Z__q002_move_plan_current",
+      "source_question_type": "knowledge_update",
+      "query": "B 现在还能按 A 六月底/七月初去雾蒲西的那套计划，继续帮她问车、留箱子、转置物架链接吗？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0040Z__s003_t004",
+        "dialogue_smoke_20260421T0040Z__s003_t006",
+        "dialogue_smoke_20260421T0040Z__s005_t007"
+      ],
+      "stale_event_ids": [
+        "dialogue_smoke_20260421T0040Z__s001_t003",
+        "dialogue_smoke_20260421T0040Z__s001_t004",
+        "dialogue_smoke_20260421T0040Z__s001_t006",
+        "dialogue_smoke_20260421T0040Z__s001_t007"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0042Z__q006_xiaoyan_privacy_boundary",
+      "task": "anaphora",
+      "source_question_id": "dialogue_smoke_20260421T0042Z__q006_xiaoyan_privacy_boundary",
+      "source_question_type": "scope_or_boundary",
+      "query": "B 之后在楼道里还能不能顺嘴问小砚，或者把他的事顺口跟邻居提一下？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0042Z__s006_t008",
+        "dialogue_smoke_20260421T0042Z__s006_t009",
+        "dialogue_smoke_20260421T0042Z__s006_t010"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0044Z__q001_old_receive_names",
+      "task": "anaphora",
+      "source_question_id": "dialogue_smoke_20260421T0044Z__q001_old_receive_names",
+      "source_question_type": "temporal_reasoning",
+      "query": "在 2025-06 那个阶段，B 看到哪些名字的件时可以先帮 A 留着？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0044Z__s001_t003",
+        "dialogue_smoke_20260421T0044Z__s001_t004",
+        "dialogue_smoke_20260421T0044Z__s001_t007"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0045Z__q003_old_spare_key_rule",
+      "task": "anaphora",
+      "source_question_id": "dialogue_smoke_20260421T0045Z__q003_old_spare_key_rule",
+      "source_question_type": "temporal_reasoning",
+      "query": "2025-09 那次短期出城时，A 当时有没有同意 B 暂时把备用钥匙放在她这里？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0045Z__s002_t003",
+        "dialogue_smoke_20260421T0045Z__s002_t004",
+        "dialogue_smoke_20260421T0045Z__s002_t009",
+        "dialogue_smoke_20260421T0045Z__s002_t010"
+      ],
+      "stale_event_ids": [
+        "dialogue_smoke_20260421T0045Z__s006_t001",
+        "dialogue_smoke_20260421T0045Z__s006_t002",
+        "dialogue_smoke_20260421T0045Z__s006_t004",
+        "dialogue_smoke_20260421T0045Z__s006_t006",
+        "dialogue_smoke_20260421T0045Z__s006_t007",
+        "dialogue_smoke_20260421T0045Z__s006_t008",
+        "dialogue_smoke_20260421T0045Z__s006_t012"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0052Z__q006_linqi_identity",
+      "task": "anaphora",
+      "source_question_id": "dialogue_smoke_20260421T0052Z__q006_linqi_identity",
+      "source_question_type": "knowledge_update",
+      "query": "林启是谁？B 应该把他理解成 A 的新室友吗？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0052Z__s007_t001",
+        "dialogue_smoke_20260421T0052Z__s007_t002",
+        "dialogue_smoke_20260421T0052Z__s007_t003",
+        "dialogue_smoke_20260421T0052Z__s007_t004"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0054Z__q006_xiaoman_status",
+      "task": "anaphora",
+      "source_question_id": "dialogue_smoke_20260421T0054Z__q006_xiaoman_status",
+      "source_question_type": "knowledge_update",
+      "query": "小满是谁？她是 A 家里的长期住户或租客吗？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0054Z__s006_t001",
+        "dialogue_smoke_20260421T0054Z__s006_t002",
+        "dialogue_smoke_20260421T0054Z__s006_t003",
+        "dialogue_smoke_20260421T0054Z__s006_t004"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0056Z__q005_nephew_context",
+      "task": "anaphora",
+      "source_question_id": "dialogue_smoke_20260421T0056Z__q005_nephew_context",
+      "source_question_type": "information_extraction",
+      "query": "电梯口那个穿校服的小孩是谁？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0056Z__s006_t001",
+        "dialogue_smoke_20260421T0056Z__s006_t002",
+        "dialogue_smoke_20260421T0056Z__s006_t003",
+        "dialogue_smoke_20260421T0056Z__s006_t008"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0001Z__q007_budget_status",
+      "task": "aggregate",
+      "source_question_id": "dialogue_smoke_20260421T0001Z__q007_budget_status",
+      "source_question_type": "knowledge_update",
+      "query": "如果现在问浮砾是不是已经没了，应该怎么回答？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0001Z__s006_t012",
+        "dialogue_smoke_20260421T0001Z__s008_t003",
+        "dialogue_smoke_20260421T0001Z__s008_t011"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0003Z__q003_qingmoli_tail",
+      "task": "aggregate",
+      "source_question_id": "dialogue_smoke_20260421T0003Z__q003_qingmoli_tail",
+      "source_question_type": "multi_session_reasoning",
+      "query": "青陌里那边的问题大致是什么，为什么还影响 A 的地址和物品？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0003Z__s004_t006",
+        "dialogue_smoke_20260421T0003Z__s004_t007",
+        "dialogue_smoke_20260421T0003Z__s008_t010",
+        "dialogue_smoke_20260421T0003Z__s008_t011",
+        "dialogue_smoke_20260421T0003Z__s008_t015"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0008Z__q001",
+      "task": "aggregate",
+      "source_question_id": "dialogue_smoke_20260421T0008Z__q001",
+      "source_question_type": "knowledge_update",
+      "query": "A 在 Glass Fern Archive 的工作和 Morrow Quay 的住处是否已经很稳定？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0008Z__s03_t002",
+        "dialogue_smoke_20260421T0008Z__s03_t004",
+        "dialogue_smoke_20260421T0008Z__s03_t010",
+        "dialogue_smoke_20260421T0008Z__s07_t004",
+        "dialogue_smoke_20260421T0008Z__s07_t010"
+      ],
+      "stale_event_ids": [
+        "dialogue_smoke_20260421T0008Z__s01_t003",
+        "dialogue_smoke_20260421T0008Z__s01_t004",
+        "dialogue_smoke_20260421T0008Z__s01_t007"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0009Z__q004_voice_phone_preference",
+      "task": "aggregate",
+      "source_question_id": "dialogue_smoke_20260421T0009Z__q004_voice_phone_preference",
+      "source_question_type": "knowledge_update",
+      "query": "B 还应该认为 A 一听语音或电话就一定想逃吗？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0009Z__s04_old_impression_softens_voice_and_birthday_t001",
+        "dialogue_smoke_20260421T0009Z__s04_old_impression_softens_voice_and_birthday_t004",
+        "dialogue_smoke_20260421T0009Z__s07_clinic_topic_soft_reframe_t011",
+        "dialogue_smoke_20260421T0009Z__s07_clinic_topic_soft_reframe_t012"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0017Z__q004_display_card_process_status",
+      "task": "aggregate",
+      "source_question_id": "dialogue_smoke_20260421T0017Z__q004_display_card_process_status",
+      "source_question_type": "knowledge_update",
+      "query": "陈列卡那单里，A 说“楼上那边还没放”是什么意思？是不是审批、预算或票据没过？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0017Z__s005_t004",
+        "dialogue_smoke_20260421T0017Z__s005_t005",
+        "dialogue_smoke_20260421T0017Z__s006_t001",
+        "dialogue_smoke_20260421T0017Z__s006_t002",
+        "dialogue_smoke_20260421T0017Z__s006_t003",
+        "dialogue_smoke_20260421T0017Z__s006_t004"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0018Z__q001_store_alias",
+      "task": "aggregate",
+      "source_question_id": "dialogue_smoke_20260421T0018Z__q001_store_alias",
+      "source_question_type": "information_extraction",
+      "query": "北庭是不是新加的一家店？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0018Z__s001_t005",
+        "dialogue_smoke_20260421T0018Z__s001_t006",
+        "dialogue_smoke_20260421T0018Z__s007_t008",
+        "dialogue_smoke_20260421T0018Z__s007_t009"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0029Z__q007_package_help_context",
+      "task": "aggregate",
+      "source_question_id": "dialogue_smoke_20260421T0029Z__q007_package_help_context",
+      "source_question_type": "information_extraction",
+      "query": "为什么后来不能再像以前那样默认把冷藏件直接放进去？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0029Z__s004_t002",
+        "dialogue_smoke_20260421T0029Z__s004_t004",
+        "dialogue_smoke_20260421T0029Z__s004_t006",
+        "dialogue_smoke_20260421T0029Z__s006_t002",
+        "dialogue_smoke_20260421T0029Z__s006_t006"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0030Z__q005_review_routing",
+      "task": "aggregate",
+      "source_question_id": "dialogue_smoke_20260421T0030Z__q005_review_routing",
+      "source_question_type": "information_extraction",
+      "query": "如果周漪这轮没有进会或没法一次拍板，当前终版大致按什么路由走？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0030Z__s004_t005",
+        "dialogue_smoke_20260421T0030Z__s004_t006",
+        "dialogue_smoke_20260421T0030Z__s006_t007",
+        "dialogue_smoke_20260421T0030Z__s006_t008"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0038Z__q008_appliance_transfer_current",
+      "task": "aggregate",
+      "source_question_id": "dialogue_smoke_20260421T0038Z__q008_appliance_transfer_current",
+      "source_question_type": "knowledge_update",
+      "query": "按最新说法，小冰箱和窄书架现在还能默认先给 B 拿走吗？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0038Z__s001_t010",
+        "dialogue_smoke_20260421T0038Z__s005_t004"
+      ],
+      "stale_event_ids": [
+        "dialogue_smoke_20260421T0038Z__s001_t008",
+        "dialogue_smoke_20260421T0038Z__s001_t009"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0041Z__q002_current_housing_status",
+      "task": "aggregate",
+      "source_question_id": "dialogue_smoke_20260421T0041Z__q002_current_housing_status",
+      "source_question_type": "knowledge_update",
+      "query": "现在还应该按 A 快要搬走来理解吗？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0041Z__s004_t005",
+        "dialogue_smoke_20260421T0041Z__s004_t007",
+        "dialogue_smoke_20260421T0041Z__s006_t007",
+        "dialogue_smoke_20260421T0041Z__s006_t008",
+        "dialogue_smoke_20260421T0041Z__s006_t011"
+      ],
+      "stale_event_ids": [
+        "dialogue_smoke_20260421T0041Z__s001_t005",
+        "dialogue_smoke_20260421T0041Z__s001_t007"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0044Z__q009_pickup_notice_rule",
+      "task": "aggregate",
+      "source_question_id": "dialogue_smoke_20260421T0044Z__q009_pickup_notice_rule",
+      "source_question_type": "information_extraction",
+      "query": "如果 B 看到 11B 的取件提醒单，现在应该怎么处理？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0044Z__s003_t011",
+        "dialogue_smoke_20260421T0044Z__s003_t012",
+        "dialogue_smoke_20260421T0044Z__s006_t001",
+        "dialogue_smoke_20260421T0044Z__s006_t002",
+        "dialogue_smoke_20260421T0044Z__s006_t003"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0049Z__q008_current_housing_status",
+      "task": "aggregate",
+      "source_question_id": "dialogue_smoke_20260421T0049Z__q008_current_housing_status",
+      "source_question_type": "knowledge_update",
+      "query": "A 为什么到冬天还继续住在这间，没有按最开始那条线搬走？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0049Z__s005_t004",
+        "dialogue_smoke_20260421T0049Z__s005_t006",
+        "dialogue_smoke_20260421T0049Z__s007_t003",
+        "dialogue_smoke_20260421T0049Z__s007_t004",
+        "dialogue_smoke_20260421T0049Z__s007_t006"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0001Z__q003_north_tower_identity",
+      "task": "lookup",
+      "source_question_id": "dialogue_smoke_20260421T0001Z__q003_north_tower_identity",
+      "source_question_type": "information_extraction",
+      "query": "北塔到底是谁？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0001Z__s006_t001",
+        "dialogue_smoke_20260421T0001Z__s006_t002"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0002Z__q002_baiyao_status",
+      "task": "lookup",
+      "source_question_id": "dialogue_smoke_20260421T0002Z__q002_baiyao_status",
+      "source_question_type": "information_extraction",
+      "query": "A 和白曜那边现在是什么状态？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0002Z__s005_t003",
+        "dialogue_smoke_20260421T0002Z__s005_t012"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0003Z__q009_pet_context",
+      "task": "lookup",
+      "source_question_id": "dialogue_smoke_20260421T0003Z__q009_pet_context",
+      "source_question_type": "information_extraction",
+      "query": "A 常提到的猫叫什么？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0003Z__s001_t007",
+        "dialogue_smoke_20260421T0003Z__s005_t001",
+        "dialogue_smoke_20260421T0003Z__s008_t015"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0004Z__q007_delivery_preference",
+      "task": "lookup",
+      "source_question_id": "dialogue_smoke_20260421T0004Z__q007_delivery_preference",
+      "source_question_type": "information_extraction",
+      "query": "A 对快递接收时间有什么偏好？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0004Z__s006_t007",
+        "dialogue_smoke_20260421T0004Z__s006_t008"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0007Z__q005_meal_place",
+      "task": "lookup",
+      "source_question_id": "dialogue_smoke_20260421T0007Z__q005_meal_place",
+      "source_question_type": "information_extraction",
+      "query": "如果 A 之后和 B 约夜里吃点东西，什么样的地方更合适？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0007Z__s005_t010",
+        "dialogue_smoke_20260421T0007Z__s005_t011",
+        "dialogue_smoke_20260421T0007Z__s005_t012"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0008Z__q004",
+      "task": "lookup",
+      "source_question_id": "dialogue_smoke_20260421T0008Z__q004",
+      "source_question_type": "information_extraction",
+      "query": "A 和 Ren 的关系是不是还没讲清楚？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0008Z__s05_t005",
+        "dialogue_smoke_20260421T0008Z__s05_t006",
+        "dialogue_smoke_20260421T0008Z__s05_t007"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0009Z__q006_beizhan_context",
+      "task": "lookup",
+      "source_question_id": "dialogue_smoke_20260421T0009Z__q006_beizhan_context",
+      "source_question_type": "information_extraction",
+      "query": "A 经常去北栈主要是在处理什么？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0009Z__s05_beizhan_backfill_family_paperwork_t004",
+        "dialogue_smoke_20260421T0009Z__s05_beizhan_backfill_family_paperwork_t006",
+        "dialogue_smoke_20260421T0009Z__s05_beizhan_backfill_family_paperwork_t012"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0010Z__q003_delivery_handoff",
+      "task": "lookup",
+      "source_question_id": "dialogue_smoke_20260421T0010Z__q003_delivery_handoff",
+      "source_question_type": "information_extraction",
+      "query": "小件和大件现在分别应该怎么收？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0010Z__s003_t007",
+        "dialogue_smoke_20260421T0010Z__s003_t008",
+        "dialogue_smoke_20260421T0010Z__s003_t009"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0011Z__q007_opening_signage",
+      "task": "lookup",
+      "source_question_id": "dialogue_smoke_20260421T0011Z__q007_opening_signage",
+      "source_question_type": "information_extraction",
+      "query": "明天开业前，导视最低要先完成哪些？入口那块贴在哪里？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0011Z__s007_t005",
+        "dialogue_smoke_20260421T0011Z__s007_t006",
+        "dialogue_smoke_20260421T0011Z__s007_t008",
+        "dialogue_smoke_20260421T0011Z__s007_t009"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0012Z__q002",
+      "task": "lookup",
+      "source_question_id": "dialogue_smoke_20260421T0012Z__q002",
+      "source_question_type": "information_extraction",
+      "query": "三层当前那两个先可用的名称是什么？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0012Z__s004_t001",
+        "dialogue_smoke_20260421T0012Z__s004_t013"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0013Z__q002",
+      "task": "lookup",
+      "source_question_id": "dialogue_smoke_20260421T0013Z__q002",
+      "source_question_type": "information_extraction",
+      "query": "到 2025-11-28 晚那版时，三层先能上的两个房名是什么？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0013Z__s004_t001",
+        "dialogue_smoke_20260421T0013Z__s004_t013"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0014Z__q003_connector_scope",
+      "task": "lookup",
+      "source_question_id": "dialogue_smoke_20260421T0014Z__q003_connector_scope",
+      "source_question_type": "information_extraction",
+      "query": "北楼外侧连桥口那几个过渡点，现在算不算这一条导视线里的范围？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0014Z__s004_t009",
+        "dialogue_smoke_20260421T0014Z__s004_t010",
+        "dialogue_smoke_20260421T0014Z__s004_t011"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0001Z__q001_initial_scope",
+      "task": "temporal",
+      "source_question_id": "dialogue_smoke_20260421T0001Z__q001_initial_scope",
+      "source_question_type": "temporal_reasoning",
+      "query": "一开始浮砾这个任务是按什么范围给 B 排的？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0001Z__s001_t001",
+        "dialogue_smoke_20260421T0001Z__s001_t002",
+        "dialogue_smoke_20260421T0001Z__s001_t003",
+        "dialogue_smoke_20260421T0001Z__s001_t005",
+        "dialogue_smoke_20260421T0001Z__s001_t008"
+      ],
+      "stale_event_ids": [
+        "dialogue_smoke_20260421T0001Z__s008_t003",
+        "dialogue_smoke_20260421T0001Z__s008_t004",
+        "dialogue_smoke_20260421T0001Z__s008_t005",
+        "dialogue_smoke_20260421T0001Z__s008_t011"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0013Z__q001",
+      "task": "temporal",
+      "source_question_id": "dialogue_smoke_20260421T0013Z__q001",
+      "source_question_type": "temporal_reasoning",
+      "query": "在 2025-09-18 那版里，三层在最终房名还没定之前应该怎么处理？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0013Z__s002_t001",
+        "dialogue_smoke_20260421T0013Z__s002_t002",
+        "dialogue_smoke_20260421T0013Z__s002_t005",
+        "dialogue_smoke_20260421T0013Z__s002_t009",
+        "dialogue_smoke_20260421T0013Z__s002_t011",
+        "dialogue_smoke_20260421T0013Z__s002_t012"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0019Z__q004_lightbox_historical_hold",
+      "task": "temporal",
+      "source_question_id": "dialogue_smoke_20260421T0019Z__q004_lightbox_historical_hold",
+      "source_question_type": "temporal_reasoning",
+      "query": "在 2025-07-03 那时，北侧二版灯箱应该立刻排料和叫边框色片吗？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0019Z__s004_t001",
+        "dialogue_smoke_20260421T0019Z__s004_t003",
+        "dialogue_smoke_20260421T0019Z__s004_t005",
+        "dialogue_smoke_20260421T0019Z__s004_t006",
+        "dialogue_smoke_20260421T0019Z__s004_t008"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0021Z__q002_old_pause_historical",
+      "task": "temporal",
+      "source_question_id": "dialogue_smoke_20260421T0021Z__q002_old_pause_historical",
+      "source_question_type": "temporal_reasoning",
+      "query": "在 2026-09-10 这次更新前，B 一直按什么思路在排潮杉这一套？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0021Z__s005_t001",
+        "dialogue_smoke_20260421T0021Z__s005_t002",
+        "dialogue_smoke_20260421T0021Z__s005_t003"
+      ],
+      "stale_event_ids": [
+        "dialogue_smoke_20260421T0021Z__s005_t004",
+        "dialogue_smoke_20260421T0021Z__s005_t005",
+        "dialogue_smoke_20260421T0021Z__s005_t006",
+        "dialogue_smoke_20260421T0021Z__s005_t007"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0024Z__q001_initial_scope",
+      "task": "temporal",
+      "source_question_id": "dialogue_smoke_20260421T0024Z__q001_initial_scope",
+      "source_question_type": "temporal_reasoning",
+      "query": "在最初那版里，岚簇这条最开始是按什么范围来想的？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0024Z__s001_t001",
+        "dialogue_smoke_20260421T0024Z__s001_t002",
+        "dialogue_smoke_20260421T0024Z__s001_t003"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0025Z__q001_old_receiving_rule",
+      "task": "temporal",
+      "source_question_id": "dialogue_smoke_20260421T0025Z__q001_old_receiving_rule",
+      "source_question_type": "temporal_reasoning",
+      "query": "在 2025-07 的时候，如果 B 有急件不好收，当时 A 允许怎么处理？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0025Z__s001_t007",
+        "dialogue_smoke_20260421T0025Z__s001_t008",
+        "dialogue_smoke_20260421T0025Z__s001_t009",
+        "dialogue_smoke_20260421T0025Z__s001_t010"
+      ],
+      "stale_event_ids": [
+        "dialogue_smoke_20260421T0025Z__s005_t001",
+        "dialogue_smoke_20260421T0025Z__s005_t002",
+        "dialogue_smoke_20260421T0025Z__s005_t004",
+        "dialogue_smoke_20260421T0025Z__s005_t006",
+        "dialogue_smoke_20260421T0025Z__s005_t008",
+        "dialogue_smoke_20260421T0025Z__s005_t012"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0027Z__q001_historical_4f_location",
+      "task": "temporal",
+      "source_question_id": "dialogue_smoke_20260421T0027Z__q001_historical_4f_location",
+      "source_question_type": "temporal_reasoning",
+      "query": "在 2025-09-24 那次黑屏排查里，那块屏当时是按什么位置和接法处理的？能不能直接按三层那套理解？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0027Z__s002_t002",
+        "dialogue_smoke_20260421T0027Z__s002_t006",
+        "dialogue_smoke_20260421T0027Z__s002_t007",
+        "dialogue_smoke_20260421T0027Z__s002_t009",
+        "dialogue_smoke_20260421T0027Z__s002_t010"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0029Z__q001_move_historical",
+      "task": "temporal",
+      "source_question_id": "dialogue_smoke_20260421T0029Z__q001_move_historical",
+      "source_question_type": "temporal_reasoning",
+      "query": "在最早那轮对话里，A 当时大概打算什么时候搬去澄湾？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0029Z__s001_t003",
+        "dialogue_smoke_20260421T0029Z__s001_t004"
+      ],
+      "stale_event_ids": [
+        "dialogue_smoke_20260421T0029Z__s004_t007",
+        "dialogue_smoke_20260421T0029Z__s004_t008"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0030Z__q003_zhouyi_historical_assessment",
+      "task": "temporal",
+      "source_question_id": "dialogue_smoke_20260421T0030Z__q003_zhouyi_historical_assessment",
+      "source_question_type": "temporal_reasoning",
+      "query": "在 2026-02-10 那个时间点，A 当时对周漪的判断是什么？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0030Z__s001_t005",
+        "dialogue_smoke_20260421T0030Z__s001_t006",
+        "dialogue_smoke_20260421T0030Z__s001_t007",
+        "dialogue_smoke_20260421T0030Z__s001_t008",
+        "dialogue_smoke_20260421T0030Z__s001_t009"
+      ],
+      "stale_event_ids": [
+        "dialogue_smoke_20260421T0030Z__s004_t001",
+        "dialogue_smoke_20260421T0030Z__s004_t002",
+        "dialogue_smoke_20260421T0030Z__s004_t004",
+        "dialogue_smoke_20260421T0030Z__s004_t005",
+        "dialogue_smoke_20260421T0030Z__s004_t006",
+        "dialogue_smoke_20260421T0030Z__s007_t009",
+        "dialogue_smoke_20260421T0030Z__s007_t010",
+        "dialogue_smoke_20260421T0030Z__s007_t011",
+        "dialogue_smoke_20260421T0030Z__s007_t014"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0031Z__q001_old_small_package_rule",
+      "task": "temporal",
+      "source_question_id": "dialogue_smoke_20260421T0031Z__q001_old_small_package_rule",
+      "source_question_type": "temporal_reasoning",
+      "query": "在 2025-09 那会儿，如果 B 白天不在，小件通常可以怎么处理？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0031Z__s001_t007",
+        "dialogue_smoke_20260421T0031Z__s001_t008",
+        "dialogue_smoke_20260421T0031Z__s001_t009",
+        "dialogue_smoke_20260421T0031Z__s001_t010"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0032Z__q001_old_repair_access_rule",
+      "task": "temporal",
+      "source_question_id": "dialogue_smoke_20260421T0032Z__q001_old_repair_access_rule",
+      "source_question_type": "temporal_reasoning",
+      "query": "在 2026-06-03 那次热水器师傅预约里，如果师傅早很多到，A 当时是怎么让 B 处理的？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0032Z__s001_t003",
+        "dialogue_smoke_20260421T0032Z__s001_t004",
+        "dialogue_smoke_20260421T0032Z__s001_t005",
+        "dialogue_smoke_20260421T0032Z__s001_t006",
+        "dialogue_smoke_20260421T0032Z__s001_t007"
+      ],
+      "stale_event_ids": [
+        "dialogue_smoke_20260421T0032Z__s006_t004",
+        "dialogue_smoke_20260421T0032Z__s006_t005",
+        "dialogue_smoke_20260421T0032Z__s006_t006"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0033Z__q001_historical_entry_permission",
+      "task": "temporal",
+      "source_question_id": "dialogue_smoke_20260421T0033Z__q001_historical_entry_permission",
+      "source_question_type": "temporal_reasoning",
+      "query": "在 2026-05-27 那次包裹被错放到 B 门口时，A 当时允许 B 怎么处理？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0033Z__s001_t001",
+        "dialogue_smoke_20260421T0033Z__s001_t003",
+        "dialogue_smoke_20260421T0033Z__s001_t005",
+        "dialogue_smoke_20260421T0033Z__s001_t006",
+        "dialogue_smoke_20260421T0033Z__s001_t007"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0001Z__q002_current_scope",
+      "task": "update",
+      "source_question_id": "dialogue_smoke_20260421T0001Z__q002_current_scope",
+      "source_question_type": "knowledge_update",
+      "query": "到 2026-03-29 时，浮砾这一轮当前真要落的范围包括哪些？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0001Z__s008_t003",
+        "dialogue_smoke_20260421T0001Z__s008_t004",
+        "dialogue_smoke_20260421T0001Z__s008_t005",
+        "dialogue_smoke_20260421T0001Z__s008_t011"
+      ],
+      "stale_event_ids": [
+        "dialogue_smoke_20260421T0001Z__s001_t001",
+        "dialogue_smoke_20260421T0001Z__s001_t002",
+        "dialogue_smoke_20260421T0001Z__s001_t003",
+        "dialogue_smoke_20260421T0001Z__s001_t004",
+        "dialogue_smoke_20260421T0001Z__s001_t005",
+        "dialogue_smoke_20260421T0001Z__s001_t008",
+        "dialogue_smoke_20260421T0001Z__s006_t012"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0002Z__q001_nanchin_reason",
+      "task": "update",
+      "source_question_id": "dialogue_smoke_20260421T0002Z__q001_nanchin_reason",
+      "source_question_type": "knowledge_update",
+      "query": "A 去南炘主要是为了什么？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0002Z__s005_t003",
+        "dialogue_smoke_20260421T0002Z__s005_t005",
+        "dialogue_smoke_20260421T0002Z__s005_t012"
+      ],
+      "stale_event_ids": [
+        "dialogue_smoke_20260421T0002Z__s004_t001",
+        "dialogue_smoke_20260421T0002Z__s004_t002",
+        "dialogue_smoke_20260421T0002Z__s004_t003"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0003Z__q001_current_work",
+      "task": "update",
+      "source_question_id": "dialogue_smoke_20260421T0003Z__q001_current_work",
+      "source_question_type": "knowledge_update",
+      "query": "A 现在的工作状态是否还主要是固定在纸潮所？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0003Z__s008_t002",
+        "dialogue_smoke_20260421T0003Z__s008_t005",
+        "dialogue_smoke_20260421T0003Z__s008_t006",
+        "dialogue_smoke_20260421T0003Z__s008_t007"
+      ],
+      "stale_event_ids": [
+        "dialogue_smoke_20260421T0003Z__s003_t005",
+        "dialogue_smoke_20260421T0003Z__s003_t006",
+        "dialogue_smoke_20260421T0003Z__s003_t007",
+        "dialogue_smoke_20260421T0003Z__s003_t008",
+        "dialogue_smoke_20260421T0003Z__s003_t009"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0008Z__q005",
+      "task": "update",
+      "source_question_id": "dialogue_smoke_20260421T0008Z__q005",
+      "source_question_type": "knowledge_update",
+      "query": "A 之后大概率会继续住在 Morrow Quay 吗？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0008Z__s07_t001",
+        "dialogue_smoke_20260421T0008Z__s07_t004",
+        "dialogue_smoke_20260421T0008Z__s07_t005",
+        "dialogue_smoke_20260421T0008Z__s07_t006"
+      ],
+      "stale_event_ids": [
+        "dialogue_smoke_20260421T0008Z__s01_t003",
+        "dialogue_smoke_20260421T0008Z__s01_t004",
+        "dialogue_smoke_20260421T0008Z__s01_t007"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0009Z__q001_current_residence",
+      "task": "update",
+      "source_question_id": "dialogue_smoke_20260421T0009Z__q001_current_residence",
+      "source_question_type": "knowledge_update",
+      "query": "A 现在算是在槐序稳定安顿下来了吗？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0009Z__s08_spring_return_flow_not_yet_settled_t003",
+        "dialogue_smoke_20260421T0009Z__s08_spring_return_flow_not_yet_settled_t004",
+        "dialogue_smoke_20260421T0009Z__s08_spring_return_flow_not_yet_settled_t006"
+      ],
+      "stale_event_ids": [
+        "dialogue_smoke_20260421T0009Z__s01_late_rain_move_in_small_talk_t001",
+        "dialogue_smoke_20260421T0009Z__s01_late_rain_move_in_small_talk_t004",
+        "dialogue_smoke_20260421T0009Z__s01_late_rain_move_in_small_talk_t010"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0010Z__q001_site_floor_current",
+      "task": "update",
+      "source_question_id": "dialogue_smoke_20260421T0010Z__q001_site_floor_current",
+      "source_question_type": "knowledge_update",
+      "query": "正式要落设备的是哪一层？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0010Z__s003_t003",
+        "dialogue_smoke_20260421T0010Z__s003_t004",
+        "dialogue_smoke_20260421T0010Z__s003_t005",
+        "dialogue_smoke_20260421T0010Z__s003_t006"
+      ],
+      "stale_event_ids": [
+        "dialogue_smoke_20260421T0010Z__s002_t001",
+        "dialogue_smoke_20260421T0010Z__s002_t002",
+        "dialogue_smoke_20260421T0010Z__s002_t004",
+        "dialogue_smoke_20260421T0010Z__s002_t005",
+        "dialogue_smoke_20260421T0010Z__s002_t006",
+        "dialogue_smoke_20260421T0010Z__s002_t009"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0011Z__q002_material_entry",
+      "task": "update",
+      "source_question_id": "dialogue_smoke_20260421T0011Z__q002_material_entry",
+      "source_question_type": "supersede",
+      "query": "现在板子还能按原计划明晚从南坡门上楼吗？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0011Z__s003_t001",
+        "dialogue_smoke_20260421T0011Z__s003_t002",
+        "dialogue_smoke_20260421T0011Z__s003_t004",
+        "dialogue_smoke_20260421T0011Z__s003_t005",
+        "dialogue_smoke_20260421T0011Z__s003_t006",
+        "dialogue_smoke_20260421T0011Z__s003_t008"
+      ],
+      "stale_event_ids": [
+        "dialogue_smoke_20260421T0011Z__s002_t008",
+        "dialogue_smoke_20260421T0011Z__s002_t009",
+        "dialogue_smoke_20260421T0011Z__s002_t010"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0013Z__q003",
+      "task": "update",
+      "source_question_id": "dialogue_smoke_20260421T0013Z__q003",
+      "source_question_type": "knowledge_update",
+      "query": "在 2025-11-28 那次更新后，B 能不能只换看得见的房名、房间编号先继续沿旧的？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0013Z__s004_t005",
+        "dialogue_smoke_20260421T0013Z__s004_t006",
+        "dialogue_smoke_20260421T0013Z__s004_t007",
+        "dialogue_smoke_20260421T0013Z__s004_t014"
+      ],
+      "stale_event_ids": [
+        "dialogue_smoke_20260421T0013Z__s002_t001",
+        "dialogue_smoke_20260421T0013Z__s002_t002",
+        "dialogue_smoke_20260421T0013Z__s002_t003",
+        "dialogue_smoke_20260421T0013Z__s002_t005",
+        "dialogue_smoke_20260421T0013Z__s002_t007",
+        "dialogue_smoke_20260421T0013Z__s002_t008",
+        "dialogue_smoke_20260421T0013Z__s002_t009",
+        "dialogue_smoke_20260421T0013Z__s002_t011",
+        "dialogue_smoke_20260421T0013Z__s002_t012"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0014Z__q002_three_floor_current_names",
+      "task": "update",
+      "source_question_id": "dialogue_smoke_20260421T0014Z__q002_three_floor_current_names",
+      "source_question_type": "knowledge_update",
+      "query": "现在三层那两个位置先以上什么名字进入总图？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0014Z__s004_t001",
+        "dialogue_smoke_20260421T0014Z__s004_t005",
+        "dialogue_smoke_20260421T0014Z__s004_t013"
+      ],
+      "stale_event_ids": [
+        "dialogue_smoke_20260421T0014Z__s002_t001",
+        "dialogue_smoke_20260421T0014Z__s002_t002",
+        "dialogue_smoke_20260421T0014Z__s002_t003",
+        "dialogue_smoke_20260421T0014Z__s002_t005",
+        "dialogue_smoke_20260421T0014Z__s002_t007",
+        "dialogue_smoke_20260421T0014Z__s002_t008",
+        "dialogue_smoke_20260421T0014Z__s002_t009",
+        "dialogue_smoke_20260421T0014Z__s002_t011",
+        "dialogue_smoke_20260421T0014Z__s002_t012"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0015Z__q003_delivery_current",
+      "task": "update",
+      "source_question_id": "dialogue_smoke_20260421T0015Z__q003_delivery_current",
+      "source_question_type": "knowledge_update",
+      "query": "现在普通快递、小件样品和大件/推车件分别应该送到哪里？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0015Z__s005_t001",
+        "dialogue_smoke_20260421T0015Z__s005_t002",
+        "dialogue_smoke_20260421T0015Z__s005_t004",
+        "dialogue_smoke_20260421T0015Z__s005_t005",
+        "dialogue_smoke_20260421T0015Z__s005_t006",
+        "dialogue_smoke_20260421T0015Z__s005_t007"
+      ],
+      "stale_event_ids": [
+        "dialogue_smoke_20260421T0015Z__s004_t001",
+        "dialogue_smoke_20260421T0015Z__s004_t003",
+        "dialogue_smoke_20260421T0015Z__s004_t005",
+        "dialogue_smoke_20260421T0015Z__s004_t007",
+        "dialogue_smoke_20260421T0015Z__s004_t010"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0017Z__q002_return_sample_location",
+      "task": "update",
+      "source_question_id": "dialogue_smoke_20260421T0017Z__q002_return_sample_location",
+      "source_question_type": "knowledge_update",
+      "query": "现在返样还能照老样子放西门保安室吗？应该放哪里？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0017Z__s004_t001",
+        "dialogue_smoke_20260421T0017Z__s004_t002",
+        "dialogue_smoke_20260421T0017Z__s004_t006",
+        "dialogue_smoke_20260421T0017Z__s004_t009",
+        "dialogue_smoke_20260421T0017Z__s004_t012"
+      ],
+      "stale_event_ids": [
+        "dialogue_smoke_20260421T0017Z__s004_t010"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0018Z__q002_current_rollout_plan",
+      "task": "update",
+      "source_question_id": "dialogue_smoke_20260421T0018Z__q002_current_rollout_plan",
+      "source_question_type": "knowledge_update",
+      "query": "现在还能继续按“六家周三晚九点半统一切换”那套去排吗？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0018Z__s004_t001",
+        "dialogue_smoke_20260421T0018Z__s004_t005",
+        "dialogue_smoke_20260421T0018Z__s004_t007",
+        "dialogue_smoke_20260421T0018Z__s004_t008",
+        "dialogue_smoke_20260421T0018Z__s004_t009",
+        "dialogue_smoke_20260421T0018Z__s004_t012"
+      ],
+      "stale_event_ids": [
+        "dialogue_smoke_20260421T0018Z__s001_t008",
+        "dialogue_smoke_20260421T0018Z__s001_t009",
+        "dialogue_smoke_20260421T0018Z__s001_t010",
+        "dialogue_smoke_20260421T0018Z__s001_t011",
+        "dialogue_smoke_20260421T0018Z__s001_t012",
+        "dialogue_smoke_20260421T0018Z__s001_t013"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0001Z__q006_family_detail_abstain",
+      "task": "abstain",
+      "source_question_id": "dialogue_smoke_20260421T0001Z__q006_family_detail_abstain",
+      "source_question_type": "abstention",
+      "query": "A 家里临时有事、人在医院，具体发生了什么？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0001Z__s003_t002",
+        "dialogue_smoke_20260421T0001Z__s003_t004"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0002Z__q006_shuiting_detail_abstain",
+      "task": "abstain",
+      "source_question_id": "dialogue_smoke_20260421T0002Z__q006_shuiting_detail_abstain",
+      "source_question_type": "abstention",
+      "query": "A 那晚在急诊具体发生了什么？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0002Z__s008_t008",
+        "dialogue_smoke_20260421T0002Z__s008_t010",
+        "dialogue_smoke_20260421T0002Z__s008_t011"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0003Z__q006_family_detail_abstain",
+      "task": "abstain",
+      "source_question_id": "dialogue_smoke_20260421T0003Z__q006_family_detail_abstain",
+      "source_question_type": "abstention",
+      "query": "A 家里长辈具体是什么病，情况轻重如何？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0003Z__s006_t005",
+        "dialogue_smoke_20260421T0003Z__s006_t006",
+        "dialogue_smoke_20260421T0003Z__s006_t007"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0004Z__q010_who_inquired_abstain",
+      "task": "abstain",
+      "source_question_id": "dialogue_smoke_20260421T0004Z__q010_who_inquired_abstain",
+      "source_question_type": "abstention",
+      "query": "之前来打听 A 的人是谁？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0004Z__s008_t005"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0005Z__q009_diagnosis_abstain",
+      "task": "abstain",
+      "source_question_id": "dialogue_smoke_20260421T0005Z__q009_diagnosis_abstain",
+      "source_question_type": "abstention",
+      "query": "A 在北汀复诊的具体诊断和药名是什么？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0005Z__s006_t005",
+        "dialogue_smoke_20260421T0005Z__s006_t007"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0006Z__q004_family_detail_abstain",
+      "task": "abstain",
+      "source_question_id": "dialogue_smoke_20260421T0006Z__q004_family_detail_abstain",
+      "source_question_type": "abstention",
+      "query": "A 家里那摊具体是什么情况？A 和妈妈之间到底发生了什么？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0006Z__s004_t003",
+        "dialogue_smoke_20260421T0006Z__s004_t004",
+        "dialogue_smoke_20260421T0006Z__s004_t005",
+        "dialogue_smoke_20260421T0006Z__s004_t009"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0007Z__q009_medical_reason_abstain",
+      "task": "abstain",
+      "source_question_id": "dialogue_smoke_20260421T0007Z__q009_medical_reason_abstain",
+      "source_question_type": "abstention",
+      "query": "B 为什么要改医疗授权？具体医疗原因是什么？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0007Z__s008_t005",
+        "dialogue_smoke_20260421T0007Z__s008_t009",
+        "dialogue_smoke_20260421T0007Z__s008_t011"
+      ]
+    },
+    {
+      "id": "zh-dialogue_smoke_20260421T0008Z__q008",
+      "task": "abstain",
+      "source_question_id": "dialogue_smoke_20260421T0008Z__q008",
+      "source_question_type": "abstention",
+      "query": "A 当时在 Tallow Street 的具体医疗流程是什么？",
+      "relevant_event_ids": [
+        "dialogue_smoke_20260421T0008Z__s08_t004",
+        "dialogue_smoke_20260421T0008Z__s08_t006",
+        "dialogue_smoke_20260421T0008Z__s08_t008"
+      ]
+    }
+  ]
+}

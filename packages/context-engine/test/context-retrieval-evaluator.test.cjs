@@ -142,6 +142,52 @@ describe("Context retrieval evaluator", () => {
     });
   });
 
+  it("reports recall, nDCG, and MRR separately for each semantic search task", async () => {
+    const engine = {
+      async assemble(value) {
+        return value.id === "request-lookup"
+          ? assembly([{ id: "event-a", hash: HASH_A }], [{ id: "event-a", hash: HASH_A }])
+          : assembly([], []);
+      },
+      async replay() { throw new Error("not used"); },
+    };
+    const report = await evaluateContextRetrieval(engine, {
+      schema_version: "1.0",
+      id: "task-split",
+      cases: [
+        {
+          id: "lookup-one",
+          task: "lookup",
+          request: request("request-lookup"),
+          relevant_event_ids: ["event-a"],
+        },
+        {
+          id: "anaphora-one",
+          task: "anaphora",
+          request: request("request-anaphora"),
+          relevant_event_ids: ["event-a"],
+        },
+      ],
+    }, { k: 10 });
+
+    assert.equal(report.k, 10);
+    assert.equal(report.metrics.mean_recall_at_k, 0.5);
+    assert.equal(report.metrics.by_task.lookup.mean_recall_at_k, 1);
+    assert.equal(report.metrics.by_task.lookup.mean_ndcg_at_k, 1);
+    assert.equal(report.metrics.by_task.lookup.mean_reciprocal_rank_at_k, 1);
+    assert.equal(report.metrics.by_task.anaphora.mean_recall_at_k, 0);
+    assert.equal(report.metrics.by_task.anaphora.positive_case_count, 1);
+    assert.equal(report.metrics.by_task.aggregate, undefined);
+  });
+
+  it("rejects a dataset that tags only some cases", async () => {
+    const value = dataset();
+    value.cases[0].task = "lookup";
+    const engine = { async assemble() { throw new Error("must not run"); } };
+
+    await assert.rejects(evaluateContextRetrieval(engine, value), /Invalid Context evaluation dataset/);
+  });
+
   it("rejects ambiguous or duplicate ground truth", async () => {
     const value = dataset();
     value.cases[0].forbidden_event_ids = ["event-a"];
