@@ -247,9 +247,9 @@ async function launchSmoke() {
     }));
     createRoot(document.getElementById("root")).render(<React.StrictMode>
       <Fixture />
-      <ConnectorKind kind={kind} installations={installations} busyId={null} syncingAll={false}
+      <ConnectorKind kind={kind} installations={installations} busyId={null}
         installing={false} pendingUninstall={false} onOpenInstall={() => {}} onCloseInstall={() => {}}
-        onInstall={() => {}} onSync={() => {}} onRetryQuarantines={() => {}}
+        onInstall={() => {}} onRetryQuarantines={() => {}}
         onEnable={installation => { window.__enabledInstallation = installation.id; }}
         onUpdate={async () => true}
         onUninstall={installation => { window.__uninstalledInstallation = installation.id; }} />

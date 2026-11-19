@@ -216,14 +216,14 @@ describe("sync coverage copy", () => {
     };
     assert.equal(
       syncProgressSummary(sync),
-      "120+ found · 94 syncing · 26 current",
+      "120+ found · 94 loading older messages · 26 current",
     );
     assert.equal(syncProgressTone(sync), "warn");
     setActiveLocale("zh");
     try {
       assert.equal(
         syncProgressSummary(sync),
-        "已发现 120+ · 同步中 94 · 已跟上 26",
+        "已发现 120+ · 正在补旧消息 94 · 已跟上 26",
       );
     } finally {
       setActiveLocale("en");
@@ -327,7 +327,7 @@ describe("connector action errors", () => {
 describe("connector attempt summaries", () => {
   it("keeps polling connectors' empty state and explains push connectors", () => {
     setActiveLocale("en");
-    assert.equal(attemptSummary(null), "Not synced yet");
+    assert.equal(attemptSummary(null), "No messages yet");
     assert.equal(attemptSummary(null, "webhook"), "Waiting for the first update");
     assert.equal(attemptSummary(null, "hybrid"), "Waiting for the first update");
   });

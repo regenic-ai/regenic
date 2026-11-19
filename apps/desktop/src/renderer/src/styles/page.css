@@ -117,31 +117,6 @@
   }
 }
 
-@media (min-width: 1100px) {
-  .page-recipes {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
-    /* Auto rows can shrink below the form height, leaving its overflow beyond the padding. */
-    grid-auto-rows: max-content;
-    column-gap: 16px;
-    row-gap: 12px;
-    align-items: start;
-    align-content: start;
-  }
-
-  .page-recipes > .page-hero,
-  .page-recipes > .recipe-start,
-  .page-recipes > .recipe-empty,
-  .page-recipes > .recipe-page-notice {
-    grid-column: 1 / -1;
-  }
-
-  .page-recipes > .card:only-of-type,
-  .page-recipes:not(:has(.recipe-saved)) > .recipe-editor {
-    grid-column: 1 / -1;
-  }
-}
-
 @media (max-width: 860px) {
   .step-grid,
   .language-choices,
@@ -169,20 +144,11 @@
     margin-left: 0;
   }
 
-  .recipe-section {
-    padding: 20px 20px 20px 60px;
-  }
-
-  .recipe-section-head {
-    margin-left: -40px;
-  }
-
-  .recipe-section::before {
-    left: 33px;
-  }
-
-  .recipe-form-foot {
-    padding: 18px 20px 20px;
+  .recipe-section,
+  .recipe-form-foot,
+  .recipe-editor-head {
+    padding-left: 20px;
+    padding-right: 20px;
   }
 
   .recipe-form-foot > .recipe-actions,
@@ -191,26 +157,13 @@
     grid-row: auto;
   }
 
-  .page-recipes .seg {
-    display: grid;
-    width: 100%;
-    grid-auto-flow: row;
-    grid-auto-columns: unset;
-    grid-template-columns: 1fr;
-  }
-
-  .page-recipes .seg button {
-    width: 100%;
-    padding: 0 8px;
-  }
-
   .recipe-actions {
-    justify-content: stretch;
+    justify-content: flex-start;
   }
 
   .recipe-actions .primary,
   .recipe-actions .ghost {
-    flex: 1;
+    flex: 0 0 auto;
   }
 
   .recipe-commit {
@@ -764,31 +717,6 @@
   align-items: center;
   padding-top: 10px;
   border-top: 1px solid var(--line-8);
-}
-
-.connector-sync {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.connector-sync-mode {
-  height: 30px;
-  max-width: 11rem;
-  padding: 0 28px 0 12px;
-  border: 1px solid var(--line-12);
-  border-radius: 999px;
-  background: var(--elevated);
-  color: var(--text);
-  font: inherit;
-  font-size: 13px;
-  font-weight: 500;
-}
-
-.connector-sync-mode:focus-visible {
-  outline: none;
-  border-color: var(--focus);
-  box-shadow: 0 0 0 1px var(--focus);
 }
 
 .install-block {

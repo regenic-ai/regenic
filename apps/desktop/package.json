@@ -11,6 +11,7 @@
     "typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.web.json --noEmit",
     "test": "node --experimental-strip-types --test test/*.test.ts",
     "test:recipe-layout:electron": "node scripts/recipe-layout-electron-smoke.cjs",
+    "test:recipe-saved-layout:electron": "node scripts/recipe-saved-layout-electron-smoke.cjs",
     "test:semantic:electron": "node scripts/semantic-electron-smoke.cjs",
     "test:connector-form:electron": "node scripts/connector-form-electron-smoke.cjs",
     "test:database-settings:electron": "node scripts/database-settings-electron-smoke.cjs"
