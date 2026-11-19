@@ -15,6 +15,17 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
     await ingestActionable(database, blobRoot);
     const { app, origin } = await startPersonalApi(database, blobRoot);
     try {
+      const executorResponse = await fetch(`${origin}/v1/me/executors`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          kind: "http",
+          name: "Keep executor",
+          config: { base_url: "https://agent.example/exec/" },
+        }),
+      });
+      const executor = await executorResponse.json();
+      assert.equal(executorResponse.status, 201, JSON.stringify(executor));
       const created = await (
         await fetch(`${origin}/v1/me/flows`, {
           method: "POST",
@@ -24,7 +35,12 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
             config: {
               source: { installations: "all" },
               scope: { kind: "new_messages", match: { record_class: "task" } },
-              handler: { kind: "agent", executor_type: "dsh", task: "Triage each task.", params: { prompt: "Triage each task." } },
+              handler: {
+                kind: "agent",
+                executor_type: executor.id,
+                task: "Triage each task.",
+                params: { prompt: "Triage each task." },
+              },
               trigger: { kind: "push", coalesce: true },
               hide_on_success: false,
               include_context: false,
@@ -33,7 +49,7 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
           }),
         })
       ).json();
-      assert.equal(created.name, "Keep me");
+      assert.equal(created.name, "Keep me", JSON.stringify(created));
       assert.equal(created.config.include_context, false);
 
       const before = await (await fetch(`${origin}/v1/me/store`)).json();

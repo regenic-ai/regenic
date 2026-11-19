@@ -385,6 +385,7 @@ describe("first-party channel plugins", () => {
       "dsh-session",
       "feishu-chat",
       "cursor-agent",
+      "server-app",
     ]);
     assert.equal(createExecutorPluginRegistry({}).default()?.executor_type, "dsh");
     const appModule = readFileSync(join(__dirname, "../src/app.module.ts"), "utf8");
@@ -396,6 +397,7 @@ describe("first-party channel plugins", () => {
         "@regenic/cursor-connector",
         "@regenic/dsh-connector",
         "@regenic/feishu-connector",
+        "@regenic/server-app-connector",
       ],
     );
     assert.ok(firstParty.every((item) => item.trust === "core" && item.status === "loaded"));
