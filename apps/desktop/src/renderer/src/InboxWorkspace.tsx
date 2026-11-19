@@ -4,6 +4,7 @@ import {
   filterInboxThreads,
   filterInboxThreadsByTitle,
   INBOX_SEARCH_AUTO_PAGES,
+  inboxSearchAwaitingOlder,
   shouldScanInboxSearch,
   groupThreadsByAttention,
   inboxRuleOptions,
@@ -208,11 +209,20 @@ export function InboxWorkspace({
   };
   const pool = searching ? mergeInboxThreadLists(threads, otherThreads) : threads;
   const channels = threadChannels(pool);
-  const visible = filterInboxThreadsByTitle(
-    filterInboxThreads(pool, pinFilter, channelFilter, statusFilter, ruleFilter),
-    titleQuery,
-    threadTitle,
+  const titleHits = filterInboxThreadsByTitle(pool, titleQuery, threadTitle);
+  const visible = filterInboxThreads(
+    titleHits,
+    pinFilter,
+    channelFilter,
+    statusFilter,
+    ruleFilter,
   );
+  const awaitingOlder = inboxSearchAwaitingOlder({
+    searching,
+    hasOlder: hasOlderHeads,
+    pinnedOnly: pinFilter === "pinned",
+    titleHits: titleHits.length,
+  });
   const ruleChoices = inboxRuleOptions(pool, recipeNames);
   useEffect(() => {
     let cancelled = false;
@@ -536,12 +546,12 @@ export function InboxWorkspace({
             )
           ) : null}
           {!error && (searching || threads.length > 0) && visible.length === 0 ? (
-            searchStillScanning || (searchCanContinue && loadingOlderHeads) ? (
+            awaitingOlder && (searchStillScanning || loadingOlderHeads) ? (
               <div className="list-more">
                 <span className="dot" />
                 {t("inbox.searchingOlder")}
               </div>
-            ) : searchCanContinue ? (
+            ) : awaitingOlder ? (
               <EmptyState
                 compact
                 icon={<SearchIcon />}

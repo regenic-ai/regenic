@@ -245,6 +245,12 @@ describe("sync coverage copy", () => {
     };
     assert.equal(syncWorkSettled(sync), true);
     assert.equal(syncProgressTone(sync), "ok");
+    assert.equal(syncWorkSettled({ ...sync, media_pending: 3 }), false);
+    assert.equal(syncProgressTone({ ...sync, media_pending: 3 }), "warn");
+    assert.equal(
+      syncProgressSummary({ ...sync, media_pending: 3 }),
+      "889+ found · 0 loading older messages · 889 current",
+    );
     assert.equal(
       syncProgressSummary(sync),
       "Up to date with all 889 found so far",

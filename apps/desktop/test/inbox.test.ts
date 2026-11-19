@@ -15,6 +15,7 @@ import {
   filterInboxThreads,
   filterInboxThreadsByTitle,
   shouldScanInboxSearch,
+  inboxSearchAwaitingOlder,
   INBOX_SEARCH_AUTO_PAGES,
   inboxRuleOptions,
   mergeInboxThreadLists,
@@ -233,6 +234,20 @@ describe("inbox title search", () => {
       }),
       true,
     );
+  });
+
+  it("offers older pages only when the loaded rows missed the title", () => {
+    const base = {
+      searching: true,
+      hasOlder: true,
+      pinnedOnly: false,
+      titleHits: 0,
+    };
+    assert.equal(inboxSearchAwaitingOlder(base), true);
+    assert.equal(inboxSearchAwaitingOlder({ ...base, titleHits: 2 }), false);
+    assert.equal(inboxSearchAwaitingOlder({ ...base, pinnedOnly: true }), false);
+    assert.equal(inboxSearchAwaitingOlder({ ...base, hasOlder: false }), false);
+    assert.equal(inboxSearchAwaitingOlder({ ...base, searching: false }), false);
   });
 
   it("stays on the current thread at the ends of the visible list", () => {

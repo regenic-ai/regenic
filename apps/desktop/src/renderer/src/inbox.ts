@@ -281,6 +281,21 @@ export function mergeInboxThreadLists(
 /** Extra list pages a title search will walk on its own before asking to continue. */
 export const INBOX_SEARCH_AUTO_PAGES = 8;
 
+/** Title search may offer older pages only when the loaded rows themselves missed the title. */
+export function inboxSearchAwaitingOlder(input: {
+  searching: boolean;
+  hasOlder: boolean;
+  pinnedOnly: boolean;
+  titleHits: number;
+}): boolean {
+  return (
+    input.searching &&
+    input.hasOlder &&
+    !input.pinnedOnly &&
+    input.titleHits === 0
+  );
+}
+
 export function shouldScanInboxSearch(input: {
   searching: boolean;
   hasOlder: boolean;

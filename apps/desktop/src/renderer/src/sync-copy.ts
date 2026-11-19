@@ -5,13 +5,14 @@ import type {
   SyncReadinessView,
 } from "./types.ts";
 
-/** Known conversations are on the live tail; nothing on this installation is still catching up. */
+/** Known conversations are on the live tail, and no attachment work is still pending. */
 export function syncWorkSettled(sync?: SyncProgressView | null): boolean {
   return Boolean(
     sync &&
       sync.discovered > 0 &&
       sync.bootstrap_pending === 0 &&
-      sync.steady === sync.discovered,
+      sync.steady === sync.discovered &&
+      sync.media_pending === 0,
   );
 }
 
@@ -50,7 +51,11 @@ export function syncProgressTone(
   if (syncWorkSettled(sync)) {
     return "ok";
   }
-  if (!sync.catalog_complete || sync.bootstrap_pending > 0) {
+  if (
+    !sync.catalog_complete ||
+    sync.bootstrap_pending > 0 ||
+    sync.media_pending > 0
+  ) {
     return "warn";
   }
   return "ok";
