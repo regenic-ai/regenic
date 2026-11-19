@@ -35,14 +35,12 @@ import type {
   ConnectorSetupStep,
   ConnectorFieldOption,
   EngineInstallationView,
-  SyncRunMode,
 } from "./types";
 
 export function ConnectorKind({
   kind,
   installations,
   busyId,
-  syncingAll,
   installing,
   pendingUninstall,
   pairingCode,
@@ -50,7 +48,6 @@ export function ConnectorKind({
   onOpenInstall,
   onCloseInstall,
   onInstall,
-  onSync,
   onRetryQuarantines,
   onEnable,
   onUpdate,
@@ -61,7 +58,6 @@ export function ConnectorKind({
   kind: ConnectorCatalogItem;
   installations: EngineInstallationView[];
   busyId: string | null;
-  syncingAll: boolean;
   installing: boolean;
   pendingUninstall: boolean;
   pairingCode?: Record<string, string>;
@@ -69,7 +65,6 @@ export function ConnectorKind({
   onOpenInstall: () => void;
   onCloseInstall: () => void;
   onInstall: (config: ConnectorFormValues) => void;
-  onSync: (id: string, mode: SyncRunMode) => void;
   onRetryQuarantines: (id: string) => void;
   onEnable: (installation: EngineInstallationView) => void;
   onUpdate: (
@@ -112,7 +107,7 @@ export function ConnectorKind({
             <button
               type="button"
               className={kind.installed ? "ghost" : "primary"}
-              disabled={busyId !== null || syncingAll || installing}
+              disabled={busyId !== null || installing}
               onClick={onOpenInstall}
             >
               {busyId === kind.connector_type
@@ -127,7 +122,7 @@ export function ConnectorKind({
       {kind.import_files ? (
         <ConnectorFileImport
           kind={kind}
-          disabled={busyId !== null || syncingAll || installing}
+          disabled={busyId !== null || installing}
           onImported={onRefresh}
         />
       ) : null}
@@ -158,7 +153,7 @@ export function ConnectorKind({
           id={`connector-installation-${installation.id}`}
           kind={kind}
           installation={installation}
-          busy={busyId === installation.id || syncingAll}
+          busy={busyId === installation.id}
           editing={editingId === installation.id}
           pairingCode={pairingCode?.[installation.id]}
           error={error}
@@ -167,7 +162,6 @@ export function ConnectorKind({
               current === installation.id ? null : installation.id,
             )
           }
-          onSync={(mode) => onSync(installation.id, mode)}
           onRetryQuarantines={() => onRetryQuarantines(installation.id)}
           onEnable={() => onEnable(installation)}
           onSave={(config) => {
@@ -670,7 +664,6 @@ function ConnectorRow({
   pairingCode,
   error,
   onEdit,
-  onSync,
   onRetryQuarantines,
   onEnable,
   onSave,
@@ -685,7 +678,6 @@ function ConnectorRow({
   pairingCode?: string;
   error?: string | null;
   onEdit: () => void;
-  onSync: (mode: SyncRunMode) => void;
   onRetryQuarantines: () => void;
   onEnable: () => void;
   onSave: (config: ConnectorFormValues) => void;
@@ -693,7 +685,6 @@ function ConnectorRow({
   onPairingCode?: (id: string, code: string) => void;
 }) {
   const { t } = useLocale();
-  const [syncMode, setSyncMode] = useState<SyncRunMode>("quick_start");
   const statusChip =
     installation.status === "enabled"
       ? "running"
@@ -739,11 +730,7 @@ function ConnectorRow({
             </span>
             {receivesPush ? (
               <span className="connector-mode-chip">
-                {t(
-                  activeSourceMode === "hybrid"
-                    ? "connector.mode.hybrid"
-                    : "connector.mode.push",
-                )}
+                {t("connector.mode.push")}
               </span>
             ) : null}
             {installation.detail ? (
@@ -755,11 +742,7 @@ function ConnectorRow({
           </div>
           {!installation.last_attempt && !installation.last_push_at && receivesPush ? (
             <p className="muted connector-next">
-              {t(
-                activeSourceMode === "hybrid"
-                  ? "connector.hybrid.waitingHint"
-                  : "connector.push.waitingHint",
-              )}
+              {t("connector.push.waitingHint")}
             </p>
           ) : null}
           {syncUnavailableHint ? (
@@ -777,31 +760,6 @@ function ConnectorRow({
           ) : null}
         </div>
         <div className="install-actions">
-          {syncUnavailableHint ? null : (
-            <div className="connector-sync">
-              <select
-                className="connector-sync-mode"
-                value={syncMode}
-                disabled={busy || !installation.syncable}
-                aria-label={t("sync.mode")}
-                onChange={(event) =>
-                  setSyncMode(event.target.value as SyncRunMode)
-                }
-              >
-                <option value="quick_start">{t("sync.mode.quick")}</option>
-                <option value="continuous">{t("sync.mode.continuous")}</option>
-                <option value="archive">{t("sync.mode.archive")}</option>
-              </select>
-              <button
-                type="button"
-                className={receivesPush ? "ghost" : "primary"}
-                disabled={busy || !installation.syncable}
-                onClick={() => onSync(syncMode)}
-              >
-                {busy ? t("engine.syncing") : t(receivesPush ? "connector.syncCatchUp" : "connector.sync")}
-              </button>
-            </div>
-          )}
           {(installation.last_attempt?.quarantined_count ?? 0) > 0 ? (
             <button
               type="button"

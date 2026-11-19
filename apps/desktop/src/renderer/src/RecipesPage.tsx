@@ -1,7 +1,6 @@
 import {
   deleteRecipe,
   fetchExecutors,
-  fetchInboxHeads,
   fetchRecipes,
   saveRecipe,
   tryRecipe,
@@ -9,7 +8,6 @@ import {
 import { ChatIcon, ClockIcon, ConnectIcon, FlowIcon, PlusIcon } from "./Icons";
 import { useLocale } from "./LocaleContext";
 import { MenuSelect } from "./MenuSelect";
-import { loadRecipeConversations } from "./recipe-conversations";
 import {
   MatchPreview,
   MoreOptions,
@@ -79,7 +77,8 @@ import type {
   RecipeSourceOption,
   RecipeView,
 } from "./types";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRecipeConversationCatalog } from "./use-recipe-conversations";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 export function RecipesPage({
   sources,
@@ -99,16 +98,6 @@ export function RecipesPage({
   onOpenThread?: (threadId: string) => void;
 }) {
   const { t, locale } = useLocale();
-  const [discoveredConversations, setDiscoveredConversations] = useState<RecipeConversationOption[]>([]);
-  const conversations = useMemo(() => {
-    const byId = new Map(initialConversations.map((item) => [item.id, item]));
-    for (const item of discoveredConversations) byId.set(item.id, item);
-    return [...byId.values()];
-  }, [initialConversations, discoveredConversations]);
-  const loadConversations = useCallback(async (signal: AbortSignal) => {
-    const next = await loadRecipeConversations(fetchInboxHeads, signal);
-    if (!signal.aborted) setDiscoveredConversations(next);
-  }, [locale]);
   const formRef = useRef<HTMLElement>(null);
   const [recipes, setRecipes] = useState<RecipeView[]>([]);
   const [composing, setComposing] = useState(false);
@@ -208,8 +197,13 @@ export function RecipesPage({
     () => new Map(executors.map((item) => [item.executor_type, item])),
     [executors],
   );
-  const formFirst = Boolean(draft.id || returnToWork || recipes.length === 0);
-  const awaitingStart = recipes.length === 0 && !draft.id && !returnToWork && !composing;
+  const editing = Boolean(draft.id || returnToWork || composing);
+  const {
+    conversations,
+    load: loadConversations,
+    ready: conversationsReady,
+  } = useRecipeConversationCatalog(initialConversations, editing, locale);
+  const awaitingStart = recipes.length === 0 && !editing;
   const conversationOptions = useMemo(
     () => conversationChoices(conversations, draft),
     [conversations, draft.thread_id, draft.thread_title],
@@ -424,6 +418,7 @@ export function RecipesPage({
 
   const resetDraft = () => {
     setReturnToWork(false);
+    setComposing(false);
     setError(null);
     setNotice(null);
     setDraft(emptyDraftFrom(executors, sources));
@@ -597,11 +592,14 @@ export function RecipesPage({
             >
               {t("recipes.import")}
             </button>
-            {draft.id ? (
-              <button type="button" className="ghost" onClick={resetDraft}>
-                {t("recipes.new")}
-              </button>
-            ) : null}
+            <button
+              type="button"
+              className="primary"
+              disabled={busy || executors.length === 0}
+              onClick={openBlank}
+            >
+              {t("recipes.new")}
+            </button>
           </div>
         </div>
         <ul className="recipe-list">
@@ -660,7 +658,7 @@ export function RecipesPage({
                     ).map((step) => (
                       <li key={step.stage} className={`recipe-chain-step is-${step.stage}`}>
                         <span className="recipe-chain-stage">{t(`recipes.chain.${step.stage}`)}</span>
-                        <span className="recipe-chain-value">{step.label}</span>
+                        <span className="recipe-chain-value" title={step.label}>{step.label}</span>
                       </li>
                     ))}
                   </ol>
@@ -739,6 +737,13 @@ export function RecipesPage({
   const formCard = (
     <section className="card recipe-editor" ref={formRef}>
       <header className="recipe-editor-head">
+        <button
+          type="button"
+          className="ghost recipe-back"
+          onClick={resetDraft}
+        >
+          {t("recipes.backToList")}
+        </button>
         <h2>{formTitle(draft, returnToWork, t)}</h2>
       </header>
       {draft.id
@@ -882,6 +887,7 @@ export function RecipesPage({
                       ariaLabel={t("recipes.conversation")}
                       searchable
                       onLoad={loadConversations}
+                      resultsReady={conversationsReady}
                       options={conversationOptions}
                       onChange={(thread_id) => {
                         const picked = conversationOptions.find(
@@ -1057,6 +1063,7 @@ export function RecipesPage({
                       placeholder={t("recipes.searchConversation")}
                       searchable
                       onLoad={loadConversations}
+                      resultsReady={conversationsReady}
                       ariaLabel={t("recipes.writeBackTo")}
                       onChange={(write_back_thread_id) =>
                         setDraft((current) => ({ ...current, write_back_thread_id }))
@@ -1115,10 +1122,7 @@ export function RecipesPage({
                 <button
                   type="button"
                   className="ghost"
-                  onClick={() => {
-                    resetDraft();
-                    if (!draft.id && !returnToWork) setComposing(false);
-                  }}
+                  onClick={resetDraft}
                 >
                   {t("recipes.cancel")}
                 </button>
@@ -1290,9 +1294,7 @@ export function RecipesPage({
           </ol>
         </section>
       ) : null}
-      {awaitingStart ? null : formFirst ? formCard : null}
-      {listCard}
-      {awaitingStart || formFirst ? null : formCard}
+      {editing ? formCard : listCard}
       <input
         ref={importRef}
         type="file"

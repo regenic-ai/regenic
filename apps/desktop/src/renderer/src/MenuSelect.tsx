@@ -18,6 +18,7 @@ export function MenuSelect({
   ariaLabel,
   onChange,
   onLoad,
+  resultsReady = true,
 }: {
   value: string;
   options: MenuSelectOption[];
@@ -29,6 +30,8 @@ export function MenuSelect({
   ariaLabel?: string;
   onChange: (value: string) => void;
   onLoad?: (signal: AbortSignal) => Promise<void>;
+  /** False until `options` is the complete load result. Search stays hidden before that. */
+  resultsReady?: boolean;
 }) {
   const { t } = useLocale();
   const listId = useId();
@@ -38,15 +41,13 @@ export function MenuSelect({
   const [placement, setPlacement] = useState<"above" | "below">("below");
   const [popupMaxHeight, setPopupMaxHeight] = useState(280);
   const [query, setQuery] = useState("");
-  const [debouncedQuery, setDebouncedQuery] = useState("");
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [retry, setRetry] = useState(0);
   const selected = options.find((item) => item.value === value);
-  const searchQuery = onLoad ? debouncedQuery : query;
   const filtered = useMemo(() => {
-    if (onLoad && (loading || loadError || query !== debouncedQuery)) return [];
-    const needle = searchQuery.trim().toLowerCase();
+    if (onLoad && (loading || loadError || !resultsReady)) return [];
+    const needle = query.trim().toLowerCase();
     if (!needle) {
       return options;
     }
@@ -54,35 +55,26 @@ export function MenuSelect({
       item.label.toLowerCase().includes(needle) ||
       Boolean(onLoad && item.value.toLowerCase().includes(needle)),
     );
-  }, [options, searchQuery, onLoad, loading, loadError, query, debouncedQuery]);
+  }, [options, query, onLoad, loading, loadError, resultsReady]);
   const [active, setActive] = useState(0);
-
-  useEffect(() => {
-    if (!onLoad || !open) return;
-    const timer = window.setTimeout(() => setDebouncedQuery(query), 200);
-    return () => window.clearTimeout(timer);
-  }, [onLoad, open, query]);
 
   useEffect(() => {
     if (!open || !onLoad) return;
     const controller = new AbortController();
     setLoading(true);
     setLoadError(null);
-    const timer = window.setTimeout(() => {
-      void onLoad(controller.signal).then(
-        () => {
-          if (!controller.signal.aborted) setLoading(false);
-        },
-        (error: unknown) => {
-          if (!controller.signal.aborted) {
-            setLoading(false);
-            setLoadError(error instanceof Error ? error.message : String(error));
-          }
-        },
-      );
-    }, 200);
+    void onLoad(controller.signal).then(
+      () => {
+        if (!controller.signal.aborted) setLoading(false);
+      },
+      (error: unknown) => {
+        if (!controller.signal.aborted) {
+          setLoading(false);
+          setLoadError(error instanceof Error ? error.message : String(error));
+        }
+      },
+    );
     return () => {
-      window.clearTimeout(timer);
       controller.abort();
     };
   }, [open, onLoad, retry]);
@@ -139,7 +131,6 @@ export function MenuSelect({
   useEffect(() => {
     if (!open) {
       setQuery("");
-      setDebouncedQuery("");
       return;
     }
     setActive(Math.max(0, filtered.findIndex((item) => item.value === value)));
@@ -269,7 +260,7 @@ export function MenuSelect({
               aria-label={placeholder}
             />
           ) : null}
-          {onLoad && loading ? <p className="muted" role="status">{t("menuSelect.loading")}</p> : null}
+          {onLoad && (loading || !resultsReady) && !loadError ? <p className="muted" role="status">{t("menuSelect.loading")}</p> : null}
           {onLoad && loadError ? (
             <div role="alert">
               <p className="action-error">{t("menuSelect.loadError", { error: loadError })}</p>
@@ -278,9 +269,9 @@ export function MenuSelect({
               </button>
             </div>
           ) : null}
-          {onLoad && !loading && !loadError && query === debouncedQuery && filtered.length === 0
+          {onLoad && !loading && resultsReady && !loadError && filtered.length === 0
             ? <p className="muted" role="status">{t("menuSelect.empty")}</p> : null}
-          <ul id={listId} className="menu-select-menu" role="listbox" aria-busy={onLoad ? loading : undefined}>
+          <ul id={listId} className="menu-select-menu" role="listbox" aria-busy={onLoad ? loading || !resultsReady : undefined}>
             {filtered.map((option, index) => (
               <li key={option.value || `empty-${index}`}>
                 <button
