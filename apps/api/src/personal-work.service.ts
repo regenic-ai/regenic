@@ -25,6 +25,7 @@ import {
   parseConversationThread,
   validatePersonalDispatchPolicy,
   projectThreadFacet,
+  recipeConversationTitle,
   recipeMatches,
   recordClassFromType,
   shouldFlushDelivery,
@@ -1214,12 +1215,17 @@ export class PersonalWorkService implements OnModuleDestroy {
         hint: surface?.thread_facet,
       });
     const unit_kind = normalizeUnitKind(surface?.unit_kind);
+    const pref = await authority.getConversationPref(orgId, threadId);
     const subject = {
       record_class,
       thread_facet,
       source: head?.event.source ?? threadId.split(":")[0] ?? "",
       thread_id: threadId,
       body_text: body?.body_text,
+      title: recipeConversationTitle({
+        customTitle: pref?.title,
+        conversationLabel: surface?.conversation_label,
+      }),
       ...(unit_kind ? { unit_kind } : {}),
     };
     if (!recipeMatches(recipe.match, subject, recipe.trigger.kind)) {
@@ -1230,8 +1236,9 @@ export class PersonalWorkService implements OnModuleDestroy {
       );
     }
     const now = new Date().toISOString();
-    const filtered = recipe.trigger.kind === "push" &&
-      Boolean(recipe.match.text_contains || recipe.match.text_excludes);
+    const filtered = (recipe.trigger.kind === "push" &&
+      Boolean(recipe.match.text_contains || recipe.match.text_excludes)) ||
+      Boolean(recipe.match.title_contains || recipe.match.title_excludes);
     let item =
       existing &&
       (!filtered || existing.head_event_id === head?.event.id) &&

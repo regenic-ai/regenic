@@ -82,7 +82,7 @@ function parseMatch(value: unknown): RecipeMatch | null {
     return null;
   }
   const match: RecipeMatch = {};
-  for (const key of ["text_contains", "text_excludes"] as const) {
+  for (const key of ["text_contains", "text_excludes", "title_contains", "title_excludes"] as const) {
     if (value[key] !== undefined) {
       if (typeof value[key] !== "string" || !value[key].trim()) {
         return null;

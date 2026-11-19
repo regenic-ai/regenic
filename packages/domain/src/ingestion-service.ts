@@ -61,6 +61,7 @@ import {
   attachmentDigestsFromStored,
   attachmentsCoveredBy,
   bodyTextFromStored,
+  conversationLabelFromStored,
   conversationId,
   isLocalOutboundId,
   normalizeUtterance,
@@ -71,7 +72,7 @@ import {
   recipeAllowsPushDispatch,
   shouldAcceptPushRecord,
 } from "./recipe-trigger";
-import { recipeTextMatches } from "./recipe-match";
+import { recipeConversationTitle, recipeTextMatches, recipeTitleMatches } from "./recipe-match";
 import { isPushInboxDecision } from "./inbox-query";
 import {
   openOrUpdateWorkItem,
@@ -916,12 +917,17 @@ export class IngestionService {
         const bodyText = planned.record.content?.find((part) =>
           part.role === "body" && part.text !== undefined,
         )?.text;
+        const pref = await this.authorityStore.getConversationPref(orgId, threadId);
         const subject = workSubjectFromEvent({
           type: surface?.type ?? planned.record.type,
           source: planned.identity.source,
           thread_id: threadId,
           unit_kind: surface?.unit_kind,
           body_text: bodyText,
+          title: recipeConversationTitle({
+            customTitle: pref?.title,
+            conversationLabel: surface?.conversation_label,
+          }),
           prompts: false,
           hint: surface?.thread_facet,
           prior_facet: existing && isActiveWorkStatus(existing.status)
@@ -940,22 +946,44 @@ export class IngestionService {
 
         let reusable = existing;
         if (
+          recipe &&
           reusable &&
           !isOccupiedRecipeSlot(reusable.status) &&
           reusable.head_event_id !== planned.eventId &&
-          recipe?.trigger.kind === "push" &&
-          (recipe.match.text_contains || recipe.match.text_excludes)
+          recipe.trigger.kind === "push" &&
+          (recipe.match.text_contains || recipe.match.text_excludes ||
+            recipe.match.title_contains || recipe.match.title_excludes)
         ) {
           const previous = reusable.head_event_id
             ? await this.authorityStore.getEvent(orgId, reusable.head_event_id)
             : null;
-          const previousText = previous?.content_hash
-            ? bodyTextFromStored(
-              await this.blobStore.get(previous.content_hash),
-              CONTENT_PARTS_MEDIA_TYPE,
-            )
+          const stored = previous?.content_hash
+            ? await this.blobStore.get(previous.content_hash)
             : undefined;
-          if (!recipeTextMatches(recipe.match, previousText)) reusable = null;
+          if (
+            (recipe.match.text_contains || recipe.match.text_excludes) &&
+            !recipeTextMatches(
+              recipe.match,
+              stored ? bodyTextFromStored(stored, CONTENT_PARTS_MEDIA_TYPE) : undefined,
+            )
+          ) {
+            reusable = null;
+          }
+          if (
+            reusable &&
+            (recipe.match.title_contains || recipe.match.title_excludes) &&
+            !recipeTitleMatches(
+              recipe.match,
+              recipeConversationTitle({
+                customTitle: pref?.title,
+                conversationLabel: stored
+                  ? conversationLabelFromStored(stored, CONTENT_PARTS_MEDIA_TYPE)
+                  : undefined,
+              }),
+            )
+          ) {
+            reusable = null;
+          }
         }
         const next = openOrUpdateWorkItem({
           existing: reusable,

@@ -11,6 +11,7 @@ import {
   readForwardedTo,
 } from "./forward-packet";
 import {
+  surfaceFromParts,
   type ChannelId,
   type ForwardedFrom,
   type ForwardedTo,
@@ -74,6 +75,17 @@ export function bodyTextFromStored(
     return Buffer.from(bytes).toString("utf8");
   }
   return undefined;
+}
+
+export function conversationLabelFromStored(
+  bytes: Uint8Array,
+  mediaType: string,
+): string | undefined {
+  if (mediaType !== CONTENT_PARTS_MEDIA_TYPE) {
+    return undefined;
+  }
+  const parts = parseStoredContentParts(bytes);
+  return parts ? surfaceFromParts(parts)?.conversation_label : undefined;
 }
 
 export function attachmentDigestsFromParts(

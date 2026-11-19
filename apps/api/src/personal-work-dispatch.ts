@@ -20,7 +20,9 @@ import {
   recipeHasStartCapacity,
   recipeStartInflight,
   recipeWantsContext,
+  recipeConversationTitle,
   recipeTextMatches,
+  recipeTitleMatches,
   recipeTriggerOf,
   isPushInboxDecision,
   shouldRetryFailedPush,
@@ -392,6 +394,22 @@ export class PersonalWorkDispatch {
       }
       return undefined;
     }
+    if (
+      (recipe.match.title_contains || recipe.match.title_excludes) &&
+      !recipeTitleMatches(
+        recipe.match,
+        await this.conversationTitle(item.thread_id, item.head_event_id),
+      )
+    ) {
+      if (mode !== "auto") {
+        throw new PersonalConnectorError(
+          "invalid_config",
+          "This conversation title does not match the rule's title filters",
+          400,
+        );
+      }
+      return undefined;
+    }
     const executor = host.get("executors").get(recipe.executor_type);
     if (!executor) {
       await this.noteStartFailed(item, recipe, "Unknown executor", mode, options?.rebind);
@@ -571,7 +589,8 @@ export class PersonalWorkDispatch {
       retry: mode === "manual" ? "manual" : item.status === "failed" ? "automatic" : undefined,
       rebind: mode === "manual" && options?.rebind ? "manual"
         : mode === "auto" && recipe.trigger.kind === "push" && item.recipe_id !== recipe.id
-          && (recipe.match.text_contains || recipe.match.text_excludes) ? "automatic" : undefined,
+          && (recipe.match.text_contains || recipe.match.text_excludes ||
+            recipe.match.title_contains || recipe.match.title_excludes) ? "automatic" : undefined,
       max_concurrent: mode === "manual" ? undefined : recipe.max_concurrent,
       require_current_work_trigger:
         mode === "auto" &&
@@ -872,6 +891,47 @@ export class PersonalWorkDispatch {
       return undefined;
     }
     return (await resolveInboxBody(authority, host.get("blobs"), event?.content_hash, "meta")).body_text;
+  }
+
+  private async conversationTitle(threadId: string, eventId?: string): Promise<string | undefined> {
+    const host = this.runtime.requireHost();
+    const authority = host.get("authority");
+    const orgId = this.runtime.orgId();
+    const [pref, heads] = await Promise.all([
+      authority.getConversationPref(orgId, threadId),
+      authority.listInbox(orgId, { heads: true, thread_ids: [threadId] }),
+    ]);
+    const currentLabel = await this.eventConversationLabel(heads[0]?.event, threadId);
+    if (pref?.title?.trim() || currentLabel) {
+      return recipeConversationTitle({
+        customTitle: pref?.title,
+        conversationLabel: currentLabel,
+      });
+    }
+    const event = eventId ? await authority.getEvent(orgId, eventId) : null;
+    return recipeConversationTitle({
+      conversationLabel: await this.eventConversationLabel(event, threadId),
+    });
+  }
+
+  private async eventConversationLabel(
+    event: { id: string; source: string; external_id: string; content_hash?: string } | null | undefined,
+    threadId: string,
+  ): Promise<string | undefined> {
+    if (!event?.content_hash) {
+      return undefined;
+    }
+    if (conversationId(event.source, event.external_id, event.id) !== threadId) {
+      return undefined;
+    }
+    const host = this.runtime.requireHost();
+    const body = await resolveInboxBody(
+      host.get("authority"),
+      host.get("blobs"),
+      event.content_hash,
+      "meta",
+    );
+    return body.surface?.conversation_label;
   }
 
   private async noteStartFailed(

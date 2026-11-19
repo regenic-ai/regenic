@@ -9,6 +9,22 @@ export interface RecipeSubject {
   thread_id: string;
   unit_kind?: string;
   body_text?: string;
+  /** Display title: a renamed conversation wins over the app's conversation label. */
+  title?: string;
+}
+
+/** Title a recipe filter should see. Custom names win; whitespace is collapsed. */
+export function recipeConversationTitle(input: {
+  customTitle?: string | null;
+  conversationLabel?: string | null;
+}): string | undefined {
+  for (const value of [input.customTitle, input.conversationLabel]) {
+    const title = value?.replace(/\s+/g, " ").trim();
+    if (title) {
+      return title;
+    }
+  }
+  return undefined;
 }
 
 export const RECIPE_MATCH_WEIGHTS = {
@@ -17,6 +33,8 @@ export const RECIPE_MATCH_WEIGHTS = {
   source: 4,
   record_class: 2,
   thread_facet: 1,
+  /** A name filter splits one app, so it beats that app with no name filter. */
+  conversation_name: 1,
 } as const;
 
 export function recipeSpecificity(match: RecipeMatch): number {
@@ -35,6 +53,9 @@ export function recipeSpecificity(match: RecipeMatch): number {
   }
   if (match.thread_facet) {
     score += RECIPE_MATCH_WEIGHTS.thread_facet;
+  }
+  if (match.title_contains || match.title_excludes) {
+    score += RECIPE_MATCH_WEIGHTS.conversation_name;
   }
   return score;
 }
@@ -62,11 +83,18 @@ export function recipeMatches(
   if (match.thread_facet && match.thread_facet !== subject.thread_facet) {
     return false;
   }
-  return triggerKind !== "push" || recipeTextMatches(match, subject.body_text);
+  if (triggerKind === "push" && !recipeTextMatches(match, subject.body_text)) {
+    return false;
+  }
+  return recipeTitleMatches(match, subject.title);
 }
 
-export function recipeTextMatches(match: RecipeMatch, text: string | undefined): boolean {
-  if (!match.text_contains && !match.text_excludes) {
+function literalSubstringMatches(
+  contains: string | undefined,
+  excludes: string | undefined,
+  text: string | undefined,
+): boolean {
+  if (!contains && !excludes) {
     return true;
   }
   // Missing content is not proof that an exclusion passes.
@@ -75,8 +103,32 @@ export function recipeTextMatches(match: RecipeMatch, text: string | undefined):
   }
   const folded = text.toLowerCase();
   return (
-    (!match.text_contains || folded.includes(match.text_contains.toLowerCase())) &&
-    (!match.text_excludes || !folded.includes(match.text_excludes.toLowerCase()))
+    (!contains || folded.includes(contains.toLowerCase())) &&
+    (!excludes || !folded.includes(excludes.toLowerCase()))
+  );
+}
+
+export function recipeTextMatches(match: RecipeMatch, text: string | undefined): boolean {
+  return literalSubstringMatches(match.text_contains, match.text_excludes, text);
+}
+
+export function recipeTitleMatches(match: RecipeMatch, title: string | undefined): boolean {
+  return literalSubstringMatches(match.title_contains, match.title_excludes, title);
+}
+
+function substringFiltersConflict(
+  leftContains: string | undefined,
+  leftExcludes: string | undefined,
+  rightContains: string | undefined,
+  rightExcludes: string | undefined,
+): boolean {
+  return Boolean(
+    (leftContains &&
+      rightExcludes &&
+      leftContains.toLowerCase().includes(rightExcludes.toLowerCase())) ||
+      (rightContains &&
+        leftExcludes &&
+        rightContains.toLowerCase().includes(leftExcludes.toLowerCase())),
   );
 }
 
@@ -89,8 +141,22 @@ export function recipesCanShareSubject(
   if (
     leftKind === "push" &&
     rightKind === "push" &&
-    ((left.text_contains && right.text_excludes && left.text_contains.toLowerCase().includes(right.text_excludes.toLowerCase())) ||
-      (right.text_contains && left.text_excludes && right.text_contains.toLowerCase().includes(left.text_excludes.toLowerCase())))
+    substringFiltersConflict(
+      left.text_contains,
+      left.text_excludes,
+      right.text_contains,
+      right.text_excludes,
+    )
+  ) {
+    return false;
+  }
+  if (
+    substringFiltersConflict(
+      left.title_contains,
+      left.title_excludes,
+      right.title_contains,
+      right.title_excludes,
+    )
   ) {
     return false;
   }

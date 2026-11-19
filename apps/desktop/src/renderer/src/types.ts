@@ -351,6 +351,8 @@ export interface RecipeMatch {
   unit_kind?: string;
   text_contains?: string;
   text_excludes?: string;
+  title_contains?: string;
+  title_excludes?: string;
 }
 
 export type RecipeTriggerKind = "push" | "pull" | "manual";
@@ -423,6 +425,8 @@ export interface RecipeConversationOption {
   /** True when Current work already has an open/running work face. */
   has_work?: boolean;
   body_text?: string;
+  /** Name the kernel filters on: a workbench rename, or the app's conversation name. */
+  conversation_name?: string;
 }
 
 export interface UiPrefsView {

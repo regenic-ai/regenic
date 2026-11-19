@@ -60,6 +60,13 @@ export interface RecipeMatch {
   /** Push only: literal, case-insensitive substrings of the triggering body. Both must pass. */
   text_contains?: string;
   text_excludes?: string;
+  /**
+   * Literal, case-insensitive substrings of the conversation name.
+   * Used when a rule watches one app. Both must pass. A missing name does not pass.
+   * Having either field ranks above the same scope without a name, and below one conversation.
+   */
+  title_contains?: string;
+  title_excludes?: string;
 }
 
 export const RECIPE_TRIGGER_KINDS = ["push", "pull", "manual"] as const;

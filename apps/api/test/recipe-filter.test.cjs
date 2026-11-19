@@ -51,15 +51,17 @@ async function fixture(t, options = {}) {
     threadContextLines: async () => ({ lines: [], overflow: false }),
   }, { applyHandle: async () => {}, allowsWriteBack: () => false }, { attach() {} });
   let sequence = 0;
-  const ingest = async (text) => {
+  const ingest = async (text, options = {}) => {
     sequence++;
+    const scopeId = options.scopeId ?? "room";
     const result = await new IngestionService(blobs, authority).ingest({
       schema_version: INGEST_SCHEMA_VERSION,
       connector_id: "fixture", org_id: ORG, delivery_id: `delivery-${sequence}`,
       received_at: now,
       records: [channelRecord({
         channel: "test-chat", kind: "user", direction: "inbound",
-        external_id: `room:message-${sequence}`, scope_id: "room",
+        external_id: `${scopeId}:message-${sequence}`, scope_id: scopeId,
+        ...(options.scopeName ? { scope_name: options.scopeName } : {}),
         occurred_at: new Date(Date.parse(now) + sequence * 1000).toISOString(),
         actor_id: "person", type: "task", text,
       })],
@@ -112,7 +114,12 @@ describe("recipe text filters", () => {
     assert.deepEqual(normalizeRecipe({ name: "Renamed" }, ORG, "later", saved).match, input.match);
     assert.deepEqual(normalizeRecipe({ match: { record_class: "task" } }, ORG, "later", saved).match,
       { record_class: "task" });
-    for (const key of ["text_contains", "text_excludes"]) {
+    const titled = {
+      ...input,
+      match: { ...input.match, title_contains: " 周报 ", title_excludes: "草稿" },
+    };
+    assert.deepEqual(normalizeRecipe(titled, ORG, "now").match, titled.match);
+    for (const key of ["text_contains", "text_excludes", "title_contains", "title_excludes"]) {
       for (const value of [null, 42, true, [], {}, "", "   "]) {
         assert.throws(() => normalizeRecipe({
           ...input, match: { record_class: "task", [key]: value },
@@ -423,6 +430,48 @@ describe("recipe text filters", () => {
     });
     await f.dispatch.fillOpenSlots();
     assert.equal(f.starts(), 1);
+  });
+
+  it("starts an app rule only when the conversation title matches", async (t) => {
+    const f = await fixture(t, {
+      match: {
+        record_class: "task",
+        source: "test-chat",
+        title_contains: "Design",
+        title_excludes: "draft",
+      },
+    });
+    await f.ingest("hello", { scopeName: "Other room" });
+    await f.dispatch.fillOpenSlots();
+    assert.equal(f.starts(), 0);
+    const renamedIn = await f.ingest("hello", { scopeName: "Weekly Design sync" });
+    await f.dispatch.fillOpenSlots();
+    assert.equal(f.starts(), 1);
+    const anchored = (await f.authority.listWorkItems(ORG)).find((item) => item.head_event_id === renamedIn);
+    assert.equal(anchored?.recipe_id, "filtered");
+
+    await f.ingest("hello", { scopeId: "moving", scopeName: "Weekly Design sync" });
+    await f.ingest("hello", { scopeId: "moving", scopeName: "Other room" });
+    await f.dispatch.fillOpenSlots();
+    assert.equal(f.starts(), 1);
+
+    await f.ingest("hello", { scopeId: "design", scopeName: "Weekly Design sync" });
+    await f.dispatch.fillOpenSlots();
+    assert.equal(f.starts(), 2);
+
+    await f.ingest("hello", { scopeId: "drafts", scopeName: "Design draft notes" });
+    await f.dispatch.fillOpenSlots();
+    assert.equal(f.starts(), 2);
+
+    await f.authority.putConversationPref({
+      org_id: ORG,
+      thread_id: "test-chat:renamed",
+      title: "Design review",
+      updated_at: f.now,
+    });
+    await f.ingest("hello", { scopeId: "renamed", scopeName: "Other room" });
+    await f.dispatch.fillOpenSlots();
+    assert.equal(f.starts(), 3);
   });
 
   it("refuses a start without its triggering event", async (t) => {

@@ -28,7 +28,9 @@ describe("desktop locale", () => {
     assert.equal(translate("zh", "nav.engine"), "连接应用");
     assert.equal(translate("en", "recipes.goEngine"), "Add an Agent in Connected Apps");
     assert.equal(translate("zh", "recipes.startersTitle"), "从模板开始");
-    assert.equal(translate("en", "recipes.scopeTasksConfirm"), "This watches every task across all channels. Continue?");
+    assert.equal(translate("en", "recipes.scopeTasksConfirm"), "This watches every task across all apps. Continue?");
+    assert.equal(translate("zh", "recipes.scopeSource"), "一个应用");
+    assert.equal(translate("zh", "recipes.source"), "应用");
     assert.equal(translate("zh", "recipes.openLastRun"), "打开上次运行");
     assert.equal(translate("en", "recipes.previewTitle"), "Would cover now");
     assert.equal(translate("zh", "recipes.previewMany", { count: 3 }), "工作台里约有 3 条会命中。");

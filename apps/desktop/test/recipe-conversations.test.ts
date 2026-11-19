@@ -60,6 +60,7 @@ describe("recipe conversation discovery", () => {
     assert.equal(calls.length, 4);
     assert.equal(conversations.length, 205);
     assert.equal(conversations.find((item) => item.id === "chat:beyond-200")?.label, "Title beyond-200");
+    assert.equal(conversations.find((item) => item.id === "chat:beyond-200")?.conversation_name, "Title beyond-200");
     assert.equal(conversations.find((item) => item.id === "chat:older-hidden")?.source, "chat");
     assert.equal(conversations.find((item) => item.id === "chat:hidden")?.can_send, false);
     assert.equal(conversations.find((item) => item.id === "chat:older-hidden")?.can_send, false);

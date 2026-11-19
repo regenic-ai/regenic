@@ -14,7 +14,21 @@ export function recipeConversationOptions(threads: InboxThread[]): RecipeConvers
     unit_kind: thread.unit_kind ?? undefined,
     has_work: Boolean(thread.work),
     body_text: thread.messages[thread.messages.length - 1]?.body_text,
+    conversation_name: conversationMatchName(thread),
   }));
+}
+
+/** The name a recipe filter sees. Display fallbacks, such as a message excerpt, are not names. */
+function conversationMatchName(thread: InboxThread): string | undefined {
+  const custom = thread.title?.replace(/\s+/g, " ").trim();
+  if (custom) {
+    return custom;
+  }
+  const label = thread.conversation_label?.replace(/\s+/g, " ").trim();
+  if (!label || label === thread.label) {
+    return undefined;
+  }
+  return label;
 }
 
 /** Inbox heads are paginated separately for shown and hidden conversations. */
