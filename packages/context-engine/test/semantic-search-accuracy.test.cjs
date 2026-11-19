@@ -43,26 +43,26 @@ describe("Semantic search accuracy baseline", () => {
     assert.equal(report.metrics.unauthorized_selections, 0);
     assert.equal(report.metrics.stale_selections, 0);
     assert.equal(report.metrics.mean_recall_at_k, 0.875);
-    assert.equal(report.metrics.mean_ndcg_at_k, 0.85715654947);
-    assert.equal(report.metrics.mean_reciprocal_rank_at_k, 0.875);
+    assert.equal(report.metrics.mean_ndcg_at_k, 0.849744705556);
+    assert.equal(report.metrics.mean_reciprocal_rank_at_k, 0.87037037037);
     assert.deepEqual(report.metrics.by_task, {
       lookup: {
         positive_case_count: 12,
         mean_recall_at_k: 1,
-        mean_reciprocal_rank_at_k: 0.958333333333,
-        mean_ndcg_at_k: 0.968670876667,
+        mean_reciprocal_rank_at_k: 1,
+        mean_ndcg_at_k: 0.993310065762,
       },
       anaphora: {
         positive_case_count: 12,
         mean_recall_at_k: 0.708333333333,
-        mean_reciprocal_rank_at_k: 0.708333333333,
-        mean_ndcg_at_k: 0.687006412195,
+        mean_reciprocal_rank_at_k: 0.652777777778,
+        mean_ndcg_at_k: 0.645339745528,
       },
       aggregate: {
         positive_case_count: 12,
         mean_recall_at_k: 0.916666666667,
         mean_reciprocal_rank_at_k: 0.958333333333,
-        mean_ndcg_at_k: 0.915792359549,
+        mean_ndcg_at_k: 0.910584305378,
       },
     });
   });

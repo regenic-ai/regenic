@@ -429,7 +429,7 @@ export class DeterministicContextEngine implements ContextEngine {
       }
       const key = candidateKey(value.candidate);
       const current = byResource.get(key);
-      const score = weightedScore(value.candidate, this.retrievalProfile);
+      const score = rankScore(value.candidate, this.retrievalProfile);
       if (!current) {
         byResource.set(key, { ...clone(value), rank_score: score });
         continue;
@@ -444,7 +444,7 @@ export class DeterministicContextEngine implements ContextEngine {
       for (const [name, candidateScore] of Object.entries(value.candidate.scores)) {
         current.candidate.scores[name] = Math.max(current.candidate.scores[name] ?? Number.NEGATIVE_INFINITY, candidateScore);
       }
-      current.rank_score = weightedScore(current.candidate, this.retrievalProfile);
+      current.rank_score = rankScore(current.candidate, this.retrievalProfile);
     }
     return [...byResource.values()].sort((left, right) =>
       right.rank_score - left.rank_score || compare(left.candidate.candidate_id, right.candidate.candidate_id),
@@ -774,11 +774,14 @@ function evidenceFor(source: ContextSourceEvent): ContextBundleItem["evidence"][
   };
 }
 
-function weightedScore(candidate: ContextCandidate, profile: ContextRetrievalProfile): number {
-  return Object.entries(candidate.scores).reduce(
-    (sum, [name, score]) => sum + score * scoreWeight(name, profile),
-    0,
-  );
+function rankScore(candidate: ContextCandidate, profile: ContextRetrievalProfile): number {
+  const decay = candidate.scores.recency;
+  const relevance = Object.entries(candidate.scores).reduce((sum, [name, score]) => (
+    name === "recency" ? sum : sum + score * scoreWeight(name, profile)
+  ), 0);
+  if (!Number.isFinite(decay) || decay <= 0) return relevance;
+  if (relevance === 0) return decay * scoreWeight("recency", profile);
+  return relevance * decay;
 }
 
 function scoreWeight(name: string, profile: ContextRetrievalProfile): number {

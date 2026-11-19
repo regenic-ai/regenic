@@ -9,11 +9,10 @@ import {
   type ContextRetrievalResult,
   type ContextRetriever,
   type MatchAuthorizedContextLexicalResult,
-  type RetrievedContextCandidate,
 } from "@regenic/domain";
 import {
   eligibleEventSources,
-  eventCandidateFor,
+  eventCandidatesFor,
   retrievalTimeFor,
 } from "./deterministic-event-retriever";
 
@@ -45,9 +44,11 @@ export class IndexedEventRetriever implements ContextRetriever {
       return { candidates: [] };
     }
     const eligible = eligibleEventSources(plan);
-    const candidatesFor = async (sources: typeof eligible) => toCandidates(
+    const candidatesFor = async (sources: typeof eligible) => eventCandidatesFor(
       materialize ? await materialize(sources.map((source) => source.event.event_id)) : sources,
-      plan,
+      plan.request,
+      retrievalTimeFor(plan),
+      eligible,
     );
     // Filename metadata is not part of legacy Event lexical coverage.
     if (!plan.request.query || plan.request.search_kind) {
@@ -76,17 +77,6 @@ export class IndexedEventRetriever implements ContextRetriever {
       degradation_flags: degradationFlags(result, covered.size, authorized.length),
     };
   }
-}
-
-function toCandidates(
-  sources: ReturnType<typeof eligibleEventSources>,
-  plan: AuthorizedContextRetrievalPlan,
-): RetrievedContextCandidate[] {
-  const retrievalTime = retrievalTimeFor(plan);
-  return sources
-    .map((source) => eventCandidateFor(source, plan.request, retrievalTime))
-    .filter((candidate): candidate is RetrievedContextCandidate => candidate !== null)
-    .sort((left, right) => left.candidate.candidate_id.localeCompare(right.candidate.candidate_id));
 }
 
 function validateIndexResult(
