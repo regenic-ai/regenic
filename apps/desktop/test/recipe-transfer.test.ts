@@ -50,7 +50,7 @@ describe("recipe transfer", () => {
   });
 
   it("rejects malformed text filters rather than importing an unfiltered rule", () => {
-    for (const key of ["text_contains", "text_excludes"]) {
+    for (const key of ["text_contains", "text_excludes", "title_contains", "title_excludes"]) {
       for (const value of [42, null, [], {}, true, "", "   "]) {
         const flow = buildRecipeBundle([sample]).flows[0];
         assert.throws(() => parseRecipeBundle(JSON.stringify({

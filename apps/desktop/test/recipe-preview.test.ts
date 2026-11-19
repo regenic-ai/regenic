@@ -7,6 +7,7 @@ import {
   recipeMatches,
   recipesCanShareSubject,
   recipeTextMatches,
+  recipeTitleMatches,
   shouldConfirmRecipeSave,
   subjectFromConversation,
 } from "../src/renderer/src/recipe-preview.ts";
@@ -50,6 +51,35 @@ describe("recipe match preview", () => {
     assert.equal(recipeTextMatches({ text_contains: "a.b" }, "a.b"), true);
     assert.equal(recipeTextMatches({ text_contains: "报告" }, "周报告"), true);
     assert.equal(recipeTextMatches({}, undefined), true);
+    assert.equal(recipeTitleMatches({ title_contains: "Design", title_excludes: "draft" }, "Weekly DESIGN sync"), true);
+    assert.equal(recipeTitleMatches({ title_contains: "Design", title_excludes: "draft" }, "Design draft"), false);
+    assert.equal(recipeTitleMatches({ title_excludes: "draft" }, undefined), false);
+  });
+
+  it("previews an app rule against conversation titles", () => {
+    const match = {
+      record_class: "task" as const,
+      source: "feishu",
+      title_contains: "Invoice",
+      title_excludes: "draft",
+    };
+    const preview = previewRecipeMatch({
+      match,
+      recipes: [],
+      conversations: [
+        task,
+        { ...task, id: "draft", label: "Invoice draft" },
+        { ...task, id: "other", label: "Design review" },
+        { ...otherChannel, label: "Invoice approval" },
+      ],
+    });
+    assert.deepEqual(preview.sample_ids, [task.id]);
+    assert.equal(recipesCanShareSubject(
+      match,
+      { ...match, title_excludes: "Invoice" },
+      "manual",
+      "push",
+    ), false);
   });
 
   it("previews both filters against message bodies, not conversation names", () => {

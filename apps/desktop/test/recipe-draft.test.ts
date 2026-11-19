@@ -68,6 +68,23 @@ describe("recipe draft", () => {
     const cleared = draftMatch({ ...draft, text_contains: "", text_excludes: "   " });
     assert.equal(cleared.text_contains, undefined);
     assert.equal(cleared.text_excludes, undefined);
+    const titled = draftFromRecipe({
+      ...rule,
+      match: { record_class: "task", source: "feishu", title_contains: " 周报 ", title_excludes: "草稿" },
+    });
+    assert.equal(titled.scope, "source");
+    assert.deepEqual(draftMatch(titled), {
+      record_class: "task",
+      source: "feishu",
+      title_contains: " 周报 ",
+      title_excludes: "草稿",
+    });
+    assert.equal(draftMatch({ ...titled, scope: "tasks" }).title_contains, undefined);
+    assert.equal(draftMatch({ ...titled, title_contains: "   " }).title_contains, undefined);
+    assert.match(chainText({
+      ...rule,
+      match: { record_class: "task", source: "feishu", title_contains: "周报" },
+    }, "Test"), /filterTitleContainsSummary/);
     assert.match(chainText(saved, "Test"), /filterContainsSummary/);
     assert.match(chainText(saved, "Test"), /filterExcludesSummary/);
   });

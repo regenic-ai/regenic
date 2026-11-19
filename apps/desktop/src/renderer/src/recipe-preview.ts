@@ -22,6 +22,7 @@ export interface RecipePreviewSubject {
   thread_id: string;
   unit_kind?: string;
   body_text?: string;
+  title?: string;
 }
 
 export interface RecipeMatchPreview {
@@ -65,12 +66,18 @@ export function recipeMatches(
   if (match.thread_facet && match.thread_facet !== subject.thread_facet) {
     return false;
   }
-  return triggerKind !== "push" || recipeTextMatches(match, subject.body_text);
+  if (triggerKind === "push" && !recipeTextMatches(match, subject.body_text)) {
+    return false;
+  }
+  return recipeTitleMatches(match, subject.title);
 }
 
-/** Mirrors the kernel's literal, case-insensitive body filter for previews and local tests. */
-export function recipeTextMatches(match: RecipeMatch, text: string | undefined): boolean {
-  if (!match.text_contains && !match.text_excludes) {
+function literalSubstringMatches(
+  contains: string | undefined,
+  excludes: string | undefined,
+  text: string | undefined,
+): boolean {
+  if (!contains && !excludes) {
     return true;
   }
   if (text === undefined) {
@@ -78,8 +85,34 @@ export function recipeTextMatches(match: RecipeMatch, text: string | undefined):
   }
   const folded = text.toLowerCase();
   return (
-    (!match.text_contains || folded.includes(match.text_contains.toLowerCase())) &&
-    (!match.text_excludes || !folded.includes(match.text_excludes.toLowerCase()))
+    (!contains || folded.includes(contains.toLowerCase())) &&
+    (!excludes || !folded.includes(excludes.toLowerCase()))
+  );
+}
+
+/** Mirrors the kernel's literal, case-insensitive body filter for previews and local tests. */
+export function recipeTextMatches(match: RecipeMatch, text: string | undefined): boolean {
+  return literalSubstringMatches(match.text_contains, match.text_excludes, text);
+}
+
+/** Mirrors the kernel's conversation-title filter. */
+export function recipeTitleMatches(match: RecipeMatch, title: string | undefined): boolean {
+  return literalSubstringMatches(match.title_contains, match.title_excludes, title);
+}
+
+function substringFiltersConflict(
+  leftContains: string | undefined,
+  leftExcludes: string | undefined,
+  rightContains: string | undefined,
+  rightExcludes: string | undefined,
+): boolean {
+  return Boolean(
+    (leftContains &&
+      rightExcludes &&
+      leftContains.toLowerCase().includes(rightExcludes.toLowerCase())) ||
+      (rightContains &&
+        leftExcludes &&
+        rightContains.toLowerCase().includes(leftExcludes.toLowerCase())),
   );
 }
 
@@ -103,6 +136,7 @@ export function subjectFromConversation(
     source,
     thread_id,
     body_text: conversation.body_text,
+    title: conversation.label.replace(/\s+/g, " ").trim() || undefined,
     ...(conversation.unit_kind?.trim()
       ? { unit_kind: conversation.unit_kind.trim() }
       : {}),
@@ -149,8 +183,22 @@ export function recipesCanShareSubject(
   if (
     leftKind === "push" &&
     rightKind === "push" &&
-    ((left.text_contains && right.text_excludes && left.text_contains.toLowerCase().includes(right.text_excludes.toLowerCase())) ||
-      (right.text_contains && left.text_excludes && right.text_contains.toLowerCase().includes(left.text_excludes.toLowerCase())))
+    substringFiltersConflict(
+      left.text_contains,
+      left.text_excludes,
+      right.text_contains,
+      right.text_excludes,
+    )
+  ) {
+    return false;
+  }
+  if (
+    substringFiltersConflict(
+      left.title_contains,
+      left.title_excludes,
+      right.title_contains,
+      right.title_excludes,
+    )
   ) {
     return false;
   }

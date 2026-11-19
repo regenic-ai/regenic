@@ -147,6 +147,8 @@ export interface RecipeDraft {
   unit_kind: string;
   text_contains: string;
   text_excludes: string;
+  title_contains: string;
+  title_excludes: string;
   executor_type: string;
   config: Record<string, string>;
   can_write_back: boolean;
@@ -182,6 +184,8 @@ export function emptyDraft(executorType = ""): RecipeDraft {
     unit_kind: "",
     text_contains: "",
     text_excludes: "",
+    title_contains: "",
+    title_excludes: "",
     executor_type: executorType,
     config: {},
     can_write_back: true,
@@ -327,6 +331,8 @@ export function draftFromRecipe(
     unit_kind: recipe.match.unit_kind ?? "",
     text_contains: recipe.match.text_contains ?? "",
     text_excludes: recipe.match.text_excludes ?? "",
+    title_contains: recipe.match.title_contains ?? "",
+    title_excludes: recipe.match.title_excludes ?? "",
     executor_type: recipe.executor_type,
     config: configForRecipeEdit(catalog, config),
     can_write_back: recipe.can_write_back,
@@ -369,6 +375,12 @@ export function draftMatch(draft: RecipeDraft): RecipeMatch {
     ...draftScopeMatch(draft),
     ...(draft.text_contains.trim() ? { text_contains: draft.text_contains } : {}),
     ...(draft.text_excludes.trim() ? { text_excludes: draft.text_excludes } : {}),
+    ...(draft.scope === "source" && draft.title_contains.trim()
+      ? { title_contains: draft.title_contains }
+      : {}),
+    ...(draft.scope === "source" && draft.title_excludes.trim()
+      ? { title_excludes: draft.title_excludes }
+      : {}),
   };
 }
 
@@ -572,6 +584,12 @@ export function recipeChain(
         : []),
       ...(kind === "push" && recipe.match.text_excludes
         ? [t("recipes.filterExcludesSummary", { text: recipe.match.text_excludes })]
+        : []),
+      ...(recipe.match.title_contains
+        ? [t("recipes.filterTitleContainsSummary", { text: recipe.match.title_contains })]
+        : []),
+      ...(recipe.match.title_excludes
+        ? [t("recipes.filterTitleExcludesSummary", { text: recipe.match.title_excludes })]
         : []),
     ].join(" · ");
   }

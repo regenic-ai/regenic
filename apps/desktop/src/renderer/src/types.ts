@@ -351,6 +351,8 @@ export interface RecipeMatch {
   unit_kind?: string;
   text_contains?: string;
   text_excludes?: string;
+  title_contains?: string;
+  title_excludes?: string;
 }
 
 export type RecipeTriggerKind = "push" | "pull" | "manual";

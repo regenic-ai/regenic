@@ -23,8 +23,10 @@ const {
   selectThreadEvidenceLines,
   hiddenExecutorThreadIds,
   matchRecipe,
+  recipeConversationTitle,
   recipeMatches,
   recipeTextMatches,
+  recipeTitleMatches,
   recipesCanShareSubject,
   MemoryExecutorRegistry,
   MemoryWorkStore,
@@ -130,6 +132,34 @@ describe("recipe match", () => {
     assert.equal(recipeTextMatches({ text_contains: "报告" }, "本周报告"), true);
     assert.equal(recipeSpecificity(match), recipeSpecificity({ thread_id: subject.thread_id }));
     assert.equal(recipeMatches({ text_contains: "approve" }, { ...subject, body_text: "approve" }), false);
+  });
+
+  it("filters an app rule by conversation title for every trigger kind", () => {
+    const match = {
+      source: subject.source,
+      record_class: "task",
+      title_contains: "Design",
+      title_excludes: "draft",
+    };
+    const task = { ...subject, record_class: "task", title: "Weekly Design sync" };
+    assert.equal(recipeConversationTitle({ customTitle: "  Design   review ", conversationLabel: "Other" }), "Design review");
+    assert.equal(recipeConversationTitle({ conversationLabel: "  Weekly Design sync  " }), "Weekly Design sync");
+    assert.equal(recipeTitleMatches(match, "weekly DESIGN sync"), true);
+    assert.equal(recipeTitleMatches(match, "Design draft"), false);
+    assert.equal(recipeTitleMatches(match, undefined), false);
+    assert.equal(recipeTitleMatches({}, undefined), true);
+    for (const kind of ["push", "manual", "pull"]) {
+      assert.equal(recipeMatches(match, task, kind), true);
+      assert.equal(recipeMatches(match, { ...task, title: "Design draft" }, kind), false);
+      assert.equal(recipeMatches(match, { ...task, title: undefined }, kind), false);
+    }
+    assert.equal(recipeSpecificity(match), recipeSpecificity({ source: subject.source, record_class: "task" }));
+    assert.equal(recipesCanShareSubject(
+      { ...match, title_contains: "Design draft" },
+      { ...match, title_excludes: "draft" },
+      "manual",
+      "push",
+    ), false);
   });
 
   it("falls back to the next eligible rule when a more-specific filter fails", () => {

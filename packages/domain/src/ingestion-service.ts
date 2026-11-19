@@ -71,7 +71,7 @@ import {
   recipeAllowsPushDispatch,
   shouldAcceptPushRecord,
 } from "./recipe-trigger";
-import { recipeTextMatches } from "./recipe-match";
+import { recipeConversationTitle, recipeTextMatches } from "./recipe-match";
 import { isPushInboxDecision } from "./inbox-query";
 import {
   openOrUpdateWorkItem,
@@ -916,12 +916,17 @@ export class IngestionService {
         const bodyText = planned.record.content?.find((part) =>
           part.role === "body" && part.text !== undefined,
         )?.text;
+        const pref = await this.authorityStore.getConversationPref(orgId, threadId);
         const subject = workSubjectFromEvent({
           type: surface?.type ?? planned.record.type,
           source: planned.identity.source,
           thread_id: threadId,
           unit_kind: surface?.unit_kind,
           body_text: bodyText,
+          title: recipeConversationTitle({
+            customTitle: pref?.title,
+            conversationLabel: surface?.conversation_label,
+          }),
           prompts: false,
           hint: surface?.thread_facet,
           prior_facet: existing && isActiveWorkStatus(existing.status)

@@ -619,12 +619,12 @@ async function rendererSmoke() {
       record_class: "task", thread_facet: "ticket", can_send: true, body_text: "draft"
     }])`);
     await clickText("Send back");
-    for (const scope of ["All tasks", "One channel"]) {
+    for (const scope of ["All tasks", "One app"]) {
       await clickText(scope);
-      if (scope === "One channel") {
+      if (scope === "One app") {
         await window.webContents.executeJavaScript(`(() => {
           const row = [...document.querySelectorAll(".recipe-row")]
-            .find(item => item.querySelector(".recipe-row-label")?.textContent.trim() === "Source");
+            .find(item => item.querySelector(".recipe-row-label")?.textContent.trim() === "App");
           row.querySelector(".menu-select-btn").click();
         })()`);
         await new Promise((resolve) => setTimeout(resolve, 50));
@@ -651,7 +651,7 @@ async function rendererSmoke() {
         assert.equal(saved.config.destination.thread, "origin");
         assert.equal(saved.config.scope.match.text_contains, contains);
         assert.equal(saved.config.scope.match.text_excludes, excludes);
-        assert.equal(saved.config.scope.match.source, scope === "One channel" ? "smoke" : undefined);
+        assert.equal(saved.config.scope.match.source, scope === "One app" ? "smoke" : undefined);
         assert.equal(await window.webContents.executeJavaScript(`(() => {
           return [...document.querySelectorAll(".recipe-form-foot button")]
             .find(item => item.textContent.trim() === "Try once").disabled;

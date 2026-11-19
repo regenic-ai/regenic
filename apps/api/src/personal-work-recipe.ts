@@ -125,7 +125,7 @@ export function normalizeRecipe(
 }
 
 function normalizeMatch(match: RecipeMatch): RecipeMatch {
-  for (const key of ["text_contains", "text_excludes"] as const) {
+  for (const key of ["text_contains", "text_excludes", "title_contains", "title_excludes"] as const) {
     if (
       match[key] !== undefined &&
       (typeof match[key] !== "string" || !match[key]?.trim())
@@ -162,5 +162,7 @@ function normalizeMatch(match: RecipeMatch): RecipeMatch {
     ...(unit_kind ? { unit_kind } : {}),
     ...(match.text_contains !== undefined ? { text_contains: match.text_contains } : {}),
     ...(match.text_excludes !== undefined ? { text_excludes: match.text_excludes } : {}),
+    ...(match.title_contains !== undefined ? { title_contains: match.title_contains } : {}),
+    ...(match.title_excludes !== undefined ? { title_excludes: match.title_excludes } : {}),
   };
 }
