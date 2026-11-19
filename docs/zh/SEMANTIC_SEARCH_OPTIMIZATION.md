@@ -62,7 +62,7 @@ LoCoMo 和中文的 PerLTQA 也像个人记忆，但是 CC BY-NC，没有放进�
 ### 步骤 2：去掉硬阈值，改归一化加权融合（已接入默认 profile）
 
 - 参考：Weaviate `relativeScoreFusion`、Elastic RRF / linear retriever。
-- 默认 profile 是 `personal-hybrid-thread-minmax-v5`。向量路用索引已有的 top-k（预算的 5 倍，夹在 50 到 1000），`vector_min_score = -1`，余弦不再单独卡 0.7。两路各自做 min-max，空路记 0，一路里分数都相同则该路记 1，然后向量 0.6、词法 0.4 相加。
+- 默认 profile 是 `personal-hybrid-thread-minmax-v5`。融合用索引已有的 top-k（预算的 5 倍，夹在 50 到 1000），`vector_min_score = -1`，不再因为余弦低于 0.7 把候选挡在融合之外。搜索结果上的 semantic / visual 标记仍要余弦不低于 `semantic_evidence_score = 0.7`，避免把弱向量标成语义证据。两路各自做 min-max，空路记 0，一路里分数都相同则该路记 1，然后向量 0.6、词法 0.4 相加。
 - 对照 profile 是 `personal-hybrid-thread-rrf-v4`：仍是 RRF，`RRF_K = 60`，余弦低于 0.7 不进向量路。
 - EmbeddingGemma 对照（k = 10，分数是 recall / nDCG）。0.3、0.4、0.5 与 top-k 的前 10 名完全相同，所以默认仍用 top-k，不另设中间阈值。
 

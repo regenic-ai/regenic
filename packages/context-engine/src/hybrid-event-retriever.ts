@@ -32,6 +32,7 @@ export const HYBRID_RRF_PROFILE = {
   fusion: "rrf" as const,
   score_weights: HYBRID_SCORE_WEIGHTS,
   vector_min_score: 0.7,
+  semantic_evidence_score: 0.7,
   vector_weight: 0.5,
   lexical_weight: 0.5,
 };
@@ -40,6 +41,7 @@ export const HYBRID_RETRIEVAL_PROFILE = {
   fusion: "minmax" as const,
   score_weights: HYBRID_SCORE_WEIGHTS,
   vector_min_score: -1,
+  semantic_evidence_score: 0.7,
   vector_weight: 0.6,
   lexical_weight: 0.4,
 };
@@ -48,6 +50,7 @@ export interface HybridRetrievalProfile {
   fusion: "rrf" | "minmax";
   score_weights: typeof HYBRID_SCORE_WEIGHTS;
   vector_min_score: number;
+  semantic_evidence_score: number;
   vector_weight: number;
   lexical_weight: number;
 }
@@ -208,8 +211,8 @@ export class HybridEventRetriever implements ContextRetriever {
     if (plan.request.search_kind) {
       for (const hit of result.matched) {
         const source = allowed.get(hit.event_id)!;
-        const matches = searchMatchesFor(source, plan.request, hit.search_matches, this.profile.vector_min_score);
-        if (hit.score >= this.profile.vector_min_score && plan.request.search_kind !== "files") {
+        const matches = searchMatchesFor(source, plan.request, hit.search_matches, this.profile.semantic_evidence_score);
+        if (hit.score >= this.profile.semantic_evidence_score && plan.request.search_kind !== "files") {
           const body = source.search_body ?? source.text ?? "";
           if (hit.end <= body.length && !matches.some((match) => match.kind === "message")) {
             matches.push({ kind: "message", via: ["semantic"],
@@ -364,6 +367,7 @@ function vectorCandidateLimit(plan: AuthorizedContextRetrievalPlan): number {
 function assertHybridProfile(profile: HybridRetrievalProfile): void {
   if ((profile.fusion !== "rrf" && profile.fusion !== "minmax") ||
     !Number.isFinite(profile.vector_min_score) || profile.vector_min_score < -1 || profile.vector_min_score > 1 ||
+    !Number.isFinite(profile.semantic_evidence_score) || profile.semantic_evidence_score < -1 || profile.semantic_evidence_score > 1 ||
     !Number.isFinite(profile.vector_weight) || profile.vector_weight < 0 || profile.vector_weight > 1 ||
     !Number.isFinite(profile.lexical_weight) || profile.lexical_weight < 0 || profile.lexical_weight > 1 ||
     (profile.fusion === "minmax" && Math.abs(profile.vector_weight + profile.lexical_weight - 1) > 1e-9)) {
