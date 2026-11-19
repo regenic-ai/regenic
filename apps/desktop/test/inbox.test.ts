@@ -14,6 +14,8 @@ import {
   holdOpenedThread,
   filterInboxThreads,
   filterInboxThreadsByTitle,
+  shouldScanInboxSearch,
+  INBOX_SEARCH_AUTO_PAGES,
   inboxRuleOptions,
   mergeInboxThreadLists,
   adjacentInboxThreadId,
@@ -202,6 +204,34 @@ describe("inbox title search", () => {
         (item) => item.id,
       ),
       ["dsh:named", "dsh:label"],
+    );
+  });
+
+  it("keeps scanning unloaded pages while a title search is active, then stops at the cap", () => {
+    const base = {
+      searching: true,
+      hasOlder: true,
+      loading: false,
+      pinnedOnly: false,
+      scannedPages: 0,
+      budget: INBOX_SEARCH_AUTO_PAGES,
+    };
+    assert.equal(shouldScanInboxSearch(base), true);
+    assert.equal(shouldScanInboxSearch({ ...base, loading: true }), false);
+    assert.equal(shouldScanInboxSearch({ ...base, pinnedOnly: true }), false);
+    assert.equal(shouldScanInboxSearch({ ...base, hasOlder: false }), false);
+    assert.equal(shouldScanInboxSearch({ ...base, searching: false }), false);
+    assert.equal(
+      shouldScanInboxSearch({ ...base, scannedPages: INBOX_SEARCH_AUTO_PAGES }),
+      false,
+    );
+    assert.equal(
+      shouldScanInboxSearch({
+        ...base,
+        scannedPages: INBOX_SEARCH_AUTO_PAGES,
+        budget: INBOX_SEARCH_AUTO_PAGES * 2,
+      }),
+      true,
     );
   });
 

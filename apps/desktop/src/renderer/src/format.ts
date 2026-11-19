@@ -19,8 +19,10 @@ export {
   aggregateInstallationSync,
   syncEtaSummary,
   syncFreshnessSummary,
+  installationHasStoredConversations,
   syncProgressSummary,
   syncProgressTone,
+  syncWorkSettled,
   syncReadinessTone,
 } from "./sync-copy.ts";
 

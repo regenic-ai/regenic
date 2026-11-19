@@ -22,6 +22,7 @@ import {
   syncFreshnessSummary,
   syncProgressSummary,
   syncProgressTone,
+  syncWorkSettled,
 } from "../src/renderer/src/sync-copy.ts";
 import type {
   EngineInstallationView,
@@ -219,12 +220,38 @@ describe("sync coverage copy", () => {
       "120+ found · 94 loading older messages · 26 current",
     );
     assert.equal(syncProgressTone(sync), "warn");
+    assert.equal(syncWorkSettled(sync), false);
     setActiveLocale("zh");
     try {
       assert.equal(
         syncProgressSummary(sync),
         "已发现 120+ · 正在补旧消息 94 · 已跟上 26",
       );
+    } finally {
+      setActiveLocale("en");
+    }
+  });
+
+  it("treats a fully current open catalog as caught up", () => {
+    const sync: SyncProgressView = {
+      discovered: 889,
+      seeded: 889,
+      unseeded: 0,
+      backfilling: 0,
+      media_pending: 0,
+      catalog_complete: false,
+      bootstrap_pending: 0,
+      steady: 889,
+    };
+    assert.equal(syncWorkSettled(sync), true);
+    assert.equal(syncProgressTone(sync), "ok");
+    assert.equal(
+      syncProgressSummary(sync),
+      "Up to date with all 889 found so far",
+    );
+    setActiveLocale("zh");
+    try {
+      assert.equal(syncProgressSummary(sync), "目前发现的 889 个都已跟上");
     } finally {
       setActiveLocale("en");
     }

@@ -5,14 +5,32 @@ import type {
   SyncReadinessView,
 } from "./types.ts";
 
+/** Known conversations are on the live tail; nothing on this installation is still catching up. */
+export function syncWorkSettled(sync?: SyncProgressView | null): boolean {
+  return Boolean(
+    sync &&
+      sync.discovered > 0 &&
+      sync.bootstrap_pending === 0 &&
+      sync.steady === sync.discovered,
+  );
+}
+
+export function installationHasStoredConversations(
+  sync?: SyncProgressView | null,
+): boolean {
+  return (sync?.discovered ?? 0) > 0;
+}
+
 export function syncProgressSummary(
   sync?: SyncProgressView | null,
 ): string {
   if (!sync || sync.discovered === 0) {
     return t("sync.noneFound");
   }
-  if (sync.catalog_complete && sync.bootstrap_pending === 0) {
-    return t("sync.coverageReady", { count: sync.discovered });
+  if (syncWorkSettled(sync)) {
+    return sync.catalog_complete
+      ? t("sync.coverageReady", { count: sync.discovered })
+      : t("sync.coverageSoFar", { count: sync.discovered });
   }
   return t("sync.coverage", {
     discovered: sync.catalog_complete
@@ -26,8 +44,11 @@ export function syncProgressSummary(
 export function syncProgressTone(
   sync?: SyncProgressView | null,
 ): "ok" | "warn" | undefined {
-  if (!sync) {
+  if (!sync || sync.discovered === 0) {
     return undefined;
+  }
+  if (syncWorkSettled(sync)) {
+    return "ok";
   }
   if (!sync.catalog_complete || sync.bootstrap_pending > 0) {
     return "warn";

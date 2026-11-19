@@ -54,7 +54,6 @@ import {
 } from "./recipe-draft";
 import {
   configFromCatalog,
-  invokeCopy,
   missingRequiredField,
   taskInstructionValue,
 } from "./recipe-params";
@@ -604,18 +603,21 @@ export function RecipesPage({
         </div>
         <ul className="recipe-list">
           {recipes.map((recipe) => {
-            const invoke = invokeCopy(
-              executorByType.get(recipe.executor_type),
-              recipe.executor_config,
-            );
             const next = nextRunCopy(recipe, t);
             const last = lastRunCopy(recipe, t);
             const conflict = conflictCopy(recipe, recipes, t);
-            const recentRuns = recipe.recent_runs?.length
-              ? recipe.recent_runs
-              : recipe.last_run
-                ? [recipe.last_run]
-                : [];
+            const summary = recipeChain(
+              recipe,
+              sources,
+              conversations,
+              executorByType.get(recipe.executor_type)?.label ??
+                recipe.executor_type,
+              t,
+            )
+              .map((step) => step.label)
+              .filter(Boolean)
+              .join(" · ");
+            const meta = [next, last].filter(Boolean).join(" · ");
             const runThread =
               recipe.last_run?.thread_id?.trim() ||
               recipe.match.thread_id?.trim() ||
@@ -634,7 +636,7 @@ export function RecipesPage({
                   onClick={() => editRecipe(recipe)}
                 >
                   <div className="recipe-card-title">
-                    <strong>{recipe.name}</strong>
+                    <strong title={recipe.name}>{recipe.name}</strong>
                     <span className={`recipe-pill${recipe.enabled ? " is-on" : ""}`}>
                       {recipe.enabled ? t("recipes.on") : t("recipes.off")}
                     </span>
@@ -647,35 +649,16 @@ export function RecipesPage({
                       </span>
                     ) : null}
                   </div>
-                  <ol className="recipe-chain" aria-label={t("recipes.chainLabel")}>
-                    {recipeChain(
-                      recipe,
-                      sources,
-                      conversations,
-                      executorByType.get(recipe.executor_type)?.label ??
-                        recipe.executor_type,
-                      t,
-                    ).map((step) => (
-                      <li key={step.stage} className={`recipe-chain-step is-${step.stage}`}>
-                        <span className="recipe-chain-stage">{t(`recipes.chain.${step.stage}`)}</span>
-                        <span className="recipe-chain-value" title={step.label}>{step.label}</span>
-                      </li>
-                    ))}
-                  </ol>
-                  {next ? <p className="recipe-card-next">{next}</p> : null}
-                  {last && recentRuns.length <= 1 ? (
-                    <p className="recipe-card-next">{last}</p>
+                  {summary ? (
+                    <span className="recipe-card-summary" title={summary}>
+                      {summary}
+                    </span>
                   ) : null}
-                  {conflict ? <p className="recipe-card-next">{conflict}</p> : null}
-                  {invoke ? <p className="recipe-card-how">{invoke}</p> : null}
+                  {meta ? <span className="recipe-card-next">{meta}</span> : null}
+                  {conflict ? (
+                    <span className="recipe-card-next is-conflict">{conflict}</span>
+                  ) : null}
                 </button>
-                {recentRuns.length > 0 ? (
-                  <RecipeRunHistory
-                    runs={recentRuns}
-                    onOpenThread={onOpenThread}
-                    t={t}
-                  />
-                ) : null}
                 <div className="install-actions">
                   <button
                     type="button"

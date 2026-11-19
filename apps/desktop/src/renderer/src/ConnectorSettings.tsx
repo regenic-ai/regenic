@@ -25,8 +25,10 @@ import {
   attemptSummary,
   connectorActionError,
   formatTime,
+  installationHasStoredConversations,
   installationStatusLabel,
   syncProgressSummary,
+  syncWorkSettled,
 } from "./format";
 import { openExternal } from "./CatalogDocs";
 import { useLocale } from "./LocaleContext";
@@ -82,6 +84,12 @@ export function ConnectorKind({
     ? installations.map((item) => item.label).filter(Boolean).join("、")
     : kind.description?.trim() || null;
   const serverApp = kind.connector_type === "server-app";
+  const addingAnother = kind.installed && kind.setup_ready;
+  const idleInstallLabel = addingAnother
+    ? t("connector.addAnother")
+    : kind.setup_ready
+      ? t(serverApp ? "serverApp.connect" : "connector.install")
+      : t("connector.setup");
   return (
     <div
       id={`connector-type-${kind.connector_type}`}
@@ -112,9 +120,7 @@ export function ConnectorKind({
             >
               {busyId === kind.connector_type
                 ? t(serverApp ? "serverApp.connecting" : "connector.installing")
-                : kind.setup_ready
-                  ? t(serverApp ? "serverApp.connect" : "connector.install")
-                  : t("connector.setup")}
+                : idleInstallLabel}
             </button>
           ) : null}
         </div>
@@ -131,16 +137,18 @@ export function ConnectorKind({
       ) : null}
       {installing ? (
         <ConnectorSettingsDialog
-          title={serverApp
-            ? t("serverApp.connectTitle")
-            : t(
-                kind.setup_ready ? "connector.installTitle" : "connector.setupTitle",
-                { title: kind.title },
-              )}
+          title={addingAnother
+            ? t("connector.addAnotherTitle", { title: kind.title })
+            : serverApp
+              ? t("serverApp.connectTitle")
+              : t(
+                  kind.setup_ready ? "connector.installTitle" : "connector.setupTitle",
+                  { title: kind.title },
+                )}
           kind={kind}
           busy={busyId === kind.connector_type}
           error={error}
-          submitLabel={t(serverApp ? "serverApp.connect" : "connector.install")}
+          submitLabel={idleInstallLabel}
           busyLabel={t(serverApp ? "serverApp.connecting" : "connector.installing")}
           showSetup
           onSubmit={onInstall}
@@ -710,13 +718,20 @@ function ConnectorRow({
               installation.last_attempt.started_at,
           )),
   );
+  const hasConversations = installationHasStoredConversations(installation.sync);
+  const settled = syncWorkSettled(installation.sync);
   const activity = pushIsLatest && installation.last_push_at
     ? t("connector.push.lastUpdateWhen", {
         when: formatTime(installation.last_push_at),
       })
-    : !installation.last_attempt && receivesPush && activeSourceMode === "poll"
+    : !installation.last_attempt &&
+        receivesPush &&
+        activeSourceMode === "poll" &&
+        !hasConversations
       ? t("connector.push.waiting")
-      : attemptSummary(installation.last_attempt, attemptSourceMode ?? "poll");
+      : hasConversations && !installation.last_attempt
+        ? null
+        : attemptSummary(installation.last_attempt, attemptSourceMode ?? "poll");
   return (
     <div id={id} className="install-block">
       <div className="install install-instance">
@@ -733,14 +748,25 @@ function ConnectorRow({
                 {t("connector.mode.push")}
               </span>
             ) : null}
+            {hasConversations ? (
+              <span className={`chip ${settled ? "running" : "syncing"}`}>
+                <span className="dot" />
+                {settled ? t("sync.caughtUp") : t("sync.catching")}
+              </span>
+            ) : null}
             {installation.detail ? (
               <span className="muted">{installation.detail}</span>
             ) : null}
           </div>
-          <div className={receivesPush ? "connector-activity" : "muted"}>
-            {activity}
-          </div>
-          {!installation.last_attempt && !installation.last_push_at && receivesPush ? (
+          {activity ? (
+            <div className={receivesPush ? "connector-activity" : "muted"}>
+              {activity}
+            </div>
+          ) : null}
+          {!hasConversations &&
+          !installation.last_attempt &&
+          !installation.last_push_at &&
+          receivesPush ? (
             <p className="muted connector-next">
               {t("connector.push.waitingHint")}
             </p>

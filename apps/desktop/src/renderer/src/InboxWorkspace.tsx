@@ -3,6 +3,8 @@ import { formatChatTime, threadIsSyncing, threadSyncLabel } from "./format";
 import {
   filterInboxThreads,
   filterInboxThreadsByTitle,
+  INBOX_SEARCH_AUTO_PAGES,
+  shouldScanInboxSearch,
   groupThreadsByAttention,
   inboxRuleOptions,
   latestMessage,
@@ -162,6 +164,48 @@ export function InboxWorkspace({
   const columnsRef = useRef<HTMLDivElement>(null);
   const [recipeNames, setRecipeNames] = useState<Record<string, string>>({});
   const searching = titleQuery.trim().length > 0;
+  const loadOlderHeadsRef = useRef(onLoadOlderHeads);
+  loadOlderHeadsRef.current = onLoadOlderHeads;
+  const [searchBudget, setSearchBudget] = useState(INBOX_SEARCH_AUTO_PAGES);
+  const [settledQuery, setSettledQuery] = useState("");
+  const searchAttempts = useRef(0);
+  useEffect(() => {
+    const query = titleQuery.trim();
+    if (!query) {
+      setSettledQuery("");
+      return;
+    }
+    const timer = setTimeout(() => setSettledQuery(query), 300);
+    return () => clearTimeout(timer);
+  }, [titleQuery]);
+  useEffect(() => {
+    searchAttempts.current = 0;
+    setSearchBudget(INBOX_SEARCH_AUTO_PAGES);
+  }, [settledQuery]);
+  const scanReady = searching && settledQuery === titleQuery.trim();
+  useEffect(() => {
+    if (
+      !shouldScanInboxSearch({
+        searching: scanReady,
+        hasOlder: hasOlderHeads,
+        loading: loadingOlderHeads,
+        pinnedOnly: pinFilter === "pinned",
+        scannedPages: searchAttempts.current,
+        budget: searchBudget,
+      })
+    ) {
+      return;
+    }
+    searchAttempts.current += 1;
+    loadOlderHeadsRef.current();
+  }, [scanReady, hasOlderHeads, loadingOlderHeads, pinFilter, searchBudget, settledQuery]);
+  const searchCanContinue =
+    searching && hasOlderHeads && pinFilter !== "pinned";
+  const searchStillScanning =
+    searchCanContinue && (!scanReady || searchAttempts.current < searchBudget);
+  const searchFurther = () => {
+    setSearchBudget((current) => current + INBOX_SEARCH_AUTO_PAGES);
+  };
   const pool = searching ? mergeInboxThreadLists(threads, otherThreads) : threads;
   const channels = threadChannels(pool);
   const visible = filterInboxThreadsByTitle(
@@ -492,21 +536,41 @@ export function InboxWorkspace({
             )
           ) : null}
           {!error && (searching || threads.length > 0) && visible.length === 0 ? (
-            <EmptyState
-              compact
-              icon={<SearchIcon />}
-              title={t("inbox.noMatchTitle")}
-              actions={
-                <button type="button" className="ghost" onClick={() => {
-                  setTitleQuery("");
-                  clearFilters();
-                }}>
-                  {t("inbox.clearFilters")}
-                </button>
-              }
-            >
-              <p>{t("inbox.noMatch")}</p>
-            </EmptyState>
+            searchStillScanning || (searchCanContinue && loadingOlderHeads) ? (
+              <div className="list-more">
+                <span className="dot" />
+                {t("inbox.searchingOlder")}
+              </div>
+            ) : searchCanContinue ? (
+              <EmptyState
+                compact
+                icon={<SearchIcon />}
+                title={t("inbox.searchIncompleteTitle")}
+                actions={
+                  <button type="button" className="ghost" onClick={searchFurther}>
+                    {t("inbox.searchFurther")}
+                  </button>
+                }
+              >
+                <p>{t("inbox.searchIncomplete")}</p>
+              </EmptyState>
+            ) : (
+              <EmptyState
+                compact
+                icon={<SearchIcon />}
+                title={t("inbox.noMatchTitle")}
+                actions={
+                  <button type="button" className="ghost" onClick={() => {
+                    setTitleQuery("");
+                    clearFilters();
+                  }}>
+                    {t("inbox.clearFilters")}
+                  </button>
+                }
+              >
+                <p>{t("inbox.noMatch")}</p>
+              </EmptyState>
+            )
           ) : null}
           {(searching
             ? [
@@ -561,6 +625,14 @@ export function InboxWorkspace({
               ))}
             </div>
           ))}
+          {searchCanContinue && visible.length > 0 && !searchStillScanning && !loadingOlderHeads ? (
+            <div className="list-more">
+              <p>{t("inbox.searchPartial")}</p>
+              <button type="button" className="ghost" onClick={searchFurther}>
+                {t("inbox.searchFurther")}
+              </button>
+            </div>
+          ) : null}
         </ListBody>
         <ColumnResizeHandle
           label={t("shell.resizeList")}

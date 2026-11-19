@@ -278,6 +278,26 @@ export function mergeInboxThreadLists(
   return next;
 }
 
+/** Extra list pages a title search will walk on its own before asking to continue. */
+export const INBOX_SEARCH_AUTO_PAGES = 8;
+
+export function shouldScanInboxSearch(input: {
+  searching: boolean;
+  hasOlder: boolean;
+  loading: boolean;
+  pinnedOnly: boolean;
+  scannedPages: number;
+  budget: number;
+}): boolean {
+  return (
+    input.searching &&
+    input.hasOlder &&
+    !input.loading &&
+    !input.pinnedOnly &&
+    input.scannedPages < input.budget
+  );
+}
+
 export function filterInboxThreadsByTitle(
   threads: readonly InboxThread[],
   query: string,
