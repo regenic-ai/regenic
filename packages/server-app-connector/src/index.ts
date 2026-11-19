@@ -25,13 +25,11 @@ import {
   type PushIngestBatch,
   type ServerAppManifest,
   type SyncDirectoryPage,
-} from "@regenic/connector-contract";
-import {
   ChannelDriverError,
   CONNECTOR_PROTOCOL,
   createHttpTaskExecutor,
   normalizeExecutorHttpUrl,
-} from "@regenic/domain";
+} from "@regenic/connector-contract";
 import { serverAppLocaleTables } from "./locales";
 
 export const SERVER_APP_CONNECTOR_TYPE = "server-app";
