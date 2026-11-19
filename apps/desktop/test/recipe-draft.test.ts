@@ -9,9 +9,11 @@ import {
   emptyDraft,
   starterDraft,
   recipeChain,
+  recipeToggleInput,
   writeBackAvailable,
   writeBackChoices,
 } from "../src/renderer/src/recipe-draft.ts";
+import { fieldsFromFlowConfig, flowConfigFromFields } from "../src/renderer/src/flow-wire.ts";
 import type { RecipeView } from "../src/renderer/src/types.ts";
 import { matchingConversations } from "../src/renderer/src/recipe-preview.ts";
 
@@ -257,5 +259,42 @@ describe("recipe draft", () => {
     assert.match(keep, /recipes\.outcomeKeep/);
     const send = chainText({ ...rule, can_write_back: true }, "DSH");
     assert.match(send, /recipes\.outcomeBack/);
+    assert.doesNotMatch(send, /recipes\.outcomeBackTo/);
+  });
+
+  it("names a saved write-back chat on the list", () => {
+    const saved: RecipeView = {
+      ...rule,
+      can_write_back: true,
+      write_back_thread_id: "feishu:results",
+    };
+    const named = recipeChain(
+      saved,
+      [],
+      [{ id: "feishu:results", label: "发回测试群", can_send: true }],
+      "DSH",
+      t as never,
+    ).find((step) => step.stage === "destination")?.label;
+    assert.equal(named, 'recipes.outcomeBackTo:{"name":"发回测试群"}');
+    const fallback = recipeChain(saved, [], [], "DSH", t as never)
+      .find((step) => step.stage === "destination")?.label;
+    assert.equal(fallback, 'recipes.outcomeBackTo:{"name":"results"}');
+  });
+
+  it("keeps the saved write-back chat when the list flips enabled", () => {
+    const saved: RecipeView = {
+      ...rule,
+      can_write_back: true,
+      write_back_thread_id: "feishu:results",
+      enabled: true,
+    };
+    const input = recipeToggleInput(saved);
+    assert.equal(input.enabled, false);
+    assert.equal(input.write_back_thread_id, "feishu:results");
+    const config = flowConfigFromFields(input);
+    assert.equal(config.destination?.thread, "feishu:results");
+    assert.equal(config.destination?.send, true);
+    assert.equal(config.enabled, false);
+    assert.equal(fieldsFromFlowConfig(config).write_back_thread_id, "feishu:results");
   });
 });

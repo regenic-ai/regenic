@@ -37,6 +37,7 @@ import {
   nextRunCopy,
   parseMaxConcurrent,
   recipeChain,
+  recipeToggleInput,
   saveCoverageCopy,
   scopeChoices,
   scopeError,
@@ -445,21 +446,7 @@ export function RecipesPage({
     setBusy(true);
     setError(null);
     try {
-      await saveRecipe(
-        {
-          name: recipe.name,
-          match: recipe.match,
-          trigger: recipe.trigger,
-          executor_type: recipe.executor_type,
-          executor_config: recipe.executor_config,
-          can_write_back: recipe.can_write_back,
-          hide_on_success: recipe.hide_on_success ?? true,
-          include_context: recipe.include_context,
-          max_concurrent: recipe.max_concurrent ?? null,
-          enabled: !recipe.enabled,
-        },
-        recipe.id,
-      );
+      await saveRecipe(recipeToggleInput(recipe), recipe.id);
       setDraft((current) =>
         current.id === recipe.id
           ? { ...current, enabled: !recipe.enabled }

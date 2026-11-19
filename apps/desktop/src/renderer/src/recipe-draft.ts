@@ -587,11 +587,42 @@ export function recipeChain(
     { stage: "trigger", label: trigger },
     { stage: "source", label: source },
     { stage: "handler", label: handler },
-    {
-      stage: "destination",
-      label: t(recipe.can_write_back ? "recipes.outcomeBack" : "recipes.outcomeKeep"),
-    },
+    { stage: "destination", label: destinationLabel(recipe, conversations, t) },
   ];
+}
+
+function destinationLabel(
+  recipe: RecipeView,
+  conversations: RecipeConversationOption[],
+  t: Translate,
+): string {
+  if (!recipe.can_write_back) {
+    return t("recipes.outcomeKeep");
+  }
+  const target = recipe.write_back_thread_id?.trim();
+  if (!target) {
+    return t("recipes.outcomeBack");
+  }
+  const name =
+    conversations.find((item) => item.id === target)?.label ?? shortThread(target);
+  return t("recipes.outcomeBackTo", { name });
+}
+
+/** List on/off must resend the saved destination. Omitting it encodes as origin and clears it. */
+export function recipeToggleInput(recipe: RecipeView) {
+  return {
+    name: recipe.name,
+    match: recipe.match,
+    trigger: recipe.trigger,
+    executor_type: recipe.executor_type,
+    executor_config: recipe.executor_config,
+    can_write_back: recipe.can_write_back,
+    write_back_thread_id: recipe.write_back_thread_id ?? null,
+    hide_on_success: recipe.hide_on_success ?? true,
+    include_context: recipe.include_context,
+    max_concurrent: recipe.max_concurrent ?? null,
+    enabled: !recipe.enabled,
+  };
 }
 
 export function writeBackAvailable(
