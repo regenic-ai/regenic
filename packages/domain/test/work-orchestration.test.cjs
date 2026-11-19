@@ -153,7 +153,13 @@ describe("recipe match", () => {
       assert.equal(recipeMatches(match, { ...task, title: "Design draft" }, kind), false);
       assert.equal(recipeMatches(match, { ...task, title: undefined }, kind), false);
     }
-    assert.equal(recipeSpecificity(match), recipeSpecificity({ source: subject.source, record_class: "task" }));
+    assert.ok(recipeSpecificity(match) > recipeSpecificity({ source: subject.source, record_class: "task" }));
+    assert.ok(recipeSpecificity({ thread_id: task.thread_id }) > recipeSpecificity(match));
+    const broad = makeRecipe("broad", { source: subject.source, record_class: "task" });
+    const named = makeRecipe("named", match);
+    const thread = makeRecipe("thread", { thread_id: task.thread_id });
+    assert.equal(matchRecipe([broad, named], task)?.id, "named");
+    assert.equal(matchRecipe([named, thread], task)?.id, "thread");
     assert.equal(recipesCanShareSubject(
       { ...match, title_contains: "Design draft" },
       { ...match, title_excludes: "draft" },

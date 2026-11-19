@@ -425,6 +425,8 @@ export interface RecipeConversationOption {
   /** True when Current work already has an open/running work face. */
   has_work?: boolean;
   body_text?: string;
+  /** Name the kernel filters on: a workbench rename, or the app's conversation name. */
+  conversation_name?: string;
 }
 
 export interface UiPrefsView {

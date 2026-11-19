@@ -56,24 +56,34 @@ describe("recipe match preview", () => {
     assert.equal(recipeTitleMatches({ title_excludes: "draft" }, undefined), false);
   });
 
-  it("previews an app rule against conversation titles", () => {
+  it("previews an app rule against conversation names, not display fallbacks", () => {
     const match = {
       record_class: "task" as const,
       source: "feishu",
       title_contains: "Invoice",
       title_excludes: "draft",
     };
+    const named = { ...task, conversation_name: "Invoice approval" };
     const preview = previewRecipeMatch({
       match,
       recipes: [],
       conversations: [
-        task,
-        { ...task, id: "draft", label: "Invoice draft" },
-        { ...task, id: "other", label: "Design review" },
-        { ...otherChannel, label: "Invoice approval" },
+        named,
+        { ...task, id: "draft", label: "Invoice draft", conversation_name: "Invoice draft" },
+        { ...task, id: "excerpt", label: "Invoice approval" },
+        { ...otherChannel, label: "Invoice approval", conversation_name: "Invoice approval" },
       ],
     });
-    assert.deepEqual(preview.sample_ids, [task.id]);
+    assert.deepEqual(preview.sample_ids, [named.id]);
+    const broad = {
+      id: "broad", org_id: "local", name: "All Feishu", enabled: true,
+      match: { record_class: "task" as const, source: "feishu" },
+      trigger: { kind: "push" as const }, executor_type: "agent", executor_config: {},
+      can_write_back: false, include_context: false, created_at: "", updated_at: "",
+    };
+    assert.equal(previewRecipeMatch({
+      match, draftId: "named", recipes: [broad], conversations: [named],
+    }).preempted_by, undefined);
     assert.equal(recipesCanShareSubject(
       match,
       { ...match, title_excludes: "Invoice" },

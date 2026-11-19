@@ -33,6 +33,8 @@ export const RECIPE_MATCH_WEIGHTS = {
   source: 4,
   record_class: 2,
   thread_facet: 1,
+  /** A name filter splits one app, so it beats that app with no name filter. */
+  conversation_name: 1,
 } as const;
 
 export function recipeSpecificity(match: RecipeMatch): number {
@@ -51,6 +53,9 @@ export function recipeSpecificity(match: RecipeMatch): number {
   }
   if (match.thread_facet) {
     score += RECIPE_MATCH_WEIGHTS.thread_facet;
+  }
+  if (match.title_contains || match.title_excludes) {
+    score += RECIPE_MATCH_WEIGHTS.conversation_name;
   }
   return score;
 }

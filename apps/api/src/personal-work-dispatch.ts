@@ -897,23 +897,41 @@ export class PersonalWorkDispatch {
     const host = this.runtime.requireHost();
     const authority = host.get("authority");
     const orgId = this.runtime.orgId();
-    const pref = await authority.getConversationPref(orgId, threadId);
-    let event = eventId ? await authority.getEvent(orgId, eventId) : null;
-    if (event && conversationId(event.source, event.external_id, event.id) !== threadId) {
-      event = null;
+    const [pref, heads] = await Promise.all([
+      authority.getConversationPref(orgId, threadId),
+      authority.listInbox(orgId, { heads: true, thread_ids: [threadId] }),
+    ]);
+    const currentLabel = await this.eventConversationLabel(heads[0]?.event, threadId);
+    if (pref?.title?.trim() || currentLabel) {
+      return recipeConversationTitle({
+        customTitle: pref?.title,
+        conversationLabel: currentLabel,
+      });
     }
-    if (!event) {
-      const heads = await authority.listInbox(orgId, { heads: true, thread_ids: [threadId] });
-      event = heads[0]?.event ?? null;
-    }
-    const label = event?.content_hash
-      ? (await resolveInboxBody(authority, host.get("blobs"), event.content_hash, "meta")).surface
-          ?.conversation_label
-      : undefined;
+    const event = eventId ? await authority.getEvent(orgId, eventId) : null;
     return recipeConversationTitle({
-      customTitle: pref?.title,
-      conversationLabel: label,
+      conversationLabel: await this.eventConversationLabel(event, threadId),
     });
+  }
+
+  private async eventConversationLabel(
+    event: { id: string; source: string; external_id: string; content_hash?: string } | null | undefined,
+    threadId: string,
+  ): Promise<string | undefined> {
+    if (!event?.content_hash) {
+      return undefined;
+    }
+    if (conversationId(event.source, event.external_id, event.id) !== threadId) {
+      return undefined;
+    }
+    const host = this.runtime.requireHost();
+    const body = await resolveInboxBody(
+      host.get("authority"),
+      host.get("blobs"),
+      event.content_hash,
+      "meta",
+    );
+    return body.surface?.conversation_label;
   }
 
   private async noteStartFailed(

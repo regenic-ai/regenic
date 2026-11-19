@@ -61,8 +61,9 @@ export interface RecipeMatch {
   text_contains?: string;
   text_excludes?: string;
   /**
-   * Literal, case-insensitive substrings of the conversation title.
-   * Used when a rule watches one app. Both must pass. A missing title does not pass.
+   * Literal, case-insensitive substrings of the conversation name.
+   * Used when a rule watches one app. Both must pass. A missing name does not pass.
+   * Having either field ranks above the same scope without a name, and below one conversation.
    */
   title_contains?: string;
   title_excludes?: string;

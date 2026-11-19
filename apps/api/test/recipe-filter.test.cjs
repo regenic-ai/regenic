@@ -444,14 +444,24 @@ describe("recipe text filters", () => {
     await f.ingest("hello", { scopeName: "Other room" });
     await f.dispatch.fillOpenSlots();
     assert.equal(f.starts(), 0);
+    const renamedIn = await f.ingest("hello", { scopeName: "Weekly Design sync" });
+    await f.dispatch.fillOpenSlots();
+    assert.equal(f.starts(), 1);
+    const anchored = (await f.authority.listWorkItems(ORG)).find((item) => item.head_event_id === renamedIn);
+    assert.equal(anchored?.recipe_id, "filtered");
+
+    await f.ingest("hello", { scopeId: "moving", scopeName: "Weekly Design sync" });
+    await f.ingest("hello", { scopeId: "moving", scopeName: "Other room" });
+    await f.dispatch.fillOpenSlots();
+    assert.equal(f.starts(), 1);
 
     await f.ingest("hello", { scopeId: "design", scopeName: "Weekly Design sync" });
     await f.dispatch.fillOpenSlots();
-    assert.equal(f.starts(), 1);
+    assert.equal(f.starts(), 2);
 
     await f.ingest("hello", { scopeId: "drafts", scopeName: "Design draft notes" });
     await f.dispatch.fillOpenSlots();
-    assert.equal(f.starts(), 1);
+    assert.equal(f.starts(), 2);
 
     await f.authority.putConversationPref({
       org_id: ORG,
@@ -461,7 +471,7 @@ describe("recipe text filters", () => {
     });
     await f.ingest("hello", { scopeId: "renamed", scopeName: "Other room" });
     await f.dispatch.fillOpenSlots();
-    assert.equal(f.starts(), 2);
+    assert.equal(f.starts(), 3);
   });
 
   it("refuses a start without its triggering event", async (t) => {

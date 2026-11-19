@@ -13,6 +13,7 @@ const WEIGHTS = {
   source: 4,
   record_class: 2,
   thread_facet: 1,
+  conversation_name: 1,
 } as const;
 
 export interface RecipePreviewSubject {
@@ -40,6 +41,7 @@ export function recipeSpecificity(match: RecipeMatch): number {
   if (match.source) score += WEIGHTS.source;
   if (match.record_class) score += WEIGHTS.record_class;
   if (match.thread_facet) score += WEIGHTS.thread_facet;
+  if (match.title_contains || match.title_excludes) score += WEIGHTS.conversation_name;
   return score;
 }
 
@@ -136,7 +138,7 @@ export function subjectFromConversation(
     source,
     thread_id,
     body_text: conversation.body_text,
-    title: conversation.label.replace(/\s+/g, " ").trim() || undefined,
+    title: conversation.conversation_name?.replace(/\s+/g, " ").trim() || undefined,
     ...(conversation.unit_kind?.trim()
       ? { unit_kind: conversation.unit_kind.trim() }
       : {}),
