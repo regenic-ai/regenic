@@ -151,6 +151,22 @@ export class PersonalController {
     return this.guard(async () => this.inbox.listInbox(query));
   }
 
+  @Get("inbox/directory")
+  searchConversationDirectory(
+    @Query("q") q?: string,
+    @Query("thread_id") threadId?: string,
+    @Query("list") list?: string,
+    @Query("limit") limit?: string,
+  ) {
+    const scope = list === "shown" || list === "hidden" || list === "all" ? list : undefined;
+    return this.guard(() => this.inbox.searchConversationDirectory({
+      q: q?.trim() || undefined,
+      thread_id: threadId?.trim() || undefined,
+      list: scope,
+      limit: limit?.trim() ? Number(limit) : undefined,
+    }));
+  }
+
   @Post("inbox/:eventId/triage")
   triageInboxEvent(
     @Param("eventId") eventId: string,

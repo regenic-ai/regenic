@@ -374,6 +374,16 @@ export interface StoreClearView {
   };
 }
 
+export interface ConversationDirectoryView {
+  id: string;
+  label: string;
+  source: string;
+  can_send: boolean;
+  hidden: boolean;
+  has_work: boolean;
+  conversation_name?: string;
+}
+
 @Injectable()
 export class PersonalInboxService {
   private readonly catalogProbes = new CatalogProbeCache();
@@ -737,6 +747,40 @@ export class PersonalInboxService {
       this.kernelRuntime.noteInteractiveWaiter(-1);
       noteInteractiveReadFinished();
     }
+  }
+
+  async searchConversationDirectory(query: {
+    q?: string;
+    thread_id?: string;
+    list?: "shown" | "hidden" | "all";
+    limit?: number;
+  }): Promise<ConversationDirectoryView[]> {
+    const host = this.runtime.requireHost();
+    const authority = host.get("authority");
+    const orgId = this.runtime.orgId();
+    const [rows, installations] = await Promise.all([
+      authority.searchConversationDirectory(orgId, query),
+      authority.listInstallations(orgId),
+    ]);
+    return rows.map((row) => {
+      const title = directoryName(row.pref_title);
+      const catalog = directoryName(row.catalog_label);
+      let thread: ConversationThread;
+      try {
+        thread = parseConversationThread(row.thread_id);
+      } catch {
+        thread = { source: row.source, target: row.thread_id };
+      }
+      return {
+        id: row.thread_id,
+        label: title || catalog || row.thread_id,
+        source: row.source,
+        can_send: this.drivers.canSend(installations, thread),
+        hidden: row.hidden,
+        has_work: row.has_current_work,
+        ...(title || catalog ? { conversation_name: title || catalog } : {}),
+      };
+    });
   }
 
   async getInboxItem(
@@ -2415,5 +2459,9 @@ async function latestInboundByThread(
   return new Map([...fromSiblings, ...cached]);
 }
 
+
+function directoryName(value: string | null): string {
+  return value?.replace(/\s+/g, " ").trim() ?? "";
+}
 
 export { PersonalKernelStoppedError };

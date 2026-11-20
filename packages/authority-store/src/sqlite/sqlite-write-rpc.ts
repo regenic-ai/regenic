@@ -44,6 +44,7 @@ export const AUTHORITY_READ_METHODS = [
   "countStandardUsage",
   "getDisposition",
   "listInbox",
+  "searchConversationDirectory",
   "summarizeInbox",
   "listConversationPrefs",
   "getConversationPref",

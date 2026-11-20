@@ -261,6 +261,57 @@ export function inboxRuleOptions(
     .sort((left, right) => left.label.localeCompare(right.label));
 }
 
+export function directoryInboxThread(item: {
+  id: string;
+  label: string;
+  source: string;
+  can_send: boolean;
+  hidden: boolean;
+  conversation_name?: string;
+}): InboxThread {
+  return {
+    id: item.id,
+    source: item.source,
+    channel: item.source,
+    channel_label: item.source,
+    label: item.label,
+    title: item.conversation_name ?? null,
+    conversation_label: item.conversation_name ?? item.label,
+    conversation_kind: null,
+    unit_kind: null,
+    unit_kind_label: null,
+    pinned: false,
+    hidden: item.hidden,
+    visibility_version: 0,
+    can_send: item.can_send,
+    messages: [],
+    prompts: [],
+    unread: false,
+    unread_count: 0,
+  };
+}
+
+/** Keep a loaded row, and fill in a directory name when that row has none. */
+export function mergeInboxDirectoryHits(
+  loaded: readonly InboxThread[],
+  hits: readonly InboxThread[],
+): InboxThread[] {
+  const byId = new Map(hits.map((hit) => [hit.id, hit]));
+  const overlaid = loaded.map((thread) => {
+    const hit = byId.get(thread.id);
+    if (!hit || thread.title?.trim() || thread.conversation_label?.trim()) {
+      return thread;
+    }
+    return {
+      ...thread,
+      label: hit.label,
+      title: hit.title,
+      conversation_label: hit.conversation_label,
+    };
+  });
+  return mergeInboxThreadLists(overlaid, hits);
+}
+
 export function mergeInboxThreadLists(
   ...lists: Array<readonly InboxThread[]>
 ): InboxThread[] {

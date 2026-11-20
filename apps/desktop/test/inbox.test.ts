@@ -13,7 +13,9 @@ import {
   overlayThreadMessages,
   holdOpenedThread,
   filterInboxThreads,
+  directoryInboxThread,
   filterInboxThreadsByTitle,
+  mergeInboxDirectoryHits,
   shouldScanInboxSearch,
   inboxSearchAwaitingOlder,
   INBOX_SEARCH_AUTO_PAGES,
@@ -206,6 +208,31 @@ describe("inbox title search", () => {
       ),
       ["dsh:named", "dsh:label"],
     );
+  });
+
+  it("keeps a loaded row and still finds a directory name it did not have", () => {
+    const loaded = thread({ id: "synthetic:crm", label: "crm" });
+    const hit = directoryInboxThread({
+      id: "synthetic:crm",
+      label: "Regenic project",
+      source: "synthetic",
+      can_send: true,
+      hidden: false,
+      conversation_name: "Regenic project",
+    });
+    const missing = directoryInboxThread({
+      id: "synthetic:other",
+      label: "Other chat",
+      source: "synthetic",
+      can_send: false,
+      hidden: true,
+    });
+    const merged = mergeInboxDirectoryHits([loaded], [hit, missing]);
+    assert.equal(merged.length, 2);
+    assert.equal(merged[0]?.messages, loaded.messages);
+    assert.equal(merged[0]?.title, "Regenic project");
+    assert.equal(merged[1]?.id, "synthetic:other");
+    assert.equal(merged[1]?.hidden, true);
   });
 
   it("keeps scanning unloaded pages while a title search is active, then stops at the cap", () => {

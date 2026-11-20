@@ -24,6 +24,10 @@ import {
   headsScanQuery,
   threadExternalIdLike,
   normalizeInboxLimit,
+  conversationDirectoryStatement,
+  numberConversationDirectorySql,
+  type ConversationDirectoryEntry,
+  type ConversationDirectoryQuery,
   TASK_INBOX_REASON,
   WORK_OBSERVE_AGAIN_STATUSES,
   assertConversationPolicyVisibility,
@@ -386,6 +390,43 @@ export async function listInbox(db: PgSql, orgId: string, query?: InboxQuery): P
     }
     return items;
   }
+
+export async function searchConversationDirectory(
+  db: PgSql,
+  orgId: string,
+  query?: ConversationDirectoryQuery,
+): Promise<ConversationDirectoryEntry[]> {
+  const statement = conversationDirectoryStatement(
+    orgId,
+    query,
+    userConversationSql("th"),
+    {
+      isHidden: "p.hidden = TRUE",
+      isShown: "(p.hidden IS NULL OR p.hidden = FALSE)",
+      column: "CASE WHEN p.hidden THEN 1 ELSE 0 END",
+    },
+  );
+  const rows = await db.query<{
+    thread_id: string;
+    source: string;
+    face_occurred_at: Date | string;
+    has_current_work: boolean | number;
+    pref_title: string | null;
+    hidden: number;
+    catalog_label: string | null;
+  }>(numberConversationDirectorySql(statement.sql), statement.params);
+  return rows.map((row) => ({
+    thread_id: row.thread_id,
+    source: row.source,
+    pref_title: row.pref_title,
+    catalog_label: row.catalog_label,
+    hidden: row.hidden === 1,
+    has_current_work: row.has_current_work === true || row.has_current_work === 1,
+    face_occurred_at: row.face_occurred_at instanceof Date
+      ? row.face_occurred_at.toISOString()
+      : String(row.face_occurred_at),
+  }));
+}
 
 export async function summarizeInbox(db: PgSql, orgId: string): Promise<InboxSummary> {
     const latest = await db.queryOne<{ latest_at: unknown; latest_id: string }>(

@@ -295,6 +295,7 @@ import {
   getDisposition,
   listConversationPrefs,
   listInbox,
+  searchConversationDirectory,
   putConversationPref,
   setConversationVisibility,
   setConversationPolicyHidden,
@@ -944,6 +945,13 @@ export class SqliteAuthorityStore
 
   async listInbox(orgId: string, query?: InboxQuery): Promise<InboxItem[]> {
     return listInbox(this.database, orgId, query);
+  }
+
+  async searchConversationDirectory(
+    orgId: string,
+    query?: import("@regenic/domain").ConversationDirectoryQuery,
+  ): Promise<import("@regenic/domain").ConversationDirectoryEntry[]> {
+    return searchConversationDirectory(this.database, orgId, query);
   }
 
   async summarizeInbox(orgId: string): Promise<InboxSummary> {

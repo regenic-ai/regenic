@@ -1,7 +1,6 @@
 import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { fetchEngine, fetchInboxHeads, fetchSearchSource, fetchSearchWindow, searchPersonalContext } from "./api";
+import { fetchConversationDirectory, fetchEngine, fetchSearchSource, fetchSearchWindow, searchPersonalContext } from "./api";
 import { MenuSelect } from "./MenuSelect";
-import { loadRecipeConversations } from "./recipe-conversations";
 import {
   applySearchWindow,
   contextSearchInput,
@@ -268,10 +267,20 @@ export function PreciseSearch({ onSettings, onOpenConversation, onLocate, locked
   }, [filtersOpen, locale]);
 
   async function loadConversations(signal: AbortSignal) {
-    const loaded = await loadRecipeConversations(fetchInboxHeads, signal);
+    const loaded = await fetchConversationDirectory({ limit: 40 }, { signal });
     if (signal.aborted) return;
     setConversations(loaded.map((item) => ({ value: item.id, label: item.label })));
     setConversationsReady(true);
+  }
+
+  async function searchConversations(query: string, signal: AbortSignal) {
+    const loaded = await fetchConversationDirectory({ q: query, limit: 40 }, { signal });
+    if (signal.aborted) return;
+    setConversations((current) => {
+      const byId = new Map(current.map((item) => [item.value, item]));
+      for (const item of loaded) byId.set(item.id, { value: item.id, label: item.label });
+      return [...byId.values()];
+    });
   }
 
   const notices = useMemo(() => {
@@ -374,6 +383,7 @@ export function PreciseSearch({ onSettings, onOpenConversation, onLocate, locked
                   searchable
                   options={[{ value: "", label: t("search.threadAll") }, ...conversations]}
                   onLoad={loadConversations}
+                  onSearch={searchConversations}
                   resultsReady={conversationsReady}
                   onChange={(value) => {
                     setThread(value);

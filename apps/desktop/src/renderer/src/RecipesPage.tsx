@@ -201,11 +201,22 @@ export function RecipesPage({
     [executors],
   );
   const editing = Boolean(draft.id || returnToWork || composing);
+  const pinnedConversations = [draft.thread_id, draft.write_back_thread_id]
+    .flatMap((id) => {
+      const trimmed = id?.trim() ?? "";
+      return trimmed ? [trimmed] : [];
+    });
   const {
     conversations,
     load: loadConversations,
+    search: searchConversations,
     ready: conversationsReady,
-  } = useRecipeConversationCatalog(initialConversations, editing, locale);
+  } = useRecipeConversationCatalog(
+    initialConversations,
+    editing,
+    `${locale}\n${pinnedConversations.join("\n")}`,
+    pinnedConversations,
+  );
   const awaitingStart = catalogReady && recipes.length === 0 && !editing;
   const conversationOptions = useMemo(
     () => conversationChoices(conversations, draft),
@@ -860,6 +871,7 @@ export function RecipesPage({
                       ariaLabel={t("recipes.conversation")}
                       searchable
                       onLoad={loadConversations}
+                      onSearch={searchConversations}
                       resultsReady={conversationsReady}
                       options={conversationOptions}
                       onChange={(thread_id) => {
@@ -1036,6 +1048,7 @@ export function RecipesPage({
                       placeholder={t("recipes.searchConversation")}
                       searchable
                       onLoad={loadConversations}
+                      onSearch={searchConversations}
                       resultsReady={conversationsReady}
                       ariaLabel={t("recipes.writeBackTo")}
                       onChange={(write_back_thread_id) =>
