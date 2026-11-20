@@ -180,7 +180,7 @@ export const ThreadPane = memo(function ThreadPane({
       merged: reading,
       activityNote: threadActivityNote({ ...thread, messages: source }),
     };
-  }, [thread, pending]);
+  }, [thread, pending, t]);
   const prompts = thread.prompts;
   const locatedRef = useRef<string | null>(null);
   const [locateUnavailable, setLocateUnavailable] = useState(false);

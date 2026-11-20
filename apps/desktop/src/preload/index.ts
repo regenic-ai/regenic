@@ -14,8 +14,21 @@ function readApiOrigin(): string {
   return flag?.slice("--regenic-api=".length) ?? "http://127.0.0.1:4370";
 }
 
+function readArg(name: string): string | undefined {
+  const flag = process.argv.find((arg) => arg.startsWith(`--${name}=`));
+  const value = flag?.slice(name.length + 3);
+  return value || undefined;
+}
+
+function readBootLocale(): "en" | "zh" | undefined {
+  const value = readArg("regenic-locale");
+  return value === "zh" || value === "en" ? value : undefined;
+}
+
 contextBridge.exposeInMainWorld("regenic", {
   apiOrigin: readApiOrigin(),
+  locale: readBootLocale(),
+  boot: readArg("regenic-boot"),
   getApiOrigin: () => ipcRenderer.invoke("regenic:get-api-origin"),
   getKernelSettings: () => ipcRenderer.invoke("regenic:get-kernel-settings"),
   getDatabaseSettings: () => invokeDatabase<DatabaseSettingsView>("regenic:get-database-settings"),

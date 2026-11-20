@@ -97,7 +97,7 @@ export function TrayApp() {
         </div>
         <div className={`chip ${chip}`}>
           <span className="dot" />
-          {t("chrome.kernel", { state: chipLabel(chip) })}
+          {t("chrome.kernel", { state: chipLabel(chip, t) })}
         </div>
         <p className="muted">
           {t("tray.workCount", { count: engine?.inbox_count ?? threads.length })}

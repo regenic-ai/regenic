@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { t } from "../../shared/i18n.ts";
 import { chipLabel } from "./format";
+import { useLocale } from "./LocaleContext";
 import {
   ConnectIcon,
   ConnectedAppsHint,
@@ -93,6 +93,7 @@ function StatusMenu({
   onOpenStatus: () => void;
   onOpenConnections: () => void;
 }) {
+  const { t } = useLocale();
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -110,7 +111,7 @@ function StatusMenu({
       document.removeEventListener("keydown", onKeyDown);
     };
   }, [open]);
-  const summary = statusSummary(status);
+  const summary = statusSummary(status, t);
   return (
     <div className="status-menu" ref={rootRef}>
       <button
@@ -134,7 +135,7 @@ function StatusMenu({
         <div className="status-pop" role="dialog" aria-label={t("shell.status.title")}>
           <div className={`status-pop-head tone-${status.tone}`}>
             <span className="status-dot" />
-            <strong>{t("chrome.kernel", { state: chipLabel(status.chip) })}</strong>
+            <strong>{t("chrome.kernel", { state: chipLabel(status.chip, t) })}</strong>
           </div>
           <StatusRows rows={status.rows} className="status-pop-rows" />
           {status.errors.length > 0 || status.hints.length > 0 ? (
@@ -219,6 +220,7 @@ export function Sidebar({
   onResizeDrag: (dragging: boolean) => void;
   resizeMax: () => number;
 }) {
+  const { t } = useLocale();
   const toggleLabel = collapsed ? t("shell.expand") : t("shell.collapse");
   return (
     <nav className={`sidebar${collapsed ? " collapsed" : ""}`} aria-label={t("shell.nav")}>

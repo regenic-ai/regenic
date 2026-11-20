@@ -3,8 +3,8 @@ import { dirname } from "node:path";
 import { tryParseDataRoot } from "./data-directory.ts";
 import { storedDatabasePreference, type DatabasePreference } from "./database-settings.ts";
 import {
-  DEFAULT_LOCALE,
   parseLocale,
+  resolveLocale,
   type Locale,
 } from "../shared/locale.ts";
 import {
@@ -50,7 +50,22 @@ export function parseKernelOrigin(raw: string): string {
   return parsed.origin;
 }
 
-export function loadDesktopPreference(file: string): DesktopPreference {
+let hostLanguageTag: string | undefined;
+
+/** OS language used when a desktop install has not chosen one yet. */
+export function setHostLanguage(language: string | undefined): void {
+  hostLanguageTag = language?.trim() || undefined;
+}
+
+function hostLanguage(): string | undefined {
+  return hostLanguageTag;
+}
+
+export function loadDesktopPreference(
+  file: string,
+  systemLanguage: unknown = hostLanguage(),
+): DesktopPreference {
+  const system = systemLanguage;
   try {
     const raw = JSON.parse(readFileSync(file, "utf8")) as {
       mode?: unknown;
@@ -64,7 +79,7 @@ export function loadDesktopPreference(file: string): DesktopPreference {
       semanticLaunchSettings?: unknown;
       database?: unknown;
     };
-    const locale = parseLocale(raw.locale ?? DEFAULT_LOCALE);
+    const locale = resolveLocale(raw.locale, system);
     const dataRoot = tryParseDataRoot(raw.dataRoot);
     const previousDataRoot = tryParseDataRoot(raw.previousDataRoot);
     const personalApiKeys = parsePersonalApiKeys(raw.personalApiKeys);
@@ -97,7 +112,8 @@ export function loadDesktopPreference(file: string): DesktopPreference {
   } catch (error) {
     if (error instanceof Error && error.message.startsWith("database.")) throw error;
     return {
-      mode: "local", locale: DEFAULT_LOCALE,
+      mode: "local",
+      locale: resolveLocale(undefined, system),
       semanticLaunchSettings: DEFAULT_SEMANTIC_LAUNCH_SETTINGS,
     };
   }

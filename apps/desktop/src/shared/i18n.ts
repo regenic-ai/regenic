@@ -4,6 +4,11 @@ import { translate, type MessageKey } from "./messages.ts";
 export type { Locale, MessageKey };
 export { DEFAULT_LOCALE, parseLocale, translate };
 
+export type Translate = (
+  key: MessageKey,
+  vars?: Record<string, string | number>,
+) => string;
+
 let active: Locale = DEFAULT_LOCALE;
 
 export function activeLocale(): Locale {
