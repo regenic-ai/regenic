@@ -107,7 +107,10 @@ async function fixture(t, maxConcurrent, { initialStatus = "open", withTrigger =
   const calls = { spawn: 0, stdin: 0, stdinText: "", status: 0, attach: 0 };
   const hooks = {};
   let executor = createSessionTaskExecutor({ executor_type: "session", source: "dsh" });
-  ports.executors = { get: () => executor };
+  ports.executors = {
+    get: () => executor,
+    list: () => [executor],
+  };
   const runtime = { isReady: () => true, orgId: () => ORG, getOptions: () => null,
     requireHost: () => ({ get: (name) => ports[name] }) };
   const ctx = {
@@ -2136,7 +2139,11 @@ describe("durable executor start", () => {
     const replacement = createSessionTaskExecutor({ executor_type: "replacement" });
     f.ports.executors = new MemoryExecutorRegistry();
     f.ports.executors.register(original);
-    const service = new PersonalExecutorService(f.runtime, {}, {});
+    const service = new PersonalExecutorService(
+      f.runtime,
+      { get() {}, findCreatable() {} },
+      { default() {}, forSource() {} },
+    );
     let release;
     let started;
     const preparing = new Promise((resolve) => { started = resolve; });

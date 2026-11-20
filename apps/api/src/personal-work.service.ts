@@ -43,8 +43,10 @@ import {
   type FlowConfig,
   type PersonalDispatchPolicy,
   type PromptAnswer,
+  createSessionTaskExecutor,
   type Recipe,
   type SearchAnswerRecord,
+  type TaskExecutor,
   type WorkItemCreation,
   type WorkItemCreationAbortResult,
   type ThreadPrompt,
@@ -115,6 +117,12 @@ export interface PreparedAuxiliaryExecution {
   work_item: WorkItem;
   recipe: Recipe;
   search_answer?: SearchAnswerRecord;
+  /**
+   * Present only when no executor is installed. It is not registered, so the
+   * catalog stays empty, and its start fails closed once no connector can
+   * create a session.
+   */
+  executor?: TaskExecutor;
 }
 
 export interface WorkRunView {
@@ -749,10 +757,15 @@ export class PersonalWorkService implements OnModuleDestroy {
     const host = this.runtime.requireHost();
     const orgId = this.runtime.orgId();
     const mounted = host.get("executors").list();
-    const executorType = input.executor_type
+    let executorType = input.executor_type
       ?? mounted.find((executor) => executor.catalog().agent === true)?.executor_type
       ?? mounted[0]?.executor_type;
-    if (!executorType || !host.get("executors").get(executorType)) {
+    let executor: TaskExecutor | undefined;
+    if (!executorType && searchAnswer) {
+      executor = createSessionTaskExecutor({ executor_type: "session", source: "dsh" });
+      executorType = executor.executor_type;
+    }
+    if (!executorType || !(executor ?? host.get("executors").get(executorType))) {
       throw new PersonalConnectorError(
         "invalid_config",
         input.executor_type
@@ -805,6 +818,7 @@ export class PersonalWorkService implements OnModuleDestroy {
     return {
       work_item: created.item, recipe: created.recipe,
       ...(created.search_answer ? { search_answer: created.search_answer } : {}),
+      ...(executor ? { executor } : {}),
     };
   }
 
@@ -832,6 +846,7 @@ export class PersonalWorkService implements OnModuleDestroy {
       prepared.recipe,
       evidenceText,
       "auxiliary",
+      prepared.executor ? { executor: prepared.executor } : undefined,
     );
     if (!run) {
       throw new PersonalConnectorError(

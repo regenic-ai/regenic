@@ -217,6 +217,7 @@ describe("first-party channel plugins", () => {
       "@regenic/dsh-connector",
       "@regenic/feishu-connector",
       "@regenic/cursor-connector",
+      "@regenic/server-app-connector",
     ]);
   });
 
