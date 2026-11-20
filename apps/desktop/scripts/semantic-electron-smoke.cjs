@@ -889,7 +889,7 @@ process.on("SIGTERM",() => server.close(() => process.exit(0)));
         return !runtime.busy && !runtime.healthy && runtime.canManage;
       }, "managed model stopped before full-process crash");
     }
-    if (!process.argv.includes("--skip-crash")) {
+    if (!process.argv.includes("--skip-crash") && process.env.REGENIC_ELECTRON_SMOKE_SKIP_CRASH !== "1") {
       await checkElectronCrash();
       await checkElectronAcknowledgmentCrash();
     }
