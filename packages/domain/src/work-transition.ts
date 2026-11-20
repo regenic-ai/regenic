@@ -316,19 +316,23 @@ export function prepareWorkAcknowledgment(input: WorkAcknowledgment, facts: {
   trigger_is_completed_work?: boolean;
 }): WorkAcknowledgmentResult {
   assertWorkAcknowledgmentAttentionBinding(input);
+  const triggerId = input.trigger_event_id.trim();
   if (!input.command_id.trim() || input.command_id !== input.command_id.trim()
     || input.command_id.length > 128 || !Number.isSafeInteger(input.expected_version)
     || input.expected_version < 0 || !Number.isSafeInteger(input.expected_run_version)
     || input.expected_run_version < 0 || !Number.isFinite(Date.parse(input.issued_at))
-    || !Number.isFinite(Date.parse(input.now)) || !input.run_id.trim()
-    || !input.trigger_event_id.trim()) {
+    || !Number.isFinite(Date.parse(input.now)) || !input.run_id.trim()) {
     throw new Error("Work result acknowledgment requires a valid run, version, command and timestamp");
   }
   const { item, run, delivery } = facts;
   if (!item) return { outcome: "conflict", reason: "missing_work" };
+  const itemHead = item.head_event_id ?? "";
+  if (!triggerId && itemHead) {
+    throw new Error("Work result acknowledgment requires the triggering message");
+  }
   if (input.expected_item.org_id !== item.org_id || input.expected_item.id !== item.id
     || !sameSnapshot(item, input.expected_item) || (item.version ?? 0) !== input.expected_version
-    || item.current_run_id !== input.run_id || item.head_event_id !== input.trigger_event_id) {
+    || item.current_run_id !== input.run_id || itemHead !== triggerId) {
     return { outcome: "conflict", reason: "stale_result" };
   }
   const completed = run?.status === "completed" && item.status === "done"
@@ -345,7 +349,7 @@ export function prepareWorkAcknowledgment(input: WorkAcknowledgment, facts: {
   )) {
     return { outcome: "conflict", reason: "not_acknowledgeable" };
   }
-  if (!facts.trigger_is_current_work && !(completed && facts.trigger_is_completed_work)) {
+  if (itemHead && !facts.trigger_is_current_work && !(completed && facts.trigger_is_completed_work)) {
     return { outcome: "conflict", reason: "not_acknowledgeable" };
   }
   return {

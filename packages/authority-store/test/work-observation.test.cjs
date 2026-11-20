@@ -3736,6 +3736,40 @@ for (const driver of [
     });
     }
 
+    it("keeps a finished scheduled run visible while another message is current work", async (t) => {
+      const f = await fixture(t, driver);
+      assert.equal((await f.store.commitWorkObservation({ ...f.input, can_write_back: false })).outcome, "applied");
+      const item = await seedLegacyWorkHeadEvent(f, driver, f.item.id, null);
+      const run = await f.store.getWorkRun(ORG, f.run.id);
+      assert.equal((await f.store.acknowledgeWorkResult({
+        expected_item: item, run_id: run.id, trigger_event_id: "",
+        expected_version: item.version, expected_run_version: run.version,
+        command_id: "ack-scheduled-other-work", issued_at: LATER, now: LATER,
+      })).outcome, "applied");
+      assert.equal((await f.store.getConversationPref(ORG, item.thread_id))?.hidden ?? false, false);
+      assert.equal((await f.store.getDisposition("work-trigger-event")).disposition, "current_work");
+      assert.equal((await f.store.getWorkItem(ORG, item.id)).acknowledged_run_id, run.id);
+    });
+
+    it("hides a finished scheduled run when the thread has no current work", async (t) => {
+      const f = await fixture(t, driver);
+      assert.equal((await f.store.commitWorkObservation({ ...f.input, can_write_back: false })).outcome, "applied");
+      const current = await f.store.getDisposition("work-trigger-event");
+      await setDisposition(f.store, {
+        ...current, disposition: "outside_current_work", decided_at: LATER,
+      });
+      const item = await seedLegacyWorkHeadEvent(f, driver, f.item.id, null);
+      const run = await f.store.getWorkRun(ORG, f.run.id);
+      assert.equal((await f.store.acknowledgeWorkResult({
+        expected_item: item, run_id: run.id, trigger_event_id: "",
+        expected_version: item.version, expected_run_version: run.version,
+        command_id: "ack-scheduled-clear", issued_at: LATER, now: LATER,
+      })).outcome, "applied");
+      const pref = await f.store.getConversationPref(ORG, item.thread_id);
+      assert.equal(pref?.hidden, true);
+      assert.equal(pref?.hidden_reason, "policy");
+    });
+
     for (const prior of ["acknowledgment", "visibility", "disposition"]) {
       it(`rejects command ID reuse when ${prior} is first`, async (t) => {
         const f = await fixture(t, driver);

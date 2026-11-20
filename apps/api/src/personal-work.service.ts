@@ -2062,13 +2062,6 @@ export class PersonalWorkService implements OnModuleDestroy {
     if (!item || isSystemRecipeId(item.recipe_id)) {
       throw new PersonalConnectorError("not_found", "Work item not found", 404);
     }
-    if (!item.head_event_id) {
-      throw new PersonalConnectorError(
-        "work_acknowledgment_conflict",
-        "The triggering message identity is unavailable; this result cannot be closed safely.",
-        409,
-      );
-    }
     if (typeof runId !== "string" || !runId.trim()
       || typeof expectedVersion !== "number" || !Number.isSafeInteger(expectedVersion) || expectedVersion < 0
       || typeof expectedRunVersion !== "number" || !Number.isSafeInteger(expectedRunVersion) || expectedRunVersion < 0) {
@@ -2084,7 +2077,7 @@ export class PersonalWorkService implements OnModuleDestroy {
     const acknowledged = await authority.acknowledgeWorkResult({
       expected_item: item,
       run_id: runId,
-      trigger_event_id: item.head_event_id,
+      trigger_event_id: item.head_event_id ?? "",
       expected_version: expectedVersion,
       expected_run_version: expectedRunVersion,
       command_id: commandId,

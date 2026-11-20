@@ -409,6 +409,7 @@ export class MemoryAuthorityStore
   }
 
   protected override hasAcknowledgmentTrigger(input: WorkAcknowledgment, item: WorkItem | null, run?: WorkRun | null): boolean {
+    if (item && !item.head_event_id && !input.trigger_event_id.trim()) return true;
     const event = this.events.find((candidate) =>
       candidate.id === input.trigger_event_id && candidate.org_id === input.expected_item.org_id);
     const decision = this.dispositions.get(input.trigger_event_id);
@@ -432,7 +433,60 @@ export class MemoryAuthorityStore
     return () => this.prefs.set(key, pref);
   }
 
+  private hasOtherCurrentWork(item: WorkItem, excludedEventId: string): boolean {
+    return [...this.currentBySource.values()].some((event) =>
+      event.org_id === item.org_id && event.id !== excludedEventId
+      && eventThreadId(event) === item.thread_id
+      && event.operation !== "tombstone"
+      && this.dispositions.get(event.id)?.disposition === "current_work");
+  }
+
   protected override prepareAcknowledgmentEffects(input: WorkAcknowledgment, item: WorkItem): () => void {
+    if (!input.trigger_event_id.trim()) {
+      const key = prefKey(item.org_id, item.thread_id);
+      const currentPref = this.prefs.get(key);
+      const attentionPref = input.conversation_attention
+        ? mergeAttentionPref(currentPref, input.conversation_attention)
+        : undefined;
+      const pref = attentionPref ?? currentPref;
+      const visibilityVersion = pref?.visibility_version ?? 0;
+      const shouldFold = !this.hasOtherCurrentWork(item, input.trigger_event_id)
+        && !this.hasUnsettledWorkForThread(item.org_id, item.thread_id, item)
+        && visibilityVersion === (item.visibility_intent_version ?? 0)
+        && !(pref?.hidden === true && pref.hidden_reason !== "policy");
+      const folded: ConversationPref | undefined = shouldFold ? {
+        org_id: item.org_id, thread_id: item.thread_id,
+        title: pref?.title ?? null, pinned: pref?.pinned ?? false,
+        hidden: true, hidden_reason: "policy", visibility_version: visibilityVersion,
+        last_read_at: pref?.last_read_at ?? null,
+        last_read_external_id: pref?.last_read_external_id ?? null,
+        updated_at: input.now,
+      } : undefined;
+      const version = item.version ?? 0;
+      const eventBase = {
+        org_id: item.org_id, thread_id: item.thread_id,
+        occurred_at: input.issued_at, created_at: input.now,
+      };
+      const lifecycleEvents: typeof this.acknowledgmentLifecycleEvents = [
+        ...(folded ? [{
+          ...eventBase, aggregate_type: "conversation" as const, aggregate_id: item.thread_id,
+          aggregate_version: visibilityVersion, event_type: "visibility_changed" as const,
+          dedupe_key: JSON.stringify(["conversation", item.thread_id, "policy_fold", item.id, version]),
+          payload: { hidden: true, hidden_reason: "policy", cause: "result_acknowledged" },
+        }] : []),
+        {
+          ...eventBase, aggregate_type: "work_item", aggregate_id: item.id,
+          aggregate_version: version, event_type: "work_acknowledged", command_id: input.command_id,
+          dedupe_key: JSON.stringify(["work_item", item.id, version, "work_acknowledged"]),
+          payload: { command: structuredClone(input), item: structuredClone(item) },
+        },
+      ];
+      return () => {
+        if (folded) this.prefs.set(key, folded);
+        else if (attentionPref) this.prefs.set(key, attentionPref);
+        this.acknowledgmentLifecycleEvents.push(...lifecycleEvents);
+      };
+    }
     const current = this.dispositions.get(input.trigger_event_id);
     if (!current) throw new Error("Acknowledgment trigger disposition disappeared");
     const decision: ArrangementDecision = {
@@ -449,12 +503,7 @@ export class MemoryAuthorityStore
       : undefined;
     const pref = attentionPref ?? currentPref;
     const visibilityVersion = pref?.visibility_version ?? 0;
-    const otherCurrentWork = [...this.currentBySource.values()].some((event) =>
-      event.org_id === item.org_id && event.id !== input.trigger_event_id
-      && eventThreadId(event) === item.thread_id
-      && event.operation !== "tombstone"
-      && this.dispositions.get(event.id)?.disposition === "current_work");
-    const shouldFold = !otherCurrentWork
+    const shouldFold = !this.hasOtherCurrentWork(item, input.trigger_event_id)
       && !this.hasUnsettledWorkForThread(item.org_id, item.thread_id, item)
       && visibilityVersion === (item.visibility_intent_version ?? 0)
       && !(pref?.hidden === true && pref.hidden_reason !== "policy");

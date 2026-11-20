@@ -19,6 +19,7 @@ import {
   threadTitle,
   parseRichBlocks,
   heldFollowUpCount,
+  workCanAcknowledge,
   workNextStepCopy,
   workStatusLabel,
 } from "../src/renderer/src/message-view.ts";
@@ -569,6 +570,22 @@ describe("thread activity", () => {
       }).map((tag) => tag.label),
       ["飞书", "Group", "Ticket", "Waiting"],
     );
+    assert.equal(workCanAcknowledge({
+      status: "done",
+      run_id: "run-1",
+      can_write_back: true,
+      delivery: { status: "acked", write_back: "sent" },
+    }, "done"), true);
+    assert.equal(workCanAcknowledge({
+      status: "done",
+      run_id: "run-1",
+      can_write_back: true,
+      delivery: { status: "write_back", write_back: "sent" },
+    }, "done"), false);
+    assert.equal(workCanAcknowledge({
+      status: "failed",
+      run_id: "run-1",
+    }, "failed"), true);
     assert.equal(workStatusLabel("open"), null);
     assert.equal(workStatusLabel("waiting_human"), "Waiting");
     assert.equal(workStatusLabel("done"), "Done");
