@@ -20,6 +20,8 @@ export interface InboxThread {
   label: string;
   title: string | null;
   conversation_label: string | null;
+  /** Catalog or preference name used only to match a directory hit. */
+  directory_label?: string;
   conversation_kind: string | null;
   unit_kind: string | null;
   unit_kind_label: string | null;
@@ -261,6 +263,68 @@ export function inboxRuleOptions(
     .sort((left, right) => left.label.localeCompare(right.label));
 }
 
+export function directoryInboxThread(item: {
+  id: string;
+  label: string;
+  source: string;
+  can_send: boolean;
+  hidden: boolean;
+  pinned?: boolean;
+  conversation_name?: string;
+}): InboxThread {
+  return {
+    id: item.id,
+    source: item.source,
+    channel: item.source,
+    channel_label: item.source,
+    label: item.label,
+    title: item.conversation_name ?? null,
+    conversation_label: item.conversation_name ?? item.label,
+    conversation_kind: null,
+    unit_kind: null,
+    unit_kind_label: null,
+    pinned: item.pinned === true,
+    hidden: item.hidden,
+    visibility_version: 0,
+    can_send: item.can_send,
+    messages: [],
+    prompts: [],
+    unread: false,
+    unread_count: 0,
+  };
+}
+
+/** Keep a loaded row's title, and remember the directory name for matching. */
+export function mergeInboxDirectoryHits(
+  loaded: readonly InboxThread[],
+  hits: readonly InboxThread[],
+): InboxThread[] {
+  const byId = new Map(hits.map((hit) => [hit.id, hit]));
+  const overlaid = loaded.map((thread) => {
+    const hit = byId.get(thread.id);
+    if (!hit) {
+      return thread;
+    }
+    const directoryName = directoryHitName(hit);
+    const named = thread.title?.trim() || thread.conversation_label?.trim();
+    if (named) {
+      return directoryName ? { ...thread, directory_label: directoryName } : thread;
+    }
+    return {
+      ...thread,
+      label: hit.label,
+      title: hit.title,
+      conversation_label: hit.conversation_label,
+      ...(directoryName ? { directory_label: directoryName } : {}),
+    };
+  });
+  return mergeInboxThreadLists(overlaid, hits);
+}
+
+function directoryHitName(hit: InboxThread): string {
+  return hit.conversation_label?.trim() || hit.title?.trim() || hit.label.trim();
+}
+
 export function mergeInboxThreadLists(
   ...lists: Array<readonly InboxThread[]>
 ): InboxThread[] {
@@ -313,6 +377,36 @@ export function shouldScanInboxSearch(input: {
   );
 }
 
+/** Prefix matches stay above weaker matches. Order inside each group is kept. */
+export function rankInboxSearchHits(
+  threads: readonly InboxThread[],
+  query: string,
+  titleOf: (thread: InboxThread) => string,
+): InboxThread[] {
+  const needle = query.trim().toLowerCase();
+  if (!needle) {
+    return [...threads];
+  }
+  return threads
+    .map((thread, index) => ({ thread, index, prefix: inboxSearchPrefix(thread, needle, titleOf) }))
+    .sort((left, right) => {
+      if (left.prefix !== right.prefix) {
+        return left.prefix ? -1 : 1;
+      }
+      return left.index - right.index;
+    })
+    .map((item) => item.thread);
+}
+
+function inboxSearchPrefix(
+  thread: InboxThread,
+  needle: string,
+  titleOf: (thread: InboxThread) => string,
+): boolean {
+  return [titleOf(thread), thread.directory_label, thread.conversation_label, thread.title, thread.label]
+    .some((field) => field?.trim().toLowerCase().startsWith(needle));
+}
+
 export function filterInboxThreadsByTitle(
   threads: readonly InboxThread[],
   query: string,
@@ -329,6 +423,7 @@ export function filterInboxThreadsByTitle(
       thread.title,
       thread.conversation_label,
       thread.label,
+      thread.directory_label,
     ];
     return fields.some((field) => field?.toLowerCase().includes(needle));
   });

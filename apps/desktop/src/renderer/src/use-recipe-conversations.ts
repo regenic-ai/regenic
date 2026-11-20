@@ -1,34 +1,49 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { fetchInboxHeads } from "./api";
-import { loadRecipeConversations } from "./recipe-conversations";
+import {
+  capConversationDirectory,
+  fetchConversationDirectory,
+  type ConversationDirectoryItem,
+} from "./api";
 import type { RecipeConversationOption } from "./types";
 
+const DIRECTORY_LIMIT = 40;
+
 /**
- * One complete shown+hidden conversation walk for the automation editor.
- * `active` covers a new automation, an existing one, and a draft opened from work.
- * Closing a menu does not cancel the walk. Leaving the editor or changing `reloadKey` does.
- * `ready` becomes true only after that full result is stored.
+ * Recent conversations for the automation editor, then a capped name query.
+ * A saved conversation is loaded by id so a slow catalog cannot mark it unavailable.
+ * `ready` is true once that first page is stored.
  */
 export function useRecipeConversationCatalog(
   initialConversations: RecipeConversationOption[],
   active: boolean,
   reloadKey: string,
+  pinnedIds: readonly string[] = [],
 ) {
   const [discovered, setDiscovered] = useState<RecipeConversationOption[]>([]);
   const [ready, setReady] = useState(false);
+  const [searchCapped, setSearchCapped] = useState(false);
   const loadRef = useRef<{
     controller: AbortController;
     promise: Promise<void>;
   } | null>(null);
+  const pinnedKey = pinnedIds.filter((id) => id.trim()).join("\n");
   const start = useCallback(() => {
     const current = loadRef.current;
     if (current) return current.promise;
     const controller = new AbortController();
     let entry: { controller: AbortController; promise: Promise<void> } | null = null;
-    const promise = loadRecipeConversations(fetchInboxHeads, controller.signal)
-      .then((next) => {
+    const ids = pinnedKey.split("\n").filter((id) => id.length > 0);
+    const promise = Promise.all([
+      fetchConversationDirectory({ limit: DIRECTORY_LIMIT }, { signal: controller.signal }),
+      ...ids.map((threadId) =>
+        fetchConversationDirectory({ thread_id: threadId, limit: 1 }, { signal: controller.signal }),
+      ),
+    ])
+      .then((pages) => {
         if (controller.signal.aborted || loadRef.current !== entry) return;
-        setDiscovered(next);
+        setDiscovered((current) =>
+          mergeDirectoryOptions(current, pages.flat().map(directoryOption)),
+        );
         setReady(true);
       })
       .catch((error: unknown) => {
@@ -38,7 +53,7 @@ export function useRecipeConversationCatalog(
     entry = { controller, promise };
     loadRef.current = entry;
     return promise;
-  }, [reloadKey]);
+  }, [reloadKey, pinnedKey]);
   const load = useCallback((signal: AbortSignal) => {
     const pending = start();
     if (signal.aborted) {
@@ -60,24 +75,62 @@ export function useRecipeConversationCatalog(
       );
     });
   }, [start]);
+  const search = useCallback((query: string, signal: AbortSignal) => {
+    const needle = query.trim();
+    if (!needle) return Promise.resolve();
+    return fetchConversationDirectory(
+      { q: needle, limit: DIRECTORY_LIMIT + 1 },
+      { signal },
+    ).then((rows) => {
+      if (signal.aborted) return;
+      const page = capConversationDirectory(rows);
+      setSearchCapped(page.capped);
+      setDiscovered((current) => mergeDirectoryOptions(current, page.rows.map(directoryOption)));
+    });
+  }, []);
 
   useEffect(() => {
-    if (!active) return;
+    if (!active) {
+      loadRef.current?.controller.abort();
+      loadRef.current = null;
+      setDiscovered([]);
+      setReady(false);
+      setSearchCapped(false);
+      return;
+    }
     const pending = start();
     void pending.catch(() => undefined);
     return () => {
       loadRef.current?.controller.abort();
       loadRef.current = null;
-      setDiscovered([]);
-      setReady(false);
     };
   }, [active, start]);
 
   const conversations = useMemo(() => {
-    const byId = new Map(initialConversations.map((item) => [item.id, item]));
-    for (const item of discovered) byId.set(item.id, item);
-    return [...byId.values()];
+    return mergeDirectoryOptions(initialConversations, discovered);
   }, [initialConversations, discovered]);
 
-  return { conversations, load, ready };
+  return { conversations, load, search, searchCapped, ready };
+}
+
+function directoryOption(item: ConversationDirectoryItem): RecipeConversationOption {
+  return {
+    id: item.id,
+    label: item.label,
+    source: item.source,
+    can_send: item.can_send,
+    has_work: item.has_work,
+    ...(item.conversation_name ? { conversation_name: item.conversation_name } : {}),
+  };
+}
+
+function mergeDirectoryOptions(
+  current: readonly RecipeConversationOption[],
+  next: readonly RecipeConversationOption[],
+): RecipeConversationOption[] {
+  const byId = new Map(current.map((item) => [item.id, item]));
+  for (const item of next) {
+    byId.set(item.id, item);
+  }
+  return [...byId.values()];
 }

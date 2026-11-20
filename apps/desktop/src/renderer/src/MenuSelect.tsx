@@ -18,7 +18,9 @@ export function MenuSelect({
   ariaLabel,
   onChange,
   onLoad,
+  onSearch,
   resultsReady = true,
+  resultsCapped = false,
 }: {
   value: string;
   options: MenuSelectOption[];
@@ -30,8 +32,12 @@ export function MenuSelect({
   ariaLabel?: string;
   onChange: (value: string) => void;
   onLoad?: (signal: AbortSignal) => Promise<void>;
-  /** False until `options` is the complete load result. Search stays hidden before that. */
+  /** Debounced name lookup. Results are merged into `options` by the caller. */
+  onSearch?: (query: string, signal: AbortSignal) => Promise<void>;
+  /** False until the first page of `options` is stored. Later searches keep that page visible. */
   resultsReady?: boolean;
+  /** The name lookup returned more rows than the menu shows. */
+  resultsCapped?: boolean;
 }) {
   const { t } = useLocale();
   const listId = useId();
@@ -42,11 +48,13 @@ export function MenuSelect({
   const [popupMaxHeight, setPopupMaxHeight] = useState(280);
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
+  const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [retry, setRetry] = useState(0);
   const selected = options.find((item) => item.value === value);
   const filtered = useMemo(() => {
-    if (onLoad && (loadError || !resultsReady || (loading && options.length === 0))) return [];
+    if (onLoad && options.length === 0 && (loadError || !resultsReady || loading)) return [];
     const needle = query.trim().toLowerCase();
     if (!needle) {
       return options;
@@ -59,6 +67,8 @@ export function MenuSelect({
   const [active, setActive] = useState(0);
   const onLoadRef = useRef(onLoad);
   onLoadRef.current = onLoad;
+  const onSearchRef = useRef(onSearch);
+  onSearchRef.current = onSearch;
 
   useEffect(() => {
     const load = onLoadRef.current;
@@ -81,6 +91,37 @@ export function MenuSelect({
       controller.abort();
     };
   }, [open, retry]);
+
+  useEffect(() => {
+    const search = onSearchRef.current;
+    const needle = query.trim();
+    if (!open || !search || !needle) {
+      setSearching(false);
+      setSearchError(false);
+      return;
+    }
+    setSearching(true);
+    setSearchError(false);
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      setSearching(true);
+      void search(needle, controller.signal).then(
+        () => {
+          if (!controller.signal.aborted) setSearching(false);
+        },
+        () => {
+          if (!controller.signal.aborted) {
+            setSearching(false);
+            setSearchError(true);
+          }
+        },
+      );
+    }, 250);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [open, query, retry]);
 
   const openMenu = () => {
     const root = rootRef.current;
@@ -263,7 +304,7 @@ export function MenuSelect({
               aria-label={placeholder}
             />
           ) : null}
-          {onLoad && (loading || !resultsReady) && !loadError && options.length === 0 ? <p className="muted" role="status">{t("menuSelect.loading")}</p> : null}
+          {(loading || searching || (onLoad && !resultsReady)) && !loadError && filtered.length === 0 ? <p className="muted" role="status">{t("menuSelect.loading")}</p> : null}
           {onLoad && loadError ? (
             <div role="alert">
               <p className="action-error">{t("menuSelect.loadError", { error: loadError })}</p>
@@ -272,7 +313,16 @@ export function MenuSelect({
               </button>
             </div>
           ) : null}
-          {onLoad && !loading && resultsReady && !loadError && filtered.length === 0
+          {onSearch && searchError && !loading && !searching && !loadError && filtered.length === 0 ? (
+            <div role="alert">
+              <p className="action-error">{t("inbox.searchIncompleteTitle")}</p>
+              <p className="muted">{t("inbox.searchIncomplete")}</p>
+              <button type="button" className="ghost" onClick={() => setRetry((current) => current + 1)}>
+                {t("menuSelect.retry")}
+              </button>
+            </div>
+          ) : null}
+          {(onLoad || onSearch) && !loading && !searching && resultsReady && !loadError && !searchError && filtered.length === 0
             ? <p className="muted" role="status">{t("menuSelect.empty")}</p> : null}
           <ul id={listId} className="menu-select-menu" role="listbox" aria-busy={onLoad ? loading || !resultsReady : undefined}>
             {filtered.map((option, index) => (
@@ -299,6 +349,10 @@ export function MenuSelect({
               </li>
             ))}
           </ul>
+          {onSearch && !query.trim() && !loading && resultsReady && !loadError && options.length > 0
+            ? <p className="muted">{t("inbox.searchRecent")}</p> : null}
+          {resultsCapped && query.trim() && !searching && !searchError
+            ? <p className="muted">{t("inbox.searchLimited")}</p> : null}
         </div>
       ) : null}
     </div>

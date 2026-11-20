@@ -550,6 +550,13 @@ export class SqliteSplitAuthorityStore
     return this.reader.call("listInbox", [orgId, query]);
   }
 
+  async searchConversationDirectory(
+    orgId: string,
+    query?: import("@regenic/domain").ConversationDirectoryQuery,
+  ): Promise<import("@regenic/domain").ConversationDirectoryEntry[]> {
+    return this.reader.call("searchConversationDirectory", [orgId, query]);
+  }
+
   async summarizeInbox(orgId: string): Promise<InboxSummary> {
     return this.reader.call("summarizeInbox", [orgId]);
   }

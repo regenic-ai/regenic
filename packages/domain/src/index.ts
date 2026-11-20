@@ -27,6 +27,7 @@ export * from "./forward-packet";
 export * from "./content-compact";
 export * from "./thread-surface";
 export * from "./inbox-query";
+export * from "./conversation-directory";
 export * from "./list-surface";
 export * from "./ingestion-schema";
 export * from "./canonicalization";

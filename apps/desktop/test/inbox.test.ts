@@ -13,7 +13,10 @@ import {
   overlayThreadMessages,
   holdOpenedThread,
   filterInboxThreads,
+  directoryInboxThread,
   filterInboxThreadsByTitle,
+  mergeInboxDirectoryHits,
+  rankInboxSearchHits,
   shouldScanInboxSearch,
   inboxSearchAwaitingOlder,
   INBOX_SEARCH_AUTO_PAGES,
@@ -206,6 +209,60 @@ describe("inbox title search", () => {
       ),
       ["dsh:named", "dsh:label"],
     );
+  });
+
+  it("keeps a loaded row and still finds a directory name it did not have", () => {
+    const loaded = thread({ id: "synthetic:crm", label: "crm" });
+    const hit = directoryInboxThread({
+      id: "synthetic:crm",
+      label: "Regenic project",
+      source: "synthetic",
+      can_send: true,
+      hidden: false,
+      conversation_name: "Regenic project",
+    });
+    const missing = directoryInboxThread({
+      id: "synthetic:other",
+      label: "Other chat",
+      source: "synthetic",
+      can_send: false,
+      hidden: true,
+    });
+    const merged = mergeInboxDirectoryHits([loaded], [hit, missing]);
+    assert.equal(merged.length, 2);
+    assert.equal(merged[0]?.messages, loaded.messages);
+    assert.equal(merged[0]?.title, "Regenic project");
+    assert.equal(merged[1]?.id, "synthetic:other");
+    assert.equal(merged[1]?.hidden, true);
+  });
+
+  it("matches a directory name without replacing a loaded title", () => {
+    const loaded = { ...thread({ id: "synthetic:crm" }), title: "Weekly notes" };
+    const hit = directoryInboxThread({
+      id: "synthetic:crm",
+      label: "Regenic project",
+      source: "synthetic",
+      can_send: true,
+      hidden: false,
+      conversation_name: "Regenic project",
+    });
+    const merged = mergeInboxDirectoryHits([loaded], [hit]);
+    assert.equal(merged[0]?.title, "Weekly notes");
+    assert.equal(merged[0]?.directory_label, "Regenic project");
+    assert.deepEqual(
+      filterInboxThreadsByTitle(merged, "rege", (item) => item.title ?? item.label).map(
+        (item) => item.id,
+      ),
+      ["synthetic:crm"],
+    );
+  });
+
+  it("ranks a name prefix ahead of a loaded substring without changing the title", () => {
+    const weak = { ...thread({ id: "dsh:weak" }), title: "notes about regenic" };
+    const named = { ...thread({ id: "dsh:named" }), title: "Weekly notes", directory_label: "Regenic project" };
+    const ranked = rankInboxSearchHits([weak, named], "rege", (item) => item.title ?? item.label);
+    assert.deepEqual(ranked.map((item) => item.id), ["dsh:named", "dsh:weak"]);
+    assert.equal(ranked[0]?.title, "Weekly notes");
   });
 
   it("keeps scanning unloaded pages while a title search is active, then stops at the cap", () => {

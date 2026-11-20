@@ -341,6 +341,71 @@ export async function fetchInboxHeads(
   };
 }
 
+export interface ConversationDirectoryItem {
+  id: string;
+  label: string;
+  source: string;
+  can_send: boolean;
+  hidden: boolean;
+  pinned: boolean;
+  has_work: boolean;
+  conversation_name?: string;
+}
+
+export const CONVERSATION_DIRECTORY_PAGE = 40;
+
+export function capConversationDirectory<T>(rows: readonly T[]): { rows: T[]; capped: boolean } {
+  return {
+    rows: rows.slice(0, CONVERSATION_DIRECTORY_PAGE),
+    capped: rows.length > CONVERSATION_DIRECTORY_PAGE,
+  };
+}
+
+export async function fetchConversationDirectory(
+  query: {
+    q?: string;
+    thread_id?: string;
+    list?: "shown" | "hidden" | "all";
+    limit?: number;
+  } = {},
+  init?: InboxFetchInit,
+): Promise<ConversationDirectoryItem[]> {
+  const params = new URLSearchParams();
+  if (query.q?.trim()) {
+    params.set("q", query.q.trim());
+  }
+  if (query.thread_id?.trim()) {
+    params.set("thread_id", query.thread_id.trim());
+  }
+  if (query.list) {
+    params.set("list", query.list);
+  }
+  if (query.limit) {
+    params.set("limit", String(query.limit));
+  }
+  params.set("locale", activeLocale());
+  const response = await fetch(`${origin()}/v1/me/inbox/directory?${params.toString()}`, {
+    signal: inboxRequestSignal(init),
+  });
+  if (!response.ok) {
+    throw new Error(`inbox ${response.status}`);
+  }
+  const body = (await response.json()) as ConversationDirectoryItem[];
+  if (!Array.isArray(body)) {
+    throw new Error("inbox directory");
+  }
+  return body.map((item) => ({
+    id: item.id,
+    label: item.label,
+    source: item.source,
+    can_send: item.can_send === true,
+    hidden: item.hidden === true,
+    pinned: item.pinned === true,
+    has_work: item.has_work === true,
+    ...(item.conversation_name ? { conversation_name: item.conversation_name } : {}),
+  }));
+}
+
 async function fetchInboxResponse(
   query: {
     since?: string;

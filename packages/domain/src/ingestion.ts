@@ -4,6 +4,10 @@ import type {
   InboxDispositionTransitionResult,
   InboxItem,
 } from "./arrangement";
+import type {
+  ConversationDirectoryEntry,
+  ConversationDirectoryQuery,
+} from "./conversation-directory";
 import type { SyncPollHint, SyncStore } from "./sync-contracts";
 import type { SyncWorkStore } from "./sync-work";
 import type { DeliveryReceipt } from "./egress";
@@ -799,6 +803,10 @@ export interface AuthorityStore {
   transitionDisposition(input: InboxDispositionTransition): Promise<InboxDispositionTransitionResult>;
   getDisposition(eventId: string): Promise<ArrangementDecision | null>;
   listInbox(orgId: string, query?: InboxQuery): Promise<InboxItem[]>;
+  searchConversationDirectory(
+    orgId: string,
+    query?: ConversationDirectoryQuery,
+  ): Promise<ConversationDirectoryEntry[]>;
   summarizeInbox(orgId: string): Promise<InboxSummary>;
   listConversationPrefs(orgId: string): Promise<ConversationPref[]>;
   getConversationPref(

@@ -1,7 +1,6 @@
 import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { fetchEngine, fetchInboxHeads, fetchSearchSource, fetchSearchWindow, searchPersonalContext } from "./api";
+import { capConversationDirectory, fetchConversationDirectory, fetchEngine, fetchSearchSource, fetchSearchWindow, searchPersonalContext } from "./api";
 import { MenuSelect } from "./MenuSelect";
-import { loadRecipeConversations } from "./recipe-conversations";
 import {
   applySearchWindow,
   contextSearchInput,
@@ -82,6 +81,7 @@ export function PreciseSearch({ onSettings, onOpenConversation, onLocate, locked
   const [threadTitle, setThreadTitle] = useState("");
   const [conversations, setConversations] = useState<Array<{ value: string; label: string }>>([]);
   const [conversationsReady, setConversationsReady] = useState(false);
+  const [conversationsCapped, setConversationsCapped] = useState(false);
   const [limit, setLimit] = useState(DEFAULT_LIMIT);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [recent, setRecent] = useState<string[]>(loadRecent);
@@ -268,10 +268,22 @@ export function PreciseSearch({ onSettings, onOpenConversation, onLocate, locked
   }, [filtersOpen, locale]);
 
   async function loadConversations(signal: AbortSignal) {
-    const loaded = await loadRecipeConversations(fetchInboxHeads, signal);
+    const loaded = await fetchConversationDirectory({ limit: 40 }, { signal });
     if (signal.aborted) return;
     setConversations(loaded.map((item) => ({ value: item.id, label: item.label })));
     setConversationsReady(true);
+  }
+
+  async function searchConversations(query: string, signal: AbortSignal) {
+    const loaded = await fetchConversationDirectory({ q: query, limit: 41 }, { signal });
+    if (signal.aborted) return;
+    const page = capConversationDirectory(loaded);
+    setConversationsCapped(page.capped);
+    setConversations((current) => {
+      const byId = new Map(current.map((item) => [item.value, item]));
+      for (const item of page.rows) byId.set(item.id, { value: item.id, label: item.label });
+      return [...byId.values()];
+    });
   }
 
   const notices = useMemo(() => {
@@ -374,7 +386,9 @@ export function PreciseSearch({ onSettings, onOpenConversation, onLocate, locked
                   searchable
                   options={[{ value: "", label: t("search.threadAll") }, ...conversations]}
                   onLoad={loadConversations}
+                  onSearch={searchConversations}
                   resultsReady={conversationsReady}
+                  resultsCapped={conversationsCapped}
                   onChange={(value) => {
                     setThread(value);
                     setThreadTitle(conversations.find((item) => item.value === value)?.label ?? "");

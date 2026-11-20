@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { capConversationDirectory, fetchConversationDirectory } from "./api";
 import { formatChatTime, threadIsSyncing, threadSyncLabel } from "./format";
 import {
+  directoryInboxThread,
   filterInboxThreads,
+  mergeInboxDirectoryHits,
   filterInboxThreadsByTitle,
-  INBOX_SEARCH_AUTO_PAGES,
-  inboxSearchAwaitingOlder,
-  shouldScanInboxSearch,
+  rankInboxSearchHits,
   groupThreadsByAttention,
   inboxRuleOptions,
   latestMessage,
@@ -169,11 +170,12 @@ export function InboxWorkspace({
   const columnsRef = useRef<HTMLDivElement>(null);
   const [recipeNames, setRecipeNames] = useState<Record<string, string>>({});
   const searching = titleQuery.trim().length > 0;
-  const loadOlderHeadsRef = useRef(onLoadOlderHeads);
-  loadOlderHeadsRef.current = onLoadOlderHeads;
-  const [searchBudget, setSearchBudget] = useState(INBOX_SEARCH_AUTO_PAGES);
   const [settledQuery, setSettledQuery] = useState("");
-  const searchAttempts = useRef(0);
+  const [directoryThreads, setDirectoryThreads] = useState<InboxThread[]>([]);
+  const [directoryLoading, setDirectoryLoading] = useState(false);
+  const [directoryError, setDirectoryError] = useState(false);
+  const [directoryCapped, setDirectoryCapped] = useState(false);
+  const [directoryRetry, setDirectoryRetry] = useState(0);
   useEffect(() => {
     const query = titleQuery.trim();
     if (!query) {
@@ -184,49 +186,49 @@ export function InboxWorkspace({
     return () => clearTimeout(timer);
   }, [titleQuery]);
   useEffect(() => {
-    searchAttempts.current = 0;
-    setSearchBudget(INBOX_SEARCH_AUTO_PAGES);
-  }, [settledQuery]);
-  const scanReady = searching && settledQuery === titleQuery.trim();
-  useEffect(() => {
-    if (
-      !shouldScanInboxSearch({
-        searching: scanReady,
-        hasOlder: hasOlderHeads,
-        loading: loadingOlderHeads,
-        pinnedOnly: pinFilter === "pinned",
-        scannedPages: searchAttempts.current,
-        budget: searchBudget,
-      })
-    ) {
+    if (!settledQuery) {
+      setDirectoryThreads([]);
+      setDirectoryLoading(false);
+      setDirectoryError(false);
+      setDirectoryCapped(false);
       return;
     }
-    searchAttempts.current += 1;
-    loadOlderHeadsRef.current();
-  }, [scanReady, hasOlderHeads, loadingOlderHeads, pinFilter, searchBudget, settledQuery]);
-  const searchCanContinue =
-    searching && hasOlderHeads && pinFilter !== "pinned";
-  const searchStillScanning =
-    searchCanContinue && (!scanReady || searchAttempts.current < searchBudget);
-  const searchFurther = () => {
-    setSearchBudget((current) => current + INBOX_SEARCH_AUTO_PAGES);
-  };
-  const pool = searching ? mergeInboxThreadLists(threads, otherThreads) : threads;
+    const controller = new AbortController();
+    let cancelled = false;
+    setDirectoryLoading(true);
+    setDirectoryError(false);
+    void fetchConversationDirectory({ q: settledQuery, limit: 41 }, { signal: controller.signal })
+      .then((rows) => {
+        if (cancelled) return;
+        const page = capConversationDirectory(rows);
+        setDirectoryThreads(page.rows.map(directoryInboxThread));
+        setDirectoryCapped(page.capped);
+        setDirectoryError(false);
+      })
+      .catch(() => {
+        if (!cancelled) setDirectoryError(true);
+      })
+      .finally(() => {
+        if (!cancelled) setDirectoryLoading(false);
+      });
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [settledQuery, directoryRetry]);
+  const pool = searching
+    ? mergeInboxDirectoryHits(mergeInboxThreadLists(threads, otherThreads), directoryThreads)
+    : threads;
   const channels = threadChannels(pool);
   const titleHits = filterInboxThreadsByTitle(pool, titleQuery, threadTitle);
-  const visible = filterInboxThreads(
+  const filtered = filterInboxThreads(
     titleHits,
     pinFilter,
     channelFilter,
     statusFilter,
     ruleFilter,
   );
-  const awaitingOlder = inboxSearchAwaitingOlder({
-    searching,
-    hasOlder: hasOlderHeads,
-    pinnedOnly: pinFilter === "pinned",
-    titleHits: titleHits.length,
-  });
+  const visible = searching ? rankInboxSearchHits(filtered, titleQuery, threadTitle) : filtered;
   const ruleChoices = inboxRuleOptions(pool, recipeNames);
   useEffect(() => {
     let cancelled = false;
@@ -262,21 +264,11 @@ export function InboxWorkspace({
     setPinFilter("all");
   };
   const canCreate = createTargets.length > 0;
-  const selectedMatches = Boolean(
-    selected && visible.some((thread) => thread.id === selected.id),
-  );
-  const firstVisibleId = visible[0]?.id ?? null;
   useEffect(() => {
     if (searching) {
       onNeedSearchCatalog?.();
     }
   }, [searching, onNeedSearchCatalog]);
-  useEffect(() => {
-    if (!searching || selectedMatches || !firstVisibleId) {
-      return;
-    }
-    onSelect(firstVisibleId);
-  }, [searching, selectedMatches, firstVisibleId, onSelect]);
   const renameSelected = useCallback(
     (title: string | null) => (selected ? onRename(selected, title) : Promise.resolve()),
     [selected, onRename],
@@ -550,19 +542,23 @@ export function InboxWorkspace({
             )
           ) : null}
           {!error && (searching || threads.length > 0) && visible.length === 0 ? (
-            awaitingOlder && (searchStillScanning || loadingOlderHeads) ? (
+            searching && (directoryLoading || settledQuery !== titleQuery.trim()) ? (
               <div className="list-more">
                 <span className="dot" />
                 {t("inbox.searchingOlder")}
               </div>
-            ) : awaitingOlder ? (
+            ) : directoryError ? (
               <EmptyState
                 compact
                 icon={<SearchIcon />}
                 title={t("inbox.searchIncompleteTitle")}
                 actions={
-                  <button type="button" className="ghost" onClick={searchFurther}>
-                    {t("inbox.searchFurther")}
+                  <button
+                    type="button"
+                    className="ghost"
+                    onClick={() => setDirectoryRetry((current) => current + 1)}
+                  >
+                    {t("menuSelect.retry")}
                   </button>
                 }
               >
@@ -639,13 +635,8 @@ export function InboxWorkspace({
               ))}
             </div>
           ))}
-          {searchCanContinue && visible.length > 0 && !searchStillScanning && !loadingOlderHeads ? (
-            <div className="list-more">
-              <p>{t("inbox.searchPartial")}</p>
-              <button type="button" className="ghost" onClick={searchFurther}>
-                {t("inbox.searchFurther")}
-              </button>
-            </div>
+          {searching && directoryCapped && !directoryLoading && !directoryError ? (
+            <p className="muted list-more">{t("inbox.searchLimited")}</p>
           ) : null}
         </ListBody>
         <ColumnResizeHandle

@@ -22,6 +22,9 @@ import {
   headsScanQuery,
   threadExternalIdLike,
   normalizeInboxLimit,
+  conversationDirectoryStatement,
+  type ConversationDirectoryEntry,
+  type ConversationDirectoryQuery,
   TASK_INBOX_REASON,
   WORK_OBSERVE_AGAIN_STATUSES,
   assertConversationPolicyVisibility,
@@ -323,6 +326,34 @@ export async function listInbox(db: Database.Database, orgId: string, query?: In
     }
     return items;
   }
+
+export function searchConversationDirectory(
+  db: Database.Database,
+  orgId: string,
+  query?: ConversationDirectoryQuery,
+): ConversationDirectoryEntry[] {
+  const statement = conversationDirectoryStatement(orgId, query, userConversationSql("th"));
+  const rows = db.prepare(statement.sql).all(...statement.params) as Array<{
+    thread_id: string;
+    source: string;
+    face_occurred_at: string;
+    has_current_work: number;
+    pref_title: string | null;
+    hidden: number;
+    pinned: number;
+    catalog_label: string | null;
+  }>;
+  return rows.map((row) => ({
+    thread_id: row.thread_id,
+    source: row.source,
+    pref_title: row.pref_title,
+    catalog_label: row.catalog_label,
+    hidden: row.hidden === 1,
+    pinned: row.pinned === 1,
+    has_current_work: row.has_current_work === 1,
+    face_occurred_at: row.face_occurred_at,
+  }));
+}
 
 export async function summarizeInbox(db: Database.Database, orgId: string): Promise<InboxSummary> {
     const latest = db

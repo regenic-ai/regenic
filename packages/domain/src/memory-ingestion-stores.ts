@@ -10,6 +10,11 @@ import {
   type InboxDispositionTransitionResult,
   type InboxItem,
 } from "./arrangement";
+import { rankConversationDirectory } from "./conversation-directory";
+import type {
+  ConversationDirectoryEntry,
+  ConversationDirectoryQuery,
+} from "./conversation-directory";
 import type {
   AuthorityStore,
   BlobReservation,
@@ -1011,6 +1016,41 @@ export class MemoryAuthorityStore
       }
       return left.event.id.localeCompare(right.event.id);
     });
+  }
+
+  async searchConversationDirectory(
+    orgId: string,
+    query?: ConversationDirectoryQuery,
+  ): Promise<ConversationDirectoryEntry[]> {
+    const exact = query?.thread_id?.trim();
+    const lists = exact || !query?.list || query.list === "all"
+      ? (["shown", "hidden"] as const)
+      : ([query.list] as const);
+    const seen = new Map<string, ConversationDirectoryEntry>();
+    for (const list of lists) {
+      const items = await this.listInbox(orgId, {
+        heads: true,
+        ...(list === "hidden" ? { list: "hidden" as const } : {}),
+      });
+      for (const item of items) {
+        const threadId = item.event.thread_id?.trim();
+        if (!threadId || seen.has(threadId)) {
+          continue;
+        }
+        const pref = this.prefs.get(prefKey(orgId, threadId));
+        seen.set(threadId, {
+          thread_id: threadId,
+          source: item.event.source,
+          pref_title: pref?.title ?? null,
+          catalog_label: null,
+          hidden: pref?.hidden === true,
+          pinned: pref?.pinned === true,
+          has_current_work: item.decision.disposition === "current_work",
+          face_occurred_at: item.event.occurred_at,
+        });
+      }
+    }
+    return rankConversationDirectory([...seen.values()], query);
   }
 
   async summarizeInbox(orgId: string): Promise<InboxSummary> {
