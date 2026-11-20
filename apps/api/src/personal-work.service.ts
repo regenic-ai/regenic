@@ -178,6 +178,7 @@ export interface ContextQuestionView {
   status: string;
   run_id?: string;
   run_status?: string;
+  executor_type?: string;
   agent_thread_id?: string;
 }
 
@@ -196,7 +197,7 @@ function contextQuestionView(
     query,
     ...(threadId ? { thread_id: threadId } : {}),
     status: item.status,
-    ...(run ? { run_id: run.id, run_status: run.status } : {}),
+    ...(run ? { run_id: run.id, run_status: run.status, executor_type: run.executor_type } : {}),
     ...(run?.agent_thread_id ? { agent_thread_id: run.agent_thread_id } : {}),
   };
 }
@@ -899,6 +900,7 @@ export class PersonalWorkService implements OnModuleDestroy {
   async startContextQuestion(input: {
     query?: string;
     thread_id?: string;
+    executor_type?: string;
   }): Promise<ContextQuestionView> {
     const query = input.query?.trim() ?? "";
     if (!query || query.length > 8000) {
@@ -910,17 +912,34 @@ export class PersonalWorkService implements OnModuleDestroy {
     }
     await this.executors.ensureMounted();
     const mounted = this.runtime.requireHost().get("executors").list();
+    const requested = typeof input.executor_type === "string" ? input.executor_type.trim() : "";
+    if (input.executor_type != null && input.executor_type !== "" && !requested) {
+      throw new PersonalConnectorError("invalid_config", "executor_type is empty", 400);
+    }
     const agents = mounted.filter((entry) => entry.catalog().agent === true);
-    let executor = agents[0] ?? mounted[0];
-    for (const entry of agents) {
-      const selfServe = await entry.contextSelfServe?.(this.channel.contextFor(entry)).catch(() => false);
-      if (selfServe) {
-        executor = entry;
-        break;
+    let executor = requested ? mounted.find((entry) => entry.executor_type === requested) : undefined;
+    if (requested && !executor) {
+      throw new PersonalConnectorError("executor_unavailable", "That agent is not installed", 409);
+    }
+    if (!executor) {
+      executor = agents[0] ?? mounted[0];
+      for (const entry of agents) {
+        const selfServe = await entry.contextSelfServe?.(this.channel.contextFor(entry)).catch(() => false);
+        if (selfServe) {
+          executor = entry;
+          break;
+        }
       }
     }
     if (!executor) {
       throw new PersonalConnectorError("executor_unavailable", "No executor is installed", 409);
+    }
+    if (requested && executor.catalog().agent !== true) {
+      throw new PersonalConnectorError(
+        "executor_session_unavailable",
+        "This executor cannot open a session with context tools",
+        409,
+      );
     }
     // Cursor attaches the tools when the session is created. DSH mounts the
     // same server from its local profile. Either path is contextSelfServe.

@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
+  fetchEngine,
   fetchInbox,
   fetchSearchQuestion,
   sendReply,
@@ -7,31 +8,24 @@ import {
   type SearchQuestion,
 } from "./api";
 import { AgentReadsCard } from "./AgentReadsCard";
-import { ArrowUpIcon, CloseIcon, PlusIcon, SparkleIcon } from "./Icons";
+import { askSpeech } from "./ask-speech";
+import { ArrowUpIcon, ChevronIcon, CloseIcon, PlusIcon, SparkleIcon } from "./Icons";
 import { KernelRequestError } from "./kernel-request";
 import { MessageBody } from "./MessageBody";
 import { useLocale } from "./LocaleContext";
 import type { InboxViewItem } from "./types";
 
 const QUESTIONS_KEY = "regenic.search.questions";
+const EXECUTOR_KEY = "regenic.search.executor";
 const STOPPED_RUN = new Set(["failed", "cancelled", "canceled", "aborted"]);
 const SETTLED_RUN = new Set(["completed", "done", ...STOPPED_RUN]);
-const PROMPT_PREAMBLE = "Answer QUESTION using only";
-
-/** Working heartbeats and channel reminders are not part of the question. */
-function askSpeech(item: InboxViewItem): boolean {
-  if (item.activity === "working" || item.kind === "system") return false;
-  const text = item.body_text?.trim() ?? "";
-  if (!text && !(item.attachments?.length)) return false;
-  if (item.kind === "user" && text.startsWith(PROMPT_PREAMBLE)) return false;
-  return true;
-}
 
 interface StoredQuestion {
   id: string;
   query: string;
   scopeThreadId?: string;
   scopeTitle?: string;
+  executorType?: string;
 }
 
 function loadQuestions(): StoredQuestion[] {
@@ -49,7 +43,115 @@ function saveQuestions(entries: StoredQuestion[]) {
   try { localStorage.setItem(QUESTIONS_KEY, JSON.stringify(entries)); } catch { /* storage unavailable */ }
 }
 
-function AskComposer({ value, onChange, onSubmit, placeholder, disabled, busy, scope, onClearScope, autoFocus }: {
+function loadExecutor(): string {
+  try { return localStorage.getItem(EXECUTOR_KEY) ?? ""; } catch { return ""; }
+}
+
+function saveExecutor(executorType: string) {
+  try { localStorage.setItem(EXECUTOR_KEY, executorType); } catch { /* storage unavailable */ }
+}
+
+function AgentSwitch({ agents, value, onChange, lockedLabel }: {
+  agents: Array<{ value: string; label: string }>;
+  value: string;
+  onChange?: (value: string) => void;
+  lockedLabel?: string;
+}) {
+  const { t } = useLocale();
+  const root = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState(false);
+  const [active, setActive] = useState(0);
+  const current = agents.find((item) => item.value === value);
+  const label = lockedLabel || current?.label || "";
+  const selectable = !lockedLabel && Boolean(onChange) && agents.length > 0;
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (event: MouseEvent) => {
+      if (!root.current?.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+
+  if (!label) return null;
+  if (!selectable) return <span className="ask-agent-current">{label}</span>;
+
+  const choose = (executorType: string) => {
+    onChange?.(executorType);
+    setOpen(false);
+  };
+
+  return (
+    <div className="ask-agent" ref={root}>
+      <button
+        type="button"
+        className={`ask-agent-trigger${open ? " is-open" : ""}`}
+        aria-label={t("search.ask.agent")}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onMouseDown={(event) => event.preventDefault()}
+        onClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          setActive(Math.max(0, agents.findIndex((item) => item.value === value)));
+          setOpen((shown) => !shown);
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+            event.preventDefault();
+            if (!open) {
+              setOpen(true);
+              return;
+            }
+            const delta = event.key === "ArrowDown" ? 1 : -1;
+            setActive((index) => (index + delta + agents.length) % agents.length);
+          } else if (event.key === "Enter" && open) {
+            event.preventDefault();
+            const next = agents[active];
+            if (next) choose(next.value);
+          } else if (event.key === "Escape" && open) {
+            event.preventDefault();
+            setOpen(false);
+          }
+        }}
+      >
+        <span>{label}</span>
+        <ChevronIcon />
+      </button>
+      {open ? (
+        <ul className="ask-agent-menu" role="listbox" aria-label={t("search.ask.agent")}>
+          {agents.map((item, index) => (
+            <li key={item.value}>
+              <button
+                type="button"
+                role="option"
+                aria-selected={item.value === value}
+                className={`ask-agent-option${item.value === value ? " is-on" : ""}${index === active ? " is-active" : ""}`}
+                onMouseEnter={() => setActive(index)}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  choose(item.value);
+                }}
+              >
+                <span>{item.label}</span>
+                {item.value === value ? (
+                  <svg className="ask-agent-check" viewBox="0 0 16 16" aria-hidden="true">
+                    <path d="M3.5 8.2 6.4 11 12.5 4.8" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                ) : <span className="ask-agent-check" aria-hidden="true" />}
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
+
+function AskComposer({ value, onChange, onSubmit, placeholder, disabled, busy, scope, onClearScope, autoFocus, agents = [], agent = "", onAgent, agentLabel }: {
   value: string;
   onChange: (value: string) => void;
   onSubmit: () => void;
@@ -59,6 +161,10 @@ function AskComposer({ value, onChange, onSubmit, placeholder, disabled, busy, s
   scope?: string | null;
   onClearScope?: () => void;
   autoFocus?: boolean;
+  agents?: Array<{ value: string; label: string }>;
+  agent?: string;
+  onAgent?: (value: string) => void;
+  agentLabel?: string;
 }) {
   const { t } = useLocale();
   const field = useRef<HTMLTextAreaElement>(null);
@@ -96,16 +202,19 @@ function AskComposer({ value, onChange, onSubmit, placeholder, disabled, busy, s
         }}
       />
       <div className="ask-composer-bar">
-        {scope ? (
-          <span className="ask-scope-chip">
-            <span>{t("search.ask.scope", { title: scope })}</span>
-            {onClearScope ? (
-              <button type="button" aria-label={t("search.ask.clearScope")} title={t("search.ask.clearScope")} onClick={onClearScope}>
-                <CloseIcon />
-              </button>
-            ) : null}
-          </span>
-        ) : <span className="ask-composer-hint">{t("search.ask.hint")}</span>}
+        <div className="ask-composer-tools">
+          <AgentSwitch agents={agents} value={agent} onChange={onAgent} lockedLabel={agentLabel} />
+          {scope ? (
+            <span className="ask-scope-chip">
+              <span>{t("search.ask.scope", { title: scope })}</span>
+              {onClearScope ? (
+                <button type="button" aria-label={t("search.ask.clearScope")} title={t("search.ask.clearScope")} onClick={onClearScope}>
+                  <CloseIcon />
+                </button>
+              ) : null}
+            </span>
+          ) : <span className="ask-composer-hint">{t("search.ask.hint")}</span>}
+        </div>
         <button type="submit" className="ask-send" disabled={!canSend} aria-label={t("search.ask.submit")} title={t("search.ask.submit")}>
           {busy ? <span className="ask-send-spinner" aria-hidden="true" /> : <ArrowUpIcon />}
         </button>
@@ -119,7 +228,7 @@ export function SearchAsk({ scope, scopeNonce = 0, onClearScope }: {
   scopeNonce?: number;
   onClearScope: () => void;
 }) {
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
   const [questions, setQuestions] = useState<StoredQuestion[]>(loadQuestions);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
@@ -127,7 +236,10 @@ export function SearchAsk({ scope, scopeNonce = 0, onClearScope }: {
   const [error, setError] = useState<string | null>(null);
   const [live, setLive] = useState<SearchQuestion | null>(null);
   const [items, setItems] = useState<InboxViewItem[]>([]);
+  const [agents, setAgents] = useState<Array<{ value: string; label: string }>>([]);
+  const [agent, setAgent] = useState(loadExecutor);
   const log = useRef<HTMLDivElement>(null);
+  const loadedQuestion = useRef<string | null>(null);
 
   useEffect(() => {
     if (!scopeNonce) return;
@@ -136,10 +248,38 @@ export function SearchAsk({ scope, scopeNonce = 0, onClearScope }: {
   }, [scopeNonce]);
 
   useEffect(() => {
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        const engine = await fetchEngine();
+        if (controller.signal.aborted) return;
+        const next = engine.executor_installations
+          .filter((item) => item.status !== "disabled" && item.context_self_serve === true)
+          .map((item) => ({ value: item.id, label: item.label || item.name }))
+          .sort((left, right) => left.label.localeCompare(right.label, locale));
+        setAgents(next);
+        setAgent((current) => {
+          const chosen = next.some((item) => item.value === current) ? current : (next[0]?.value ?? "");
+          saveExecutor(chosen);
+          return chosen;
+        });
+      } catch {
+        if (!controller.signal.aborted) setAgents([]);
+      }
+    })();
+    return () => controller.abort();
+  }, [locale]);
+
+  useEffect(() => {
     if (!selectedId) {
+      loadedQuestion.current = null;
       setLive(null);
       setItems([]);
       return;
+    }
+    if (loadedQuestion.current !== selectedId) {
+      setLive(null);
+      setItems([]);
     }
     const controller = new AbortController();
     let timer = 0;
@@ -148,19 +288,21 @@ export function SearchAsk({ scope, scopeNonce = 0, onClearScope }: {
         const next = await fetchSearchQuestion(selectedId, controller.signal);
         if (controller.signal.aborted) return;
         setLive(next);
-        setError(null);
         if (next.agent_thread_id) {
           const page = await fetchInbox(
             { thread_id: next.agent_thread_id, limit: 200 },
             { signal: controller.signal },
           );
-          if (!controller.signal.aborted) setItems(page);
+          if (controller.signal.aborted) return;
+          setItems(page);
         }
-        if (!controller.signal.aborted) timer = window.setTimeout(() => void tick(), 4000);
-      } catch (caught) {
+        loadedQuestion.current = selectedId;
+        setError(null);
+      } catch {
         if (controller.signal.aborted) return;
-        setError(t("search.ask.loadFailed"));
+        if (loadedQuestion.current !== selectedId) setError(t("search.ask.loadFailed"));
       }
+      if (!controller.signal.aborted) timer = window.setTimeout(() => void tick(), 4000);
     };
     void tick();
     return () => {
@@ -203,11 +345,13 @@ export function SearchAsk({ scope, scopeNonce = 0, onClearScope }: {
       const created = await startSearchQuestion({
         query: text,
         ...(scope ? { thread_id: scope.threadId } : {}),
+        ...(agent ? { executor_type: agent } : {}),
       });
       const stored: StoredQuestion = {
         id: created.id,
         query: created.query || text,
         ...(scope ? { scopeThreadId: scope.threadId, scopeTitle: scope.title } : {}),
+        ...(created.executor_type || agent ? { executorType: created.executor_type || agent } : {}),
       };
       const next = [stored, ...questions.filter((entry) => entry.id !== stored.id)];
       setQuestions(next);
@@ -222,6 +366,11 @@ export function SearchAsk({ scope, scopeNonce = 0, onClearScope }: {
     } finally {
       setStarting(false);
     }
+  }
+
+  function chooseAgent(executorType: string) {
+    setAgent(executorType);
+    saveExecutor(executorType);
   }
 
   const suggestions = scope
@@ -300,6 +449,7 @@ export function SearchAsk({ scope, scopeNonce = 0, onClearScope }: {
                 disabled={!canFollow}
                 busy={starting}
                 scope={selected.scopeTitle ?? null}
+                agentLabel={agents.find((item) => item.value === (selected.executorType || live?.executor_type))?.label}
                 autoFocus
               />
             </div>
@@ -319,6 +469,9 @@ export function SearchAsk({ scope, scopeNonce = 0, onClearScope }: {
               busy={starting}
               scope={scope?.title ?? null}
               onClearScope={onClearScope}
+              agents={agents}
+              agent={agent}
+              onAgent={chooseAgent}
               autoFocus
             />
             {error ? <p className="ask-error" role="alert">{error}</p> : null}

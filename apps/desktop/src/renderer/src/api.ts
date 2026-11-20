@@ -1823,12 +1823,14 @@ export interface SearchQuestion {
   status: string;
   run_id?: string;
   run_status?: string;
+  executor_type?: string;
   agent_thread_id?: string;
 }
 
 export async function startSearchQuestion(input: {
   query: string;
   thread_id?: string;
+  executor_type?: string;
 }): Promise<SearchQuestion> {
   const response = await kernelFetch("/v1/me/context/search/questions", {
     method: "POST",

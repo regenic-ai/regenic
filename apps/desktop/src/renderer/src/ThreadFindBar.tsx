@@ -32,7 +32,7 @@ export function ThreadFindBar({ threadId, onLocate, onClose }: {
     setBusy(true);
     try {
       const result = await searchPersonalContext(
-        contextSearchInput(trimmed, "", threadId, 20, "messages"),
+        contextSearchInput(trimmed, "", threadId, 20, "messages", new Date(), "all", true),
       );
       if (ticket !== request.current) return;
       const ids = result.items.map((hit) => hit.event_id);

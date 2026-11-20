@@ -421,6 +421,17 @@ async function seedAgentRun(database, blobRoot) {
     expected_recipe: savedRecipe,
   });
   assert.equal(createdItem.outcome, "applied");
+  const question = await authority.createWorkItem({
+    item: {
+      id: "work-question", org_id: "local-owner", recipe_id: recipe.id,
+      thread_id: "system:search-question:work-question", unit_key: "u-question",
+      record_class: "message", thread_facet: "customer", status: "open",
+      created_at: now, updated_at: now,
+    },
+    recipe: savedRecipe,
+    expected_recipe: savedRecipe,
+  });
+  assert.equal(question.outcome, "applied");
   const run = {
     id: "run-open", org_id: "local-owner", work_item_id: createdItem.item.id,
     recipe_id: recipe.id, executor_type: recipe.executor_type, status: "running",
@@ -442,6 +453,11 @@ async function seedAgentRun(database, blobRoot) {
       id: "run-old", org_id: "local-owner", work_item_id: "work-ctx",
       recipe_id: recipe.id, executor_type: "session", status: "running",
       created_at: old, updated_at: old,
+    },
+    {
+      id: "run-question", org_id: "local-owner", work_item_id: "work-question",
+      recipe_id: recipe.id, executor_type: "session", status: "completed",
+      created_at: now, updated_at: now,
     },
   ]);
   authority.close();
@@ -505,6 +521,11 @@ describe("agent context MCP", () => {
       });
       assert.equal(denied.body.result.isError, true, runId);
     }
+    const followUp = await mcp(origin, access.runToken("run-question"), "tools/call", {
+      name: "read_task_conversation", arguments: {},
+    });
+    assert.equal(followUp.body.result.isError, undefined, JSON.stringify(followUp.body));
+    assert.equal(followUp.body.result.structuredContent.thread_id, "system:search-question:work-question");
   });
 
   it("requires a run_id with the shared agent key", async () => {

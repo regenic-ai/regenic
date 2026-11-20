@@ -212,6 +212,74 @@
 .ask-composer textarea::placeholder { color: var(--ink-40); }
 .ask-composer textarea:disabled { cursor: default; }
 .ask-composer-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 32px; }
+.ask-composer-tools { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.ask-composer-tools .ask-composer-hint { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ask-agent { position: relative; flex: 0 0 auto; }
+.ask-agent-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 28px;
+  max-width: 200px;
+  padding: 0 6px 0 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.ask-agent-trigger span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ask-agent-trigger svg { flex: none; color: var(--ink-40); }
+.ask-agent-trigger:hover,
+.ask-agent-trigger.is-open { background: var(--wash-6); }
+.ask-agent-menu {
+  position: absolute;
+  z-index: 30;
+  left: 0;
+  bottom: calc(100% + 6px);
+  min-width: 200px;
+  max-width: 280px;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  border-radius: var(--radius-menu);
+  background: var(--elevated);
+  box-shadow: var(--shadow-pop);
+}
+.ask-agent-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  width: 100%;
+  height: 32px;
+  padding: 0 8px 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.ask-agent-option span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ask-agent-option.is-active,
+.ask-agent-option:hover { background: var(--wash-6); }
+.ask-agent-check { flex: none; width: 14px; height: 14px; }
+.ask-agent-current {
+  max-width: 160px;
+  overflow: hidden;
+  padding: 0 8px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .ask-composer-hint { color: var(--ink-40); font-size: 12px; }
 .ask-scope-chip {
   display: inline-flex;
