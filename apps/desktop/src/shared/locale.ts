@@ -15,6 +15,15 @@ export function localeFromLanguage(raw: unknown): Locale | null {
   return null;
 }
 
+/** First entry in the user's language list that this app can show. */
+export function preferredLocale(languages: readonly unknown[], fallback?: unknown): Locale {
+  for (const language of languages) {
+    const locale = localeFromLanguage(language);
+    if (locale) return locale;
+  }
+  return localeFromLanguage(fallback) ?? DEFAULT_LOCALE;
+}
+
 /**
  * An explicit saved choice wins. A missing choice follows the system language,
  * then English when that language has no translation.
@@ -29,6 +38,7 @@ export function resolveLocale(saved: unknown, systemLanguage?: unknown): Locale 
 /** First paint: a known app locale, otherwise the same rule as a fresh install. */
 export function bootLocale(saved: unknown, systemLanguage?: unknown): Locale {
   if (saved === "en" || saved === "zh") return saved;
+  if (Array.isArray(systemLanguage)) return preferredLocale(systemLanguage);
   return resolveLocale(undefined, systemLanguage);
 }
 

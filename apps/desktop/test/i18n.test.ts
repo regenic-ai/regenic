@@ -6,7 +6,13 @@ import { describe, it } from "node:test";
 import { loadDesktopPreference } from "../src/main/kernel-settings.ts";
 import { statusSummary } from "../src/renderer/src/shell-status.ts";
 import type { ShellStatus } from "../src/renderer/src/shell-status.ts";
-import { bootLocale, DEFAULT_LOCALE, parseLocale, resolveLocale } from "../src/shared/locale.ts";
+import {
+  bootLocale,
+  DEFAULT_LOCALE,
+  parseLocale,
+  preferredLocale,
+  resolveLocale,
+} from "../src/shared/locale.ts";
 import { translate } from "../src/shared/messages.ts";
 
 describe("desktop locale", () => {
@@ -178,6 +184,12 @@ describe("desktop locale", () => {
     assert.equal(resolveLocale("fr", "zh-CN"), "en");
     assert.equal(bootLocale(undefined, "zh-Hans"), "zh");
     assert.equal(bootLocale("en", "zh-CN"), "en");
+    assert.equal(preferredLocale(["zh-Hans-CN", "en-US"]), "zh");
+    assert.equal(preferredLocale(["ja-JP", "en-US"]), "en");
+    assert.equal(preferredLocale(["fr-FR"], "zh-CN"), "zh");
+    assert.equal(preferredLocale([], "en-US"), "en");
+    assert.equal(preferredLocale([], undefined), "en");
+    assert.equal(bootLocale(undefined, ["ja-JP", "zh-Hant", "en-US"]), "zh");
     assert.equal(
       translate("en", "settings.languageLead"),
       "Applies immediately across the app. A new install uses your system language, or English when that language has no translation.",

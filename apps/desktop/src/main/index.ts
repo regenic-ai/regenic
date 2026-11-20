@@ -54,7 +54,7 @@ import { formatBytes, portFromHttpOrigin } from "../shared/host-watch";
 import { waitForPersonalKernel } from "../shared/kernel-ready";
 import { probeKernelAuthority, probeKernelDatabase, probeKernelMode } from "./kernel-probe";
 import { isMessageKey, translate } from "../shared/messages.ts";
-import { parseLocale } from "../shared/locale.ts";
+import { parseLocale, preferredLocale } from "../shared/locale.ts";
 import {
   LOCAL_KERNEL_ORIGIN,
   loadDesktopPreference,
@@ -1242,7 +1242,7 @@ app.whenReady().then(async () => {
   if (!app.hasSingleInstanceLock()) {
     return;
   }
-  setHostLanguage(app.getLocale());
+  setHostLanguage(preferredLocale(app.getPreferredSystemLanguages(), app.getLocale()));
   applyAppIcon();
   installPersonalApiKeyInjection();
   ipcMain.handle("regenic:show-console", async () => {

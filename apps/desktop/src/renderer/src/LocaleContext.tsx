@@ -78,7 +78,10 @@ function initialLocale(): Locale {
   if (typeof window === "undefined") return DEFAULT_LOCALE;
   return (
     readCachedLocale() ??
-    bootLocale(window.regenic?.locale, window.navigator?.language)
+    bootLocale(
+      window.regenic?.locale,
+      window.navigator?.languages ?? window.navigator?.language,
+    )
   );
 }
 
