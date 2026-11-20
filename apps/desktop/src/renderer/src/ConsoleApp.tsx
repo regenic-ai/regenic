@@ -64,6 +64,7 @@ import {
 } from "./inbox-drafts";
 import type { ComposerDraft } from "./Composer";
 import { t as translate } from "../../shared/i18n.ts";
+import { workStartErrorCopy } from "./recipe-draft";
 import { useLocale } from "./LocaleContext";
 import { InboxWorkspace } from "./InboxWorkspace";
 import { connectPersonalEvents } from "./personal-events";
@@ -1668,10 +1669,10 @@ export function ConsoleApp() {
         await refresh();
         setError(null);
       } catch (caught) {
-        setError(caught instanceof Error ? caught.message : translate("error.cannotStartWork"));
+        setError(workStartErrorCopy(caught, t, t("error.cannotStartWork")));
       }
     },
-    [refresh],
+    [refresh, t],
   );
   const dismissSelectedWork = useCallback(
     async (thread: InboxThread) => {

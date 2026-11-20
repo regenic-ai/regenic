@@ -1,4 +1,5 @@
 import { formatNextRunWhen, formatTime } from "./format.ts";
+import { KernelRequestError } from "./kernel-request.ts";
 import { configForRecipeEdit, configFromCatalog } from "./recipe-params.ts";
 import {
   competesForChat,
@@ -708,6 +709,20 @@ export function lastRunCopy(recipe: RecipeView, t: Translate): string | null {
     return null;
   }
   return runLineCopy(run, t);
+}
+
+export function workStartErrorCopy(
+  caught: unknown,
+  t: Translate,
+  fallback: string,
+): string {
+  if (caught instanceof KernelRequestError) {
+    if (caught.code === "work_in_progress") return t("recipes.workInProgress");
+    if (caught.code === "work_running_elsewhere") return t("recipes.workRunningElsewhere");
+    if (caught.code === "work_bound") return t("recipes.workBound");
+    return caught.message.trim() ? caught.message : fallback;
+  }
+  return caught instanceof Error && caught.message.trim() ? caught.message : fallback;
 }
 
 export function conflictCopy(

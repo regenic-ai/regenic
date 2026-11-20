@@ -35,6 +35,7 @@ import {
   importErrorKey,
   lastRunCopy,
   nextRunCopy,
+  workStartErrorCopy,
   parseMaxConcurrent,
   recipeChain,
   recipeToggleInput,
@@ -331,7 +332,7 @@ export function RecipesPage({
       );
       onOpenThread?.(result.thread_id);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : t("recipes.tryError"));
+      setError(workStartErrorCopy(caught, t, t("recipes.tryError")));
     } finally {
       setBusy(false);
     }
