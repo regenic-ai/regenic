@@ -25,6 +25,7 @@ function recipeServiceFixture() {
     },
     listInstallations: async () => [],
     getWorkItemByThread: async () => null,
+    getConversationPref: async () => null,
     listInbox: async () => [],
     createWorkItem: async ({ item }) => {
       items.push(item);
