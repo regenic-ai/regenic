@@ -366,6 +366,7 @@ export class PersonalWorkDispatch {
         issued_at: string;
       };
       onReplay?: () => void;
+      executor?: TaskExecutor;
     },
   ): Promise<WorkRun | undefined> {
     const host = this.runtime.requireHost();
@@ -410,7 +411,7 @@ export class PersonalWorkDispatch {
       }
       return undefined;
     }
-    const executor = host.get("executors").get(recipe.executor_type);
+    const executor = options?.executor ?? host.get("executors").get(recipe.executor_type);
     if (!executor) {
       await this.noteStartFailed(item, recipe, "Unknown executor", mode, options?.rebind);
       if (mode !== "auto") {

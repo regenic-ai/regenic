@@ -12,7 +12,6 @@ import {
   isAbandonedWorkItem,
   matchWriteBackPrompt,
   parseConversationThread,
-  pickAbsenteeInboxRows,
   recipeWantsWriteBack,
   asConnectorHost,
   requireCreateThread,
@@ -43,8 +42,17 @@ import { writeWorkContextFiles } from "./personal-work-context";
 import { PersonalRuntimeService } from "./personal-runtime.service";
 import {
   scanInboxTurns,
+  type InboxTurnRow,
   type InboxTurnScan,
 } from "./personal-work-reap";
+
+/**
+ * Absentee status walks the newest sysout backwards. A session transcript is
+ * the whole agent history; loading every blob on each 3s tick fills the heap
+ * and exhausts file descriptors.
+ */
+const SYSOUT_SCAN_PAGES = 8;
+const SYSOUT_FACE_PAGES = SYSOUT_SCAN_PAGES;
 
 export class PersonalWorkChannel {
   constructor(
@@ -351,76 +359,154 @@ export class PersonalWorkChannel {
   }
 
   async readTranscript(threadId: string): Promise<Transcript | null> {
-    const host = this.runtime.requireHost();
-    const items = await host.get("authority").listInbox(this.runtime.orgId(), {
-      thread_ids: [threadId],
-      siblings: true,
-    });
-    const { live, visible } = pickAbsenteeInboxRows(items);
-    if (!live) {
+    const face = await this.sysoutFace(threadId);
+    if (!face.live) {
       return null;
     }
-    const hashes = [live.event.content_hash];
-    if (visible && visible.event.id !== live.event.id) {
-      hashes.push(visible.event.content_hash);
-    }
-    const bodies = await resolveInboxBodies(
-      host.get("authority"),
-      host.get("blobs"),
-      hashes,
-      "meta",
+    const bodies = await this.bodiesFor([face.live, face.visible]);
+    return transcriptFromBodies(
+      bodyOf(face.live, bodies),
+      face.visible ? bodyOf(face.visible, bodies) : undefined,
     );
-    const liveBody = live.event.content_hash
-      ? (bodies.get(live.event.content_hash) ?? {})
-      : {};
-    const body = visible?.event.content_hash
-      ? (bodies.get(visible.event.content_hash) ?? liveBody)
-      : liveBody;
-    return transcriptFromAbsenteeLive({
-      liveKind: liveBody.surface?.kind,
-      liveActivity: liveBody.surface?.activity,
-      liveTurn: liveBody.surface?.turn,
-      visibleKind: body.surface?.kind,
-      visibleText: body.body_text,
-      visibleActivity: body.surface?.activity,
-    });
   }
 
   async inspectSysout(threadId: string): Promise<{
     transcript: Transcript | null;
     scan: InboxTurnScan;
   }> {
-    const host = this.runtime.requireHost();
-    const items = await host.get("authority").listInbox(this.runtime.orgId(), {
+    let cursor: SysoutCursor | undefined;
+    const scanRows: InboxTurnRow[] = [];
+    let live: InboxItem | undefined;
+    let visible: InboxItem | undefined;
+    let liveBody: InboxBody = {};
+    let visibleBody: InboxBody | undefined;
+    let foundEnded = false;
+
+    for (let page = 0; page < SYSOUT_SCAN_PAGES && !foundEnded; page += 1) {
+      const items = await this.listSysoutPage(threadId, cursor);
+      if (items.length === 0) {
+        break;
+      }
+      const newest = newestLiveRows(items);
+      const batch: InboxItem[] = [];
+      for (const row of newest) {
+        if (isThreadStatus(row)) {
+          batch.push(row);
+        } else if (!visible) {
+          visible = row;
+          batch.push(row);
+        }
+      }
+      const bodies = await this.bodiesFor(batch);
+      for (const row of newest) {
+        if (!isThreadStatus(row)) {
+          if (row === visible) {
+            visibleBody = bodyOf(row, bodies);
+          }
+          continue;
+        }
+        const body = bodyOf(row, bodies);
+        if (!live) {
+          live = row;
+          liveBody = body;
+        }
+        scanRows.push({
+          status: true,
+          turn: body.surface?.turn,
+          activity: body.surface?.activity,
+          text: body.body_text,
+        });
+        if (body.surface?.turn?.state === "ended") {
+          foundEnded = true;
+        }
+      }
+      if (foundEnded || items.length < INBOX_PAGE_MAX) {
+        break;
+      }
+      cursor = olderThan(items);
+      if (!cursor) {
+        break;
+      }
+    }
+
+    if (!live && visible) {
+      live = visible;
+      liveBody = visibleBody ?? {};
+    }
+
+    const scan = scanInboxTurns(
+      scanRows.length > 0
+        ? scanRows
+        : [{ status: false, text: visibleBody?.body_text }],
+    );
+    return {
+      transcript: live
+        ? transcriptFromBodies(liveBody, visibleBody)
+        : null,
+      scan,
+    };
+  }
+
+  /**
+   * Newest thread_status plus the newest speech. Stops once both are in hand
+   * so a long session is not materialized on every executor status poll.
+   */
+  private async sysoutFace(threadId: string): Promise<{
+    live?: InboxItem;
+    visible?: InboxItem;
+  }> {
+    let cursor: SysoutCursor | undefined;
+    let live: InboxItem | undefined;
+    let newestRow: InboxItem | undefined;
+    let visible: InboxItem | undefined;
+    for (let page = 0; page < SYSOUT_FACE_PAGES; page += 1) {
+      const items = await this.listSysoutPage(threadId, cursor);
+      if (items.length === 0) {
+        break;
+      }
+      const newest = newestLiveRows(items);
+      if (!newestRow) {
+        newestRow = newest[0];
+      }
+      if (!live) {
+        live = newest.find((row) => isThreadStatus(row));
+      }
+      if (!visible) {
+        visible = newest.find((row) => !isThreadStatus(row));
+      }
+      if ((live && visible) || items.length < INBOX_PAGE_MAX) {
+        break;
+      }
+      cursor = olderThan(items);
+      if (!cursor) {
+        break;
+      }
+    }
+    return { live: live ?? newestRow, visible };
+  }
+
+  private async listSysoutPage(
+    threadId: string,
+    cursor?: SysoutCursor,
+  ): Promise<InboxItem[]> {
+    return this.runtime.requireHost().get("authority").listInbox(this.runtime.orgId(), {
       thread_ids: [threadId],
       siblings: true,
+      limit: INBOX_PAGE_MAX,
+      ...(cursor ?? {}),
     });
-    const newest = [...items]
-      .reverse()
-      .filter((row) => row.event.operation !== "tombstone");
-    const hashes = newest
-      .map((row) => row.event.content_hash)
-      .filter((hash): hash is string => Boolean(hash));
-    const bodies = await resolveInboxBodies(
+  }
+
+  private async bodiesFor(
+    rows: Array<InboxItem | undefined>,
+  ): Promise<Map<string, InboxBody>> {
+    const host = this.runtime.requireHost();
+    return resolveInboxBodies(
       host.get("authority"),
       host.get("blobs"),
-      hashes,
+      rows.flatMap((row) => row?.event.content_hash ? [row.event.content_hash] : []),
       "meta",
     );
-    const scan = scanInboxTurns(
-      newest.map((row) => {
-        const body = row.event.content_hash
-          ? bodies.get(row.event.content_hash)
-          : undefined;
-        return {
-          status: row.decision.reason_codes.includes("thread_status"),
-          turn: body?.surface?.turn,
-          activity: body?.surface?.activity,
-          text: body?.body_text,
-        };
-      }),
-    );
-    return { transcript: await this.readTranscript(threadId), scan };
   }
 
   /**
@@ -618,6 +704,43 @@ export class PersonalWorkChannel {
     }
     return driverCanReply(found.driver, found.installation);
   }
+}
+
+interface SysoutCursor {
+  before: string;
+  before_id: string;
+}
+
+function isThreadStatus(row: InboxItem): boolean {
+  return row.decision.reason_codes.includes("thread_status");
+}
+
+function newestLiveRows(items: readonly InboxItem[]): InboxItem[] {
+  return [...items].reverse().filter((row) => row.event.operation !== "tombstone");
+}
+
+function olderThan(items: readonly InboxItem[]): SysoutCursor | undefined {
+  const oldest = items[0]?.event;
+  if (!oldest) {
+    return undefined;
+  }
+  return { before: oldest.occurred_at, before_id: oldest.id };
+}
+
+function bodyOf(row: InboxItem, bodies: Map<string, InboxBody>): InboxBody {
+  return row.event.content_hash ? (bodies.get(row.event.content_hash) ?? {}) : {};
+}
+
+function transcriptFromBodies(liveBody: InboxBody, visibleBody?: InboxBody): Transcript {
+  const body = visibleBody ?? liveBody;
+  return transcriptFromAbsenteeLive({
+    liveKind: liveBody.surface?.kind,
+    liveActivity: liveBody.surface?.activity,
+    liveTurn: liveBody.surface?.turn,
+    visibleKind: body.surface?.kind,
+    visibleText: body.body_text,
+    visibleActivity: body.surface?.activity,
+  });
 }
 
 function attachmentEvidence(
