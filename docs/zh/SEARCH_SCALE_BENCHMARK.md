@@ -91,7 +91,8 @@ pnpm --filter @regenic/local-cli bench:conversation-scale -- `
 
 - 精确消息/会话数量、角色和语言分布、已消费前缀 hash；
 - 索引构建时间与 SQLite 文件大小；
-- 暖授权搜索 P50、P95、P99、平均值和最大延迟；
+- 授权 hash 计算时间、首次授权 staging 延迟；
+- 复用同一授权快照的暖搜索 P50、P95、P99、平均值和最大延迟；
 - coverage、匹配数量、进程峰值 RSS 和硬件信息。
 
 报告不会包含消息正文或完整本地路径。
@@ -101,6 +102,10 @@ pnpm --filter @regenic/local-cli bench:conversation-scale -- `
 该基准使用真实文本测量生产 SQLite FTS 的授权集合 staging 与候选匹配路径。
 它不测 embedding 推理、向量召回率、答案生成或桌面渲染。检索质量继续使用
 `bench:semantic`，推理抢占和延迟使用 embedding latency benchmark。
+
+`warmup_latency` 测量进程内首次 staging；`latency` 仅测量后续复用同一
+organization、generation、watermark 和授权 hash 的查询。生产端任一绑定值变化
+都会安全失效缓存并重新 staging。
 
 如果消息规模增长时延迟近似线性增长，而实际命中数量很少，应优先优化授权集合
 staging 和候选 lookup，而不是先更换 embedding 模型。

@@ -137,6 +137,64 @@ describe("indexed Event retrieval", () => {
     assert.ok(!result.bundle.degradation_flags.includes("lexical_index_partial"));
   });
 
+  it("accepts a compact complete coverage proof bound to the authorization set", async () => {
+    let compactInput;
+    const { engine } = engineFixture({
+      async matchAuthorized(input) {
+        compactInput = structuredClone(input);
+        return {
+          available: true,
+          algorithm_version: "segment-bm25-v1",
+          generation: "continuous-v1",
+          watermark: "authority:2",
+          covered: [],
+          coverage: {
+            authorization_hash: input.authorization_hash,
+            authorized_count: input.authorized.length,
+            covered_count: input.authorized.length,
+            complete: true,
+            uncovered: [],
+          },
+          matched: structuredClone(input.authorized),
+        };
+      },
+    });
+
+    const result = await engine.assemble(request());
+
+    assert.match(compactInput.authorization_hash, /^[a-f0-9]{64}$/);
+    assert.deepEqual(
+      result.bundle.sections.flatMap((section) => section.items)
+        .map((item) => item.resource_id),
+      ["event-visible"],
+    );
+    assert.ok(!result.bundle.degradation_flags.includes("lexical_index_partial"));
+  });
+
+  it("rejects a compact coverage proof for another authorization set", async () => {
+    const { engine } = engineFixture({
+      async matchAuthorized(input) {
+        return {
+          available: true,
+          algorithm_version: "segment-bm25-v1",
+          generation: "continuous-v1",
+          watermark: "authority:2",
+          covered: [],
+          coverage: {
+            authorization_hash: HASH_B,
+            authorized_count: input.authorized.length,
+            covered_count: input.authorized.length,
+            complete: true,
+            uncovered: [],
+          },
+          matched: [],
+        };
+      },
+    });
+
+    await assert.rejects(engine.assemble(request()), /invalid coverage proof/);
+  });
+
   it("falls back to local verification for uncovered authorized keys", async () => {
     const { engine } = engineFixture({
       async matchAuthorized() {

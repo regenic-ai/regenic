@@ -96,7 +96,8 @@ The report contains:
 
 - exact messages, conversations, role/language counts and consumed-prefix hash;
 - index construction time and SQLite file sizes;
-- warm authorized-search P50, P95, P99, mean and maximum latency;
+- authorization-hash time and first authorization-staging latency;
+- warm P50, P95, P99, mean and maximum latency while reusing one authorization snapshot;
 - coverage and match counts;
 - observed process peak RSS and hardware information.
 
@@ -109,6 +110,11 @@ candidate matching path with real text. It does not measure embedding
 inference, vector recall, answer generation or end-to-end desktop rendering.
 Use `bench:semantic` for retrieval quality and the embedding latency benchmark
 for inference contention.
+
+`warmup_latency` measures the first in-process staging operation. `latency`
+measures only later queries that reuse the same organization, generation,
+watermark, and authorization hash. Production safely invalidates the cache
+whenever any binding changes.
 
 If latency grows linearly with the authorized message count while match counts
 stay small, optimize authorization staging/candidate lookup before changing

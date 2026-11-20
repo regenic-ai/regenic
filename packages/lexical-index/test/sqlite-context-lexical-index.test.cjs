@@ -5,6 +5,7 @@ const { join } = require("node:path");
 const { performance } = require("node:perf_hooks");
 const { afterEach, describe, it } = require("node:test");
 const { createHost } = require("@regenic/plugin-host");
+const { contextLexicalAuthorizationHash } = require("@regenic/domain");
 const {
   SqliteContextLexicalIndex,
   sqliteContextLexicalIndexPlugin,
@@ -40,6 +41,61 @@ function replacement(documents, overrides = {}) {
 }
 
 describe("SQLite Context lexical index", () => {
+  it("reuses compact authorization coverage and invalidates it after index writes", async () => {
+    const dir = await root();
+    const index = new SqliteContextLexicalIndex(join(dir, "authorization.db"));
+    const authorized = [key("event-a", HASH_A), key("event-b", HASH_B)];
+    const authorization_hash = contextLexicalAuthorizationHash(authorized);
+    await index.replaceOrganization(replacement([
+      { ...authorized[0], text: "alpha" },
+      { ...authorized[1], text: "beta" },
+    ]));
+
+    for (const query of ["alpha", "missing"]) {
+      const result = await index.matchAuthorized({
+        org_id: "example-org",
+        query,
+        authorized,
+        authorization_hash,
+      });
+      assert.deepEqual(result.covered, []);
+      assert.deepEqual(result.coverage, {
+        authorization_hash,
+        authorized_count: 2,
+        covered_count: 2,
+        complete: true,
+        uncovered: [],
+      });
+    }
+    await assert.rejects(
+      index.matchAuthorized({
+        org_id: "example-org",
+        query: "alpha",
+        authorized,
+        authorization_hash: HASH_C,
+      }),
+      /authorization hash/,
+    );
+
+    await index.upsertDocuments(replacement([
+      { ...key("event-b", HASH_C), text: "gamma" },
+    ], { watermark: "authority:2" }));
+    const stale = await index.matchAuthorized({
+      org_id: "example-org",
+      query: "alpha",
+      authorized,
+      authorization_hash,
+    });
+    assert.deepEqual(stale.coverage, {
+      authorization_hash,
+      authorized_count: 2,
+      covered_count: 1,
+      complete: false,
+      uncovered: [key("event-b", HASH_B)],
+    });
+    index.close();
+  });
+
   it("builds and searches more than 10000 keys without truncating late authorized matches", async (t) => {
     const dir = await root();
     const index = new SqliteContextLexicalIndex(join(dir, "large.db"));

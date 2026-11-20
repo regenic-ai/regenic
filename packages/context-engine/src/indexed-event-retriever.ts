@@ -1,6 +1,7 @@
 import {
   CONTEXT_LEXICAL_ALGORITHM_VERSION,
   canonicalContextJson,
+  contextLexicalAuthorizationHash,
   type AuthorizedContextRetrievalPlan,
   type ContextLexicalIndex,
   type ContextLexicalKey,
@@ -57,12 +58,18 @@ export class IndexedEventRetriever implements ContextRetriever {
     const authorized = eligible.flatMap((source) => source.event.content_hash
       ? [{ event_id: source.event.event_id, content_hash: source.event.content_hash }]
       : []);
+    const authorizationHash = contextLexicalAuthorizationHash(authorized);
     const result = await this.index.matchAuthorized({
       org_id: plan.request.org_id,
       query: plan.request.query,
       authorized,
+      authorization_hash: authorizationHash,
     });
-    const { covered, matched } = validateIndexResult(result, authorized);
+    const { coveredCount, matched, uncovered } = validateIndexResult(
+      result,
+      authorized,
+      authorizationHash,
+    );
     const candidates = eligible
       .filter((source) => {
         const contentHash = source.event.content_hash;
@@ -70,11 +77,11 @@ export class IndexedEventRetriever implements ContextRetriever {
           return false;
         }
         const key = keyOf({ event_id: source.event.event_id, content_hash: contentHash });
-        return matched.has(key) || !covered.has(key);
+        return matched.has(key) || uncovered.has(key);
       });
     return {
       candidates: await candidatesFor(candidates),
-      degradation_flags: degradationFlags(result, covered.size, authorized.length),
+      degradation_flags: degradationFlags(result, coveredCount, authorized.length),
     };
   }
 }
@@ -82,8 +89,8 @@ export class IndexedEventRetriever implements ContextRetriever {
 function validateIndexResult(
   result: MatchAuthorizedContextLexicalResult,
   authorized: ContextLexicalKey[],
-): { covered: Set<string>; matched: Set<string> } {
-  const allowed = new Set(authorized.map(keyOf));
+  authorizationHash: string,
+): { coveredCount: number; matched: Set<string>; uncovered: Set<string> } {
   if (
     !result ||
     typeof result.available !== "boolean" ||
@@ -97,12 +104,45 @@ function validateIndexResult(
   ) {
     throw new Error("Context lexical index returned an invalid result");
   }
-  const covered = validateKeys(result.covered, allowed);
+  if (result.coverage !== undefined) {
+    const coverage = result.coverage;
+    if (
+      !coverage
+      || coverage.authorization_hash !== authorizationHash
+      || coverage.authorized_count !== authorized.length
+      || !Number.isSafeInteger(coverage.covered_count)
+      || coverage.covered_count < 0
+      || coverage.covered_count > authorized.length
+      || typeof coverage.complete !== "boolean"
+      || !Array.isArray(coverage.uncovered)
+    ) {
+      throw new Error("Context lexical index returned an invalid coverage proof");
+    }
+    const needsAllowlist = result.matched.length > 0 || coverage.uncovered.length > 0;
+    const allowed = needsAllowlist
+      ? new Set(authorized.map(keyOf))
+      : new Set<string>();
+    const matched = validateKeys(result.matched, allowed);
+    const uncovered = validateKeys(coverage.uncovered, allowed);
+    if (
+      coverage.covered_count !== authorized.length - uncovered.size
+      || coverage.complete !== (uncovered.size === 0)
+      || [...matched].some((key) => uncovered.has(key))
+    ) {
+      throw new Error("Context lexical index returned an inconsistent coverage proof");
+    }
+    return { coveredCount: coverage.covered_count, matched, uncovered };
+  }
+  const allowed = new Set(authorized.map(keyOf));
   const matched = validateKeys(result.matched, allowed);
+  const covered = validateKeys(result.covered, allowed);
   if ([...matched].some((key) => !covered.has(key))) {
     throw new Error("Context lexical index matched an uncovered Event");
   }
-  return { covered, matched };
+  const uncovered = new Set(
+    [...allowed].filter((key) => !covered.has(key)),
+  );
+  return { coveredCount: covered.size, matched, uncovered };
 }
 
 function validateKeys(keys: ContextLexicalKey[], allowed: Set<string>): Set<string> {

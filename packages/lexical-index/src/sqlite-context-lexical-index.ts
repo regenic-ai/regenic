@@ -4,6 +4,7 @@ import Database from "better-sqlite3";
 import {
   CONTEXT_LEXICAL_ALGORITHM_VERSION,
   boundedContextLexicalTerms,
+  contextLexicalAuthorizationHash,
   contextLexicalQueryTerms,
   contextLexicalTerms,
   type ContextLexicalDocument,
@@ -30,6 +31,15 @@ interface LexicalMetaRow {
 interface LexicalKeyRow {
   event_id: string;
   content_hash: string;
+}
+
+interface AuthorizationStateRow {
+  org_id: string;
+  generation: string;
+  watermark: string;
+  authorization_hash: string;
+  authorized_count: number;
+  covered_count: number;
 }
 
 export interface SqliteContextLexicalIndexOptions {
@@ -72,6 +82,7 @@ export class SqliteContextLexicalIndex implements ContextLexicalIndex {
       return;
     }
     this.database.transaction(() => {
+      this.invalidateAuthorizationCache();
       this.deleteOrganization(input.org_id);
       for (const document of sortedDocuments(input.documents)) {
         this.insertDocument(input.org_id, input.generation, document);
@@ -105,6 +116,7 @@ export class SqliteContextLexicalIndex implements ContextLexicalIndex {
       throw new Error("Context lexical index generation is not active");
     }
     this.database.transaction(() => {
+      this.invalidateAuthorizationCache();
       for (const document of sortedDocuments(input.documents)) {
         const terms = indexTerms(document.text);
         const current = this.database.prepare(
@@ -134,30 +146,66 @@ export class SqliteContextLexicalIndex implements ContextLexicalIndex {
   async matchAuthorized(
     input: MatchAuthorizedContextLexicalInput,
   ): Promise<MatchAuthorizedContextLexicalResult> {
-    assertMatch(input);
+    assertMatchShape(input);
     const status = await this.getStatus(input.org_id);
     if (!status.available || !status.generation || input.authorized.length === 0) {
       return { ...status, matched: [], covered: [] };
     }
     const expression = matchExpression(input.query);
     return this.database.transaction(() => {
-      this.database.prepare("DELETE FROM context_lexical_authorized").run();
-      const authorize = this.database.prepare(
-        "INSERT INTO context_lexical_authorized (event_id, content_hash) VALUES (?, ?)",
-      );
-      for (const key of input.authorized) {
-        authorize.run(key.event_id, key.content_hash);
-      }
-      const covered = this.database.prepare(
-        `
-          SELECT d.event_id, d.content_hash
+      const cached = input.authorization_hash
+        ? this.authorizationState(input, status)
+        : null;
+      let uncovered: LexicalKeyRow[];
+      let coveredCount: number;
+      if (cached) {
+        uncovered = this.database.prepare(`
+          SELECT event_id, content_hash
+          FROM context_lexical_uncovered
+          ORDER BY event_id, content_hash
+        `).all() as LexicalKeyRow[];
+        coveredCount = cached.covered_count;
+      } else {
+        assertAuthorization(input);
+        this.database.prepare("DELETE FROM context_lexical_authorized").run();
+        this.database.prepare("DELETE FROM context_lexical_uncovered").run();
+        this.database.prepare("DELETE FROM context_lexical_authorization_state").run();
+        const authorize = this.database.prepare(
+          "INSERT INTO context_lexical_authorized (event_id, content_hash) VALUES (?, ?)",
+        );
+        for (const key of input.authorized) {
+          authorize.run(key.event_id, key.content_hash);
+        }
+        uncovered = this.database.prepare(`
+          SELECT a.event_id, a.content_hash
           FROM context_lexical_authorized a
-          JOIN context_lexical_documents d
-            ON a.event_id = d.event_id AND a.content_hash = d.content_hash
-          WHERE d.org_id = ? AND d.generation = ?
-          ORDER BY d.event_id, d.content_hash
-        `,
-      ).all(input.org_id, status.generation) as LexicalKeyRow[];
+          LEFT JOIN context_lexical_documents d
+            ON d.org_id = ? AND d.generation = ?
+            AND d.event_id = a.event_id AND d.content_hash = a.content_hash
+          WHERE d.rowid IS NULL
+          ORDER BY a.event_id, a.content_hash
+        `).all(input.org_id, status.generation) as LexicalKeyRow[];
+        coveredCount = input.authorized.length - uncovered.length;
+        const saveUncovered = this.database.prepare(
+          "INSERT INTO context_lexical_uncovered (event_id, content_hash) VALUES (?, ?)",
+        );
+        for (const key of uncovered) saveUncovered.run(key.event_id, key.content_hash);
+        if (input.authorization_hash) {
+          this.database.prepare(`
+            INSERT INTO context_lexical_authorization_state (
+              singleton, org_id, generation, watermark, authorization_hash,
+              authorized_count, covered_count
+            ) VALUES (1, ?, ?, ?, ?, ?, ?)
+          `).run(
+            input.org_id,
+            status.generation,
+            status.watermark ?? "",
+            input.authorization_hash,
+            input.authorized.length,
+            coveredCount,
+          );
+        }
+      }
       const matched = expression
         ? this.database.prepare(
           `
@@ -174,7 +222,25 @@ export class SqliteContextLexicalIndex implements ContextLexicalIndex {
         : [];
       return {
         ...status,
-        covered: sortedKeys(covered),
+        covered: input.authorization_hash ? [] : sortedKeys(
+          this.database.prepare(`
+            SELECT d.event_id, d.content_hash
+            FROM context_lexical_authorized a
+            JOIN context_lexical_documents d
+              ON a.event_id = d.event_id AND a.content_hash = d.content_hash
+            WHERE d.org_id = ? AND d.generation = ?
+            ORDER BY d.event_id, d.content_hash
+          `).all(input.org_id, status.generation) as LexicalKeyRow[],
+        ),
+        ...(input.authorization_hash ? {
+          coverage: {
+            authorization_hash: input.authorization_hash,
+            authorized_count: input.authorized.length,
+            covered_count: coveredCount,
+            complete: uncovered.length === 0,
+            uncovered: sortedKeys(uncovered),
+          },
+        } : {}),
         matched: sortedKeys(matched),
       };
     })();
@@ -220,6 +286,24 @@ export class SqliteContextLexicalIndex implements ContextLexicalIndex {
           content_hash TEXT NOT NULL,
           PRIMARY KEY (event_id, content_hash)
         ) WITHOUT ROWID;
+
+        CREATE TEMP TABLE IF NOT EXISTS context_lexical_uncovered (
+          event_id TEXT NOT NULL,
+          content_hash TEXT NOT NULL,
+          PRIMARY KEY (event_id, content_hash)
+        ) WITHOUT ROWID;
+
+        CREATE TEMP TABLE IF NOT EXISTS context_lexical_authorization_state (
+          singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+          org_id TEXT NOT NULL,
+          generation TEXT NOT NULL,
+          watermark TEXT NOT NULL,
+          authorization_hash TEXT NOT NULL,
+          authorized_count INTEGER NOT NULL CHECK (authorized_count >= 0),
+          covered_count INTEGER NOT NULL CHECK (
+            covered_count >= 0 AND covered_count <= authorized_count
+          )
+        );
       `);
       return true;
     } catch (error) {
@@ -264,6 +348,7 @@ export class SqliteContextLexicalIndex implements ContextLexicalIndex {
   }
 
   private deleteOrganization(orgId: string): void {
+    this.invalidateAuthorizationCache();
     const rows = this.database.prepare(
       `SELECT rowid FROM context_lexical_documents WHERE org_id = ?`,
     ).all(orgId) as Array<{ rowid: number }>;
@@ -274,6 +359,32 @@ export class SqliteContextLexicalIndex implements ContextLexicalIndex {
     }
     this.database.prepare(`DELETE FROM context_lexical_documents WHERE org_id = ?`).run(orgId);
     this.database.prepare(`DELETE FROM context_lexical_meta WHERE org_id = ?`).run(orgId);
+  }
+
+  private authorizationState(
+    input: MatchAuthorizedContextLexicalInput,
+    status: ContextLexicalIndexStatus,
+  ): AuthorizationStateRow | null {
+    const state = this.database.prepare(`
+      SELECT org_id, generation, watermark, authorization_hash,
+        authorized_count, covered_count
+      FROM context_lexical_authorization_state
+      WHERE singleton = 1
+    `).get() as AuthorizationStateRow | undefined;
+    return state
+      && state.org_id === input.org_id
+      && state.generation === status.generation
+      && state.watermark === (status.watermark ?? "")
+      && state.authorization_hash === input.authorization_hash
+      && state.authorized_count === input.authorized.length
+      ? state
+      : null;
+  }
+
+  private invalidateAuthorizationCache(): void {
+    this.database.prepare("DELETE FROM context_lexical_authorization_state").run();
+    this.database.prepare("DELETE FROM context_lexical_uncovered").run();
+    this.database.prepare("DELETE FROM context_lexical_authorized").run();
   }
 }
 
@@ -318,7 +429,7 @@ function assertWrite(input: ReplaceContextLexicalIndex | UpsertContextLexicalInd
   }
 }
 
-function assertMatch(input: MatchAuthorizedContextLexicalInput): void {
+function assertMatchShape(input: MatchAuthorizedContextLexicalInput): void {
   assertNonEmpty(input?.org_id, "organization");
   if (typeof input.query !== "string" || input.query.length > 8_000) {
     throw new Error("Invalid Context lexical query");
@@ -326,9 +437,26 @@ function assertMatch(input: MatchAuthorizedContextLexicalInput): void {
   if (!Array.isArray(input.authorized)) {
     throw new Error("Invalid authorized Context lexical keys");
   }
+  if (
+    input.authorization_hash !== undefined
+    && !HASH_PATTERN.test(input.authorization_hash)
+  ) {
+    throw new Error("Invalid Context lexical authorization hash");
+  }
+}
+
+function assertAuthorization(input: MatchAuthorizedContextLexicalInput): void {
   assertUniqueKeys(input.authorized);
   for (const key of input.authorized) {
     assertKey(key);
+  }
+  if (
+    input.authorization_hash !== undefined
+    && (
+      input.authorization_hash !== contextLexicalAuthorizationHash(input.authorized)
+    )
+  ) {
+    throw new Error("Invalid Context lexical authorization hash");
   }
 }
 

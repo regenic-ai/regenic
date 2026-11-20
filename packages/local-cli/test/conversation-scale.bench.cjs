@@ -8,6 +8,7 @@ const { createInterface } = require("node:readline");
 const { performance } = require("node:perf_hooks");
 const { parseArgs } = require("node:util");
 const { SqliteContextLexicalIndex } = require("@regenic/lexical-index");
+const { contextLexicalAuthorizationHash } = require("@regenic/domain");
 
 const FORBIDDEN_FIELDS = new Set([
   "conversation_hash",
@@ -203,24 +204,44 @@ async function main() {
     }
     const scanAndIndexMs = performance.now() - scanStarted;
     const routes = {};
+    const authorizationHashStarted = performance.now();
+    const authorizationHash = contextLexicalAuthorizationHash(authorized);
+    const authorizationHashMs = performance.now() - authorizationHashStarted;
     for (const query of queries) {
+      const warmupElapsed = [];
       for (let warmupIndex = 0; warmupIndex < warmup; warmupIndex += 1) {
-        await index.matchAuthorized({ org_id: orgId, authorized, query });
+        const started = performance.now();
+        await index.matchAuthorized({
+          org_id: orgId,
+          authorized,
+          authorization_hash: authorizationHash,
+          query,
+        });
+        warmupElapsed.push(performance.now() - started);
       }
       const elapsed = [];
       let last;
       for (let sample = 0; sample < samples; sample += 1) {
         const started = performance.now();
-        last = await index.matchAuthorized({ org_id: orgId, authorized, query });
+        last = await index.matchAuthorized({
+          org_id: orgId,
+          authorized,
+          authorization_hash: authorizationHash,
+          query,
+        });
         elapsed.push(performance.now() - started);
         peakRss = Math.max(peakRss, process.memoryUsage().rss);
       }
       routes[query] = {
+        warmup_latency: statistics(warmupElapsed),
         latency: statistics(elapsed),
-        covered: last.covered.length,
+        covered: last.coverage?.covered_count ?? last.covered.length,
         matches: last.matched.length,
       };
-      assert.equal(last.covered.length, messages);
+      assert.equal(
+        last.coverage?.covered_count ?? last.covered.length,
+        messages,
+      );
     }
     const sizes = await fileSizes(database);
     const consumedHash = inputDigest.digest("hex");
@@ -264,6 +285,7 @@ async function main() {
       measurements: {
         rebuilt_index: rebuild,
         scan_and_index_ms: Number(scanAndIndexMs.toFixed(3)),
+        authorization_hash_ms: Number(authorizationHashMs.toFixed(3)),
         index_files_bytes: sizes.files,
         index_total_bytes: sizes.total,
         observed_process_peak_rss_bytes: peakRss,
