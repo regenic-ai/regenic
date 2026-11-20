@@ -5,8 +5,13 @@ const {
   LocalExecutorPluginRegistry,
   MemoryExecutorRegistry,
   MemoryWorkStore,
+  WORK_UNATTENDED_RULES,
   createSessionTaskExecutor,
 } = require("@regenic/domain");
+
+function sessionStdin(instruction, evidence) {
+  return `${instruction}\n\n${WORK_UNATTENDED_RULES}\n\nWORK\n${evidence}`;
+}
 const { PersonalExecutorService } = require("../dist/personal-executor.service");
 const { PersonalWorkService } = require("../dist/personal-work.service");
 const { PersonalWorkChannel } = require("../dist/personal-work-channel");
@@ -354,7 +359,8 @@ test("existing session ports honor the host pin with two active installations an
   const handle = await pinned.start(input, pinnedContext);
   assert.equal(handle.external_run_id, "managed:pinned-session");
   assert.deepEqual(calls, [
-    "activate:pinned", "spawn:pinned", "stdin:pinned-session:opaque prompt\n\nWORK\ntask",
+    "activate:pinned", "spawn:pinned",
+    `stdin:pinned-session:${sessionStdin("opaque prompt", "task")}`,
   ]);
   pinnedContext.listPrompts = async () => [];
   pinnedContext.readTranscript = async () => null;
@@ -366,7 +372,7 @@ test("existing session ports honor the host pin with two active installations an
   await drivers.stopInstallation(installations[1], {}, "disable");
   assert.throws(() => pinned.resume({ ...input, run: handle }, pinnedContext), /stopped/);
   await other.start(input, channel.contextFor(other));
-  assert.equal(calls.at(-1), "stdin:other-session:opaque prompt\n\nWORK\ntask");
+  assert.equal(calls.at(-1), `stdin:other-session:${sessionStdin("opaque prompt", "task")}`);
 });
 
 test("direct runtimes install two fixed bindings and receive the host pin on every call without changing opaque config", async () => {
@@ -640,7 +646,7 @@ test("search selects the Agent pinned to its connector, not the default connecto
     evidence_text: "evidence",
   }, channel.contextFor(executor));
   assert.equal(handle.agent_thread_id, "cursor:agent-1");
-  assert.deepEqual(calls, [["create", "cursor-1", "Answer this\n\nWORK\nevidence"]]);
+  assert.deepEqual(calls, [["create", "cursor-1", sessionStdin("Answer this", "evidence")]]);
 });
 
 test("the unbound default covers its first connector instead of mounting a second agent", async () => {

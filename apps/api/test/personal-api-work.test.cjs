@@ -1971,7 +1971,11 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
     const originalItem = await authority.getWorkItem("local-owner", "work-leftover-1");
     authority.close();
     const dsh = await startDshWebStub({ dropCreateResponse: true });
-    const { app, origin } = await startPersonalApi(database, blobRoot);
+    // Dismissal already queued a cancellation job. Leave that worker off so
+    // this request still sees the previous execution as active.
+    const { app, origin } = await startPersonalApi(database, blobRoot, {
+      REGENIC_START_BACKGROUND: "0",
+    });
     try {
       const missingVersion = await fetch(`${origin}/v1/me/work-items/work-leftover-1/run`, {
         method: "POST",
@@ -2019,6 +2023,7 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
       assert.match(await started.text(), /execution_start_conflict/);
       assert.equal(dsh.created.length, 0);
     } finally {
+      delete process.env.REGENIC_START_BACKGROUND;
       await app.close();
       await dsh.close();
     }
