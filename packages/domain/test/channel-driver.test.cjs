@@ -1159,4 +1159,81 @@ describe("channel driver registry", () => {
     );
     assert.deepEqual(listed, ["inst-a"]);
   });
+
+  it("keeps whole agent sources after uninstall and ignores list titles", () => {
+    const drivers = new ChannelDriverRegistry()
+      .register(stubDriver({
+        connector_type: "dsh-session",
+        source: "dsh",
+        agent_source: true,
+        capabilities: () => ({ sync: true, reply: true, create: true, list_title: "prompt" }),
+      }))
+      .register(stubDriver({
+        connector_type: "feishu",
+        source: "feishu",
+        capabilities: () => ({ sync: true, reply: true, create: false, list_title: "prompt" }),
+      }))
+      .register(stubDriver({
+        connector_type: "server-app",
+        source: "server_app",
+        threadIdPrefix: (installation) => `server_app:demo:${installation.id}:`,
+        capabilities: (installation) => ({
+          sync: true,
+          reply: false,
+          create: false,
+          agent_sessions: installation.status === "enabled" && installation.config.agent === true,
+        }),
+      }));
+    const agent = {
+      id: "inst-1",
+      org_id: "org",
+      connector_type: "server-app",
+      status: "disabled",
+      config: { agent: true },
+      created_at: "2026-01-01T00:00:00.000Z",
+    };
+    assert.deepEqual(drivers.agentSearchScope([]), {
+      agent_sources: ["dsh"],
+      agent_thread_prefixes: [],
+    });
+    assert.deepEqual(drivers.agentSearchScope([agent, {
+      ...agent,
+      id: "inst-2",
+      connector_type: "missing-driver",
+      config: { agent: true },
+    }]), {
+      agent_sources: ["dsh"],
+      agent_thread_prefixes: ["server_app:demo:inst-1:"],
+    });
+  });
+
+  it("skips an agent install whose classification throws", () => {
+    const drivers = new ChannelDriverRegistry()
+      .register(stubDriver({
+        connector_type: "dsh-session",
+        source: "dsh",
+        agent_source: true,
+      }))
+      .register(stubDriver({
+        connector_type: "server-app",
+        source: "server_app",
+        threadIdPrefix() {
+          throw new Error("bad prefix");
+        },
+        capabilities() {
+          throw new Error("bad manifest");
+        },
+      }));
+    assert.deepEqual(drivers.agentSearchScope([{
+      id: "inst-1",
+      org_id: "org",
+      connector_type: "server-app",
+      status: "enabled",
+      config: {},
+      created_at: "2026-01-01T00:00:00.000Z",
+    }]), {
+      agent_sources: ["dsh"],
+      agent_thread_prefixes: [],
+    });
+  });
 });

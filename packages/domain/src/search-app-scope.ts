@@ -53,6 +53,64 @@ export function searchAgentScope(
   };
 }
 
+/** Unions two scopes. A source or prefix already recorded is never dropped. */
+export function mergeSearchAgentScope(
+  left: SearchAgentScope,
+  right: SearchAgentScope,
+): SearchAgentScope {
+  return searchAgentScope([
+    ...left.agent_sources.map((source) => ({ source, agent: true })),
+    ...right.agent_sources.map((source) => ({ source, agent: true })),
+    ...left.agent_thread_prefixes.map((thread_prefix) => ({
+      source: sourceOfPrefix(thread_prefix),
+      agent: true,
+      thread_prefix,
+    })),
+    ...right.agent_thread_prefixes.map((thread_prefix) => ({
+      source: sourceOfPrefix(thread_prefix),
+      agent: true,
+      thread_prefix,
+    })),
+  ]);
+}
+
+export function sameSearchAgentScope(
+  left: SearchAgentScope,
+  right: SearchAgentScope,
+): boolean {
+  return left.agent_sources.length === right.agent_sources.length
+    && left.agent_thread_prefixes.length === right.agent_thread_prefixes.length
+    && left.agent_sources.every((source, index) => source === right.agent_sources[index])
+    && left.agent_thread_prefixes.every((prefix, index) => prefix === right.agent_thread_prefixes[index]);
+}
+
+/** Drops malformed retained JSON. Valid sources and prefixes are kept. */
+export function parseSearchAgentScope(value: unknown): SearchAgentScope {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { agent_sources: [], agent_thread_prefixes: [] };
+  }
+  const record = value as Record<string, unknown>;
+  const sources = Array.isArray(record.agent_sources) ? record.agent_sources : [];
+  const prefixes = Array.isArray(record.agent_thread_prefixes) ? record.agent_thread_prefixes : [];
+  return searchAgentScope([
+    ...sources
+      .filter((source): source is string => typeof source === "string")
+      .map((source) => ({ source, agent: true })),
+    ...prefixes
+      .filter((prefix): prefix is string => typeof prefix === "string")
+      .map((thread_prefix) => ({
+        source: sourceOfPrefix(thread_prefix),
+        agent: true,
+        thread_prefix,
+      })),
+  ]);
+}
+
+function sourceOfPrefix(prefix: string): string {
+  const colon = prefix.indexOf(":");
+  return colon > 0 ? prefix.slice(0, colon) : "";
+}
+
 /**
  * Narrows a context filter to one side of the app/agent split.
  * An ordinary-app search with no agent installs stays unscoped.

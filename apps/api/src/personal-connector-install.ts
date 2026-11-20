@@ -31,6 +31,7 @@ import {
 } from "./personal-connector-poll";
 import { prepareConnectorForm } from "./personal-connector-form";
 import { forgetPushInstallation } from "./personal-connector-push";
+import { retainInstallationAgentScope } from "./search-app-class";
 
 export async function install(
   state: ConnectorState,
@@ -70,6 +71,7 @@ export async function install(
   if (!options.deferActivation) {
     void state.catchUp(created.id);
   }
+  await retainInstallationAgentScope(state.runtime, state.drivers, created);
   return viewWithPairingCode(state, store, created);
 }
 
@@ -180,6 +182,7 @@ export async function updateConfig(
     state.drivers.installationLifecycle.resume(updated.id, updated.updated_at);
     void state.catchUp(updated.id);
   }
+  await retainInstallationAgentScope(state.runtime, state.drivers, updated);
   return viewOf(state, store, updated);
 }
 
@@ -210,6 +213,7 @@ export async function uninstall(state: ConnectorState, installationId: string): 
     return { id: installationId, removed: true };
   }
   await state.drivers.stopInstallation(current, state.runtime.requireHost(), "delete");
+  await retainInstallationAgentScope(state.runtime, state.drivers, current);
   await store.deleteInstallation(current.id, state.runtime.orgId());
   try {
     await clearInstallSecrets(

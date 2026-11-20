@@ -43,6 +43,7 @@ import {
 export const dshSessionDriver: ChannelDriver = {
   connector_type: "dsh-session",
   source: "dsh",
+  agent_source: true,
   connector_protocol: CONNECTOR_PROTOCOL,
 
   install(input): NewConnectorInstallation {

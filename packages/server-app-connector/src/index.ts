@@ -85,13 +85,17 @@ export const serverAppDriver: ChannelDriver = {
       create: capabilities.source?.create === true,
       execute: capabilities.agent === true,
       list_title: capabilities.agent ? "prompt" : "conversation",
+      agent_sessions: capabilities.agent === true,
     };
   },
 
   threadIdPrefix(installation) {
+    const installationId = installation.id.trim();
+    if (!installationId) return "";
     const id = appId(installation);
-    if (!id || !installation.id.trim()) return "";
-    return `${SERVER_APP_SOURCE}:${id}:${installation.id}:`;
+    return id
+      ? `${SERVER_APP_SOURCE}:${id}:${installationId}:`
+      : `${SERVER_APP_SOURCE}::${installationId}:`;
   },
 
   async connectInstallation(installation, host, env, context) {

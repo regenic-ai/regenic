@@ -3,6 +3,8 @@ const { describe, it } = require("node:test");
 const {
   contextFiltersForAppClass,
   matchesSearchAppScope,
+  mergeSearchAgentScope,
+  parseSearchAgentScope,
   searchAgentScope,
 } = require("@regenic/domain");
 
@@ -64,5 +66,30 @@ describe("search app scope", () => {
       source: "server_app",
       thread_id: "server_app:demo:inst-1:room",
     }, { ...scope, class: "agent" }), true);
+  });
+
+  it("keeps a retained prefix after the installation is gone", () => {
+    const retained = {
+      agent_sources: ["dsh"],
+      agent_thread_prefixes: ["server_app:demo:inst-1:"],
+    };
+    assert.deepEqual(mergeSearchAgentScope(retained, {
+      agent_sources: [],
+      agent_thread_prefixes: [],
+    }), retained);
+    assert.deepEqual(mergeSearchAgentScope({
+      agent_sources: ["cursor"],
+      agent_thread_prefixes: ["server_app:demo:inst-1:extra"],
+    }, retained), {
+      agent_sources: ["cursor", "dsh"],
+      agent_thread_prefixes: ["server_app:demo:inst-1:", "server_app:demo:inst-1:extra"],
+    });
+    assert.deepEqual(parseSearchAgentScope({
+      agent_sources: ["dsh", ""],
+      agent_thread_prefixes: ["server_app:demo:inst-1:", "not-a-prefix", 3],
+    }), {
+      agent_sources: ["dsh"],
+      agent_thread_prefixes: ["server_app:demo:inst-1:"],
+    });
   });
 });

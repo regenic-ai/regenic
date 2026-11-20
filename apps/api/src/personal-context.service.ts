@@ -52,6 +52,7 @@ import {
   type AgentRunStatus,
   selectContextIndexes,
   ChannelDriverRegistry,
+  type SearchAppClass,
   type ContextAuthorityRead,
   CONTENT_PARTS_MEDIA_TYPE,
   parseStoredContentParts,
@@ -80,6 +81,7 @@ import {
   applySearchAppClass,
   isFilterRecord,
   requireSearchAppClass,
+  splitSearchAppClass,
   stripAppScope,
 } from "./search-app-class";
 export { PersonalContextError } from "./personal-context-error";
@@ -123,7 +125,8 @@ export class PersonalContextService {
 
   async search(input: unknown) {
     return this.runContext(async () => {
-      const request = contextSearchRequest(input, {
+      const { appClass, body } = splitSearchAppClass(input);
+      const request = contextSearchRequest(await this.filtersForSearch(body, appClass), {
         id: randomUUID(), org_id: this.runtime.orgId(), principal: this.principal(),
       });
       return new ContextSearcher(this.runtime.requireHost().get("context")).search(request);
@@ -152,14 +155,12 @@ export class PersonalContextService {
       );
     }
     const requestedFilters = stripAppScope(body.filters);
-    const filters = isFilterRecord(requestedFilters)
-      ? await applySearchAppClass(this.runtime, this.drivers, requestedFilters, appClass)
-      : requestedFilters;
     const search = await this.search({
       query: body.query,
       ...(body.kind === undefined ? {} : { kind: body.kind }),
       limit,
-      ...(filters === undefined ? {} : { filters }),
+      app_class: appClass,
+      ...(requestedFilters === undefined ? {} : { filters: requestedFilters }),
     });
     const messageHits = search.items.filter((hit) => !hit.matches ||
       hit.matches.some((match) => match.kind !== "file"));
@@ -1563,6 +1564,27 @@ export class PersonalContextService {
 
   private principal() {
     return { actor_type: "human" as const, actor_id: this.runtime.orgId() };
+  }
+
+  private async filtersForSearch(body: unknown, appClass: SearchAppClass): Promise<unknown> {
+    if (!body || typeof body !== "object" || Array.isArray(body)) return body;
+    const record = { ...(body as Record<string, unknown>) };
+    const hasFilters = Object.prototype.hasOwnProperty.call(record, "filters");
+    const requested = hasFilters ? stripAppScope(record.filters) : undefined;
+    if (!isFilterRecord(requested)) {
+      return { ...record, filters: requested };
+    }
+    const filters = await applySearchAppClass(
+      this.runtime,
+      this.drivers,
+      requested,
+      appClass,
+    );
+    if (filters === undefined) {
+      delete record.filters;
+      return record;
+    }
+    return { ...record, filters };
   }
 
   private async runContext<T>(run: () => Promise<T>): Promise<T> {

@@ -265,6 +265,43 @@ test("rejects an unreachable loopback callback for a remote push source", async 
   );
 });
 
+test("agent thread prefix stays specific without an app id", () => {
+  const installation = {
+    id: "inst-1",
+    org_id: "org",
+    connector_type: "server-app",
+    status: "enabled",
+    config: {
+      app_id: "demo",
+      manifest: {
+        protocol: "1.0",
+        app_id: "demo",
+        name: "Demo",
+        capabilities: { agent: true },
+      },
+    },
+    created_at: "2026-01-01T00:00:00.000Z",
+  };
+  assert.equal(serverAppDriver.threadIdPrefix(installation), "server_app:demo:inst-1:");
+  assert.equal(
+    serverAppDriver.threadIdPrefix({ ...installation, config: {} }),
+    "server_app::inst-1:",
+  );
+  assert.equal(serverAppDriver.threadIdPrefix({ ...installation, id: " " }), "");
+  assert.equal(serverAppDriver.capabilities(installation).agent_sessions, true);
+  assert.equal(serverAppDriver.capabilities({
+    ...installation,
+    config: {
+      manifest: {
+        protocol: "1.0",
+        app_id: "notes",
+        name: "Notes",
+        capabilities: { source: { pull: true } },
+      },
+    },
+  }).agent_sessions, false);
+});
+
 function fakeHost(token) {
   return {
     get() {

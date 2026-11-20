@@ -484,18 +484,25 @@ export class ChannelDriverRegistry {
 
   /**
    * Agent/executor sessions to keep out of an ordinary-app search.
-   * Classification ignores enabled/disabled so a turned-off agent app does
-   * not start matching as ordinary history. A driver that owns only part of
-   * its source (server apps) contributes a thread prefix instead.
+   * Whole-source agent drivers stay excluded with no installation left.
+   * A shared source contributes only that install's thread prefix.
+   * Classification ignores enabled/disabled. `list_title` is not used.
+   * A missing driver, a thrown `capabilities()`, or an empty prefix does not
+   * classify that install; callers retain a scope recorded earlier.
    */
   agentSearchScope(installations: readonly ConnectorInstallation[]): SearchAgentScope {
     const described: SearchAppInstallation[] = [];
+    for (const driver of this.list()) {
+      if (driver.agent_source && !driver.threadIdPrefix && driver.source.trim()) {
+        described.push({ source: driver.source, agent: true });
+      }
+    }
     for (const installation of installations) {
       const driver = this.get(installation.connector_type);
-      if (!driver) continue;
+      if (!driver || (driver.agent_source && !driver.threadIdPrefix)) continue;
       let agent = false;
       try {
-        agent = driver.capabilities({ ...installation, status: "enabled" }).list_title === "prompt";
+        agent = driver.capabilities({ ...installation, status: "enabled" }).agent_sessions === true;
       } catch {
         continue;
       }
