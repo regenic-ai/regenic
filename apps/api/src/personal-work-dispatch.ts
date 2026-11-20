@@ -8,6 +8,7 @@ import {
   failedWorkStart,
   formatWorkEvidence,
   formatWorkRunHistory,
+  currentJobOnSession,
   isActiveWorkStatus,
   isPullDue,
   parseConversationThread,
@@ -176,8 +177,6 @@ export class PersonalWorkDispatch {
       const fireAt = recipe.next_run_at ?? nowIso;
       const unit_key = pullUnitKey(recipe.id, fireAt);
       let conflict = false;
-      let progressed = false;
-      let deferred = false;
       for (const target of targets) {
         if (
           items.some(
@@ -187,14 +186,9 @@ export class PersonalWorkDispatch {
               isActiveWorkStatus(item.status),
           )
         ) {
-          progressed = true;
           continue;
         }
-        if (
-          recipeWantsContext(recipe) &&
-          (await shouldDeferWorkForThread(authority, orgId, target.threadId))
-        ) {
-          deferred = true;
+        if (await this.pullReplyUnavailable(recipe, target.threadId)) {
           continue;
         }
         const existing = await authority.getWorkItemByUnitKey(
@@ -204,7 +198,6 @@ export class PersonalWorkDispatch {
         );
         if (existing) {
           await this.retryOrResume(existing, recipe, undefined, false);
-          progressed = true;
           continue;
         }
         const created = await authority.createWorkItem({
@@ -229,12 +222,19 @@ export class PersonalWorkDispatch {
         }
         const opened = created.item;
         items.push(opened);
+        if (
+          recipeWantsContext(recipe) &&
+          (await shouldDeferWorkForThread(authority, orgId, target.threadId))
+        ) {
+          // Keep this occurrence open. The clock still moves, and the item
+          // starts from the open queue once history sync finishes.
+          continue;
+        }
         // Claim the start before the clock moves. A queued start would see a
         // stale recipe snapshot once next_run_at is advanced.
         await this.beginStart(opened, recipe, undefined, false);
-        progressed = true;
       }
-      if (conflict || (!progressed && deferred)) {
+      if (conflict) {
         continue;
       }
       await authority.advanceRecipePullSchedule({
@@ -246,8 +246,35 @@ export class PersonalWorkDispatch {
   }
 
   /**
+   * A conversation that cannot take the reply is skipped for this occurrence.
+   * No work item is opened, so a read-only chat does not leave a failure behind.
+   */
+  private async pullReplyUnavailable(recipe: Recipe, threadId: string): Promise<boolean> {
+    if (!this.supervise.allowsWriteBack("", recipe)) {
+      return false;
+    }
+    const destination = recipe.write_back_thread_id ?? threadId;
+    try {
+      await this.channel.freezeWriteBackTarget(destination);
+      return false;
+    } catch (error) {
+      const definite = definiteLocalStartFailure(error);
+      if (!definite) {
+        throw error;
+      }
+      console.error("personal scheduled reply unavailable", {
+        recipe_id: recipe.id,
+        thread_id: destination,
+        error: definite.message,
+      });
+      return true;
+    }
+  }
+
+  /**
    * Conversations this tick should open. A saved thread stays one target.
-   * A wider match is resolved from inbox heads, the same set the editor previews.
+   * A wider match uses inbox heads plus the current job on each conversation,
+   * the same class and facet the editor preview reads from a head.
    */
   private async pullTargets(recipe: Recipe): Promise<Array<{
     threadId: string;
@@ -288,12 +315,34 @@ export class PersonalWorkDispatch {
       }
       heads.set(id, item);
     }
-    const bodies = await resolveInboxBodies(
-      authority,
-      host.get("blobs"),
-      [...heads.values()].map((item) => item.event.content_hash),
-      "meta",
-    );
+    const [bodies, jobs] = await Promise.all([
+      resolveInboxBodies(
+        authority,
+        host.get("blobs"),
+        [...heads.values()].map((item) => item.event.content_hash),
+        "meta",
+      ),
+      authority.listWorkItems(orgId),
+    ]);
+    const jobsByThread = new Map<string, WorkItem[]>();
+    for (const job of jobs) {
+      if (isSystemRecipeId(job.recipe_id)) {
+        continue;
+      }
+      const list = jobsByThread.get(job.thread_id);
+      if (list) {
+        list.push(job);
+      } else {
+        jobsByThread.set(job.thread_id, [job]);
+      }
+    }
+    const faces = new Map<string, WorkItem>();
+    for (const id of heads.keys()) {
+      const job = currentJobOnSession(jobsByThread.get(id) ?? [], id);
+      if (job) {
+        faces.set(id, job);
+      }
+    }
     const targets: Array<{
       threadId: string;
       subject: NonNullable<ReturnType<typeof workSubjectFromEvent>>;
@@ -302,7 +351,7 @@ export class PersonalWorkDispatch {
       const surface = item.event.content_hash
         ? bodies.get(item.event.content_hash)?.surface
         : undefined;
-      const subject = workSubjectFromEvent({
+      const projected = workSubjectFromEvent({
         type: surface?.type,
         source: item.event.source,
         thread_id: id,
@@ -313,6 +362,19 @@ export class PersonalWorkDispatch {
         }),
         hint: surface?.thread_facet,
       });
+      const job = faces.get(id);
+      // A later reply does not change what the conversation is. The editor
+      // preview stamps the head with the current job's class and facet.
+      const subject = job
+        ? {
+            record_class: job.record_class,
+            thread_facet: job.thread_facet,
+            source: item.event.source,
+            thread_id: id,
+            ...(projected?.unit_kind ? { unit_kind: projected.unit_kind } : {}),
+            ...(projected?.title ? { title: projected.title } : {}),
+          }
+        : projected;
       if (!subject || !recipeMatches(recipe.match, subject, "pull")) {
         continue;
       }
@@ -627,9 +689,23 @@ export class PersonalWorkDispatch {
     });
     const authority = host.get("authority");
     const writeBackRequired = options?.write_back ?? this.supervise.allowsWriteBack(item.id, recipe);
-    const writeBackTarget = writeBackRequired
-      ? await this.channel.freezeWriteBackTarget(recipe.write_back_thread_id ?? item.thread_id)
-      : undefined;
+    let writeBackTarget;
+    if (writeBackRequired) {
+      try {
+        writeBackTarget = await this.channel.freezeWriteBackTarget(
+          recipe.write_back_thread_id ?? item.thread_id,
+        );
+      } catch (error) {
+        const definite = definiteLocalStartFailure(error);
+        if (!definite || mode !== "auto") {
+          throw error;
+        }
+        // One conversation that cannot take a reply fails only that item.
+        // The rest of a sweep still starts, and the clock still advances.
+        await this.noteStartFailed(item, recipe, definite.message, mode);
+        return undefined;
+      }
+    }
     const visibilityIntentVersion =
       (await authority.getConversationPref(item.org_id, item.thread_id))
         ?.visibility_version ?? 0;

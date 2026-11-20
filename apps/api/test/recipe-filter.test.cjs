@@ -9,10 +9,14 @@ const { INGEST_SCHEMA_VERSION, IngestionService, channelRecord } = require("@reg
 const { normalizeRecipe } = require("../dist/personal-work-recipe");
 const { PersonalWorkDispatch } = require("../dist/personal-work-dispatch");
 const { PersonalWorkService } = require("../dist/personal-work.service");
+const { PersonalConnectorError } = require("../dist/personal-errors");
 
 const ORG = "local-owner";
 
 async function fixture(t, options = {}) {
+  const writeBack = options.writeBack;
+  const recipeOptions = { ...options };
+  delete recipeOptions.writeBack;
   const root = await mkdtemp(join(tmpdir(), "regenic-recipe-filter-"));
   const authority = new SqliteAuthorityStore(join(root, "authority.db"));
   const blobs = new FsBlobStore(join(root, "blobs"));
@@ -25,7 +29,7 @@ async function fixture(t, options = {}) {
     id: "filtered", name: "Filtered rule",
     match: { thread_id: "test-chat:room", text_contains: "approve", text_excludes: "draft" },
     executor_type: "test", include_context: false, can_write_back: false,
-    ...options,
+    ...recipeOptions,
   }, ORG, now);
   await authority.putRecipe(recipe);
   let starts = 0;
@@ -49,7 +53,16 @@ async function fixture(t, options = {}) {
     contextFor: () => ({ org_id: ORG }),
     evidenceText: async () => "formatted evidence",
     threadContextLines: async () => ({ lines: [], overflow: false }),
-  }, { applyHandle: async () => {}, allowsWriteBack: () => false }, { attach() {} });
+    freezeWriteBackTarget: async (threadId) => {
+      if (writeBack?.freeze) {
+        return writeBack.freeze(threadId);
+      }
+      throw new Error("write-back was not expected");
+    },
+  }, {
+    applyHandle: async () => {},
+    allowsWriteBack: () => writeBack?.allows === true,
+  }, { attach() {} });
   let sequence = 0;
   const ingest = async (text, options = {}) => {
     sequence++;
@@ -63,7 +76,7 @@ async function fixture(t, options = {}) {
         external_id: `${scopeId}:message-${sequence}`, scope_id: scopeId,
         ...(options.scopeName ? { scope_name: options.scopeName } : {}),
         occurred_at: new Date(Date.parse(now) + sequence * 1000).toISOString(),
-        actor_id: "person", type: "task", text,
+        actor_id: "person", type: options.type ?? "task", text,
       })],
     });
     return result.records[0].event_id;
@@ -380,6 +393,119 @@ describe("recipe text filters", () => {
     assert.equal(opened.length, 2);
     assert.equal(f.starts(), 1);
     assert.ok((await f.authority.getRecipe(ORG, f.recipe.id)).next_run_at > f.now);
+  });
+
+  it("sweeps a task conversation after a later message", async (t) => {
+    const f = await fixture(t, {
+      match: { record_class: "task", source: "test-chat" },
+      trigger: { kind: "pull", interval_ms: 60_000 },
+      can_write_back: false,
+      include_context: false,
+    });
+    await f.ingest("review the task", { scopeId: "room" });
+    await f.ingest("following up", { scopeId: "room", type: "message" });
+    await f.dispatch.dispatchPullRecipes();
+    const opened = (await f.authority.listWorkItems(ORG)).filter(
+      (item) => item.recipe_id === f.recipe.id,
+    );
+    assert.equal(opened.length, 1);
+    assert.equal(opened[0].record_class, "task");
+    assert.equal(f.starts(), 1);
+  });
+
+  it("continues a sweep when one conversation cannot take a reply", async (t) => {
+    const f = await fixture(t, {
+      match: { record_class: "task", source: "test-chat" },
+      trigger: { kind: "pull", interval_ms: 60_000 },
+      can_write_back: true,
+      include_context: false,
+      writeBack: {
+        allows: true,
+        freeze: async (threadId) => {
+          if (threadId.endsWith(":quiet")) {
+            throw new PersonalConnectorError(
+              "no_sender",
+              "Write-back destination is unavailable",
+              409,
+            );
+          }
+          return { installation_id: "inst", source: "test-chat", target: "room" };
+        },
+      },
+    });
+    await f.ingest("review one", { scopeId: "quiet" });
+    await f.ingest("review two", { scopeId: "room" });
+    await f.dispatch.dispatchPullRecipes();
+    const opened = (await f.authority.listWorkItems(ORG)).filter(
+      (item) => item.recipe_id === f.recipe.id,
+    );
+    assert.equal(opened.length, 1);
+    assert.equal(opened[0].thread_id.endsWith(":room"), true);
+    assert.equal(opened[0].status, "running");
+    assert.equal(f.starts(), 1);
+    const scheduled = await f.authority.getRecipe(ORG, f.recipe.id);
+    assert.ok(scheduled.next_run_at > f.now);
+    await f.authority.putRecipe({
+      ...scheduled,
+      next_run_at: new Date(Date.parse(f.now) - 1000).toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+    await f.dispatch.dispatchPullRecipes();
+    const again = (await f.authority.listWorkItems(ORG)).filter(
+      (item) => item.recipe_id === f.recipe.id,
+    );
+    assert.equal(again.length, 1);
+    assert.equal(f.starts(), 1);
+  });
+
+  it("queues a syncing conversation without holding the rest of the schedule", async (t) => {
+    const f = await fixture(t, {
+      match: { record_class: "task", source: "test-chat" },
+      trigger: { kind: "pull", interval_ms: 60_000 },
+      can_write_back: false,
+      include_context: false,
+    });
+    const { clearOrgSyncPhaseIndex } = require("../dist/personal-sync-phase");
+    clearOrgSyncPhaseIndex();
+    t.after(() => clearOrgSyncPhaseIndex());
+    const listInstallations = f.authority.listInstallations.bind(f.authority);
+    const getSyncCatalog = f.authority.getSyncCatalog.bind(f.authority);
+    const listSyncPhaseHeads = f.authority.listSyncPhaseHeads.bind(f.authority);
+    f.authority.listInstallations = async () => [{ id: "inst", status: "enabled" }];
+    f.authority.getSyncCatalog = async () => ({
+      members: [{
+        installation_id: "inst",
+        stream_key: "lagging",
+        thread_id: "test-chat:lagging",
+        generation: 1,
+        discovered_at: f.now,
+        last_seen_at: f.now,
+      }],
+    });
+    f.authority.listSyncPhaseHeads = async () => [{
+      stream_key: "lagging",
+      phase: "history",
+    }];
+    await f.ingest("review one", { scopeId: "lagging" });
+    await f.ingest("review two", { scopeId: "room" });
+    await f.dispatch.dispatchPullRecipes();
+    const opened = (await f.authority.listWorkItems(ORG)).filter(
+      (item) => item.recipe_id === f.recipe.id,
+    );
+    const lagging = opened.find((item) => item.thread_id.endsWith(":lagging"));
+    const room = opened.find((item) => item.thread_id.endsWith(":room"));
+    assert.equal(opened.length, 2);
+    assert.equal(lagging.status, "open");
+    assert.equal(room.status, "running");
+    assert.equal(f.starts(), 1);
+    assert.ok((await f.authority.getRecipe(ORG, f.recipe.id)).next_run_at > f.now);
+    f.authority.listInstallations = listInstallations;
+    f.authority.getSyncCatalog = getSyncCatalog;
+    f.authority.listSyncPhaseHeads = listSyncPhaseHeads;
+    clearOrgSyncPhaseIndex();
+    await f.dispatch.fillOpenSlots();
+    assert.equal(f.starts(), 2);
+    assert.equal((await f.authority.getWorkItem(ORG, lagging.id)).status, "running");
   });
 
   it("advances a scheduled rule when nothing matches", async (t) => {
