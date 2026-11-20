@@ -433,6 +433,14 @@ export class MemoryAuthorityStore
     return () => this.prefs.set(key, pref);
   }
 
+  private hasOtherCurrentWork(item: WorkItem, excludedEventId: string): boolean {
+    return [...this.currentBySource.values()].some((event) =>
+      event.org_id === item.org_id && event.id !== excludedEventId
+      && eventThreadId(event) === item.thread_id
+      && event.operation !== "tombstone"
+      && this.dispositions.get(event.id)?.disposition === "current_work");
+  }
+
   protected override prepareAcknowledgmentEffects(input: WorkAcknowledgment, item: WorkItem): () => void {
     if (!input.trigger_event_id.trim()) {
       const key = prefKey(item.org_id, item.thread_id);
@@ -442,7 +450,8 @@ export class MemoryAuthorityStore
         : undefined;
       const pref = attentionPref ?? currentPref;
       const visibilityVersion = pref?.visibility_version ?? 0;
-      const shouldFold = !this.hasUnsettledWorkForThread(item.org_id, item.thread_id, item)
+      const shouldFold = !this.hasOtherCurrentWork(item, input.trigger_event_id)
+        && !this.hasUnsettledWorkForThread(item.org_id, item.thread_id, item)
         && visibilityVersion === (item.visibility_intent_version ?? 0)
         && !(pref?.hidden === true && pref.hidden_reason !== "policy");
       const folded: ConversationPref | undefined = shouldFold ? {
@@ -494,12 +503,7 @@ export class MemoryAuthorityStore
       : undefined;
     const pref = attentionPref ?? currentPref;
     const visibilityVersion = pref?.visibility_version ?? 0;
-    const otherCurrentWork = [...this.currentBySource.values()].some((event) =>
-      event.org_id === item.org_id && event.id !== input.trigger_event_id
-      && eventThreadId(event) === item.thread_id
-      && event.operation !== "tombstone"
-      && this.dispositions.get(event.id)?.disposition === "current_work");
-    const shouldFold = !otherCurrentWork
+    const shouldFold = !this.hasOtherCurrentWork(item, input.trigger_event_id)
       && !this.hasUnsettledWorkForThread(item.org_id, item.thread_id, item)
       && visibilityVersion === (item.visibility_intent_version ?? 0)
       && !(pref?.hidden === true && pref.hidden_reason !== "policy");
