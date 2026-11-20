@@ -52,6 +52,10 @@ import { editContextRoles } from "./edit-menu";
 import { collectHostStats, resetHostStatCache } from "./host-stats";
 import { formatBytes, portFromHttpOrigin } from "../shared/host-watch";
 import { waitForPersonalKernel } from "../shared/kernel-ready";
+import {
+  sidecarRestartDelayMs,
+  SIDECAR_STABLE_MS,
+} from "./sidecar-lifecycle";
 import { probeKernelAuthority, probeKernelDatabase, probeKernelMode } from "./kernel-probe";
 import { isMessageKey, translate } from "../shared/messages.ts";
 import { parseLocale, preferredLocale } from "../shared/locale.ts";
@@ -100,6 +104,10 @@ let mainWindow: BrowserWindow | null = null;
 let trayWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let sidecar: ChildProcess | null = null;
+let sidecarRestartArmed = false;
+let sidecarRestartAttempt = 0;
+let sidecarRestartTimer: ReturnType<typeof setTimeout> | null = null;
+let sidecarStableTimer: ReturnType<typeof setTimeout> | null = null;
 let lastOwnedSidecarPid: number | null = null;
 let ownedStoreRoot: string | null = null;
 let apiOrigin = `http://127.0.0.1:${DEFAULT_PORT}`;
@@ -523,7 +531,51 @@ function broadcastLocale(locale: "en" | "zh"): void {
   }
 }
 
+function clearSidecarRestartTimers(): void {
+  if (sidecarRestartTimer) {
+    clearTimeout(sidecarRestartTimer);
+    sidecarRestartTimer = null;
+  }
+  if (sidecarStableTimer) {
+    clearTimeout(sidecarStableTimer);
+    sidecarStableTimer = null;
+  }
+}
+
+function disarmSidecarRestart(): void {
+  sidecarRestartArmed = false;
+  clearSidecarRestartTimers();
+}
+
+function noteSidecarSpawned(): void {
+  if (sidecarStableTimer) clearTimeout(sidecarStableTimer);
+  sidecarStableTimer = setTimeout(() => {
+    sidecarRestartAttempt = 0;
+    sidecarStableTimer = null;
+  }, SIDECAR_STABLE_MS);
+  sidecarStableTimer.unref?.();
+}
+
+function scheduleSidecarRestart(port: number): void {
+  if (!sidecarRestartArmed || quitting || sidecar) return;
+  const delay = sidecarRestartDelayMs(sidecarRestartAttempt);
+  sidecarRestartAttempt += 1;
+  process.stderr.write(`[kernel] restarting in ${delay}ms\n`);
+  sidecarRestartTimer = setTimeout(() => {
+    sidecarRestartTimer = null;
+    if (!sidecarRestartArmed || quitting || sidecar) return;
+    try {
+      spawnSidecar(port);
+    } catch (error) {
+      process.stderr.write(`[kernel] restart failed ${error instanceof Error ? error.message : error}\n`);
+      scheduleSidecarRestart(port);
+    }
+  }, delay);
+  sidecarRestartTimer.unref?.();
+}
+
 function requestSidecarStop(): ChildProcess | null {
+  disarmSidecarRestart();
   const child = sidecar;
   sidecar = null;
   personalApiKey = null;
@@ -606,15 +658,22 @@ function spawnSidecar(port: number): void {
     process.stderr.write(`[kernel] ${chunk}`);
   });
   child.on("exit", (code, signal) => {
+    const unexpected = sidecar === child;
     if (!quitting) {
-      const expected = sidecar !== child;
-      process.stderr.write(`[kernel] ${expected ? "stopped (requested)" : "exited unexpectedly"} code=${code ?? "null"} signal=${signal ?? "none"}\n`);
+      process.stderr.write(`[kernel] ${unexpected ? "exited unexpectedly" : "stopped (requested)"} code=${code ?? "null"} signal=${signal ?? "none"}\n`);
     }
-    if (sidecar === child) {
-      sidecar = null;
-      personalApiKey = null;
+    if (!unexpected) return;
+    sidecar = null;
+    personalApiKey = null;
+    if (sidecarStableTimer) {
+      clearTimeout(sidecarStableTimer);
+      sidecarStableTimer = null;
+    }
+    if (sidecarRestartArmed && !quitting) {
+      scheduleSidecarRestart(port);
     }
   });
+  noteSidecarSpawned();
 }
 
 function installPersonalApiKeyInjection(): void {
@@ -725,6 +784,7 @@ async function startLocalKernel(options?: { forceSpawn?: boolean }): Promise<voi
         : probeKernelMode,
       isAlive: () => sidecar != null && sidecar.exitCode == null,
     });
+    sidecarRestartArmed = true;
   } catch (error) {
     try {
       await stopOwnedSidecarAndWait();
@@ -1422,6 +1482,7 @@ app.whenReady().then(async () => {
 
 app.on("before-quit", () => {
   quitting = true;
+  disarmSidecarRestart();
   conversationPresence.stop();
   personalApiKey = null;
   sidecar?.kill();

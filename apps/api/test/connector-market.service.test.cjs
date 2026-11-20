@@ -139,6 +139,41 @@ describe("ConnectorMarketService", () => {
     assert.equal(calls, 2);
   });
 
+  it("serves the last index when a later fetch fails", async () => {
+    const service = new ConnectorMarketService();
+    const env = {
+      REGENIC_CONNECTOR_MARKET_INDEX_URL: "https://market.example/connectors.json",
+    };
+    let calls = 0;
+    await service.getMarket(false, env, async () => {
+      calls += 1;
+      return jsonResponse(index());
+    });
+    service.cache.expiresAt = 0;
+    const market = await service.getMarket(false, env, async () => {
+      calls += 1;
+      throw new Error("timeout");
+    });
+    assert.equal(calls, 2);
+    assert.equal(market.configured, true);
+    assert.equal(market.connectors[0].name, "@example/regenic-connector-example");
+  });
+
+  it("still reports unavailable when the index fails and nothing is cached", async () => {
+    const service = new ConnectorMarketService();
+    await assert.rejects(
+      service.getMarket(
+        false,
+        { REGENIC_CONNECTOR_MARKET_INDEX_URL: "https://market.example/connectors.json" },
+        async () => {
+          throw new Error("timeout");
+        },
+      ),
+      (error) => error.getStatus() === 503
+        && error.getResponse().error.code === "connector_market_unavailable",
+    );
+  });
+
   it("rejects insecure URLs, redirect responses, and malformed index data", async () => {
     const service = new ConnectorMarketService();
     await assert.rejects(

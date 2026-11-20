@@ -11,6 +11,8 @@ const OFFER_TYPES = new Set([
 const hubs = new Map<string, DshSessionLiveHub>();
 
 export const DSH_WAIT_DEBOUNCE_MS = 20;
+/** Mux frames kept per session until the next poll drains them. */
+export const DSH_LIVE_BUFFER_MAX = 200;
 
 /** Mux frames that mean wait(2) should fire for this inferior. */
 export function dshMuxFrameWaits(frame: Record<string, unknown>): boolean {
@@ -88,6 +90,9 @@ export class DshSessionLiveHub {
       return false;
     }
     bucket.push(event);
+    if (bucket.length > DSH_LIVE_BUFFER_MAX) {
+      bucket.splice(0, bucket.length - DSH_LIVE_BUFFER_MAX);
+    }
     this.buffers.set(sessionId, bucket);
     return true;
   }

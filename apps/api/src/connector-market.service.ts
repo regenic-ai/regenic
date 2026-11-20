@@ -88,6 +88,10 @@ export class ConnectorMarketService {
       return view;
     } catch (error) {
       console.warn("regenic connector market: index request failed", error);
+      if (this.cache?.url === url.href) {
+        console.warn("regenic connector market: serving stale index");
+        return this.cache.view;
+      }
       throw new ServiceUnavailableException({
         error: {
           code: "connector_market_unavailable",

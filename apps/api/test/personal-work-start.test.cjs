@@ -10,7 +10,7 @@ const { SqliteAuthorityStore } = require("@regenic/authority-store/sqlite");
 const { PostgresAuthorityStore } = require("@regenic/authority-store/postgres");
 const { Client } = require("pg");
 const {
-  MemoryExecutorRegistry, createSessionTaskExecutor, createHttpTaskExecutor, enqueueWriteBack,
+  MemoryExecutorRegistry, WORK_UNATTENDED_RULES, createSessionTaskExecutor, createHttpTaskExecutor, enqueueWriteBack,
 } = require("@regenic/domain");
 const { dshTaskExecutor } = require("../../../packages/dsh-connector/dist");
 const { PersonalWorkDispatch } = require("../dist/personal-work-dispatch");
@@ -2196,9 +2196,10 @@ describe("durable executor start", () => {
       recipe,
       "evidence",
     );
+    const rules = WORK_UNATTENDED_RULES.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     assert.match(
       f.calls.stdinText,
-      /^Handle this carefully\.\n\nWORK\nWork item[\s\S]*\nevidence$/,
+      new RegExp(`^Handle this carefully\\.\\n\\n${rules}\\n\\nWORK\\nWork item[\\s\\S]*\\nevidence$`),
     );
   });
 

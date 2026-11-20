@@ -5,6 +5,7 @@ const { WebSocketServer } = require("ws");
 const {
   DshMuxSubscriber,
   DshPromptStore,
+  DSH_LIVE_BUFFER_MAX,
   DshSessionLiveHub,
   DshSessionPollConnector,
   dshMuxFrameWaits,
@@ -49,6 +50,22 @@ describe("DSH mux wait", () => {
     assert.equal(dshMuxFrameWaits({ type: "session/event", event: { type: "assistant/chunk" } }), false);
     assert.equal(dshMuxFrameWaits({ type: "question/requested", sessionId: "sess-1" }), true);
     assert.equal(dshMuxFrameWaits({ type: "assistant/chunk" }), false);
+  });
+
+  it("keeps only the newest live frames when a session is not drained", () => {
+    const hub = new DshSessionLiveHub();
+    for (let seq = 1; seq <= DSH_LIVE_BUFFER_MAX + 1; seq += 1) {
+      hub.offer("sess-1", {
+        type: "assistant/message",
+        seq,
+        time: seq,
+        data: {},
+      });
+    }
+    const drained = hub.drain("sess-1");
+    assert.equal(drained.length, DSH_LIVE_BUFFER_MAX);
+    assert.equal(drained[0].seq, 2);
+    assert.equal(drained.at(-1).seq, DSH_LIVE_BUFFER_MAX + 1);
   });
 
   it("buffers mux session events and drains them on poll without calling history", async () => {
