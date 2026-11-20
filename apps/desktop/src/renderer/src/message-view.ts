@@ -1,3 +1,4 @@
+import { workOperatorText } from "@regenic/connector-contract";
 import { t } from "../../shared/i18n.ts";
 import type { InboxViewItem, MessageDirection, MessageKind } from "./types";
 import type { InboxThread } from "./inbox";
@@ -541,7 +542,7 @@ export function threadPreview(thread: InboxThread): string {
 }
 
 export function listPreview(thread: InboxThread, title: string): string | null {
-  const resultLine = firstLine(thread.work?.result_summary, 88);
+  const resultLine = firstLine(workOperatorText(thread.work?.result_summary), 88);
   if (resultLine && !sameListLine(title, resultLine)) {
     return resultLine;
   }

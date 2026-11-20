@@ -60,6 +60,11 @@ export {
   handleFromWait,
   stageConversationWorkspace,
   taskInstructionOf,
+  withUnattendedReplyRules,
+  workOutboundReply,
+  WORK_REPLY_SEND,
+  WORK_REPLY_SILENCE,
+  WORK_UNATTENDED_RULES,
 } from "@regenic/connector-contract";
 
 export interface ExecutorRegistry {

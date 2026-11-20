@@ -601,6 +601,19 @@ describe("thread activity", () => {
       ),
       "审核不通过：地区不符",
     );
+    assert.equal(
+      listPreview(
+        thread(chat.messages, {
+          work: {
+            id: "work-1",
+            status: "done",
+            result_summary: "HOLD\n\nNOTE\n两套口径冲突，需要你决定催哪一版。",
+          },
+        }),
+        "Ada",
+      ),
+      "两套口径冲突，需要你决定催哪一版。",
+    );
     assert.match(workNextStepCopy({ record_class: "task" }) ?? "", /Create an automation/);
     assert.match(
       workNextStepCopy({ work: { status: "running" } }) ?? "",

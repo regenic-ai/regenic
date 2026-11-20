@@ -186,6 +186,21 @@ ALTER TABLE recipes ADD COLUMN trigger_timezone TEXT;
       assert.equal(interval.trigger.at_minute, undefined);
       assert.equal(interval.trigger.timezone, undefined);
       assert.equal(interval.trigger.weekdays, undefined);
+      assert.equal(interval.trigger.monthdays, undefined);
+
+      await store.putRecipe(
+        recipe({
+          kind: "pull",
+          interval_ms: 24 * 60 * 60 * 1000,
+          at_minute: 9 * 60,
+          monthdays: [1, 15],
+          timezone: "Asia/Shanghai",
+        }),
+      );
+      const monthly = await store.getRecipe("local-owner", "weekly");
+      assert.deepEqual(monthly.trigger.monthdays, [1, 15]);
+      assert.equal(monthly.trigger.weekdays, undefined);
+      assert.equal(monthly.trigger.at_minute, 9 * 60);
     } finally {
       store.close();
     }

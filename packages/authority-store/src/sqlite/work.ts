@@ -186,10 +186,10 @@ function writeRecipe(db: Database.Database, recipe: Recipe, insertOnly = false):
           INSERT INTO recipes (
             id, org_id, name, match_json, executor_type, executor_config_json,
             can_write_back, include_context, enabled, trigger_kind,
-            trigger_interval_ms, trigger_at_minute, trigger_weekdays, trigger_timezone,
+            trigger_interval_ms, trigger_at_minute, trigger_weekdays, trigger_monthdays, trigger_timezone,
             trigger_coalesce, max_concurrent, next_run_at, created_at, updated_at,
             write_back_thread_id, hide_on_success, flow_json
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(id) DO ${insertOnly ? "NOTHING" : `UPDATE SET
             name = excluded.name,
             match_json = excluded.match_json,
@@ -203,6 +203,7 @@ function writeRecipe(db: Database.Database, recipe: Recipe, insertOnly = false):
             trigger_interval_ms = excluded.trigger_interval_ms,
             trigger_at_minute = excluded.trigger_at_minute,
             trigger_weekdays = excluded.trigger_weekdays,
+            trigger_monthdays = excluded.trigger_monthdays,
             trigger_timezone = excluded.trigger_timezone,
             trigger_coalesce = excluded.trigger_coalesce,
             max_concurrent = excluded.max_concurrent,
@@ -226,6 +227,7 @@ function writeRecipe(db: Database.Database, recipe: Recipe, insertOnly = false):
         pull.interval_ms,
         pull.at_minute,
         pull.weekdays,
+        pull.monthdays,
         pull.timezone,
         trigger.kind === "push" && trigger.coalesce !== false ? 1 : 0,
         recipe.max_concurrent ?? null,
@@ -1796,6 +1798,7 @@ interface RecipeRow {
   trigger_interval_ms: number | null;
   trigger_at_minute: number | null;
   trigger_weekdays: string | null;
+  trigger_monthdays: string | null;
   trigger_timezone: string | null;
   trigger_coalesce: number | null;
   max_concurrent: number | null;

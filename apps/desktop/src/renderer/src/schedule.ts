@@ -5,9 +5,10 @@ export const INTERVAL_MIN_MS = 60_000;
 export const INTERVAL_MAX_MS = 7 * 24 * 60 * 60 * 1000;
 export const DEFAULT_AT_MINUTE = 9 * 60;
 export const DEFAULT_WEEKDAYS = [1, 2, 3, 4, 5] as const;
+export const DEFAULT_MONTHDAY = 1;
 export const FAST_INTERVAL_MS = 15 * 60_000;
 
-export type ScheduleMode = "interval" | "daily" | "weekly";
+export type ScheduleMode = "interval" | "daily" | "weekly" | "monthly";
 export type IntervalUnit = "minutes" | "hours";
 
 export const SCHEDULE_PRESETS = [
@@ -102,9 +103,13 @@ export function modeFromTrigger(trigger: {
   at_minute?: number;
   timezone?: string;
   weekdays?: number[];
+  monthdays?: number[];
 } | undefined): ScheduleMode {
   if (!trigger || typeof trigger.at_minute !== "number" || !trigger.timezone) {
     return "interval";
+  }
+  if (trigger.monthdays && trigger.monthdays.length > 0) {
+    return "monthly";
   }
   if (trigger.weekdays && trigger.weekdays.length > 0) {
     return "weekly";
@@ -117,18 +122,30 @@ export function pullTriggerFromDraft(draft: {
   interval_ms: number;
   at_minute: number;
   weekdays: number[];
+  monthdays?: number[];
   timezone: string;
 }): {
   kind: "pull";
   interval_ms: number;
   at_minute?: number;
   weekdays?: number[];
+  monthdays?: number[];
   timezone?: string;
 } {
-  if (draft.schedule_mode === "daily" || draft.schedule_mode === "weekly") {
+  if (
+    draft.schedule_mode === "daily" ||
+    draft.schedule_mode === "weekly" ||
+    draft.schedule_mode === "monthly"
+  ) {
     const weekdays =
       draft.schedule_mode === "weekly"
         ? [...(draft.weekdays.length ? draft.weekdays : DEFAULT_WEEKDAYS)].sort(
+            (left, right) => left - right,
+          )
+        : undefined;
+    const monthdays =
+      draft.schedule_mode === "monthly"
+        ? [...(draft.monthdays?.length ? draft.monthdays : [DEFAULT_MONTHDAY])].sort(
             (left, right) => left - right,
           )
         : undefined;
@@ -138,6 +155,7 @@ export function pullTriggerFromDraft(draft: {
       at_minute: Math.min(1439, Math.max(0, Math.floor(draft.at_minute))),
       timezone: draft.timezone || localTimeZone(),
       ...(weekdays ? { weekdays } : {}),
+      ...(monthdays ? { monthdays } : {}),
     };
   }
   return { kind: "pull", interval_ms: clampIntervalMs(draft.interval_ms) };
@@ -148,12 +166,23 @@ export function scheduleCopy(
     interval_ms?: number;
     at_minute?: number;
     weekdays?: number[];
+    monthdays?: number[];
     timezone?: string;
   } | undefined,
   t: ScheduleTranslate,
 ): string {
   if (trigger && typeof trigger.at_minute === "number" && trigger.timezone) {
     const time = formatClock(trigger.at_minute);
+    const monthdays = [...(trigger.monthdays ?? [])]
+      .filter((day) => Number.isInteger(day) && day >= 1 && day <= 31)
+      .sort((left, right) => left - right);
+    if (monthdays.length > 0) {
+      const ordinal = t("recipes.monthDayStyle") === "ordinal";
+      const days = monthdays
+        .map((day) => (ordinal ? englishOrdinal(day) : String(day)))
+        .join(t("recipes.wdSep"));
+      return t("recipes.scheduleMonthlyAt", { days, time });
+    }
     const days = trigger.weekdays ?? [];
     if (days.length === 0 || days.length === 7) {
       return t("recipes.scheduleDailyAt", { time });
@@ -186,6 +215,23 @@ export function scheduleCopy(
     return t("recipes.scheduleEveryMinutes", { count: minutes });
   }
   return t("recipes.triggerPull");
+}
+
+function englishOrdinal(day: number): string {
+  const mod100 = day % 100;
+  if (mod100 >= 11 && mod100 <= 13) {
+    return `${day}th`;
+  }
+  switch (day % 10) {
+    case 1:
+      return `${day}st`;
+    case 2:
+      return `${day}nd`;
+    case 3:
+      return `${day}rd`;
+    default:
+      return `${day}th`;
+  }
 }
 
 function sameDays(days: number[], expected: number[]): boolean {

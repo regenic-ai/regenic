@@ -399,6 +399,98 @@ export const WORK_EVIDENCE_SPLIT_HINT =
 export const WORK_WORKSPACE_PULL_HINT =
   "Review the conversation in this workspace and work from it.";
 
+/** First line when Regenic should send the chat message that follows. */
+export const WORK_REPLY_SEND = "REPLY";
+/** First line when nothing should be sent. */
+export const WORK_REPLY_QUIET = "QUIET";
+/** Older name for QUIET. */
+export const WORK_REPLY_SILENCE = "NO_REPLY";
+/** First line when the operator must decide and nothing should be sent. */
+export const WORK_REPLY_HOLD = "HOLD";
+/** Line that starts evidence for the run. Everything after it stays unsent. */
+export const WORK_REPLY_NOTE = "NOTE";
+
+/**
+ * Standing rules for every agent run. Regenic cannot answer a question or
+ * approve a tool, and it is the only sender back to the source chat.
+ */
+export const WORK_UNATTENDED_RULES = [
+  "## Unattended",
+  "",
+  "This run finishes by itself. Do not ask the operator a question, request confirmation, or pause for approval. Do not send chat messages yourself or ask for permission to send. Regenic is the only sender.",
+  "The first line is exactly one of QUIET, REPLY, or HOLD.",
+  "On the next lines, write only what the person in the source chat should read, in their language, as if speaking to them. That is not a status report to the operator.",
+  "A line that is exactly NOTE starts the evidence for this run. NOTE is never sent.",
+  "",
+  "QUIET",
+  "Send nothing. Use this when the check is already done, the message needs no reply, the same reminder was already sent, or there is nothing new and the task did not ask for a report.",
+  "",
+  "REPLY",
+  "Send the message. Use this to answer their question, remind them, or deliver a report the task asked for. A requested digest is still a message when nothing changed.",
+  "",
+  "HOLD",
+  "Send nothing and leave this run for the operator. Use this only when a person must choose, such as money, approval, or two real options. Do not guess.",
+  "If an earlier run already sent the same reminder and nothing material changed, answer QUIET.",
+].join("\n");
+
+export function withUnattendedReplyRules(instruction: string | undefined): string {
+  const body = instruction?.trim() ?? "";
+  return body ? `${body}\n\n${WORK_UNATTENDED_RULES}` : WORK_UNATTENDED_RULES;
+}
+
+export type WorkOutboundReply =
+  | { kind: "send"; text: string }
+  | { kind: "silent" }
+  | { kind: "hold" }
+  | { kind: "unmarked"; text: string };
+
+const NOTE_LINE = /(?:^|\r?\n)NOTE[ \t]*(?:\r?\n|$)/;
+
+/** Chat text before a NOTE line. The note itself is never delivered. */
+export function workChatMessage(body: string): string {
+  const match = NOTE_LINE.exec(body);
+  return (match ? body.slice(0, match.index) : body).trim();
+}
+
+/** How a finished answer should be delivered. Unmarked text keeps the old whole-answer send. */
+export function workOutboundReply(summary: string | undefined): WorkOutboundReply {
+  const text = summary?.trim() ?? "";
+  if (!text) {
+    return { kind: "unmarked", text: "" };
+  }
+  const breakAt = text.search(/\r?\n/);
+  const first = (breakAt === -1 ? text : text.slice(0, breakAt)).trim();
+  const rest = breakAt === -1 ? "" : text.slice(breakAt).replace(/^\r?\n/, "");
+  if (first === WORK_REPLY_QUIET || first === WORK_REPLY_SILENCE) {
+    return { kind: "silent" };
+  }
+  if (first === WORK_REPLY_HOLD) {
+    return { kind: "hold" };
+  }
+  if (first === WORK_REPLY_SEND) {
+    const message = workChatMessage(rest);
+    return message ? { kind: "send", text: message } : { kind: "silent" };
+  }
+  return { kind: "unmarked", text };
+}
+
+/** What the operator should read. Protocol words stay off the workbench. */
+export function workOperatorText(summary: string | undefined): string {
+  const text = summary?.trim() ?? "";
+  const reply = workOutboundReply(text);
+  if (reply.kind === "unmarked") {
+    return text;
+  }
+  const breakAt = text.search(/\r?\n/);
+  const rest = breakAt === -1 ? "" : text.slice(breakAt).replace(/^\r?\n/, "");
+  const noteAt = NOTE_LINE.exec(rest);
+  const note = noteAt ? rest.slice(noteAt.index + noteAt[0].length).trim() : "";
+  if (reply.kind === "send") {
+    return [reply.text, note].filter(Boolean).join("\n\n");
+  }
+  return note;
+}
+
 export function wrapEvidenceSection(
   tagOpen: string,
   tagClose: string,
@@ -472,14 +564,15 @@ export function composeWorkspaceInstructionFiles(input: {
         ? "Prior turns follow. Use them as context. Do not restate them."
         : `Prior turns are in ${WORK_CONVERSATION_FILENAME}. Read that file only if you need background. Do not restate it.`,
     background && input.omitted
-      ? "Older messages in this chat were left out. Ask before acting on anything that depends on them."
+      ? "Older messages in this chat were left out. Do not assume anything that depends on them."
       : "",
     historyLine,
     inline && background ? `\n## Prior turns\n\n${omitted}${background}` : "",
   ]
     .filter(Boolean)
     .join("\n");
-  const files: Record<string, string> = { [WORK_AGENTS_FILENAME]: agents };
+  const agentsWithRules = `${agents}\n\n${WORK_UNATTENDED_RULES}`;
+  const files: Record<string, string> = { [WORK_AGENTS_FILENAME]: agentsWithRules };
   if (background && !inline) {
     files[WORK_CONVERSATION_FILENAME] = `${omitted}${background}`.trim();
   }
@@ -519,6 +612,8 @@ function selfServeAgents(
       : "",
     "Do not restate the chat. Do not guess facts the chat would tell you; read it.",
     historyLine,
+    "",
+    WORK_UNATTENDED_RULES,
   ]
     .filter((line, index, lines) => line || lines[index - 1])
     .join("\n")

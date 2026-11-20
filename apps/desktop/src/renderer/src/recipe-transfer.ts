@@ -143,6 +143,19 @@ function parseTrigger(value: unknown): RecipeTrigger | null {
           trigger.weekdays = days;
         }
       }
+      if (Array.isArray(value.monthdays)) {
+        const days = [
+          ...new Set(
+            value.monthdays.filter(
+              (day): day is number =>
+                typeof day === "number" && Number.isInteger(day) && day >= 1 && day <= 31,
+            ),
+          ),
+        ].sort((left, right) => left - right);
+        if (days.length > 0) {
+          trigger.monthdays = days;
+        }
+      }
     }
     return trigger;
   }

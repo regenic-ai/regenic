@@ -1426,6 +1426,13 @@
   gap: 6px;
 }
 
+.schedule-monthdays {
+  display: grid;
+  grid-template-columns: repeat(7, 2rem);
+  width: max-content;
+  max-width: 100%;
+}
+
 .schedule-presets button,
 .schedule-days button {
   height: 28px;
@@ -1440,6 +1447,12 @@
 .schedule-days button {
   min-width: 2.75rem;
   border-radius: 6px;
+}
+
+.schedule-monthdays button {
+  width: 2rem;
+  min-width: 0;
+  padding: 0;
 }
 
 .schedule-presets button:hover:not(.active),

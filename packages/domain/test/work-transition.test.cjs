@@ -6,6 +6,7 @@ const {
   prepareWorkItemCreation,
   prepareWorkItemCreationAbort,
   prepareWorkDismissal, enqueueWriteBack, prepareWorkObservation,
+  automaticWorkCompletionReady,
   diagnoseWorkItemRunIdentity,
 } = require("../dist");
 
@@ -969,6 +970,55 @@ describe("work observation transitions", () => {
     assert.deepEqual(plan.delivery, {
       kind: "enqueue", payload: { summary: "Previous result", content: undefined },
     });
+  });
+
+  it("sends only the message after REPLY and keeps a finished check on the run", () => {
+    const input = fixture();
+    input.handle.result = {
+      summary: "REPLY\n方方，绩效表还没交，请今天补上。\n\nNOTE\n文档缺 10-12 月测算。",
+    };
+    const sent = planWorkObservation(input);
+    assert.equal(sent.run.result.summary, input.handle.result.summary);
+    assert.deepEqual(sent.delivery, {
+      kind: "enqueue",
+      payload: { summary: "方方，绩效表还没交，请今天补上。", content: undefined },
+    });
+
+    input.handle.result = {
+      summary: "QUIET\n\nNOTE\n已经提交，不需要催。",
+    };
+    const quiet = planWorkObservation(input);
+    assert.equal(quiet.run.result.summary, input.handle.result.summary);
+    assert.deepEqual(quiet.delivery, { kind: "keep" });
+
+    input.handle.result = { summary: "NO_REPLY\n已经提交。" };
+    assert.deepEqual(planWorkObservation(input).delivery, { kind: "keep" });
+
+    input.handle.result = {
+      summary: "HOLD\n\nNOTE\n两套口径冲突，需要你决定催哪一版。",
+    };
+    const held = planWorkObservation(input);
+    assert.deepEqual(held.delivery, { kind: "keep" });
+
+    const done = {
+      ...input.item,
+      status: "done",
+      head_event_id: "event-1",
+      current_run_id: input.run.id,
+    };
+    const finished = {
+      ...quiet.run,
+      status: "completed",
+      external_run_id: "external-1",
+      completion_policy_version: 1,
+      write_back_required: true,
+      result: { summary: "QUIET\n\nNOTE\n已经提交，不需要催。" },
+    };
+    assert.equal(automaticWorkCompletionReady(done, finished, null), true);
+    finished.result = { summary: "REPLY\n请今天补交。" };
+    assert.equal(automaticWorkCompletionReady(done, finished, null), false);
+    finished.result = { summary: "HOLD\n\nNOTE\n需要你决定。" };
+    assert.equal(automaticWorkCompletionReady(done, finished, null), false);
   });
 
   it("keeps empty result validation when no result was ever observed", () => {

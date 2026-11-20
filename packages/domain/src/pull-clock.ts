@@ -41,39 +41,38 @@ export function isTimeZone(value: unknown): value is string {
 
 /** Sorted unique ISO weekdays. Empty input is omitted (every day). */
 export function normalizeWeekdays(value: unknown): number[] | undefined {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  const days = [
-    ...new Set(
-      value.filter(
-        (day): day is number =>
-          typeof day === "number" && Number.isInteger(day) && day >= 1 && day <= 7,
-      ),
-    ),
-  ].sort((left, right) => left - right);
-  return days.length > 0 ? days : undefined;
+  return normalizeDayNumbers(value, 1, 7);
+}
+
+/** Sorted unique days of the month. Empty input is omitted. */
+export function normalizeMonthdays(value: unknown): number[] | undefined {
+  return normalizeDayNumbers(value, 1, 31);
 }
 
 export interface PullClock {
   at_minute: number;
   timezone: string;
   weekdays?: number[];
+  /** When set, `weekdays` is ignored. */
+  monthdays?: number[];
 }
 
 export function readPullClock(trigger: {
   at_minute?: number;
   timezone?: string;
   weekdays?: number[];
+  monthdays?: number[];
 }): PullClock | undefined {
   if (!isAtMinute(trigger.at_minute) || !isTimeZone(trigger.timezone)) {
     return undefined;
   }
-  const weekdays = normalizeWeekdays(trigger.weekdays);
+  const monthdays = normalizeMonthdays(trigger.monthdays);
+  const weekdays = monthdays ? undefined : normalizeWeekdays(trigger.weekdays);
   return {
     at_minute: trigger.at_minute,
     timezone: trigger.timezone.trim(),
     ...(weekdays ? { weekdays } : {}),
+    ...(monthdays ? { monthdays } : {}),
   };
 }
 
@@ -81,6 +80,7 @@ export function pullScheduleColumns(trigger: RecipeTrigger): {
   interval_ms: number | null;
   at_minute: number | null;
   weekdays: string | null;
+  monthdays: string | null;
   timezone: string | null;
 } {
   if (trigger.kind !== "pull") {
@@ -88,6 +88,7 @@ export function pullScheduleColumns(trigger: RecipeTrigger): {
       interval_ms: null,
       at_minute: null,
       weekdays: null,
+      monthdays: null,
       timezone: null,
     };
   }
@@ -96,6 +97,7 @@ export function pullScheduleColumns(trigger: RecipeTrigger): {
     interval_ms: isPullIntervalMs(trigger.interval_ms) ? trigger.interval_ms : null,
     at_minute: clock ? clock.at_minute : null,
     weekdays: clock?.weekdays?.length ? clock.weekdays.join(",") : null,
+    monthdays: clock?.monthdays?.length ? clock.monthdays.join(",") : null,
     timezone: clock ? clock.timezone : null,
   };
 }
@@ -104,15 +106,17 @@ export function pullScheduleFromColumns(row: {
   trigger_interval_ms: number | null;
   trigger_at_minute?: number | null;
   trigger_weekdays?: string | null;
+  trigger_monthdays?: string | null;
   trigger_timezone?: string | null;
-}): Pick<RecipeTrigger, "interval_ms" | "at_minute" | "weekdays" | "timezone"> {
+}): Pick<RecipeTrigger, "interval_ms" | "at_minute" | "weekdays" | "monthdays" | "timezone"> {
   const interval_ms = isPullIntervalMs(row.trigger_interval_ms)
     ? row.trigger_interval_ms
     : undefined;
   const clock = readPullClock({
     at_minute: row.trigger_at_minute ?? undefined,
     timezone: row.trigger_timezone ?? undefined,
-    weekdays: parseWeekdayColumn(row.trigger_weekdays),
+    weekdays: parseDayColumn(row.trigger_weekdays),
+    monthdays: parseDayColumn(row.trigger_monthdays),
   });
   return {
     ...(interval_ms !== undefined ? { interval_ms } : {}),
@@ -121,6 +125,7 @@ export function pullScheduleFromColumns(row: {
           at_minute: clock.at_minute,
           timezone: clock.timezone,
           ...(clock.weekdays ? { weekdays: clock.weekdays } : {}),
+          ...(clock.monthdays ? { monthdays: clock.monthdays } : {}),
         }
       : {}),
   };
@@ -128,17 +133,25 @@ export function pullScheduleFromColumns(row: {
 
 /**
  * First UTC instant at or after `earliestMs` whose wall clock in `timezone`
- * matches `at_minute` and, when set, `weekdays`.
+ * matches `at_minute` and, when set, `weekdays` or `monthdays`.
  * A daylight-saving gap (the local time does not exist) skips to the next day.
+ * A month without a chosen date skips to the next month that has it.
  */
 export function nextClockAtOrAfter(spec: PullClock, earliestMs: number): number {
   const hour = Math.floor(spec.at_minute / 60);
   const minute = spec.at_minute % 60;
-  const allowed = spec.weekdays?.length ? new Set(spec.weekdays) : null;
+  const weekdays = spec.weekdays?.length ? new Set(spec.weekdays) : null;
+  const monthdays = spec.monthdays?.length ? new Set(spec.monthdays) : null;
   const start = zonedParts(earliestMs, spec.timezone);
-  for (let offset = 0; offset <= 21; offset += 1) {
+  // A weekly clock needs a little over seven days. Day 31 can be 62 days
+  // away (31 Jan to 31 Mar), and a missing hour that morning needs one more month.
+  const horizon = monthdays ? 124 : 21;
+  for (let offset = 0; offset <= horizon; offset += 1) {
     const date = addCalendarDays(start.year, start.month, start.day, offset);
-    if (allowed && !allowed.has(calendarWeekday(date.year, date.month, date.day))) {
+    if (weekdays && !weekdays.has(calendarWeekday(date.year, date.month, date.day))) {
+      continue;
+    }
+    if (monthdays && !monthdays.has(date.day)) {
       continue;
     }
     const utc = zonedTimeToUtc(
@@ -156,7 +169,26 @@ export function nextClockAtOrAfter(spec: PullClock, earliestMs: number): number 
   throw new Error(`No clock occurrence for ${spec.timezone}`);
 }
 
-function parseWeekdayColumn(value: string | null | undefined): number[] | undefined {
+function normalizeDayNumbers(
+  value: unknown,
+  min: number,
+  max: number,
+): number[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const days = [
+    ...new Set(
+      value.filter(
+        (day): day is number =>
+          typeof day === "number" && Number.isInteger(day) && day >= min && day <= max,
+      ),
+    ),
+  ].sort((left, right) => left - right);
+  return days.length > 0 ? days : undefined;
+}
+
+function parseDayColumn(value: string | null | undefined): number[] | undefined {
   if (!value) {
     return undefined;
   }

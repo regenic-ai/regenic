@@ -125,6 +125,9 @@ describe("composeWorkspaceInstructionFiles", () => {
     assert.match(files[WORK_AGENTS_FILENAME], /A: hello/);
     assert.match(files[WORK_AGENTS_FILENAME], /history\.md/);
     assert.match(files[WORK_AGENTS_FILENAME], /Older messages in this chat were left out/);
+    assert.match(files[WORK_AGENTS_FILENAME], /## Unattended/);
+    assert.match(files[WORK_AGENTS_FILENAME], /QUIET/);
+    assert.match(files[WORK_AGENTS_FILENAME], /HOLD/);
   });
 
   it("stages only the task locator when the agent can read the chat itself", () => {
@@ -140,6 +143,7 @@ describe("composeWorkspaceInstructionFiles", () => {
     assert.match(agents, /WeCom · Alice \(thread_id: wecom:t1, current event_id: e9, run_id: run-now\)/);
     assert.match(agents, new RegExp(`${WORK_CONTEXT_MCP_SERVER} read_task_conversation`));
     assert.match(agents, /Pass run_id "run-now"/);
+    assert.match(agents, /## Unattended/);
     assert.match(agents, /history\.md/);
     assert.equal(files[WORK_HISTORY_FILENAME], "## run\n\ndone");
   });

@@ -1,4 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { workOperatorText } from "@regenic/connector-contract";
 import {
   answerConversationPrompt,
   currentApiOrigin,
@@ -442,7 +443,7 @@ export const ThreadPane = memo(function ThreadPane({
       item.client_request_id,
     );
   };
-  const resultSummary = thread.work?.result_summary?.trim();
+  const resultSummary = workOperatorText(thread.work?.result_summary);
   const awaitingPrompt = prompts.length > 0;
   const conversationClosed = !awaitingPrompt && !thread.can_send;
   const needsDeliveryRetry = deliveryNeedsYou(thread.work?.delivery);

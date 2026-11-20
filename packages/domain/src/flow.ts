@@ -286,6 +286,14 @@ function parseTrigger(value: unknown): RecipeTrigger {
   if (Array.isArray(value.weekdays)) {
     trigger.weekdays = value.weekdays.filter((day): day is number => typeof day === "number");
   }
+  if (Array.isArray(value.monthdays)) {
+    const days = value.monthdays.filter(
+      (day): day is number => typeof day === "number" && Number.isInteger(day) && day >= 1 && day <= 31,
+    );
+    if (days.length > 0) {
+      trigger.monthdays = days;
+    }
+  }
   if (typeof value.timezone === "string") trigger.timezone = value.timezone;
   if (typeof value.coalesce === "boolean") trigger.coalesce = value.coalesce;
   return trigger;

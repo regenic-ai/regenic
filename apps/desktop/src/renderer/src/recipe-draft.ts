@@ -9,6 +9,7 @@ import {
 } from "./recipe-preview.ts";
 import {
   DEFAULT_AT_MINUTE,
+  DEFAULT_MONTHDAY,
   DEFAULT_WEEKDAYS,
   localTimeZone,
   modeFromTrigger,
@@ -122,6 +123,7 @@ export function applyTriggerKind(draft: RecipeDraft, kind: RecipeTriggerKind): R
       schedule_mode: draft.schedule_mode,
       at_minute: draft.at_minute,
       weekdays: draft.weekdays.length ? draft.weekdays : [...DEFAULT_WEEKDAYS],
+      monthdays: draft.monthdays.length ? draft.monthdays : [DEFAULT_MONTHDAY],
       timezone: draft.timezone || localTimeZone(),
     };
   }
@@ -137,6 +139,7 @@ export interface RecipeDraft {
   schedule_mode: ScheduleMode;
   at_minute: number;
   weekdays: number[];
+  monthdays: number[];
   timezone: string;
   coalesce: boolean;
   scope: RecipeScope;
@@ -174,6 +177,7 @@ export function emptyDraft(executorType = ""): RecipeDraft {
     schedule_mode: "interval",
     at_minute: DEFAULT_AT_MINUTE,
     weekdays: [...DEFAULT_WEEKDAYS],
+    monthdays: [DEFAULT_MONTHDAY],
     timezone: localTimeZone(),
     coalesce: true,
     scope: "thread",
@@ -318,6 +322,9 @@ export function draftFromRecipe(
     weekdays: recipe.trigger?.weekdays?.length
       ? [...recipe.trigger.weekdays]
       : [...DEFAULT_WEEKDAYS],
+    monthdays: recipe.trigger?.monthdays?.length
+      ? [...recipe.trigger.monthdays]
+      : [DEFAULT_MONTHDAY],
     timezone: recipe.trigger?.timezone || localTimeZone(),
     coalesce: recipe.trigger?.coalesce !== false,
     scope,

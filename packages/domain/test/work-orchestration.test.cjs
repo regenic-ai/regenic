@@ -598,6 +598,7 @@ describe("recipe auto-start specification", () => {
 
     const columns = pullScheduleColumns(weekly);
     assert.equal(columns.weekdays, "1,3,5");
+    assert.equal(columns.monthdays, null);
     assert.deepEqual(
       pullScheduleFromColumns({
         trigger_interval_ms: columns.interval_ms,
@@ -606,6 +607,70 @@ describe("recipe auto-start specification", () => {
         trigger_timezone: columns.timezone,
       }).weekdays,
       [1, 3, 5],
+    );
+
+    const monthly = normalizeRecipeTrigger(
+      {
+        kind: "pull",
+        at_minute: 9 * 60,
+        timezone: "Asia/Shanghai",
+        weekdays: [1, 2, 3, 4, 5],
+        monthdays: [15, 1, 31],
+      },
+      { thread_id: "chat" },
+    );
+    assert.deepEqual(monthly.monthdays, [1, 15, 31]);
+    assert.equal(monthly.weekdays, undefined);
+    assert.equal(
+      initialPullNextRun(monthly, "2026-08-27T00:30:00.000Z"),
+      "2026-08-31T01:00:00.000Z",
+    );
+    assert.equal(
+      advanceRecipePull(monthly, "2026-08-31T01:00:00.000Z", "2026-08-31T01:00:00.000Z"),
+      "2026-09-01T01:00:00.000Z",
+    );
+    assert.equal(
+      advanceRecipePull(monthly, "2026-09-01T01:00:00.000Z", "2026-09-01T01:00:00.000Z"),
+      "2026-09-15T01:00:00.000Z",
+    );
+    assert.equal(
+      initialPullNextRun(
+        normalizeRecipeTrigger(
+          { kind: "pull", at_minute: 9 * 60, timezone: "Asia/Shanghai", monthdays: [31] },
+          { thread_id: "chat" },
+        ),
+        "2026-01-31T01:00:05.000Z",
+      ),
+      "2026-03-31T01:00:00.000Z",
+    );
+    assert.equal(
+      initialPullNextRun(
+        normalizeRecipeTrigger(
+          { kind: "pull", at_minute: 9 * 60, timezone: "Asia/Shanghai", monthdays: [29] },
+          { thread_id: "chat" },
+        ),
+        "2024-01-30T01:00:05.000Z",
+      ),
+      "2024-02-29T01:00:00.000Z",
+    );
+    const monthColumns = pullScheduleColumns(monthly);
+    assert.equal(monthColumns.monthdays, "1,15,31");
+    assert.equal(monthColumns.weekdays, null);
+    assert.deepEqual(
+      pullScheduleFromColumns({
+        trigger_interval_ms: monthColumns.interval_ms,
+        trigger_at_minute: monthColumns.at_minute,
+        trigger_monthdays: monthColumns.monthdays,
+        trigger_timezone: monthColumns.timezone,
+      }).monthdays,
+      [1, 15, 31],
+    );
+    assert.equal(
+      shouldKeepPullSchedule(makeRecipe("due", { thread_id: "chat" }, monthly), {
+        match: { thread_id: "chat" },
+        trigger: { ...monthly, monthdays: [1] },
+      }),
+      false,
     );
   });
 });
