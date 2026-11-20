@@ -149,6 +149,7 @@ export class HybridEventRetriever implements ContextRetriever {
         result = await this.index.matchAuthorizedText({
           org_id: plan.request.org_id, generation: generation.id, query: plan.request.query,
           authorized, authorization_hash: authorizationHash, limit: vectorLimit,
+          search_kind: plan.request.search_kind,
         });
       } catch (indexError) {
         if (indexError instanceof ContextVectorUnavailableError) return {
@@ -161,6 +162,19 @@ export class HybridEventRetriever implements ContextRetriever {
     // Invalid keys or chunk bindings are a boundary failure, never a lexical fallback.
     if (!result || result.generation !== generation.id || !Array.isArray(result.covered) ||
       !Array.isArray(result.matched) || result.matched.length > vectorLimit) throw new ContextEngineError("invalid_candidate", "Invalid vector result");
+    if (
+      result.acceleration !== undefined
+      && (
+        result.acceleration.algorithm_version !== "sqlite-vec-authorized-exact-v1"
+        || !Number.isSafeInteger(result.acceleration.authorized_chunks)
+        || result.acceleration.authorized_chunks < 1
+        || !Number.isSafeInteger(result.acceleration.candidate_chunks)
+        || result.acceleration.candidate_chunks < 1
+        || result.acceleration.candidate_chunks > result.acceleration.authorized_chunks
+      )
+    ) {
+      throw new ContextEngineError("invalid_candidate", "Invalid vector acceleration proof");
+    }
     const covered = new Set<string>();
     const uncovered = new Set<string>();
     let coveredCount: number;
@@ -275,6 +289,7 @@ export class HybridEventRetriever implements ContextRetriever {
     trace.generation = generation.id;
     trace.model_revision = generation.model.model_revision;
     trace.covered_count = coveredCount;
+    if (result.acceleration) trace.vector_acceleration = result.acceleration;
     trace.routes = [...ranks.values()].sort((a, b) => compare(a.event_id, b.event_id));
     const candidates = new Map(admittedLexical.map((candidate) => [candidate.candidate.resource_id, candidate]));
     for (const hit of vector) {

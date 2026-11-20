@@ -52,6 +52,12 @@ export interface ContextVectorCoverageProof {
   uncovered: ContextLexicalKey[];
 }
 
+export interface ContextVectorAcceleration {
+  algorithm_version: "sqlite-vec-authorized-exact-v1";
+  authorized_chunks: number;
+  candidate_chunks: number;
+}
+
 export function contextVectorAuthorizationHash(
   keys: readonly ContextVectorAuthorizationKey[],
 ): string {
@@ -78,6 +84,7 @@ export interface ContextVectorIndex {
     authorization_hash?: string;
     query: string;
     limit: number;
+    search_kind?: Exclude<import("./context-search").ContextSearchKind, "messages">;
   }): ReturnType<ContextVectorIndex["matchAuthorized"]>;
   registerGeneration(orgId: string, generation: EmbeddingGeneration): Promise<void>;
   matchAuthorized(input: {
@@ -93,6 +100,7 @@ export interface ContextVectorIndex {
     generation: string;
     covered: ContextLexicalKey[];
     coverage?: ContextVectorCoverageProof;
+    acceleration?: ContextVectorAcceleration;
     skipped?: ContextLexicalKey[];
     matched: ContextVectorMatch[];
     reconciled_epoch?: string;

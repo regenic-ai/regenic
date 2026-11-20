@@ -433,6 +433,11 @@ export const ContextRetrievalTraceSchema = z.object({
   model_revision: z.string().regex(/^[a-f0-9]{40,64}$/).optional(),
   authorized_count: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
   covered_count: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+  vector_acceleration: z.object({
+    algorithm_version: z.literal("sqlite-vec-authorized-exact-v1"),
+    authorized_chunks: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+    candidate_chunks: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  }).strict().optional(),
   routes: z.array(z.object({
     event_id: nonEmptyStringSchema,
     lexical_rank: z.number().int().positive().optional(),
@@ -448,6 +453,8 @@ export const ContextRetrievalTraceSchema = z.object({
   }).strict()),
 }).strict().superRefine((trace, context) => {
   if (trace.covered_count > trace.authorized_count ||
+    (trace.vector_acceleration !== undefined &&
+      trace.vector_acceleration.candidate_chunks > trace.vector_acceleration.authorized_chunks) ||
     new Set(trace.routes.map((route) => route.event_id)).size !== trace.routes.length ||
     (trace.mode === "hybrid" && (!trace.generation || !trace.model_revision)) ||
     trace.routes.some((route) =>

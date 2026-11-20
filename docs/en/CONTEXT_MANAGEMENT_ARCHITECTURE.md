@@ -81,17 +81,34 @@ Lexical SQL remains chunked; vector retrieval retains the global top-k rather
 than truncating the authorization set. Retrieval trace counts cover the full
 authorized universe independently of bundle item budgets. Broad, unfiltered
 queries still enumerate authorized metadata, and exact vector search still
-scans covered vectors; this is not an ANN index or constant-time retrieval.
+scans covered vectors on paths with an explicit message/file filter; this is
+not an ANN index or constant-time retrieval.
 
 The vector sidecar reuses a staged authorization snapshot only while its
 organization, generation, authorization hash/count, and projection remain
 unchanged. It returns compact coverage instead of materializing every covered
 key. In the synthetic two-dimensional million-Event isolation benchmark this
-reduced repeated authorized vector lookup from 14.81 seconds to 8.49 seconds
-(42.7%); authorization hashing took another 192 ms. The remaining time is the
-exact covered-chunk scan, so this result is not an end-to-end or ANN latency
-claim. Projection writes and lifecycle reconciliation invalidate the staged
-authorization state synchronously.
+first reduced repeated authorized vector lookup from 14.81 seconds to 8.49
+seconds (42.7%). The unfiltered semantic route now also copies only covered
+authorized chunks into a connection-local `sqlite-vec` table and uses native
+cosine KNN to select a small Event candidate set. Complete chunks for those
+Events are then validated and reranked by the existing exact implementation.
+The KNN window doubles across Event-distance ties, up to a full scan, so stable
+global top-k behavior is preserved rather than approximated.
+
+In the synthetic two-dimensional million-Event isolation benchmark, ten warm
+native samples measured P50 334.95 ms and P95 338.07 ms while inspecting 400
+candidate chunks, versus 8.49 seconds for the previous warm exact scan (96.1%
+lower at P50). Authorization hashing took another 212.09 ms; first-time
+authorization/native staging took 16.69 seconds. Process RSS after staging was
+1,057.48 MiB, 30.61 MiB above the preceding legacy measurement. These figures exclude
+Authority enumeration, query embedding, and answer generation. This is
+authorization-scoped **exact KNN acceleration**, not ANN: unauthorized vectors
+never enter the temporary table or candidate generation. Message/file-filtered
+searches keep the existing exact filtered path. Projection writes and lifecycle
+reconciliation synchronously invalidate both staged authorization state and the
+temporary native table. If the native extension cannot load, the sidecar emits
+an explicit warning and retains the existing exact scan.
 
 ### 2.4 Snapshots are immutable
 
