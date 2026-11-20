@@ -2,18 +2,23 @@ import { createHash, randomUUID } from "node:crypto";
 import { HttpStatus, Inject, Injectable } from "@nestjs/common";
 import {
   CONTENT_PARTS_MEDIA_TYPE,
+  ChannelDriverRegistry,
+  matchesSearchAppScope,
   type AggregateSpec,
   bodyTextFromStored,
   parseStoredContentParts,
   type ContextAuthorityRead,
+  type ContextRequestFilters,
   type ContextSelectionReason,
   type SearchAnswerIntent,
   type SearchAnswerMapReduce,
   type SearchAnswerScope,
+  type SearchAppClass,
 } from "@regenic/domain";
 import { PersonalContextError } from "./personal-context-error";
 import type { SearchConversationLabels } from "./personal-conversation-labels.service";
 import { PersonalRuntimeService } from "./personal-runtime.service";
+import { applySearchAppClass } from "./search-app-class";
 
 const ANSWER_QUERY_MAX = 8_000;
 const ANSWER_CONVERSATIONS_MAX = 20;
@@ -109,6 +114,8 @@ export class PersonalConversationContextService {
   constructor(
     @Inject(PersonalRuntimeService)
     private readonly runtime: PersonalRuntimeService,
+    @Inject(ChannelDriverRegistry)
+    private readonly drivers: ChannelDriverRegistry,
   ) {}
 
   async readThread(threadId: string) {
@@ -265,7 +272,7 @@ export class PersonalConversationContextService {
       : requiredString(body.executor_type, "executor_type");
     const filters = body.filters === undefined
       ? undefined
-      : answerFilters(body.filters);
+      : await this.answerContextFilters(answerFilters(body.filters));
     const intent = answerIntent(body.intent);
     const requested = answerConversations(body.conversations);
     let conversations: Array<{
@@ -591,7 +598,7 @@ export class PersonalConversationContextService {
 
   private async selectedAnswerConversations(
     requested: Array<{ thread_id: string; event_ids: string[] }>,
-    filters?: AnswerFilters,
+    filters?: EvidenceFilters,
   ) {
     const conversations: Array<{
       thread_id: string;
@@ -620,7 +627,8 @@ export class PersonalConversationContextService {
             && Date.parse(message.occurred_at) <= Date.parse(filters.occurred_before)
             && (!filters.sources || filters.sources.includes(message.source))
             && (!filters.thread_ids
-              || filters.thread_ids.includes(message.thread_id)))
+              || filters.thread_ids.includes(message.thread_id))
+            && matchesSearchAppScope(message, filters.app_scope))
         : currentMessages;
       if (messages.length) {
         conversations.push({ thread_id: conversation.thread_id, messages });
@@ -629,12 +637,13 @@ export class PersonalConversationContextService {
     return conversations;
   }
 
-  private async completeAnswerConversations(filters: {
-    occurred_after: string;
-    occurred_before: string;
-    sources?: string[];
-    thread_ids?: string[];
-  }) {
+  private async answerContextFilters(filters: AnswerFilters): Promise<EvidenceFilters> {
+    const { app_class: appClass, ...rest } = filters;
+    if (!appClass || appClass === "all") return rest;
+    return (await applySearchAppClass(this.runtime, this.drivers, rest, appClass) ?? rest) as EvidenceFilters;
+  }
+
+  private async completeAnswerConversations(filters: EvidenceFilters) {
     const host = this.runtime.requireHost();
     const result = await host.get("context").assemble({
       schema_version: "1.0",
@@ -850,12 +859,18 @@ interface AnswerFilters {
   occurred_before: string;
   sources?: string[];
   thread_ids?: string[];
+  app_class?: SearchAppClass;
 }
+
+type EvidenceFilters = ContextRequestFilters & {
+  occurred_after: string;
+  occurred_before: string;
+};
 
 function answerFilters(value: unknown): AnswerFilters {
   const filters = strictObject(
     value,
-    new Set(["occurred_after", "occurred_before", "sources", "thread_ids"]),
+    new Set(["occurred_after", "occurred_before", "sources", "thread_ids", "app_class"]),
     "filters",
   );
   const occurredAfter = requiredTimestamp(
@@ -878,7 +893,15 @@ function answerFilters(value: unknown): AnswerFilters {
     ...(filters.thread_ids === undefined
       ? {}
       : { thread_ids: stringList(filters.thread_ids, "filters.thread_ids") }),
+    ...(filters.app_class === undefined
+      ? {}
+      : { app_class: answerAppClass(filters.app_class) }),
   };
+}
+
+function answerAppClass(value: unknown): SearchAppClass {
+  if (value === "app" || value === "agent" || value === "all") return value;
+  invalid("filters.app_class must be app, agent or all");
 }
 
 function eventKey(event: { occurred_at: string; id: string }): string {

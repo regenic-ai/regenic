@@ -1744,8 +1744,9 @@ export async function searchPersonalContext(
   input: {
     query: string;
     kind?: "all" | "messages" | "files";
+    app_class?: "app" | "agent" | "all";
     limit?: number;
-    filters?: { sources?: string[]; thread_ids?: string[] };
+    filters?: { sources?: string[]; thread_ids?: string[]; app_class?: "app" | "agent" | "all" };
     context?: { before?: number; after?: number; reply_depth?: number; max_messages?: number };
   },
   signal?: AbortSignal,
@@ -1787,6 +1788,7 @@ export async function startSearchAnswer(
       occurred_before: string;
       sources?: string[];
       thread_ids?: string[];
+      app_class?: "app" | "agent" | "all";
     };
     intent?: "lookup" | "aggregate" | "list";
   },

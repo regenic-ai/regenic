@@ -192,12 +192,25 @@ export const ContextBudgetLedgerSchema: z.ZodType<ContextBudgetLedger> = z
     }
   });
 
+const appScopePrefixSchema = z.string().min(1).max(512)
+  .refine((value) => value.trim().length > 0, "String cannot be blank");
+const appScopeSchema = z.object({
+  class: z.enum(["app", "agent"]),
+  agent_sources: z.array(nonEmptyStringSchema).max(1_000),
+  agent_thread_prefixes: z.array(appScopePrefixSchema).max(1_000),
+}).strict().superRefine((scope, context) => {
+  if (hasDuplicates(scope.agent_sources) || hasDuplicates(scope.agent_thread_prefixes)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "App scope values must be unique" });
+  }
+});
+
 const contextFiltersSchema = z.object({
   sources: uniqueNonEmptyStringsSchema.optional(),
   thread_ids: uniqueNonEmptyStringsSchema.optional(),
   actor_ids: uniqueNonEmptyStringsSchema.optional(),
   occurred_after: timestampSchema.optional(),
   occurred_before: timestampSchema.optional(),
+  app_scope: appScopeSchema.optional(),
 }).strict().superRefine((filters, context) => {
   if (Object.values(filters).every((value) => value === undefined)) {
     context.addIssue({ code: z.ZodIssueCode.custom, message: "At least one context filter is required" });

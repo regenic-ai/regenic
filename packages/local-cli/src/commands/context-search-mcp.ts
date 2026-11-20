@@ -29,9 +29,10 @@ const boundaryProperty = {
 const TOOLS = [
   tool(
     "search_conversations",
-    "Search authorized messages and files. Returns bounded conversation windows plus exact file matches in items[].matches; file-only hits have no message anchor. Unlocated semantic hits remain Event-level evidence.",
+    "Search ordinary app chats and files. Agent and executor sessions are left out unless app_class is \"agent\" or \"all\". Returns bounded conversation windows plus exact file matches in items[].matches; file-only hits have no message anchor. Unlocated semantic hits remain Event-level evidence.",
     {
       query: stringProperty(),
+      app_class: { type: "string", enum: ["app", "agent", "all"] },
       kind: { type: "string", enum: ["all", "messages", "files"] },
       limit: integerProperty(1, 20),
       filters: {

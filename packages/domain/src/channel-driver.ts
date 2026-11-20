@@ -87,6 +87,11 @@ import type {
   ThreadPrompt,
 } from "./thread-surface";
 import {
+  searchAgentScope,
+  type SearchAgentScope,
+  type SearchAppInstallation,
+} from "./search-app-scope";
+import {
   formatSurfaceGeneration,
   normalizePromptAnswers,
   threadIdOf,
@@ -475,6 +480,61 @@ export class ChannelDriverRegistry {
       (driver, installation) =>
         normalizeListTitle(driver.capabilities(installation).list_title),
     );
+  }
+
+  /**
+   * Agent/executor sessions to keep out of an ordinary-app search.
+   * Whole-source agent drivers stay excluded with no installation left.
+   * A shared source contributes only that install's thread prefix.
+   * Classification ignores enabled/disabled. `list_title` is not used.
+   * A missing driver, a thrown `capabilities()`, or an empty prefix does not
+   * classify that install; callers keep a scope recorded earlier.
+   */
+  agentSearchScope(installations: readonly ConnectorInstallation[]): SearchAgentScope {
+    return this.searchClassification(installations).agent;
+  }
+
+  /**
+   * Agent scope, plus prefixes of installs positively classified as ordinary.
+   * Those ordinary prefixes can be released. An unclassified install is in
+   * neither list, so a previous agent record stays.
+   */
+  searchClassification(installations: readonly ConnectorInstallation[]): {
+    agent: SearchAgentScope;
+    ordinary_thread_prefixes: string[];
+  } {
+    const described: SearchAppInstallation[] = [];
+    const ordinary: string[] = [];
+    for (const driver of this.list()) {
+      if (driver.agent_source && !driver.threadIdPrefix && driver.source.trim()) {
+        described.push({ source: driver.source, agent: true });
+      }
+    }
+    for (const installation of installations) {
+      const driver = this.get(installation.connector_type);
+      if (!driver || (driver.agent_source && !driver.threadIdPrefix)) continue;
+      let agent = false;
+      try {
+        agent = driver.capabilities({ ...installation, status: "enabled" }).agent_sessions === true;
+      } catch {
+        continue;
+      }
+      const prefix = threadPrefixOf(driver, installation);
+      if (agent) {
+        if (driver.threadIdPrefix) {
+          if (!prefix) continue;
+          described.push({ source: driver.source, agent: true, thread_prefix: prefix });
+        } else {
+          described.push({ source: driver.source, agent: true });
+        }
+        continue;
+      }
+      if (prefix) ordinary.push(prefix);
+    }
+    return {
+      agent: searchAgentScope(described),
+      ordinary_thread_prefixes: [...new Set(ordinary)].sort(),
+    };
   }
 
   async resolveConversationLabels(
@@ -905,6 +965,18 @@ export class ChannelDriverRegistry {
         }
       }),
     );
+  }
+}
+
+function threadPrefixOf(
+  driver: { threadIdPrefix?(installation: ConnectorInstallation): string },
+  installation: ConnectorInstallation,
+): string {
+  if (!driver.threadIdPrefix) return "";
+  try {
+    return driver.threadIdPrefix(installation).trim();
+  } catch {
+    return "";
   }
 }
 

@@ -405,6 +405,58 @@ describe("SQLite context artifact store", () => {
 
 
 
+  it("excludes agent sessions from an ordinary app context read", async () => {
+    const root = await createRoot();
+    const store = new SqliteAuthorityStore(join(root, "authority.db"));
+    const base = {
+      org_id: "example-org",
+      content_hash: HASH_A,
+      content_media_type: "text/plain",
+      content_byte_size: 1,
+      actor_id: "actor-1",
+      required_scope_ids: ["scope-1"],
+      occurred_at: "2026-08-30T00:00:00.000Z",
+      expected_head_id: null,
+    };
+    await store.append({ ...base, source: "feishu", external_id: "chat-1", thread_id: "feishu:chat-1" });
+    await store.append({ ...base, source: "dsh", external_id: "session-1", thread_id: "dsh:session-1", content_hash: HASH_B });
+    await store.append({
+      ...base,
+      source: "server_app",
+      external_id: "agent-room",
+      thread_id: "server_app:demo:inst-1:room",
+      content_hash: HASH_A,
+    });
+    await store.append({
+      ...base,
+      source: "server_app",
+      external_id: "agent-bare",
+      thread_id: "server_app:demo:inst-1",
+      content_hash: HASH_A,
+    });
+    await store.append({
+      ...base,
+      source: "server_app",
+      external_id: "other-install",
+      thread_id: "server_app:demo:inst-10:room",
+      content_hash: HASH_A,
+    });
+    const scope = {
+      agent_sources: ["dsh"],
+      agent_thread_prefixes: ["server_app:demo:inst-1:"],
+    };
+    const threadsOf = async (appClass) => (await store.openContextRead("example-org", {
+      filters: { app_scope: { class: appClass, ...scope } },
+    })).events.map((event) => event.thread_id).sort();
+    assert.deepEqual(await threadsOf("app"), ["feishu:chat-1", "server_app:demo:inst-10:room"]);
+    assert.deepEqual(await threadsOf("agent"), [
+      "dsh:session-1",
+      "server_app:demo:inst-1",
+      "server_app:demo:inst-1:room",
+    ]);
+    store.close();
+  });
+
   it("persists idempotent digest proposals and enforces submission transitions", async () => {
     const root = await createRoot();
     const path = join(root, "authority.db");

@@ -5,9 +5,12 @@ export interface SearchTimeRange {
   occurred_before: string;
 }
 
+export type SearchAppClass = "app" | "agent" | "all";
+
 export interface SearchAnswerFilters extends SearchTimeRange {
   sources?: string[];
   thread_ids?: string[];
+  app_class?: SearchAppClass;
 }
 
 export interface SearchQueryPlan {
@@ -66,6 +69,7 @@ export function contextSearchInput(
   query: string, source: string, thread: string, limit: number,
   kind: "all" | "messages" | "files" = "all",
   now = new Date(),
+  appClass: SearchAppClass = "app",
 ) {
   if (!query.trim() || query.length > 8000 || !Number.isInteger(limit) || limit < 1 || limit > 20) {
     throw new Error("search.invalid");
@@ -81,6 +85,7 @@ export function contextSearchInput(
   };
   return {
     query: plan.query, limit: effectiveLimit, kind,
+    app_class: appClass,
     ...(Object.keys(filters).length ? { filters } : {}),
     context: SEARCH_CONTEXT,
   };

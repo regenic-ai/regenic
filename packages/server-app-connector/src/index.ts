@@ -78,14 +78,31 @@ export const serverAppDriver: ChannelDriver = {
     if (installation.status !== "enabled") {
       return { sync: false, reply: false, create: false };
     }
-    const capabilities = manifestOf(installation).capabilities;
-    return {
-      sync: Boolean(capabilities.source?.push || capabilities.source?.pull),
-      reply: capabilities.source?.reply === true,
-      create: capabilities.source?.create === true,
-      execute: capabilities.agent === true,
-      list_title: capabilities.agent ? "prompt" : "conversation",
-    };
+    try {
+      const capabilities = manifestOf(installation).capabilities;
+      return {
+        sync: Boolean(capabilities.source?.push || capabilities.source?.pull),
+        reply: capabilities.source?.reply === true,
+        create: capabilities.source?.create === true,
+        execute: capabilities.agent === true,
+        list_title: capabilities.agent ? "prompt" : "conversation",
+        agent_sessions: capabilities.agent === true,
+      };
+    } catch (error) {
+      if (rawManifestAgent(installation)) {
+        return { sync: false, reply: false, create: false, agent_sessions: true };
+      }
+      throw error;
+    }
+  },
+
+  threadIdPrefix(installation) {
+    const installationId = installation.id.trim();
+    if (!installationId) return "";
+    const id = appId(installation);
+    return id
+      ? `${SERVER_APP_SOURCE}:${id}:${installationId}:`
+      : `${SERVER_APP_SOURCE}::${installationId}:`;
   },
 
   async connectInstallation(installation, host, env, context) {
@@ -482,6 +499,15 @@ async function accessToken(
 
 function manifestOf(installation: ConnectorInstallation): ServerAppManifest {
   return parseServerAppManifest(installation.config.manifest);
+}
+
+/** True when a manifest that no longer parses still says this install is an Agent. */
+function rawManifestAgent(installation: ConnectorInstallation): boolean {
+  const manifest = installation.config.manifest;
+  if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) return false;
+  const capabilities = (manifest as { capabilities?: unknown }).capabilities;
+  if (!capabilities || typeof capabilities !== "object" || Array.isArray(capabilities)) return false;
+  return (capabilities as { agent?: unknown }).agent === true;
 }
 
 function baseUrl(installation: ConnectorInstallation): string {
