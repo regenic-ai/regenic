@@ -221,6 +221,14 @@ export class PersonalAgentContextController {
     }
     const locale = requestLocale(typeof args.locale === "string" ? args.locale : undefined);
     delete args.locale;
+    const locked = lockedSearchThread(scope.run);
+    if (locked && name === "search_conversations") {
+      const filters = asObject(args.filters) ?? {};
+      args.filters = { ...filters, thread_ids: [locked] };
+    }
+    if (locked && name === "read_conversation_window" && args.thread_id !== locked) {
+      throw new Error("This question can only read the locked conversation");
+    }
     const at = new Date().toISOString();
     if (name === "read_task_conversation") {
       const result = await this.readTask(scope, args, locale);
@@ -319,6 +327,11 @@ export class PersonalAgentContextController {
       })),
     };
   }
+}
+
+function lockedSearchThread(run: { executor_config?: Record<string, unknown> }): string | undefined {
+  const value = run.executor_config?.search_thread_id;
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function toolList(credential: AgentContextCredential) {

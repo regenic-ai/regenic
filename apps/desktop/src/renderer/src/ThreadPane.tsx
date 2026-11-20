@@ -39,12 +39,13 @@ import {
 } from "./message-view";
 import { ThreadFaceTags } from "./ThreadFaceTags";
 import { useLocale } from "./LocaleContext";
-import { HideIcon, PinIcon, ShowIcon, ChevronIcon } from "./Icons";
+import { HideIcon, PinIcon, ShowIcon, ChevronIcon, SearchIcon, SparkleIcon } from "./Icons";
 import {
   ThreadMessageList,
   type ThreadMessageListHandle,
 } from "./ThreadMessageList";
 import { ThreadTitleField } from "./ThreadTitleField";
+import { ThreadFindBar } from "./ThreadFindBar";
 import type {
   ForwardView,
   InboxViewItem,
@@ -92,6 +93,7 @@ export const ThreadPane = memo(function ThreadPane({
   forwardTargets = [],
   createTargets = [],
   onForwardCreated,
+  onAskAbout,
 }: {
   thread: InboxThread;
   locateEventId?: string;
@@ -126,8 +128,10 @@ export const ThreadPane = memo(function ThreadPane({
   forwardTargets?: InboxThread[];
   createTargets?: CreateTarget[];
   onForwardCreated?: (result: ForwardView) => Promise<void>;
+  onAskAbout?: () => void;
 }) {
   const { t } = useLocale();
+  const [findOpen, setFindOpen] = useState(false);
   const [composerSeed, setComposerSeed] = useState<{ text: string; nonce: number } | null>(null);
   const [quote, setQuote] = useState<InboxViewItem | null>(null);
   const [pending, setPending] = useState<InboxViewItem[]>([]);
@@ -282,7 +286,19 @@ export const ThreadPane = memo(function ThreadPane({
     selectAnchorRef.current = null;
     setSelectedIds([]);
     setSelectAnchor(null);
+    setFindOpen(false);
   }, [thread.id]);
+
+  useEffect(() => {
+    const onKey = (event: globalThis.KeyboardEvent) => {
+      if (event.key.toLowerCase() !== "f" || !(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return;
+      event.preventDefault();
+      setFindOpen(true);
+      window.requestAnimationFrame(() => document.querySelector<HTMLInputElement>(".thread-find input")?.select());
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   useEffect(() => {
     setPending((current) =>
@@ -542,6 +558,29 @@ export const ThreadPane = memo(function ThreadPane({
             <div className="thread-nav">
               <button
                 type="button"
+                className={`item-tool${findOpen ? " is-on" : ""}`}
+                aria-label={t("thread.find")}
+                title={`${t("thread.find")} (⌘F)`}
+                aria-keyshortcuts="Meta+F Control+F"
+                aria-pressed={findOpen}
+                onClick={() => setFindOpen((open) => !open)}
+              >
+                <SearchIcon />
+              </button>
+              {onAskAbout ? (
+                <button
+                  type="button"
+                  className="item-tool"
+                  aria-label={t("thread.askAbout")}
+                  title={t("thread.askAbout")}
+                  onClick={onAskAbout}
+                >
+                  <SparkleIcon />
+                </button>
+              ) : null}
+              <span className="thread-nav-divider" aria-hidden="true" />
+              <button
+                type="button"
                 className="item-tool"
                 aria-label={t("inbox.previous")}
                 title={`${t("inbox.previous")} (K)`}
@@ -705,6 +744,21 @@ export const ThreadPane = memo(function ThreadPane({
           {!conversationClosed && !awaitingPrompt ? workResult : null}
         </div>
       </header>
+      {findOpen ? (
+        <div className="thread-find-anchor">
+          <ThreadFindBar
+            key={thread.id}
+            threadId={thread.id}
+            onLocate={(eventId) => {
+              listRef.current?.scrollToEvent(eventId);
+            }}
+            onClose={() => {
+              setFindOpen(false);
+              paneRef?.current?.focus();
+            }}
+          />
+        </div>
+      ) : null}
       {locateUnavailable ? <p role="status" className="muted">{t("search.locateUnavailable")}</p> : null}
       <ThreadMessageList
         ref={listRef}

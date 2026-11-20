@@ -124,20 +124,27 @@ export class PersonalAgentContextAccessService implements OnModuleInit {
     return undefined;
   }
 
-  /** The open run a call may read for, or undefined when it is not allowed. */
+  /**
+   * The run a call may read for, or undefined when it is not allowed.
+   * A finished search question stays readable until the run TTL so a follow-up
+   * on the same executor thread can keep looking messages up. Any other
+   * finished run closes immediately.
+   */
   async scope(runId: string, now = Date.now()): Promise<AgentContextScope | undefined> {
     const authority = this.runtime.requireHost().get("authority");
     const orgId = this.runtime.orgId();
     const run = await authority.getWorkRun(orgId, runId);
-    if (!run || (run.status !== "running" && run.status !== "waiting_human")) {
-      return undefined;
-    }
+    if (!run) return undefined;
     const created = Date.parse(run.created_at);
     if (!Number.isFinite(created) || now - created > AGENT_CONTEXT_RUN_TTL_MS) {
       return undefined;
     }
     const item = await authority.getWorkItem(orgId, run.work_item_id);
-    return item ? { run, item } : undefined;
+    if (!item) return undefined;
+    const open = run.status === "running" || run.status === "waiting_human";
+    const searchFollowUp = run.status === "completed"
+      && item.thread_id.startsWith("system:search-question:");
+    return open || searchFollowUp ? { run, item } : undefined;
   }
 
   async recordRead(runId: string, read: AgentContextRead): Promise<void> {

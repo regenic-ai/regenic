@@ -70,11 +70,14 @@ export function contextSearchInput(
   kind: "all" | "messages" | "files" = "all",
   now = new Date(),
   appClass: SearchAppClass = "app",
+  literal = false,
 ) {
   if (!query.trim() || query.length > 8000 || !Number.isInteger(limit) || limit < 1 || limit > 20) {
     throw new Error("search.invalid");
   }
-  const plan = planContextSearchQuery(query, now);
+  const plan = literal
+    ? { query: query.trim(), intent: "lookup" as const }
+    : planContextSearchQuery(query, now);
   const effectiveLimit = plan.time_range && plan.intent !== "lookup"
     ? Math.max(limit, 20)
     : limit;

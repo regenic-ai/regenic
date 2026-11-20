@@ -20,6 +20,7 @@ import { PersonalKernelStoppedError } from "./personal-runtime.service";
 import { PersonalInboxService } from "./personal-inbox.service";
 import { requestLocale } from "./request-locale";
 import { PersonalSearchAnswerService } from "./personal-search-answer.service";
+import { PersonalWorkService } from "./personal-work.service";
 import { PersonalConversationLabelsService } from "./personal-conversation-labels.service";
 import { PersonalConnectorError } from "./personal-errors";
 
@@ -33,6 +34,8 @@ export class PersonalContextController {
     private readonly inbox: PersonalInboxService,
     @Inject(PersonalSearchAnswerService)
     private readonly answers: PersonalSearchAnswerService,
+    @Inject(PersonalWorkService)
+    private readonly work: PersonalWorkService,
     @Inject(PersonalConversationLabelsService)
     private readonly conversationLabels: PersonalConversationLabelsService,
   ) {}
@@ -108,6 +111,17 @@ export class PersonalContextController {
   @HttpCode(HttpStatus.OK)
   cancelSearchAnswer(@Param("answerId") answerId: string) {
     return this.guard(() => this.answers.cancel(answerId));
+  }
+
+  @Post("search/questions")
+  @HttpCode(HttpStatus.OK)
+  startSearchQuestion(@Body() body: { query?: string; thread_id?: string } | undefined) {
+    return this.guard(() => this.work.startContextQuestion(body ?? {}));
+  }
+
+  @Get("search/questions/:questionId")
+  getSearchQuestion(@Param("questionId") questionId: string) {
+    return this.guard(() => this.work.getContextQuestion(questionId));
   }
 
   @Post("search/source")

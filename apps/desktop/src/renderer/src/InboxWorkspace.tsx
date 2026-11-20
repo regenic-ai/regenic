@@ -106,6 +106,7 @@ export function InboxWorkspace({
   onAcknowledgeWork,
   onBindRecipe,
   onForwardCreated,
+  onAskAbout,
   onOpenConnections,
 }: {
   threads: InboxThread[];
@@ -151,6 +152,7 @@ export function InboxWorkspace({
   onAcknowledgeWork: (thread: InboxThread) => Promise<void>;
   onBindRecipe: (thread: InboxThread) => void;
   onForwardCreated: (result: ForwardView) => Promise<void>;
+  onAskAbout?: (thread: InboxThread) => void;
   onOpenConnections: () => void;
 }) {
   const { t } = useLocale();
@@ -699,6 +701,7 @@ export function InboxWorkspace({
             forwardTargets={threads}
             createTargets={createTargets}
             onForwardCreated={onForwardCreated}
+            onAskAbout={onAskAbout ? () => onAskAbout(selected) : undefined}
           />
         ) : (
           <EmptyState

@@ -46,7 +46,7 @@ export function MenuSelect({
   const [retry, setRetry] = useState(0);
   const selected = options.find((item) => item.value === value);
   const filtered = useMemo(() => {
-    if (onLoad && (loading || loadError || !resultsReady)) return [];
+    if (onLoad && (loadError || !resultsReady || (loading && options.length === 0))) return [];
     const needle = query.trim().toLowerCase();
     if (!needle) {
       return options;
@@ -57,13 +57,16 @@ export function MenuSelect({
     );
   }, [options, query, onLoad, loading, loadError, resultsReady]);
   const [active, setActive] = useState(0);
+  const onLoadRef = useRef(onLoad);
+  onLoadRef.current = onLoad;
 
   useEffect(() => {
-    if (!open || !onLoad) return;
+    const load = onLoadRef.current;
+    if (!open || !load) return;
     const controller = new AbortController();
     setLoading(true);
     setLoadError(null);
-    void onLoad(controller.signal).then(
+    void load(controller.signal).then(
       () => {
         if (!controller.signal.aborted) setLoading(false);
       },
@@ -77,7 +80,7 @@ export function MenuSelect({
     return () => {
       controller.abort();
     };
-  }, [open, onLoad, retry]);
+  }, [open, retry]);
 
   const openMenu = () => {
     const root = rootRef.current;
@@ -260,7 +263,7 @@ export function MenuSelect({
               aria-label={placeholder}
             />
           ) : null}
-          {onLoad && (loading || !resultsReady) && !loadError ? <p className="muted" role="status">{t("menuSelect.loading")}</p> : null}
+          {onLoad && (loading || !resultsReady) && !loadError && options.length === 0 ? <p className="muted" role="status">{t("menuSelect.loading")}</p> : null}
           {onLoad && loadError ? (
             <div role="alert">
               <p className="action-error">{t("menuSelect.loadError", { error: loadError })}</p>

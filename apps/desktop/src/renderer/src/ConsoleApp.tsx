@@ -67,7 +67,7 @@ import { t as translate } from "../../shared/i18n.ts";
 import { useLocale } from "./LocaleContext";
 import { InboxWorkspace } from "./InboxWorkspace";
 import { connectPersonalEvents } from "./personal-events";
-import { SearchPage } from "./SearchPage";
+import { SearchPage, type SearchAskRequest } from "./SearchPage";
 import { threadTitle } from "./message-view";
 import { recipeConversationOptions } from "./recipe-conversations";
 import { RecipesPage } from "./RecipesPage";
@@ -144,6 +144,7 @@ const SIDEBAR_COLLAPSED_KEY = "regenic.sidebar.collapsed";
 export function ConsoleApp() {
   const { t, locale } = useLocale();
   const [nav, setNav] = useState<NavId>("inbox");
+  const [askSeed, setAskSeed] = useState<SearchAskRequest | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(
     () => localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1",
   );
@@ -1847,6 +1848,14 @@ export function ConsoleApp() {
             onAcknowledgeWork={acknowledgeSelectedWork}
             onBindRecipe={bindSelectedRecipe}
             onForwardCreated={openForwardedConversation}
+            onAskAbout={(thread) => {
+              setAskSeed({
+                threadId: thread.id,
+                title: thread.title ?? thread.label,
+                nonce: Date.now(),
+              });
+              setNav("search");
+            }}
             onOpenConnections={() => setNav("engine")}
           />
         ) : null}
@@ -1871,7 +1880,11 @@ export function ConsoleApp() {
             onChanged={refresh}
           />
         ) : null}
-        {nav === "search" ? <SearchPage onSettings={() => setNav("settings")} onOpenConversation={(item) => {
+        {nav === "search" ? <SearchPage
+          onSettings={() => setNav("settings")}
+          ask={askSeed}
+          onAskConsumed={() => setAskSeed(null)}
+          onOpenConversation={(item) => {
           const thread = groupInboxThreads([item])[0];
           if (!thread) { setError(t("search.noConversation")); return; }
           selectedThreadRef.current = thread;
