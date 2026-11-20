@@ -474,23 +474,6 @@ export function workOutboundReply(summary: string | undefined): WorkOutboundRepl
   return { kind: "unmarked", text };
 }
 
-/** What the operator should read. Protocol words stay off the workbench. */
-export function workOperatorText(summary: string | undefined): string {
-  const text = summary?.trim() ?? "";
-  const reply = workOutboundReply(text);
-  if (reply.kind === "unmarked") {
-    return text;
-  }
-  const breakAt = text.search(/\r?\n/);
-  const rest = breakAt === -1 ? "" : text.slice(breakAt).replace(/^\r?\n/, "");
-  const noteAt = NOTE_LINE.exec(rest);
-  const note = noteAt ? rest.slice(noteAt.index + noteAt[0].length).trim() : "";
-  if (reply.kind === "send") {
-    return [reply.text, note].filter(Boolean).join("\n\n");
-  }
-  return note;
-}
-
 export function wrapEvidenceSection(
   tagOpen: string,
   tagClose: string,

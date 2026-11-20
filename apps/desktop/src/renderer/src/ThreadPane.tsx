@@ -1,5 +1,4 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { workOperatorText } from "@regenic/connector-contract";
 import {
   answerConversationPrompt,
   currentApiOrigin,
@@ -37,6 +36,7 @@ import {
   threadTitle,
   deliveryNeedsYou,
   workNextStepCopy,
+  workOperatorText,
 } from "./message-view";
 import { ThreadFaceTags } from "./ThreadFaceTags";
 import { useLocale } from "./LocaleContext";

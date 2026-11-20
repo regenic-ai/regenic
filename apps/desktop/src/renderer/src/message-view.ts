@@ -1,4 +1,3 @@
-import { workOperatorText } from "@regenic/connector-contract";
 import { t } from "../../shared/i18n.ts";
 import type { InboxViewItem, MessageDirection, MessageKind } from "./types";
 import type { InboxThread } from "./inbox";
@@ -539,6 +538,29 @@ export function threadPreview(thread: InboxThread): string {
     return firstLine(face.body_text, 96) || thread.label;
   }
   return thread.label;
+}
+
+const REPLY_NOTE_LINE = /(?:^|\r?\n)NOTE[ \t]*(?:\r?\n|$)/;
+
+/** Operator-facing result text. Protocol words stay off the workbench. */
+export function workOperatorText(summary: string | undefined): string {
+  const text = summary?.trim() ?? "";
+  if (!text) {
+    return "";
+  }
+  const breakAt = text.search(/\r?\n/);
+  const first = (breakAt === -1 ? text : text.slice(0, breakAt)).trim();
+  const rest = breakAt === -1 ? "" : text.slice(breakAt).replace(/^\r?\n/, "");
+  if (first !== "REPLY" && first !== "QUIET" && first !== "NO_REPLY" && first !== "HOLD") {
+    return text;
+  }
+  const noteAt = REPLY_NOTE_LINE.exec(rest);
+  const note = noteAt ? rest.slice(noteAt.index + noteAt[0].length).trim() : "";
+  const message = (noteAt ? rest.slice(0, noteAt.index) : rest).trim();
+  if (first === "REPLY") {
+    return [message, note].filter(Boolean).join("\n\n");
+  }
+  return note;
 }
 
 export function listPreview(thread: InboxThread, title: string): string | null {
