@@ -1038,7 +1038,7 @@ describe("personal context API", () => {
       assert.equal(invalid.response.status, 400, invalid.text);
     }
   });
-  it("rejects an answer before creating durable state when no executor is installed", async () => {
+  it("retains answer metadata when a reserved executor startup fails definitively", async () => {
     const root = await createRoot();
     const { origin } = await startApi(
       root,
@@ -1060,15 +1060,22 @@ describe("personal context API", () => {
         }],
       },
     );
-    assert.equal(failed.response.status, 409, failed.text);
-    assert.equal(JSON.parse(failed.text).error.code, "executor_unavailable");
+    assert.equal(failed.response.status, 501, failed.text);
+    assert.equal(
+      JSON.parse(failed.text).error.code,
+      "executor_session_unavailable",
+    );
     const ledger = new SqliteAuthorityStore(join(root, "authority.db"));
     try {
-      assert.equal(
-        (await ledger.listWorkItems("local-owner"))
-          .some((item) => item.id.startsWith("search-answer:")),
-        false,
-      );
+      const failedItem = (await ledger.listWorkItems("local-owner"))
+        .find((item) => item.id.startsWith("search-answer:"));
+      assert.ok(failedItem);
+      assert.equal(failedItem.status, "failed");
+      const answerId = failedItem.id.slice("search-answer:".length);
+      const record = await ledger.getSearchAnswer("local-owner", answerId);
+      assert.equal(record.work_item_id, failedItem.id);
+      assert.match(JSON.parse(failed.text).error.message, new RegExp(answerId));
+      assert.equal((await ledger.listWorkRuns("local-owner", failedItem.id))[0].status, "failed");
     } finally {
       ledger.close();
     }
