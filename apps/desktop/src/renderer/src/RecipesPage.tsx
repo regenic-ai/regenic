@@ -530,7 +530,7 @@ export function RecipesPage({
               : t("recipes.writeBackNo"),
             rhythm:
               draft.trigger_kind === "pull" && draft.scope !== "thread"
-                ? t("recipes.saveConfirmRhythm")
+                ? t(writeBack ? "recipes.saveConfirmRhythmReply" : "recipes.saveConfirmRhythm")
                 : "",
           }),
         )
@@ -796,6 +796,16 @@ export function RecipesPage({
                     />
                   </RecipeRow>
                 ) : null}
+
+                </div>
+              </section>
+
+              <section className="recipe-section">
+                <header className="recipe-section-head">
+                  <span className="recipe-step-no" aria-hidden="true">2</span>
+                  <h3>{t("recipes.stageScope")}</h3>
+                </header>
+                <div className="recipe-rows">
                 <RecipeRow label={t("recipes.watchLegend")}>
                   <div className="seg">
                     {scopeChoices(t).map((choice) => (
@@ -893,16 +903,6 @@ export function RecipesPage({
                     />
                   </RecipeRow>
                 ) : null}
-
-                </div>
-              </section>
-
-              <section className="recipe-section">
-                <header className="recipe-section-head">
-                  <span className="recipe-step-no" aria-hidden="true">2</span>
-                  <h3>{t("recipes.stageScope")}</h3>
-                </header>
-                <div className="recipe-rows">
                 <TextFilterConditions key={`${draft.id ?? "new"}:${filterEditorVersion}`} draft={draft} setDraft={setDraft} t={t} />
                 <RecipeRow label={t("recipes.previewTitle")}>
                   <MatchPreview
@@ -910,6 +910,9 @@ export function RecipesPage({
                     draft={draft}
                     t={t}
                   />
+                  {draft.trigger_kind === "pull" && draft.scope !== "thread" ? (
+                    <p className="recipe-hint">{t("recipes.pullScopeBeat")}</p>
+                  ) : null}
                   {unsendableCount > 0 ? (
                     <p className="recipe-hint">{t("recipes.previewPullSkip", { count: unsendableCount })}</p>
                   ) : null}

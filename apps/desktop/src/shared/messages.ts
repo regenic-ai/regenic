@@ -643,6 +643,8 @@ export const en = {
     "Save this automation?\n\nCoverage: {coverage}\nAfter: {after}{rhythm}",
   "recipes.saveConfirmRhythm":
     "\n\nOpen tasks are reviewed again on every occurrence.",
+  "recipes.saveConfirmRhythmReply":
+    "\n\nOpen tasks are reviewed again on every occurrence, and each review can send another reply to that conversation.",
   "recipes.priorityTitle": "Priority when automations overlap",
   "recipes.priorityLead": "More specific automations run first; rank 1 wins. Scheduled automations run on their own time and are not ranked.",
   "recipes.priorityRank": "#{rank} of {total}",
@@ -812,13 +814,15 @@ export const en = {
   "recipes.formEdit": "Edit automation",
   "recipes.formBind": "Create automation for this chat",
   "recipes.noExecutor": "Add an Agent in Connected Apps before you can save an automation.",
-  "recipes.watchLegend": "Which work",
+  "recipes.watchLegend": "Scope",
   "recipes.scopeTasks": "All tasks",
   "recipes.scopeTasksHint": "Any conversation already treated as a task.",
   "recipes.pullScopeHint":
-    "Open tasks are reviewed again on every occurrence. Closed ones stay out. A conversation still running skips this beat. One still syncing waits, then starts. One that cannot take the reply is skipped.",
+    "Open tasks are reviewed again on every occurrence. Closed ones stay out.",
+  "recipes.pullScopeBeat":
+    "At each occurrence, a conversation still running skips that beat, one still syncing waits and then starts, and one that cannot take a reply is skipped.",
   "recipes.pullThreadHint":
-    "If this conversation is still running, this beat is skipped. If its history is still syncing, the run waits, then starts.",
+    "If this conversation is still running, this beat is skipped. If its history is still syncing, the run waits, then starts. If it cannot take a reply, this beat is skipped.",
   "recipes.previewPullSkip": "{count} can't take a reply and will be skipped.",
   "recipes.scopeTasksWarn": "Broad — affects every app.",
   "recipes.scopeSource": "One app",
@@ -845,7 +849,7 @@ export const en = {
   "recipes.writeBackHintPull":
     "The result goes back to this chat. It will not start this automation again.",
   "recipes.writeBackHintPullScope":
-    "Each matching conversation gets its own result. Sending it back does not start this automation again.",
+    "Each matching conversation gets its own result. While a task stays open, it can get another one every occurrence. Sending it back does not start this automation again.",
   "recipes.writeBackUnavailable":
     "This destination is unavailable. Choose a sendable conversation or Keep here.",
   "recipes.writeBackTargetUnavailable": "{name} (unavailable)",
@@ -2206,6 +2210,8 @@ export const zh: Record<MessageKey, string> = {
     "保存这个自动化？\n\n覆盖范围：{coverage}\n完成后：{after}{rhythm}",
   "recipes.saveConfirmRhythm":
     "\n\n还开着的任务，每个周期都会再看一次。",
+  "recipes.saveConfirmRhythmReply":
+    "\n\n还开着的任务，每个周期都会再看一次，每次都可能再往会话里发一条结果。",
   "recipes.priorityTitle": "重叠时的优先级",
   "recipes.priorityLead": "条件越具体越优先，第 1 名先处理。定时自动化按自己的时间运行，不参与排序。",
   "recipes.priorityRank": "第 {rank}/{total}",
@@ -2370,13 +2376,15 @@ export const zh: Record<MessageKey, string> = {
   "recipes.formEdit": "编辑自动化",
   "recipes.formBind": "为这条会话创建自动化",
   "recipes.noExecutor": "保存自动化前，先到「连接应用」添加 Agent。",
-  "recipes.watchLegend": "看哪些",
+  "recipes.watchLegend": "范围",
   "recipes.scopeTasks": "全部任务",
   "recipes.scopeTasksHint": "已经被当成任务的会话。",
   "recipes.pullScopeHint":
-    "还开着的任务，每个周期都会再看一次。关掉的不再进入。还在进行的跳过这一拍；还在同步的等完再开始；发不回结果的会话会跳过。",
+    "还开着的任务，每个周期都会再看一次。关掉的不再进入。",
+  "recipes.pullScopeBeat":
+    "到点时，还在进行的跳过这一拍，还在同步的等完再开始，发不回结果的会跳过。",
   "recipes.pullThreadHint":
-    "这条会话如果还在进行，就跳过这一拍。历史还在同步时，会等同步完再开始。",
+    "这条会话如果还在进行，就跳过这一拍。历史还在同步时，会等同步完再开始。发不回结果时，这一拍会跳过。",
   "recipes.previewPullSkip": "{count} 条目前发不回，到点会跳过。",
   "recipes.scopeTasksWarn": "范围很宽——覆盖所有应用。",
   "recipes.scopeSource": "一个应用",
@@ -2399,7 +2407,7 @@ export const zh: Record<MessageKey, string> = {
   "recipes.writeBackCheck": "处理完后发回原会话",
   "recipes.writeBackHint": "Agent 做完后，把结果发回原会话。",
   "recipes.writeBackHintPull": "结果会发回这条会话，不会再次触发本自动化。",
-  "recipes.writeBackHintPullScope": "每条命中的会话各自收到结果。发回去不会再次触发本自动化。",
+  "recipes.writeBackHintPullScope": "每条命中的会话各自收到结果。任务一直开着时，每个周期都可能再收到一条。发回去不会再次触发本自动化。",
   "recipes.writeBackUnavailable": "此目标不可用，请选择可发送的会话，或留在本地。",
   "recipes.writeBackTargetUnavailable": "{name}（不可用）",
   "recipes.writeBackNoTargets": "暂无可用的会话",
