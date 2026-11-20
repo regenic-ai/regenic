@@ -1019,6 +1019,25 @@ describe("work observation transitions", () => {
     assert.equal(automaticWorkCompletionReady(done, finished, null), false);
     finished.result = { summary: "HOLD\n\nNOTE\n需要你决定。" };
     assert.equal(automaticWorkCompletionReady(done, finished, null), false);
+    const unanchored = { ...done };
+    delete unanchored.head_event_id;
+    finished.result = { summary: "QUIET\n\nNOTE\n已经提交，不需要催。" };
+    assert.equal(automaticWorkCompletionReady(unanchored, finished, null), true);
+    finished.result = { summary: "HOLD\n\nNOTE\n需要你决定。" };
+    assert.equal(automaticWorkCompletionReady(unanchored, finished, null), false);
+
+    input.handle.result = { summary: "REPLY 请今天补上。\n\nNOTE\n内部口径" };
+    assert.deepEqual(planWorkObservation(input).delivery, {
+      kind: "enqueue",
+      payload: { summary: "请今天补上。", content: undefined },
+    });
+    input.handle.result = { summary: "方方，表已经交了。\n\nNOTE\n内部口径" };
+    assert.deepEqual(planWorkObservation(input).delivery, {
+      kind: "enqueue",
+      payload: { summary: "方方，表已经交了。", content: undefined },
+    });
+    input.handle.result = { summary: "NOTE\n只有证据" };
+    assert.deepEqual(planWorkObservation(input).delivery, { kind: "keep" });
   });
 
   it("keeps empty result validation when no result was ever observed", () => {

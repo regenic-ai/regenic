@@ -445,6 +445,7 @@ export type WorkOutboundReply =
   | { kind: "unmarked"; text: string };
 
 const NOTE_LINE = /(?:^|\r?\n)NOTE[ \t]*(?:\r?\n|$)/;
+const PROTOCOL_LINE = /^(QUIET|NO_REPLY|REPLY|HOLD)(?:[ \t]+(.*))?$/;
 
 /** Chat text before a NOTE line. The note itself is never delivered. */
 export function workChatMessage(body: string): string {
@@ -452,26 +453,42 @@ export function workChatMessage(body: string): string {
   return (match ? body.slice(0, match.index) : body).trim();
 }
 
-/** How a finished answer should be delivered. Unmarked text keeps the old whole-answer send. */
-export function workOutboundReply(summary: string | undefined): WorkOutboundReply {
+function splitUnattendedAnswer(summary: string | undefined): {
+  token: string | null;
+  message: string;
+  note: string;
+} {
   const text = summary?.trim() ?? "";
-  if (!text) {
-    return { kind: "unmarked", text: "" };
-  }
+  if (!text) return { token: null, message: "", note: "" };
   const breakAt = text.search(/\r?\n/);
   const first = (breakAt === -1 ? text : text.slice(0, breakAt)).trim();
   const rest = breakAt === -1 ? "" : text.slice(breakAt).replace(/^\r?\n/, "");
-  if (first === WORK_REPLY_QUIET || first === WORK_REPLY_SILENCE) {
+  const token = PROTOCOL_LINE.exec(first);
+  const inline = token?.[2]?.trim() ?? "";
+  const body = token ? [inline, rest].filter(Boolean).join("\n") : text;
+  const noteAt = NOTE_LINE.exec(body);
+  return {
+    token: token?.[1] ?? null,
+    message: (noteAt ? body.slice(0, noteAt.index) : body).trim(),
+    note: noteAt ? body.slice(noteAt.index + noteAt[0].length).trim() : "",
+  };
+}
+
+/** How a finished answer should be delivered. Unmarked text keeps the old whole-answer send. */
+export function workOutboundReply(summary: string | undefined): WorkOutboundReply {
+  const parsed = splitUnattendedAnswer(summary);
+  if (parsed.token === WORK_REPLY_QUIET || parsed.token === WORK_REPLY_SILENCE) {
     return { kind: "silent" };
   }
-  if (first === WORK_REPLY_HOLD) {
+  if (parsed.token === WORK_REPLY_HOLD) {
     return { kind: "hold" };
   }
-  if (first === WORK_REPLY_SEND) {
-    const message = workChatMessage(rest);
-    return message ? { kind: "send", text: message } : { kind: "silent" };
+  if (parsed.token === WORK_REPLY_SEND) {
+    return parsed.message ? { kind: "send", text: parsed.message } : { kind: "silent" };
   }
-  return { kind: "unmarked", text };
+  // A note with no chat text is evidence, not a message. An ordinary answer is unchanged.
+  if (parsed.note && !parsed.message) return { kind: "silent" };
+  return { kind: "unmarked", text: parsed.message };
 }
 
 export function wrapEvidenceSection(

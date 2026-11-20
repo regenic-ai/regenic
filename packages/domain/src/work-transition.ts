@@ -341,7 +341,9 @@ export function prepareWorkAcknowledgment(input: WorkAcknowledgment, facts: {
     || item.acknowledged_run_id === run.id) {
     return { outcome: "conflict", reason: "not_acknowledgeable" };
   }
-  if (completed && run.write_back_required === true && (
+  const reply = workOutboundReply(run.result?.summary);
+  if (completed && run.write_back_required === true
+    && reply.kind !== "hold" && reply.kind !== "silent" && (
     !delivery || delivery.run_id !== run.id || delivery.status !== "acked" || delivery.write_back !== "sent"
   )) {
     return { outcome: "conflict", reason: "not_acknowledgeable" };
@@ -1318,7 +1320,7 @@ export function planWorkObservation(input: {
           payload: outbound.kind === "send"
             ? { summary: outbound.text, content: undefined }
             : {
-                summary: nextRun.result?.summary ?? "",
+                summary: outbound.text,
                 content: nextRun.result?.content,
               },
         };

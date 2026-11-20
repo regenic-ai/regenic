@@ -436,6 +436,36 @@ for (const driver of drivers.filter((entry) => entry.name.startsWith("sqlite")))
       });
     }
 
+    it("closes a quiet scheduled run without a triggering message and keeps a choice open", async (t) => {
+      const f = await fixture(t, driver, { ...policy, write_back_required: true, write_back_target: TARGET });
+      const current = await f.store.getDisposition("work-trigger-event");
+      await setDisposition(f.store, {
+        ...current, disposition: "outside_current_work", decided_at: LATER,
+      });
+      const detached = await seedLegacyWorkHeadEvent(f, driver, f.item.id, null);
+      const quiet = await f.store.commitWorkObservation({
+        ...f.input,
+        expected_item: detached,
+        handle: { ...f.input.handle, result: { summary: "QUIET\n\nNOTE\n已经提交。" } },
+      });
+      assert.equal(quiet.outcome, "applied");
+      assert.equal((await f.store.getWorkItem(ORG, f.item.id)).acknowledged_run_id, f.run.id);
+      assert.equal((await f.store.getConversationPref(ORG, f.item.thread_id)).hidden, true);
+      assert.equal(await f.store.getWorkDeliveryByItem(ORG, f.item.id), null);
+      assert.equal((await f.store.getDisposition("work-trigger-event")).disposition, "outside_current_work");
+
+      const held = await fixture(t, driver, { ...policy, write_back_required: true, write_back_target: TARGET });
+      const heldItem = await seedLegacyWorkHeadEvent(held, driver, held.item.id, null);
+      assert.equal((await held.store.commitWorkObservation({
+        ...held.input,
+        expected_item: heldItem,
+        handle: { ...held.input.handle, result: { summary: "HOLD\n\nNOTE\n需要你决定。" } },
+      })).outcome, "applied");
+      assert.equal((await held.store.getWorkItem(ORG, held.item.id)).acknowledged_run_id, undefined);
+      assert.equal((await held.store.getConversationPref(ORG, held.item.thread_id))?.hidden ?? false, false);
+      assert.equal((await held.store.getDisposition("work-trigger-event")).disposition, "current_work");
+    });
+
     it("atomically closes successful work without human acknowledgment and reopens for new work", async (t) => {
       const f = await fixture(t, driver, policy);
       const completed = await f.store.commitWorkObservation(f.input);

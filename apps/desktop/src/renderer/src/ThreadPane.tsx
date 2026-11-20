@@ -491,7 +491,9 @@ export const ThreadPane = memo(function ThreadPane({
     && Boolean(thread.work?.run_id)
     && thread.work?.acknowledged_run_id !== thread.work?.run_id
     && thread.work?.auto_completed !== true
-    && (thread.work?.can_write_back !== true || thread.work?.delivery?.write_back === "sent");
+    && (thread.work?.needs_operator === true && Boolean(thread.work?.head_event_id)
+      || thread.work?.can_write_back !== true
+      || thread.work?.delivery?.write_back === "sent");
   const canAcknowledgeFailure = Boolean(onAcknowledgeWork)
     && Boolean(resultSummary)
     && thread.work?.status === "failed"

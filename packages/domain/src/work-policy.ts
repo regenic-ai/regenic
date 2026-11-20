@@ -318,14 +318,16 @@ export function automaticWorkCompletionReady(
 ): boolean {
   if (!run || run.completion_policy_version !== 1 || run.status !== "completed"
     || run.start_state === "pending" || run.start_state === "uncertain"
-    || !run.external_run_id || !item.head_event_id || item.status !== "done"
+    || !run.external_run_id || item.status !== "done"
     || item.current_run_id !== run.id || item.org_id !== run.org_id
     || item.id !== run.work_item_id || item.recipe_id !== run.recipe_id) return false;
   const reply = workOutboundReply(run.result?.summary);
   if (reply.kind === "hold") return false;
+  // A quiet check has nothing to send, including a timer run with no triggering message.
   if (run.write_back_required === false || reply.kind === "silent") {
     return true;
   }
+  if (!item.head_event_id) return false;
   return run.write_back_required === true && Boolean(
     delivery && delivery.org_id === item.org_id && delivery.work_item_id === item.id
     && delivery.run_id === run.id && delivery.status === "acked" && delivery.write_back === "sent",

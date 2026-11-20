@@ -868,6 +868,32 @@ function foldWorkThreadWithinTransaction(
   });
 }
 
+function closeQuietWorkWithinTransaction(
+  db: Database.Database, orgId: string, item: WorkItem, run: WorkRun, now: string,
+): void {
+  const dedupeKey = JSON.stringify(["work_item", item.id, "quiet_completed", run.id, 1]);
+  if (db.prepare("SELECT 1 FROM conversation_lifecycle_events WHERE org_id = ? AND dedupe_key = ?")
+    .get(orgId, dedupeKey)) return;
+  const saved = db.prepare(`UPDATE work_items SET acknowledged_run_id = ?, version = version + 1, updated_at = ?
+    WHERE org_id = ? AND id = ? AND current_run_id = ? RETURNING *`)
+    .get(run.id, now, orgId, item.id, run.id) as WorkItemRow | undefined;
+  if (!saved) return;
+  const savedItem = toWorkItem(saved);
+  db.prepare(`INSERT INTO conversation_lifecycle_events (
+    id, org_id, thread_id, aggregate_type, aggregate_id, aggregate_version,
+    event_type, dedupe_key, schema_version, payload_json, occurred_at, created_at
+  ) VALUES (?, ?, ?, 'work_item', ?, ?, 'work_acknowledged', ?, 1, ?, ?, ?)`)
+    .run(
+      randomUUID(), orgId, savedItem.thread_id, savedItem.id, savedItem.version ?? 0,
+      dedupeKey,
+      JSON.stringify({ work_item_id: savedItem.id, run_id: run.id, reason: "quiet_completed" }),
+      now, now,
+    );
+  if (run.hide_on_success !== false) {
+    foldWorkThreadWithinTransaction(db, orgId, savedItem.thread_id, savedItem.visibility_intent_version ?? 0, now);
+  }
+}
+
 function finishSuccessfulWorkWithinTransaction(
   db: Database.Database, orgId: string, workItemId: string, runId: string, now: string,
 ): void {
@@ -881,6 +907,10 @@ function finishSuccessfulWorkWithinTransaction(
   const item = toWorkItem(itemRow);
   const run = runRow ? toWorkRun(runRow) : null;
   if (!run || !automaticWorkCompletionReady(item, run, deliveryRow ? toWorkDelivery(deliveryRow) : null)) return;
+  if (!item.head_event_id) {
+    closeQuietWorkWithinTransaction(db, orgId, item, run, now);
+    return;
+  }
   const dedupeKey = JSON.stringify(["source_event", item.head_event_id, "work_completed", run.id, 1]);
   if (db.prepare("SELECT 1 FROM conversation_lifecycle_events WHERE org_id = ? AND dedupe_key = ?")
     .get(orgId, dedupeKey)) return;

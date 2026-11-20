@@ -541,6 +541,7 @@ export function threadPreview(thread: InboxThread): string {
 }
 
 const REPLY_NOTE_LINE = /(?:^|\r?\n)NOTE[ \t]*(?:\r?\n|$)/;
+const REPLY_PROTOCOL_LINE = /^(QUIET|NO_REPLY|REPLY|HOLD)(?:[ \t]+(.*))?$/;
 
 /** Operator-facing result text. Protocol words stay off the workbench. */
 export function workOperatorText(summary: string | undefined): string {
@@ -551,16 +552,19 @@ export function workOperatorText(summary: string | undefined): string {
   const breakAt = text.search(/\r?\n/);
   const first = (breakAt === -1 ? text : text.slice(0, breakAt)).trim();
   const rest = breakAt === -1 ? "" : text.slice(breakAt).replace(/^\r?\n/, "");
-  if (first !== "REPLY" && first !== "QUIET" && first !== "NO_REPLY" && first !== "HOLD") {
-    return text;
+  const token = REPLY_PROTOCOL_LINE.exec(first);
+  const inline = token?.[2]?.trim() ?? "";
+  const body = token ? [inline, rest].filter(Boolean).join("\n") : text;
+  const noteAt = REPLY_NOTE_LINE.exec(body);
+  const note = noteAt ? body.slice(noteAt.index + noteAt[0].length).trim() : "";
+  const message = (noteAt ? body.slice(0, noteAt.index) : body).trim();
+  if (!token) {
+    return noteAt ? [message, note].filter(Boolean).join("\n\n") : text;
   }
-  const noteAt = REPLY_NOTE_LINE.exec(rest);
-  const note = noteAt ? rest.slice(noteAt.index + noteAt[0].length).trim() : "";
-  const message = (noteAt ? rest.slice(0, noteAt.index) : rest).trim();
-  if (first === "REPLY") {
-    return [message, note].filter(Boolean).join("\n\n");
+  if (token[1] === "QUIET" || token[1] === "NO_REPLY") {
+    return note || message;
   }
-  return note;
+  return [message, note].filter(Boolean).join("\n\n");
 }
 
 export function listPreview(thread: InboxThread, title: string): string | null {

@@ -614,6 +614,19 @@ describe("thread activity", () => {
       ),
       "两套口径冲突，需要你决定催哪一版。",
     );
+    assert.equal(
+      listPreview(
+        thread(chat.messages, {
+          work: {
+            id: "work-1",
+            status: "done",
+            result_summary: "REPLY 请今天补交。\n\nNOTE\n内部口径",
+          },
+        }),
+        "Ada",
+      ),
+      "请今天补交。",
+    );
     assert.match(workNextStepCopy({ record_class: "task" }) ?? "", /Create an automation/);
     assert.match(
       workNextStepCopy({ work: { status: "running" } }) ?? "",
