@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 export const CONTEXT_LEXICAL_ALGORITHM_VERSION = "segment-bm25-v1";
 export const CONTEXT_LEXICAL_BM25 = { k1: 1.2, b: 0.75 } as const;
 
@@ -35,12 +37,25 @@ export interface MatchAuthorizedContextLexicalInput {
   org_id: string;
   query: string;
   authorized: ContextLexicalKey[];
+  /** Stable ordered identity for reusing an unchanged authorization staging set. */
+  authorization_hash?: string;
+}
+
+export interface ContextLexicalCoverageProof {
+  authorization_hash: string;
+  authorized_count: number;
+  covered_count: number;
+  complete: boolean;
+  /** Only uncovered keys are materialized; complete coverage keeps this empty. */
+  uncovered: ContextLexicalKey[];
 }
 
 export interface MatchAuthorizedContextLexicalResult
   extends ContextLexicalIndexStatus {
   matched: ContextLexicalKey[];
+  /** Legacy explicit coverage, retained for indexes that do not support compact proofs. */
   covered: ContextLexicalKey[];
+  coverage?: ContextLexicalCoverageProof;
 }
 
 export interface ContextLexicalIndex {
@@ -70,6 +85,23 @@ export interface ContextLexicalCorpus {
   documentCount: number;
   averageLength: number;
   documentFrequency: Map<string, number>;
+}
+
+export function contextLexicalAuthorizationHash(
+  keys: readonly ContextLexicalKey[],
+): string {
+  const hash = createHash("sha256");
+  hash.update(`${keys.length}\0`);
+  let chunk = "";
+  for (const key of keys) {
+    chunk += `${key.event_id.length}:${key.event_id}${key.content_hash}`;
+    if (chunk.length >= 64 * 1024) {
+      hash.update(chunk);
+      chunk = "";
+    }
+  }
+  if (chunk) hash.update(chunk);
+  return hash.digest("hex");
 }
 
 export function normalizeContextLexicalText(value: string | undefined): string {
