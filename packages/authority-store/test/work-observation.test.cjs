@@ -436,6 +436,18 @@ for (const driver of drivers.filter((entry) => entry.name.startsWith("sqlite")))
       });
     }
 
+    it("hides a quiet reply on the triggering message even when write-back was required", async (t) => {
+      const f = await fixture(t, driver, { ...policy, write_back_required: true, write_back_target: TARGET });
+      assert.equal((await f.store.commitWorkObservation({
+        ...f.input,
+        handle: { ...f.input.handle, result: { summary: "QUIET\n\nNOTE\n已经提交。" } },
+      })).outcome, "applied");
+      assert.equal((await f.store.getDisposition(f.item.head_event_id)).disposition, "outside_current_work");
+      assert.equal((await f.store.getWorkItem(ORG, f.item.id)).acknowledged_run_id, f.run.id);
+      assert.equal((await f.store.getConversationPref(ORG, f.item.thread_id)).hidden, true);
+      assert.equal(await f.store.getWorkDeliveryByItem(ORG, f.item.id), null);
+    });
+
     it("closes a quiet scheduled run without a triggering message and keeps a choice open", async (t) => {
       const f = await fixture(t, driver, { ...policy, write_back_required: true, write_back_target: TARGET });
       const current = await f.store.getDisposition("work-trigger-event");

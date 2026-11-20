@@ -86,6 +86,7 @@ import {
   planWorkDeliveryCommand,
   canonicalContextJson,
   automaticWorkCompletionReady,
+  workOutboundReply,
   type CommitWorkObservation,
   type CommitWorkObservationResult,
 } from "@regenic/domain";
@@ -944,6 +945,12 @@ function finishSuccessfulWorkWithinTransaction(
       JSON.stringify({ work_item_id: item.id, run_id: run.id, completion_policy_version: 1,
         disposition_version: trigger.version + 1,
         disposition: "outside_current_work", reason: "work_completed" }), now, now);
+  // A quiet answer does not send. Record it finished or the thread can never hide.
+  if (workOutboundReply(run.result?.summary).kind === "silent") {
+    db.prepare(`UPDATE work_items SET acknowledged_run_id = ?, version = version + 1, updated_at = ?
+      WHERE org_id = ? AND id = ? AND current_run_id = ?`)
+      .run(run.id, now, orgId, item.id, run.id);
+  }
   if (run.hide_on_success !== false) {
     foldWorkThreadWithinTransaction(db, orgId, item.thread_id, item.visibility_intent_version ?? 0, now);
   }
