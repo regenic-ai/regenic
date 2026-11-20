@@ -97,6 +97,7 @@ import {
   scrollOlderHasMore,
   inboxCursor,
   mergeInboxDelta,
+  inboxPageAroundEvent,
   mergeOlderInbox,
   olderInboxCursor,
   mergeRecentInbox,
@@ -730,6 +731,34 @@ export function ConsoleApp() {
       olderBusyRef.current.delete(threadId);
       setLoadingOlderId((currentId) => (currentId === threadId ? null : currentId));
     }
+  };
+
+  const revealFind = async (threadId: string, hit: { id: string; occurredAt: string }) => {
+    const loaded = messagesRef.current[threadId] ?? [];
+    if (loaded.some((item) => item.event.id === hit.id)) return true;
+    const cursor = inboxPageAroundEvent(hit.occurredAt);
+    let page: InboxViewItem[];
+    try {
+      page = await fetchInbox({
+        thread_id: threadId,
+        before: cursor.before,
+        before_id: cursor.before_id,
+        limit: THREAD_PAGE_SIZE,
+      });
+    } catch (caught) {
+      if (isInboxAbortError(caught)) return false;
+      return false;
+    }
+    if (!page.some((item) => item.event.id === hit.id)) return false;
+    setMessagesByThread((prev) => rememberThreadMessages(
+      prev,
+      threadId,
+      mergeOlderInbox(prev[threadId] ?? loaded, page),
+    ));
+    if (page.length >= THREAD_PAGE_SIZE) {
+      setHasOlderByThread((prev) => ({ ...prev, [threadId]: true }));
+    }
+    return true;
   };
 
   const loadOlderHeads = async () => {
@@ -1851,11 +1880,12 @@ export function ConsoleApp() {
             onAskAbout={(thread) => {
               setAskSeed({
                 threadId: thread.id,
-                title: thread.title ?? thread.label,
+                title: threadTitle(thread),
                 nonce: Date.now(),
               });
               setNav("search");
             }}
+            onRevealFind={(hit) => selectedId ? revealFind(selectedId, hit) : Promise.resolve(false)}
             onOpenConnections={() => setNav("engine")}
           />
         ) : null}

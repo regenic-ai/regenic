@@ -1,24 +1,30 @@
 import { useEffect, useRef, useState } from "react";
 import { searchPersonalContext } from "./api";
-import { contextSearchInput } from "./context-search";
+import { contextSearchInput, orderedFindHits, type FindHit } from "./context-search";
 import { ChevronDownIcon, ChevronUpIcon, CloseIcon, SearchIcon } from "./Icons";
 import { useLocale } from "./LocaleContext";
 
 /** In-conversation find: type to search, Enter and Shift+Enter step through hits, Esc closes. */
-export function ThreadFindBar({ threadId, onLocate, onClose }: {
+export function ThreadFindBar({ threadId, anchorAt, onLocate, onState, onClose }: {
   threadId: string;
-  onLocate: (eventId: string) => void;
+  anchorAt: () => number | null;
+  onLocate: (hit: FindHit) => void | Promise<void>;
+  onState: (state: { query: string; eventId: string | null }) => void;
   onClose: () => void;
 }) {
   const { t } = useLocale();
   const [query, setQuery] = useState("");
   const [searchedFor, setSearchedFor] = useState("");
-  const [hits, setHits] = useState<string[]>([]);
+  const [hits, setHits] = useState<FindHit[]>([]);
   const [index, setIndex] = useState(0);
   const [busy, setBusy] = useState(false);
   const request = useRef(0);
   const locate = useRef(onLocate);
+  const report = useRef(onState);
+  const anchor = useRef(anchorAt);
   locate.current = onLocate;
+  report.current = onState;
+  anchor.current = anchorAt;
 
   async function run(text: string) {
     const trimmed = text.trim();
@@ -35,10 +41,11 @@ export function ThreadFindBar({ threadId, onLocate, onClose }: {
         contextSearchInput(trimmed, "", threadId, 20, "messages", new Date(), "all", true),
       );
       if (ticket !== request.current) return;
-      const ids = result.items.map((hit) => hit.event_id);
-      setHits(ids);
-      setIndex(0);
-      if (ids[0]) locate.current(ids[0]);
+      const ordered = orderedFindHits(result.items, anchor.current());
+      setHits(ordered.hits);
+      setIndex(ordered.index);
+      const current = ordered.hits[ordered.index];
+      if (current) await locate.current(current);
     } catch {
       if (ticket === request.current) setHits([]);
     } finally {
@@ -50,6 +57,12 @@ export function ThreadFindBar({ threadId, onLocate, onClose }: {
   }
 
   useEffect(() => {
+    report.current({ query, eventId: hits[index]?.id ?? null });
+  }, [query, hits, index]);
+
+  useEffect(() => () => report.current({ query: "", eventId: null }), []);
+
+  useEffect(() => {
     const timer = window.setTimeout(() => void run(query), 300);
     return () => window.clearTimeout(timer);
   }, [query, threadId]);
@@ -58,7 +71,7 @@ export function ThreadFindBar({ threadId, onLocate, onClose }: {
     if (!hits.length) return;
     const next = (index + delta + hits.length) % hits.length;
     setIndex(next);
-    locate.current(hits[next]);
+    void locate.current(hits[next]);
   }
 
   const settled = !busy && searchedFor === query.trim() && Boolean(searchedFor);

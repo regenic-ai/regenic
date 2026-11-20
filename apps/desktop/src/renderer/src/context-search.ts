@@ -65,6 +65,42 @@ export function planContextSearchQuery(query: string, now = new Date()): SearchQ
   };
 }
 
+export interface FindHit {
+  id: string;
+  occurredAt: string;
+}
+
+/** In-thread find walks hits in conversation order, starting at the first one in or below the viewport. */
+export function orderedFindHits(
+  items: ReadonlyArray<{ event_id: string; occurred_at: string }>,
+  anchorAt: number | null,
+): { hits: FindHit[]; index: number } {
+  const seen = new Set<string>();
+  const hits = items
+    .map((item) => ({ id: item.event_id, occurredAt: item.occurred_at, at: Date.parse(item.occurred_at) }))
+    .filter((item) => item.id && Number.isFinite(item.at) && !seen.has(item.id) && seen.add(item.id))
+    .sort((left, right) => left.at - right.at || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0))
+    .map(({ id, occurredAt }) => ({ id, occurredAt }));
+  if (!hits.length) return { hits, index: 0 };
+  if (anchorAt === null || !Number.isFinite(anchorAt)) return { hits, index: hits.length - 1 };
+  const next = hits.findIndex((hit) => Date.parse(hit.occurredAt) >= anchorAt);
+  return { hits, index: next >= 0 ? next : hits.length - 1 };
+}
+
+/** Literal ranges for in-thread find. Empty when case-folding would shift indexes. */
+export function findMarkRanges(text: string, query: string): Array<[number, number]> {
+  const needle = query.trim();
+  if (!needle || !text) return [];
+  const haystack = text.toLowerCase();
+  const target = needle.toLowerCase();
+  if (haystack.length !== text.length || target.length !== needle.length) return [];
+  const ranges: Array<[number, number]> = [];
+  for (let at = haystack.indexOf(target); at >= 0; at = haystack.indexOf(target, at + target.length)) {
+    ranges.push([at, at + target.length]);
+  }
+  return ranges;
+}
+
 export function contextSearchInput(
   query: string, source: string, thread: string, limit: number,
   kind: "all" | "messages" | "files" = "all",
