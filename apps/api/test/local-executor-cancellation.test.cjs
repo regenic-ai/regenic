@@ -189,8 +189,8 @@ for (const managed of [true, false]) {
         await f.drainCancellationJobs();
         const [job] = await authority.listCancellationJobs("org");
         assert.equal(job.status, "succeeded");
-        assert.equal(job.outcome_code, cancel ? "observed_cancelled" : "unsupported");
-        assert.equal((await authority.getWorkRun("org", "run")).status, cancel ? "cancelled" : "running");
+        assert.equal(job.outcome_code, "observed_cancelled");
+        assert.equal((await authority.getWorkRun("org", "run")).status, "cancelled");
         assert.deepEqual(f.calls, ["drop:run", ...(cancel ? ["cancel:owned-agent-run"] : [])]);
       });
     }

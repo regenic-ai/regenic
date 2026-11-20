@@ -1239,14 +1239,21 @@ export function prepareCancellationJobObservation(
   if (handle.status !== "cancelled" && handle.status !== "completed" && handle.status !== "failed") {
     throw new Error("Cancellation observation must prove a terminal executor state");
   }
-  if (!workRunHandleMatchesExecution(current, handle)) {
+  const unboundLocalCancel = handle.status === "cancelled"
+    && current.external_run_id === undefined
+    && current.agent_thread_id === undefined
+    && handle.external_run_id === current.id
+    && handle.agent_thread_id === undefined;
+  if (!unboundLocalCancel && !workRunHandleMatchesExecution(current, handle)) {
     return { outcome: "conflict" };
   }
   const next: WorkRun = {
     ...current,
     version: (current.version ?? 0) + 1,
     start_state: undefined,
-    external_run_id: current.external_run_id ?? handle.external_run_id,
+    external_run_id: unboundLocalCancel
+      ? undefined
+      : current.external_run_id ?? handle.external_run_id,
     agent_thread_id: handle.agent_thread_id ?? current.agent_thread_id,
     status: handle.status,
     result: handle.result ?? current.result,

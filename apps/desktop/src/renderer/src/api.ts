@@ -1469,10 +1469,9 @@ export async function tryRecipe(
     | { thread_id?: string; error?: { message?: string } }
     | { error?: { message?: string } };
   if (!response.ok) {
-    throw new Error(
-      "error" in body && body.error?.message
-        ? body.error.message
-        : `recipe try ${response.status}`,
+    throwKernelError(
+      "error" in body ? body : {},
+      `recipe try ${response.status}`,
     );
   }
   const thread_id =
@@ -1499,8 +1498,8 @@ export async function runWorkItem(id: string, expectedVersion: number): Promise<
     }),
   });
   if (!response.ok) {
-    const body = (await response.json()) as { error?: { message?: string } };
-    throw new Error(body.error?.message ?? `work run ${response.status}`);
+    const body = (await response.json()) as { error?: { code?: string; message?: string } };
+    throwKernelError(body, `work run ${response.status}`);
   }
 }
 

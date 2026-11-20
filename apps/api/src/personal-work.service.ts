@@ -611,11 +611,7 @@ export class PersonalWorkService implements OnModuleDestroy {
     const executor = host.get("executors").get(run.executor_type);
     if (!executor) throw new Error("cancel_executor_unavailable");
     if (!executor.cancel) {
-      const now = new Date().toISOString();
-      const settled = await authority.settleCancellationJob({
-        kind: "succeeded", ...lease, now, outcome_code: "unsupported",
-      });
-      if (!settled) throw new CancellationJobLeaseLostError();
+      await this.closeUnsupportedCancellation(authority, lease, run, item);
       return;
     }
     if (!run.external_run_id && !run.agent_thread_id) {
@@ -650,6 +646,31 @@ export class PersonalWorkService implements OnModuleDestroy {
       ...lease,
       expected_run: run,
       handle: terminal,
+      now,
+    });
+    if (committed.outcome === "conflict") throw new CancellationJobLeaseLostError();
+    if (committed.outcome === "applied") {
+      this.events.workUpdated(item.id);
+      this.inbox.touchInboxDigest();
+    }
+  }
+
+  /**
+   * Dismiss already removed the work item. An executor with no cancel hook
+   * cannot stop the inferior, but the run must still leave `running` or the
+   * chat stays occupied and later tries stay blocked.
+   */
+  private async closeUnsupportedCancellation(
+    authority: WorkStore,
+    lease: { org_id: string; id: string; owner: string; claim_token: string },
+    run: WorkRun,
+    item: WorkItem,
+  ): Promise<void> {
+    const now = new Date().toISOString();
+    const committed = await authority.commitCancellationJobObservation({
+      ...lease,
+      expected_run: run,
+      handle: localCancelHandle(run),
       now,
     });
     if (committed.outcome === "conflict") throw new CancellationJobLeaseLostError();
@@ -1316,7 +1337,9 @@ export class PersonalWorkService implements OnModuleDestroy {
         existing.status === "waiting_human"
       ) {
         throw new PersonalConnectorError(
-          "conflict",
+          existing.recipe_id && existing.recipe_id !== recipe.id
+            ? "work_running_elsewhere"
+            : "work_in_progress",
           existing.recipe_id && existing.recipe_id !== recipe.id
             ? "Another rule is already running on this chat"
             : "This chat already has work in progress",
@@ -1329,7 +1352,7 @@ export class PersonalWorkService implements OnModuleDestroy {
         existing.recipe_id !== recipe.id
       ) {
         throw new PersonalConnectorError(
-          "conflict",
+          "work_bound",
           "Another rule is already bound to this chat",
           409,
         );
@@ -2116,6 +2139,24 @@ export class PersonalWorkService implements OnModuleDestroy {
 const RECIPE_RECENT_RUN_LIMIT = 5;
 
 class CancellationJobLeaseLostError extends Error {}
+
+function localCancelHandle(run: WorkRun): ExecutorRunHandle {
+  if (run.external_run_id) {
+    return {
+      external_run_id: run.external_run_id,
+      ...(run.agent_thread_id ? { agent_thread_id: run.agent_thread_id } : {}),
+      status: "cancelled",
+    };
+  }
+  if (run.agent_thread_id) {
+    return {
+      external_run_id: run.agent_thread_id,
+      agent_thread_id: run.agent_thread_id,
+      status: "cancelled",
+    };
+  }
+  return { external_run_id: run.id, status: "cancelled" };
+}
 
 async function withCancellationJobLease<T>(
   authority: WorkStore,
