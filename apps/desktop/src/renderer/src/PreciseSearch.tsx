@@ -316,7 +316,7 @@ export function PreciseSearch({ onSettings, onOpenConversation, onLocate, locked
             <circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" strokeWidth="1.5" />
             <path d="M10.5 10.5 14 14" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
           </svg>
-          <input id={heading ? "context-query" : undefined} ref={input} type="search" value={query} maxLength={8000}
+          <input id="context-query" ref={input} type="search" value={query} maxLength={8000}
             aria-label={t("search.query")} placeholder={t("search.placeholder")} autoFocus={autoFocus}
             onChange={(event) => setQuery(event.target.value)}
             onKeyDown={(event) => { if (event.key === "Escape" && busy) { event.preventDefault(); cancel(); } }} />
