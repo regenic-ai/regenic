@@ -294,7 +294,8 @@ function walkPostNodes(
     return mentionLabel(value, names);
   }
   if (tag === "text" || tag === "a") {
-    return typeof value.text === "string" ? value.text : "";
+    const text = typeof value.text === "string" ? value.text : "";
+    return projectFeishuStyles(text, value.style);
   }
   if (Array.isArray(value.content)) {
     return walkPostNodes(value.content, names);
@@ -450,8 +451,10 @@ function isMentionPlaceholder(value: string): boolean {
   return /^_user_\d+$/i.test(value) || /^_all$/i.test(value);
 }
 
+export type FeishuTextStyle = "bold" | "italic" | "underline" | "lineThrough";
+
 export type FeishuPostNode =
-  | { tag: "text"; text: string }
+  | { tag: "text"; text: string; style?: FeishuTextStyle[] }
   | { tag: "at"; user_id: string; user_name?: string };
 
 export type FeishuOutgoingBody =
@@ -467,8 +470,10 @@ const FEISHU_AT_TAG =
  * the kernel still sends one body string.
  */
 export function feishuOutgoingBody(text: string): FeishuOutgoingBody {
-  const nodes = splitFeishuMentions(text);
-  if (!nodes.some((node) => node.tag === "at")) {
+  const nodes = splitFeishuMentions(text).flatMap((node) =>
+    node.tag === "text" ? styleFeishuText(node.text) : [node],
+  );
+  if (!nodes.some((node) => node.tag === "at" || node.style?.length)) {
     return { msg_type: "text", content: { text } };
   }
   return {
@@ -686,12 +691,160 @@ function feishuPostParagraphs(nodes: readonly FeishuPostNode[]): FeishuPostNode[
         lines.push([]);
       }
       if (part) {
-        lines[lines.length - 1].push({ tag: "text", text: part });
+        lines[lines.length - 1].push({
+          tag: "text",
+          text: part,
+          ...(node.style?.length ? { style: node.style } : {}),
+        });
       }
     });
   }
   const paragraphs = lines.filter((line) => line.length > 0);
   return paragraphs.length > 0 ? paragraphs : [[{ tag: "text", text: "" }]];
+}
+
+function projectFeishuStyles(text: string, style: unknown): string {
+  if (!text || !Array.isArray(style)) {
+    return text;
+  }
+  let out = text;
+  if (style.includes("lineThrough")) out = `~~${out}~~`;
+  if (style.includes("italic")) out = `*${out}*`;
+  if (style.includes("bold")) out = `**${out}**`;
+  if (style.includes("underline")) out = `<u>${out}</u>`;
+  return out;
+}
+
+function styleFeishuText(text: string): FeishuPostNode[] {
+  return parseStyledRuns(text, []).map((run) => ({
+    tag: "text",
+    text: run.text,
+    ...(run.style.length > 0 ? { style: run.style } : {}),
+  }));
+}
+
+function parseStyledRuns(
+  text: string,
+  style: FeishuTextStyle[],
+): Array<{ text: string; style: FeishuTextStyle[] }> {
+  const runs: Array<{ text: string; style: FeishuTextStyle[] }> = [];
+  let index = 0;
+  while (index < text.length) {
+    const mark = nextFeishuMark(text, index);
+    if (!mark) {
+      pushStyledRun(runs, text.slice(index), style);
+      break;
+    }
+    if (mark.index > index) {
+      pushStyledRun(runs, text.slice(index, mark.index), style);
+    }
+    if (mark.style === "code") {
+      pushStyledRun(runs, text.slice(mark.contentStart, mark.contentEnd), []);
+    } else {
+      const added = mark.style === "boldItalic"
+        ? ["bold", "italic"] as const
+        : [mark.style];
+      runs.push(...parseStyledRuns(
+        text.slice(mark.contentStart, mark.contentEnd),
+        [...style, ...added],
+      ));
+    }
+    index = mark.end;
+  }
+  return runs;
+}
+
+function nextFeishuMark(
+  text: string,
+  from: number,
+): { index: number; contentStart: number; contentEnd: number; end: number; style: FeishuTextStyle | "boldItalic" | "code" } | undefined {
+  const found = [
+    findWrappedMark(text, from, "***", "***", "boldItalic"),
+    findWrappedMark(text, from, "~~", "~~", "lineThrough"),
+    findWrappedMark(text, from, "**", "**", "bold"),
+    findItalicMark(text, from),
+    findWrappedMark(text, from, "<u>", "</u>", "underline"),
+    findWrappedMark(text, from, "`", "`", "code"),
+  ].filter((mark) => mark !== undefined);
+  return found.sort((left, right) => left.index - right.index)[0];
+}
+
+function findWrappedMark(
+  text: string,
+  from: number,
+  open: string,
+  close: string,
+  style: FeishuTextStyle | "boldItalic" | "code",
+): { index: number; contentStart: number; contentEnd: number; end: number; style: FeishuTextStyle | "boldItalic" | "code" } | undefined {
+  let search = from;
+  while (search < text.length) {
+    const opener = text.indexOf(open, search);
+    if (opener < 0) {
+      return undefined;
+    }
+    const contentStart = opener + open.length;
+    const closer = text.indexOf(close, contentStart);
+    if (closer > contentStart) {
+      return {
+        index: opener,
+        contentStart,
+        contentEnd: closer,
+        end: closer + close.length,
+        style,
+      };
+    }
+    search = opener + open.length;
+  }
+  return undefined;
+}
+
+function findItalicMark(
+  text: string,
+  from: number,
+): { index: number; contentStart: number; contentEnd: number; end: number; style: "italic" } | undefined {
+  for (let opener = from; opener < text.length; opener += 1) {
+    if (text[opener] !== "*" || text[opener + 1] === "*") {
+      if (text[opener] === "*" && text[opener + 1] === "*") opener += 1;
+      continue;
+    }
+    for (let closer = opener + 1; closer < text.length; closer += 1) {
+      if (text[closer] !== "*" || text[closer + 1] === "*") {
+        if (text[closer] === "*" && text[closer + 1] === "*") closer += 1;
+        continue;
+      }
+      if (closer === opener + 1) {
+        break;
+      }
+      return {
+        index: opener,
+        contentStart: opener + 1,
+        contentEnd: closer,
+        end: closer + 1,
+        style: "italic",
+      };
+    }
+  }
+  return undefined;
+}
+
+function pushStyledRun(
+  runs: Array<{ text: string; style: FeishuTextStyle[] }>,
+  text: string,
+  style: FeishuTextStyle[],
+): void {
+  if (!text) {
+    return;
+  }
+  const last = runs[runs.length - 1];
+  if (last && sameFeishuStyle(last.style, style)) {
+    last.text += text;
+    return;
+  }
+  runs.push({ text, style: [...style] });
+}
+
+function sameFeishuStyle(left: readonly FeishuTextStyle[], right: readonly FeishuTextStyle[]): boolean {
+  return left.length === right.length && left.every((item, index) => item === right[index]);
 }
 
 function pushFeishuText(nodes: FeishuPostNode[], text: string): void {
