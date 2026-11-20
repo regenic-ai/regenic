@@ -20,6 +20,7 @@ export function MenuSelect({
   onLoad,
   onSearch,
   resultsReady = true,
+  resultsCapped = false,
 }: {
   value: string;
   options: MenuSelectOption[];
@@ -35,6 +36,8 @@ export function MenuSelect({
   onSearch?: (query: string, signal: AbortSignal) => Promise<void>;
   /** False until the first page of `options` is stored. Later searches keep that page visible. */
   resultsReady?: boolean;
+  /** The name lookup returned more rows than the menu shows. */
+  resultsCapped?: boolean;
 }) {
   const { t } = useLocale();
   const listId = useId();
@@ -46,6 +49,7 @@ export function MenuSelect({
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
   const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [retry, setRetry] = useState(0);
   const selected = options.find((item) => item.value === value);
@@ -93,9 +97,11 @@ export function MenuSelect({
     const needle = query.trim();
     if (!open || !search || !needle) {
       setSearching(false);
+      setSearchError(false);
       return;
     }
     setSearching(true);
+    setSearchError(false);
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
       setSearching(true);
@@ -104,7 +110,10 @@ export function MenuSelect({
           if (!controller.signal.aborted) setSearching(false);
         },
         () => {
-          if (!controller.signal.aborted) setSearching(false);
+          if (!controller.signal.aborted) {
+            setSearching(false);
+            setSearchError(true);
+          }
         },
       );
     }, 250);
@@ -304,7 +313,16 @@ export function MenuSelect({
               </button>
             </div>
           ) : null}
-          {(onLoad || onSearch) && !loading && !searching && resultsReady && !loadError && filtered.length === 0
+          {onSearch && searchError && !loading && !searching && !loadError && filtered.length === 0 ? (
+            <div role="alert">
+              <p className="action-error">{t("inbox.searchIncompleteTitle")}</p>
+              <p className="muted">{t("inbox.searchIncomplete")}</p>
+              <button type="button" className="ghost" onClick={() => setRetry((current) => current + 1)}>
+                {t("menuSelect.retry")}
+              </button>
+            </div>
+          ) : null}
+          {(onLoad || onSearch) && !loading && !searching && resultsReady && !loadError && !searchError && filtered.length === 0
             ? <p className="muted" role="status">{t("menuSelect.empty")}</p> : null}
           <ul id={listId} className="menu-select-menu" role="listbox" aria-busy={onLoad ? loading || !resultsReady : undefined}>
             {filtered.map((option, index) => (
@@ -331,6 +349,10 @@ export function MenuSelect({
               </li>
             ))}
           </ul>
+          {onSearch && !query.trim() && !loading && resultsReady && !loadError && options.length > 0
+            ? <p className="muted">{t("inbox.searchRecent")}</p> : null}
+          {resultsCapped && query.trim() && !searching && !searchError
+            ? <p className="muted">{t("inbox.searchLimited")}</p> : null}
         </div>
       ) : null}
     </div>

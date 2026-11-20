@@ -380,6 +380,7 @@ export interface ConversationDirectoryView {
   source: string;
   can_send: boolean;
   hidden: boolean;
+  pinned: boolean;
   has_work: boolean;
   conversation_name?: string;
 }
@@ -777,6 +778,7 @@ export class PersonalInboxService {
         source: row.source,
         can_send: this.drivers.canSend(installations, thread),
         hidden: row.hidden,
+        pinned: row.pinned,
         has_work: row.has_current_work,
         ...(title || catalog ? { conversation_name: title || catalog } : {}),
       };

@@ -269,6 +269,7 @@ export function directoryInboxThread(item: {
   source: string;
   can_send: boolean;
   hidden: boolean;
+  pinned?: boolean;
   conversation_name?: string;
 }): InboxThread {
   return {
@@ -282,7 +283,7 @@ export function directoryInboxThread(item: {
     conversation_kind: null,
     unit_kind: null,
     unit_kind_label: null,
-    pinned: false,
+    pinned: item.pinned === true,
     hidden: item.hidden,
     visibility_version: 0,
     can_send: item.can_send,
@@ -374,6 +375,36 @@ export function shouldScanInboxSearch(input: {
     !input.pinnedOnly &&
     input.scannedPages < input.budget
   );
+}
+
+/** Prefix matches stay above weaker matches. Order inside each group is kept. */
+export function rankInboxSearchHits(
+  threads: readonly InboxThread[],
+  query: string,
+  titleOf: (thread: InboxThread) => string,
+): InboxThread[] {
+  const needle = query.trim().toLowerCase();
+  if (!needle) {
+    return [...threads];
+  }
+  return threads
+    .map((thread, index) => ({ thread, index, prefix: inboxSearchPrefix(thread, needle, titleOf) }))
+    .sort((left, right) => {
+      if (left.prefix !== right.prefix) {
+        return left.prefix ? -1 : 1;
+      }
+      return left.index - right.index;
+    })
+    .map((item) => item.thread);
+}
+
+function inboxSearchPrefix(
+  thread: InboxThread,
+  needle: string,
+  titleOf: (thread: InboxThread) => string,
+): boolean {
+  return [titleOf(thread), thread.directory_label, thread.conversation_label, thread.title, thread.label]
+    .some((field) => field?.trim().toLowerCase().startsWith(needle));
 }
 
 export function filterInboxThreadsByTitle(

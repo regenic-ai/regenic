@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { fetchConversationDirectory, fetchEngine, fetchSearchSource, fetchSearchWindow, searchPersonalContext } from "./api";
+import { capConversationDirectory, fetchConversationDirectory, fetchEngine, fetchSearchSource, fetchSearchWindow, searchPersonalContext } from "./api";
 import { MenuSelect } from "./MenuSelect";
 import {
   applySearchWindow,
@@ -81,6 +81,7 @@ export function PreciseSearch({ onSettings, onOpenConversation, onLocate, locked
   const [threadTitle, setThreadTitle] = useState("");
   const [conversations, setConversations] = useState<Array<{ value: string; label: string }>>([]);
   const [conversationsReady, setConversationsReady] = useState(false);
+  const [conversationsCapped, setConversationsCapped] = useState(false);
   const [limit, setLimit] = useState(DEFAULT_LIMIT);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [recent, setRecent] = useState<string[]>(loadRecent);
@@ -274,11 +275,13 @@ export function PreciseSearch({ onSettings, onOpenConversation, onLocate, locked
   }
 
   async function searchConversations(query: string, signal: AbortSignal) {
-    const loaded = await fetchConversationDirectory({ q: query, limit: 40 }, { signal });
+    const loaded = await fetchConversationDirectory({ q: query, limit: 41 }, { signal });
     if (signal.aborted) return;
+    const page = capConversationDirectory(loaded);
+    setConversationsCapped(page.capped);
     setConversations((current) => {
       const byId = new Map(current.map((item) => [item.value, item]));
-      for (const item of loaded) byId.set(item.id, { value: item.id, label: item.label });
+      for (const item of page.rows) byId.set(item.id, { value: item.id, label: item.label });
       return [...byId.values()];
     });
   }
@@ -385,6 +388,7 @@ export function PreciseSearch({ onSettings, onOpenConversation, onLocate, locked
                   onLoad={loadConversations}
                   onSearch={searchConversations}
                   resultsReady={conversationsReady}
+                  resultsCapped={conversationsCapped}
                   onChange={(value) => {
                     setThread(value);
                     setThreadTitle(conversations.find((item) => item.value === value)?.label ?? "");

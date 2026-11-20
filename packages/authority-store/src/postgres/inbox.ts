@@ -404,6 +404,7 @@ export async function searchConversationDirectory(
       isHidden: "p.hidden = TRUE",
       isShown: "(p.hidden IS NULL OR p.hidden = FALSE)",
       column: "CASE WHEN p.hidden THEN 1 ELSE 0 END",
+      pinned: "CASE WHEN p.pinned THEN 1 ELSE 0 END",
     },
   );
   const rows = await db.query<{
@@ -413,6 +414,7 @@ export async function searchConversationDirectory(
     has_current_work: boolean | number;
     pref_title: string | null;
     hidden: number;
+    pinned: number | boolean;
     catalog_label: string | null;
   }>(numberConversationDirectorySql(statement.sql), statement.params);
   return rows.map((row) => ({
@@ -421,6 +423,7 @@ export async function searchConversationDirectory(
     pref_title: row.pref_title,
     catalog_label: row.catalog_label,
     hidden: row.hidden === 1,
+    pinned: row.pinned === 1 || row.pinned === true,
     has_current_work: row.has_current_work === true || row.has_current_work === 1,
     face_occurred_at: row.face_occurred_at instanceof Date
       ? row.face_occurred_at.toISOString()

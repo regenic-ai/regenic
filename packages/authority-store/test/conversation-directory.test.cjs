@@ -97,7 +97,7 @@ describe("conversation directory", () => {
     `).run(olderThread, older, older, quietThread, older, older);
     db.prepare(`
       INSERT INTO conversation_prefs (org_id, thread_id, title, pinned, updated_at)
-      VALUES ('local-owner', ?, 'team regenic notes', 0, ?)
+      VALUES ('local-owner', ?, 'team regenic notes', 1, ?)
     `).run(recentThread, recent);
     db.close();
     const reopened = new SqliteAuthorityStore(path);
@@ -112,6 +112,8 @@ describe("conversation directory", () => {
       });
       assert.equal(exact.length, 1);
       assert.equal(exact[0].pref_title, "team regenic notes");
+      assert.equal(exact[0].pinned, true);
+      assert.equal(ranked[0].pinned, false);
       const recentPage = await reopened.searchConversationDirectory("local-owner", { limit: 1 });
       assert.equal(recentPage.length, 1);
       assert.equal(recentPage[0].thread_id, recentThread);

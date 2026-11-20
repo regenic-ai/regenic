@@ -210,6 +210,7 @@ export function RecipesPage({
     conversations,
     load: loadConversations,
     search: searchConversations,
+    searchCapped: conversationsCapped,
     ready: conversationsReady,
   } = useRecipeConversationCatalog(
     initialConversations,
@@ -873,6 +874,7 @@ export function RecipesPage({
                       onLoad={loadConversations}
                       onSearch={searchConversations}
                       resultsReady={conversationsReady}
+                      resultsCapped={conversationsCapped}
                       options={conversationOptions}
                       onChange={(thread_id) => {
                         const picked = conversationOptions.find(
@@ -1050,6 +1052,7 @@ export function RecipesPage({
                       onLoad={loadConversations}
                       onSearch={searchConversations}
                       resultsReady={conversationsReady}
+                      resultsCapped={conversationsCapped}
                       ariaLabel={t("recipes.writeBackTo")}
                       onChange={(write_back_thread_id) =>
                         setDraft((current) => ({ ...current, write_back_thread_id }))

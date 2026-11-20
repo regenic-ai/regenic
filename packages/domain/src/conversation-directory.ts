@@ -14,6 +14,7 @@ export interface ConversationDirectoryEntry {
   pref_title: string | null;
   catalog_label: string | null;
   hidden: boolean;
+  pinned: boolean;
   has_current_work: boolean;
   face_occurred_at: string;
 }
@@ -85,10 +86,11 @@ export function conversationDirectoryStatement(
   orgId: string,
   query: ConversationDirectoryQuery | undefined,
   userConversation: string,
-  hidden: { isHidden: string; isShown: string; column: string } = {
+  hidden: { isHidden: string; isShown: string; column: string; pinned: string } = {
     isHidden: "p.hidden = 1",
     isShown: "(p.hidden IS NULL OR p.hidden = 0)",
     column: "COALESCE(p.hidden, 0)",
+    pinned: "COALESCE(p.pinned, 0)",
   },
 ): { sql: string; params: unknown[] } {
   const params: unknown[] = [orgId];
@@ -134,6 +136,7 @@ export function conversationDirectoryStatement(
         th.has_current_work AS has_current_work,
         p.title AS pref_title,
         ${hidden.column} AS hidden,
+        ${hidden.pinned} AS pinned,
         MAX(m.label) AS catalog_label
       FROM thread_heads th
       JOIN events e ON e.id = th.face_event_id
@@ -150,7 +153,7 @@ export function conversationDirectoryStatement(
         )
       WHERE ${where.join(" AND ")}
       GROUP BY
-        th.thread_id, e.source, th.face_occurred_at, th.has_current_work, p.title, ${hidden.column}
+        th.thread_id, e.source, th.face_occurred_at, th.has_current_work, p.title, ${hidden.column}, ${hidden.pinned}
       ${order}
       LIMIT ?
     `,

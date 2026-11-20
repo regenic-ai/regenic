@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { fetchConversationDirectory, type ConversationDirectoryItem } from "./api";
+import {
+  capConversationDirectory,
+  fetchConversationDirectory,
+  type ConversationDirectoryItem,
+} from "./api";
 import type { RecipeConversationOption } from "./types";
 
 const DIRECTORY_LIMIT = 40;
@@ -17,6 +21,7 @@ export function useRecipeConversationCatalog(
 ) {
   const [discovered, setDiscovered] = useState<RecipeConversationOption[]>([]);
   const [ready, setReady] = useState(false);
+  const [searchCapped, setSearchCapped] = useState(false);
   const loadRef = useRef<{
     controller: AbortController;
     promise: Promise<void>;
@@ -74,11 +79,13 @@ export function useRecipeConversationCatalog(
     const needle = query.trim();
     if (!needle) return Promise.resolve();
     return fetchConversationDirectory(
-      { q: needle, limit: DIRECTORY_LIMIT },
+      { q: needle, limit: DIRECTORY_LIMIT + 1 },
       { signal },
     ).then((rows) => {
       if (signal.aborted) return;
-      setDiscovered((current) => mergeDirectoryOptions(current, rows.map(directoryOption)));
+      const page = capConversationDirectory(rows);
+      setSearchCapped(page.capped);
+      setDiscovered((current) => mergeDirectoryOptions(current, page.rows.map(directoryOption)));
     });
   }, []);
 
@@ -88,6 +95,7 @@ export function useRecipeConversationCatalog(
       loadRef.current = null;
       setDiscovered([]);
       setReady(false);
+      setSearchCapped(false);
       return;
     }
     const pending = start();
@@ -102,7 +110,7 @@ export function useRecipeConversationCatalog(
     return mergeDirectoryOptions(initialConversations, discovered);
   }, [initialConversations, discovered]);
 
-  return { conversations, load, search, ready };
+  return { conversations, load, search, searchCapped, ready };
 }
 
 function directoryOption(item: ConversationDirectoryItem): RecipeConversationOption {

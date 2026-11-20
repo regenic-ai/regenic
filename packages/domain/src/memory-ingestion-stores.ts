@@ -1044,6 +1044,7 @@ export class MemoryAuthorityStore
           pref_title: pref?.title ?? null,
           catalog_label: null,
           hidden: pref?.hidden === true,
+          pinned: pref?.pinned === true,
           has_current_work: item.decision.disposition === "current_work",
           face_occurred_at: item.event.occurred_at,
         });

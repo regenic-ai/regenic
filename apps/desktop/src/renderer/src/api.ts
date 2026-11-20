@@ -347,8 +347,18 @@ export interface ConversationDirectoryItem {
   source: string;
   can_send: boolean;
   hidden: boolean;
+  pinned: boolean;
   has_work: boolean;
   conversation_name?: string;
+}
+
+export const CONVERSATION_DIRECTORY_PAGE = 40;
+
+export function capConversationDirectory<T>(rows: readonly T[]): { rows: T[]; capped: boolean } {
+  return {
+    rows: rows.slice(0, CONVERSATION_DIRECTORY_PAGE),
+    capped: rows.length > CONVERSATION_DIRECTORY_PAGE,
+  };
 }
 
 export async function fetchConversationDirectory(
@@ -390,6 +400,7 @@ export async function fetchConversationDirectory(
     source: item.source,
     can_send: item.can_send === true,
     hidden: item.hidden === true,
+    pinned: item.pinned === true,
     has_work: item.has_work === true,
     ...(item.conversation_name ? { conversation_name: item.conversation_name } : {}),
   }));

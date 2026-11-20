@@ -16,6 +16,7 @@ import {
   directoryInboxThread,
   filterInboxThreadsByTitle,
   mergeInboxDirectoryHits,
+  rankInboxSearchHits,
   shouldScanInboxSearch,
   inboxSearchAwaitingOlder,
   INBOX_SEARCH_AUTO_PAGES,
@@ -254,6 +255,14 @@ describe("inbox title search", () => {
       ),
       ["synthetic:crm"],
     );
+  });
+
+  it("ranks a name prefix ahead of a loaded substring without changing the title", () => {
+    const weak = { ...thread({ id: "dsh:weak" }), title: "notes about regenic" };
+    const named = { ...thread({ id: "dsh:named" }), title: "Weekly notes", directory_label: "Regenic project" };
+    const ranked = rankInboxSearchHits([weak, named], "rege", (item) => item.title ?? item.label);
+    assert.deepEqual(ranked.map((item) => item.id), ["dsh:named", "dsh:weak"]);
+    assert.equal(ranked[0]?.title, "Weekly notes");
   });
 
   it("keeps scanning unloaded pages while a title search is active, then stops at the cap", () => {

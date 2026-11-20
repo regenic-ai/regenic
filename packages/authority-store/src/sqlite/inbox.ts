@@ -340,6 +340,7 @@ export function searchConversationDirectory(
     has_current_work: number;
     pref_title: string | null;
     hidden: number;
+    pinned: number;
     catalog_label: string | null;
   }>;
   return rows.map((row) => ({
@@ -348,6 +349,7 @@ export function searchConversationDirectory(
     pref_title: row.pref_title,
     catalog_label: row.catalog_label,
     hidden: row.hidden === 1,
+    pinned: row.pinned === 1,
     has_current_work: row.has_current_work === 1,
     face_occurred_at: row.face_occurred_at,
   }));

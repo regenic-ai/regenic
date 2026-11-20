@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { fetchConversationDirectory } from "./api";
+import { capConversationDirectory, fetchConversationDirectory } from "./api";
 import { formatChatTime, threadIsSyncing, threadSyncLabel } from "./format";
 import {
   directoryInboxThread,
   filterInboxThreads,
   mergeInboxDirectoryHits,
   filterInboxThreadsByTitle,
+  rankInboxSearchHits,
   groupThreadsByAttention,
   inboxRuleOptions,
   latestMessage,
@@ -173,6 +174,7 @@ export function InboxWorkspace({
   const [directoryThreads, setDirectoryThreads] = useState<InboxThread[]>([]);
   const [directoryLoading, setDirectoryLoading] = useState(false);
   const [directoryError, setDirectoryError] = useState(false);
+  const [directoryCapped, setDirectoryCapped] = useState(false);
   const [directoryRetry, setDirectoryRetry] = useState(0);
   useEffect(() => {
     const query = titleQuery.trim();
@@ -184,20 +186,23 @@ export function InboxWorkspace({
     return () => clearTimeout(timer);
   }, [titleQuery]);
   useEffect(() => {
-    if (!settledQuery || pinFilter === "pinned") {
+    if (!settledQuery) {
       setDirectoryThreads([]);
       setDirectoryLoading(false);
       setDirectoryError(false);
+      setDirectoryCapped(false);
       return;
     }
     const controller = new AbortController();
     let cancelled = false;
     setDirectoryLoading(true);
     setDirectoryError(false);
-    void fetchConversationDirectory({ q: settledQuery, limit: 40 }, { signal: controller.signal })
+    void fetchConversationDirectory({ q: settledQuery, limit: 41 }, { signal: controller.signal })
       .then((rows) => {
         if (cancelled) return;
-        setDirectoryThreads(rows.map(directoryInboxThread));
+        const page = capConversationDirectory(rows);
+        setDirectoryThreads(page.rows.map(directoryInboxThread));
+        setDirectoryCapped(page.capped);
         setDirectoryError(false);
       })
       .catch(() => {
@@ -210,19 +215,20 @@ export function InboxWorkspace({
       cancelled = true;
       controller.abort();
     };
-  }, [settledQuery, pinFilter, directoryRetry]);
+  }, [settledQuery, directoryRetry]);
   const pool = searching
     ? mergeInboxDirectoryHits(mergeInboxThreadLists(threads, otherThreads), directoryThreads)
     : threads;
   const channels = threadChannels(pool);
   const titleHits = filterInboxThreadsByTitle(pool, titleQuery, threadTitle);
-  const visible = filterInboxThreads(
+  const filtered = filterInboxThreads(
     titleHits,
     pinFilter,
     channelFilter,
     statusFilter,
     ruleFilter,
   );
+  const visible = searching ? rankInboxSearchHits(filtered, titleQuery, threadTitle) : filtered;
   const ruleChoices = inboxRuleOptions(pool, recipeNames);
   useEffect(() => {
     let cancelled = false;
@@ -258,21 +264,11 @@ export function InboxWorkspace({
     setPinFilter("all");
   };
   const canCreate = createTargets.length > 0;
-  const selectedMatches = Boolean(
-    selected && visible.some((thread) => thread.id === selected.id),
-  );
-  const firstVisibleId = visible[0]?.id ?? null;
   useEffect(() => {
     if (searching) {
       onNeedSearchCatalog?.();
     }
   }, [searching, onNeedSearchCatalog]);
-  useEffect(() => {
-    if (!searching || selectedMatches || !firstVisibleId) {
-      return;
-    }
-    onSelect(firstVisibleId);
-  }, [searching, selectedMatches, firstVisibleId, onSelect]);
   const renameSelected = useCallback(
     (title: string | null) => (selected ? onRename(selected, title) : Promise.resolve()),
     [selected, onRename],
@@ -639,6 +635,9 @@ export function InboxWorkspace({
               ))}
             </div>
           ))}
+          {searching && directoryCapped && !directoryLoading && !directoryError ? (
+            <p className="muted list-more">{t("inbox.searchLimited")}</p>
+          ) : null}
         </ListBody>
         <ColumnResizeHandle
           label={t("shell.resizeList")}
