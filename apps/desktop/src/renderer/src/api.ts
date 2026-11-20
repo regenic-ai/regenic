@@ -1816,6 +1816,35 @@ export async function cancelSearchAnswer(answerId: string): Promise<PersonalSear
   return response.json() as Promise<PersonalSearchAnswer>;
 }
 
+export interface SearchQuestion {
+  id: string;
+  query: string;
+  thread_id?: string;
+  status: string;
+  run_id?: string;
+  run_status?: string;
+  agent_thread_id?: string;
+}
+
+export async function startSearchQuestion(input: {
+  query: string;
+  thread_id?: string;
+}): Promise<SearchQuestion> {
+  const response = await kernelFetch("/v1/me/context/search/questions", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) throwKernelError(await response.json(), `search question ${response.status}`);
+  return response.json() as Promise<SearchQuestion>;
+}
+
+export async function fetchSearchQuestion(id: string, signal?: AbortSignal): Promise<SearchQuestion> {
+  const response = await kernelFetch(`/v1/me/context/search/questions/${encodeURIComponent(id)}`, { signal });
+  if (!response.ok) throwKernelError(await response.json(), `search question ${response.status}`);
+  return response.json() as Promise<SearchQuestion>;
+}
+
 export async function fetchSemanticIndexStatus(signal?: AbortSignal): Promise<SemanticIndexStatus> {
   const response = await kernelFetch("/v1/me/context/embedding/status", { signal });
   if (!response.ok) throwKernelError(await response.json(), `embedding status ${response.status}`);
