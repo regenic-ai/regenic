@@ -102,6 +102,7 @@ export class PersonalWorkSupervise {
         }, error);
       }
     }
+    this.retainSupervision(new Set(active.map((item) => item.id)));
   }
 
   async refreshOne(
@@ -365,6 +366,7 @@ export class PersonalWorkSupervise {
     });
     if (result.outcome === "ignored") {
       this.waits?.drop(run.id);
+      this.forgetWork(item.id);
       return;
     }
     if (result.outcome === "conflict") {
@@ -387,12 +389,14 @@ export class PersonalWorkSupervise {
     if (transition.item.status === "skipped" && item.status === "skipped") {
       this.waits?.drop(run.id);
       this.writeBackOverride.delete(item.id);
+      this.forgetWork(item.id);
       if (transition.changed) this.workUpdated?.(item.id);
       return;
     }
     if (transition.settled) {
       this.writeBackOverride.delete(item.id);
       this.waits?.drop(run.id);
+      this.forgetWork(item.id);
       if (!isSystemRecipeId(run.recipe_id)) {
         releaseFinishedAgentThread(nextRun.agent_thread_id);
         if (transition.item.status !== item.status) {
@@ -402,6 +406,20 @@ export class PersonalWorkSupervise {
     }
     if (transition.changed) {
       this.workUpdated?.(item.id);
+    }
+  }
+
+  private forgetWork(workItemId: string): void {
+    this.lastFollow.delete(workItemId);
+    this.lastReapLog.delete(workItemId);
+  }
+
+  private retainSupervision(activeIds: ReadonlySet<string>): void {
+    for (const id of this.lastFollow.keys()) {
+      if (!activeIds.has(id)) this.lastFollow.delete(id);
+    }
+    for (const id of this.lastReapLog.keys()) {
+      if (!activeIds.has(id)) this.lastReapLog.delete(id);
     }
   }
 }

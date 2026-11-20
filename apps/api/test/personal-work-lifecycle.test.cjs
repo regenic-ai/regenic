@@ -567,6 +567,28 @@ describe("work observation transaction boundaries", () => {
     assert.equal(f.digestChanges(), 1);
   });
 
+  it("drops reap timers when a run settles", async () => {
+    const f = await fixture();
+    f.supervisor.lastFollow.set(f.item.id, 1);
+    f.supervisor.lastReapLog.set(f.item.id, 1);
+    await f.supervisor.applyHandle(f.item, f.recipe, f.run, f.handle());
+    assert.equal(f.supervisor.lastFollow.has(f.item.id), false);
+    assert.equal(f.supervisor.lastReapLog.has(f.item.id), false);
+
+    const supervisor = new PersonalWorkSupervise({
+      orgId: () => ORG,
+      requireHost: () => ({ get: (name) => {
+        assert.equal(name, "authority");
+        return f.authority;
+      } }),
+    }, {});
+    supervisor.lastFollow.set("left-over", 1);
+    supervisor.lastReapLog.set("left-over", 1);
+    await supervisor.refreshRuns();
+    assert.equal(supervisor.lastFollow.has("left-over"), false);
+    assert.equal(supervisor.lastReapLog.has("left-over"), false);
+  });
+
   it("does not policy-hide a failed work item after the observation commit", async () => {
     const f = await fixture();
     await f.supervisor.applyHandle(f.item, f.recipe, f.run, f.handle("failed"));

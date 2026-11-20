@@ -4,8 +4,8 @@
   "private": true,
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "start": "node dist/main.js",
-    "start:dev": "tsx watch src/main.ts",
+    "start": "node --max-old-space-size=1536 dist/main.js",
+    "start:dev": "sh -c 'ulimit -n $(ulimit -Hn) 2>/dev/null || true; exec node scripts/dev-serve.mjs'",
     "test": "pnpm --filter @regenic/local-cli... build && pnpm --filter @regenic/api... build && node --experimental-sqlite --test --test-concurrency=1 test/personal-api*.test.cjs && node --experimental-sqlite --test $(find test -maxdepth 1 -type f -name '*.test.cjs' ! -name 'personal-api*')",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },

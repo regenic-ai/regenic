@@ -66,10 +66,23 @@ spec:
               containerPort: 3000
           command: ["bash", "-lc"]
           args:
-            - mkdir -p /data/home /data/tmp /data/blobs && exec pnpm --filter @regenic/api start
+            - |
+              mkdir -p /data/home /data/tmp /data/blobs
+              ulimit -n "$(ulimit -Hn)" || true
+              exec pnpm --filter @regenic/api start
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            failureThreshold: 3
           env:
             - name: NODE_ENV
               value: production
+            # 1536Mi leaves headroom under the 2Gi limit. DSH uses 3072Mi on 4Gi.
+            - name: NODE_OPTIONS
+              value: --max-old-space-size=1536
             - name: PORT
               value: "3000"
             - name: LISTEN_HOST
