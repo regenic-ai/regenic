@@ -102,6 +102,7 @@ export function RecipesPage({
   const [recipes, setRecipes] = useState<RecipeView[]>([]);
   const [composing, setComposing] = useState(false);
   const [executors, setExecutors] = useState<ExecutorCatalogEntry[]>([]);
+  const [catalogReady, setCatalogReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -120,6 +121,7 @@ export function RecipesPage({
     ]);
     setRecipes(nextRecipes);
     setExecutors(nextExecutors);
+    setCatalogReady(true);
     setDraft((current) => withCatalogDefaults(current, nextExecutors));
   };
 
@@ -203,7 +205,7 @@ export function RecipesPage({
     load: loadConversations,
     ready: conversationsReady,
   } = useRecipeConversationCatalog(initialConversations, editing, locale);
-  const awaitingStart = recipes.length === 0 && !editing;
+  const awaitingStart = catalogReady && recipes.length === 0 && !editing;
   const conversationOptions = useMemo(
     () => conversationChoices(conversations, draft),
     [conversations, draft.thread_id, draft.thread_title],
