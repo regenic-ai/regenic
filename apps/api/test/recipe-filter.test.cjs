@@ -458,6 +458,82 @@ describe("recipe text filters", () => {
     assert.equal(f.starts(), 1);
   });
 
+  it("waits out a failed start before opening the next scheduled beat", async (t) => {
+    const f = await fixture(t, {
+      match: { thread_id: "test-chat:room" },
+      trigger: { kind: "pull", interval_ms: 60_000 },
+      can_write_back: false,
+    });
+    await f.dispatch.dispatchPullRecipes();
+    assert.equal(f.starts(), 1);
+    let [item] = (await f.authority.listWorkItems(ORG)).filter(
+      (row) => row.recipe_id === f.recipe.id,
+    );
+    const run = await f.authority.getActiveWorkRun(ORG, item.id);
+    const failed = await f.authority.commitWorkObservation({
+      expected_item: item,
+      expected_run: run,
+      handle: {
+        external_run_id: run.external_run_id,
+        status: "failed",
+        result: { summary: "Failed run" },
+      },
+      can_write_back: false,
+      trigger_kind: "pull",
+      now: new Date().toISOString(),
+    });
+    assert.equal(failed.outcome, "applied");
+    const scheduled = await f.authority.getRecipe(ORG, f.recipe.id);
+    await f.authority.putRecipe({
+      ...scheduled,
+      next_run_at: new Date(Date.parse(f.now) - 1000).toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+    await f.dispatch.dispatchPullRecipes();
+    const held = (await f.authority.listWorkItems(ORG)).filter(
+      (row) => row.recipe_id === f.recipe.id,
+    );
+    assert.equal(held.length, 1);
+    assert.equal(f.starts(), 1);
+    assert.ok((await f.authority.getRecipe(ORG, f.recipe.id)).next_run_at > f.now);
+
+    item = await f.authority.getWorkItem(ORG, item.id);
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const now = new Date().toISOString();
+      const recorded = await f.authority.recordWorkRunStartFailure({
+        expected_item: item,
+        run: {
+          id: `preflight-${attempt}`,
+          org_id: ORG,
+          work_item_id: item.id,
+          recipe_id: f.recipe.id,
+          executor_type: f.recipe.executor_type,
+          status: "failed",
+          result: { summary: "Unknown executor" },
+          write_back_required: false,
+          trigger_kind: "pull",
+          created_at: now,
+          updated_at: now,
+        },
+        mode: "automatic",
+      });
+      assert.equal(recorded.outcome, "applied");
+      item = recorded.item;
+    }
+    const due = await f.authority.getRecipe(ORG, f.recipe.id);
+    await f.authority.putRecipe({
+      ...due,
+      next_run_at: new Date(Date.parse(f.now) - 1000).toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+    await f.dispatch.dispatchPullRecipes();
+    const opened = (await f.authority.listWorkItems(ORG)).filter(
+      (row) => row.recipe_id === f.recipe.id,
+    );
+    assert.equal(opened.length, 2);
+    assert.equal(f.starts(), 2);
+  });
+
   it("queues a syncing conversation without holding the rest of the schedule", async (t) => {
     const f = await fixture(t, {
       match: { record_class: "task", source: "test-chat" },

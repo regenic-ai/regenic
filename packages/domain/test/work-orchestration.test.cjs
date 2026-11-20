@@ -55,6 +55,7 @@ const {
   occupiedRecipeSlots,
   normalizeRecipeMaxConcurrent,
   shouldAcceptPushRecord,
+  failedStartRetriesRemain,
   shouldRetryFailedPush,
   recipeSpecificity,
   recipePreemptedBy,
@@ -465,6 +466,9 @@ describe("recipe auto-start specification", () => {
       }),
       false,
     );
+    assert.equal(failedStartRetriesRemain(0), true);
+    assert.equal(failedStartRetriesRemain(2), true);
+    assert.equal(failedStartRetriesRemain(3), false);
   });
 
   it("advances pull schedules only against the recipe snapshot it observed", async () => {

@@ -16,6 +16,7 @@ import {
   ACTIVE_WORK_STATUSES,
   OCCUPIED_RECIPE_STATUSES,
   WORK_OBSERVE_AGAIN_STATUSES,
+  failedStartRetriesRemain,
   recipeAllowsPullDispatch,
   recipeAllowsPushDispatch,
   recipeHasStartCapacity,
@@ -157,9 +158,10 @@ export class PersonalWorkDispatch {
     const host = this.runtime.requireHost();
     const orgId = this.runtime.orgId();
     const authority = host.get("authority");
-    const [recipes, items] = await Promise.all([
+    const [recipes, items, failedItems] = await Promise.all([
       authority.listRecipes(orgId),
       authority.listWorkItems(orgId, { statuses: [...ACTIVE_WORK_STATUSES] }),
+      authority.listWorkItems(orgId, { statuses: ["failed"] }),
     ]);
     const now = new Date();
     for (const recipe of recipes) {
@@ -185,7 +187,8 @@ export class PersonalWorkDispatch {
               item.recipe_id === recipe.id &&
               item.thread_id === target.threadId &&
               isActiveWorkStatus(item.status),
-          )
+          ) ||
+          (await this.pullFailureStillRetries(recipe.id, target.threadId, failedItems))
         ) {
           continue;
         }
@@ -244,6 +247,28 @@ export class PersonalWorkDispatch {
         updated_at: nowIso,
       });
     }
+  }
+
+  /**
+   * A failed start on this rule still retries for a few minutes.
+   * The next beat waits so the same conversation does not run twice.
+   */
+  private async pullFailureStillRetries(
+    recipeId: string,
+    threadId: string,
+    failedItems: readonly WorkItem[],
+  ): Promise<boolean> {
+    const pending = failedItems.filter(
+      (item) => item.recipe_id === recipeId && item.thread_id === threadId,
+    );
+    const authority = this.runtime.requireHost().get("authority");
+    for (const item of pending) {
+      const attempts = failedRunCount(await authority.listWorkRuns(item.org_id, item.id));
+      if (failedStartRetriesRemain(attempts)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**
