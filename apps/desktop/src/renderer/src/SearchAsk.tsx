@@ -15,6 +15,17 @@ import type { InboxViewItem } from "./types";
 
 const QUESTIONS_KEY = "regenic.search.questions";
 const STOPPED_RUN = new Set(["failed", "cancelled", "canceled", "aborted"]);
+const SETTLED_RUN = new Set(["completed", "done", ...STOPPED_RUN]);
+const PROMPT_PREAMBLE = "Answer QUESTION using only";
+
+/** Working heartbeats and channel reminders are not part of the question. */
+function askSpeech(item: InboxViewItem): boolean {
+  if (item.activity === "working" || item.kind === "system") return false;
+  const text = item.body_text?.trim() ?? "";
+  if (!text && !(item.attachments?.length)) return false;
+  if (item.kind === "user" && text.startsWith(PROMPT_PREAMBLE)) return false;
+  return true;
+}
 
 interface StoredQuestion {
   id: string;
@@ -140,7 +151,7 @@ export function SearchAsk({ scope, scopeNonce = 0, onClearScope }: {
         setError(null);
         if (next.agent_thread_id) {
           const page = await fetchInbox(
-            { thread_id: next.agent_thread_id, limit: 40 },
+            { thread_id: next.agent_thread_id, limit: 200 },
             { signal: controller.signal },
           );
           if (!controller.signal.aborted) setItems(page);
@@ -166,8 +177,10 @@ export function SearchAsk({ scope, scopeNonce = 0, onClearScope }: {
   const selected = questions.find((entry) => entry.id === selectedId) ?? null;
   const canFollow = Boolean(selected && live?.agent_thread_id);
   const stopped = Boolean(live?.run_status && STOPPED_RUN.has(live.run_status));
-  const last = items[items.length - 1];
-  const thinking = Boolean(selected) && !stopped && !error && (!last || last.kind === "user");
+  const speech = items.filter(askSpeech);
+  const answered = speech.some((item) => item.kind === "assistant");
+  const settled = Boolean(live?.run_status && SETTLED_RUN.has(live.run_status));
+  const thinking = Boolean(selected) && !settled && !error && !answered;
 
   function startNew() {
     setSelectedId(null);
@@ -183,7 +196,7 @@ export function SearchAsk({ scope, scopeNonce = 0, onClearScope }: {
       if (canFollow && live?.agent_thread_id) {
         await sendReply({ thread_id: live.agent_thread_id, text });
         setDraft("");
-        const page = await fetchInbox({ thread_id: live.agent_thread_id, limit: 40 });
+        const page = await fetchInbox({ thread_id: live.agent_thread_id, limit: 200 });
         setItems(page);
         return;
       }
@@ -249,10 +262,13 @@ export function SearchAsk({ scope, scopeNonce = 0, onClearScope }: {
               {selected.scopeTitle ? (
                 <p className="ask-thread-scope">{t("search.ask.scope", { title: selected.scopeTitle })}</p>
               ) : null}
-              {!items.length ? (
-                <article className="ask-message is-user"><MessageBody text={selected.query} /></article>
+              <article className="ask-message is-user"><MessageBody text={selected.query} /></article>
+              {live?.run_id ? (
+                <div className="ask-reads">
+                  <AgentReadsCard runId={live.run_id} revision={`${live.run_status ?? ""}:${speech.length}`} />
+                </div>
               ) : null}
-              {items.map((item) => item.kind === "user" ? (
+              {speech.map((item) => item.kind === "user" ? (
                 <article key={item.event.id} className="ask-message is-user">
                   <MessageBody text={item.body_text ?? ""} attachments={item.attachments} />
                 </article>
@@ -264,11 +280,6 @@ export function SearchAsk({ scope, scopeNonce = 0, onClearScope }: {
                   </div>
                 </article>
               ))}
-              {live?.run_id ? (
-                <div className="ask-reads">
-                  <AgentReadsCard runId={live.run_id} revision={`${live.run_status ?? ""}:${items.length}`} />
-                </div>
-              ) : null}
               {thinking ? (
                 <div className="ask-message is-assistant is-thinking">
                   <span className="ask-avatar" aria-hidden="true"><SparkleIcon /></span>
