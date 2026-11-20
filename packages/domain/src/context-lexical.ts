@@ -77,7 +77,7 @@ export function normalizeContextLexicalText(value: string | undefined): string {
 }
 
 export function contextLexicalTerms(value: string | undefined): string[] {
-  return collectContextLexicalTerms(value, Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY)!;
+  return collectContextLexicalTerms(value, Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY) ?? [];
 }
 
 export function boundedContextLexicalTerms(
@@ -142,12 +142,18 @@ function collectContextLexicalTerms(
   const tokens = segmentedTokens(normalizeContextLexicalText(value));
   const terms = new Set<string>();
   let operations = 0;
+  let skippedLongToken = false;
   for (const token of tokens) {
     operations += 1;
-    if (operations > maxOperations || token.length > 128) return null;
+    if (operations > maxOperations) return null;
+    if (token.length > 128) {
+      skippedLongToken = true;
+      continue;
+    }
     terms.add(token);
     if (terms.size > maxTerms) return null;
   }
+  if (terms.size === 0 && skippedLongToken) return null;
   return [...terms];
 }
 

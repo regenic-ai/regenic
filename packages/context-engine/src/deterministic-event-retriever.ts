@@ -219,22 +219,29 @@ function anchorScore(source: AuthorizedContextSourceEvent, request: ContextReque
   return matchesAnchors(source, request) ? 1 : 0;
 }
 
-/** Default decay only separates near-tied relevance. A time filter asks for recent evidence. */
-export const FRESHNESS_HALF_LIFE_DAYS = { default: 180, recent: 7 } as const;
+/** Default decay only separates near-tied relevance. A recent window uses its own span. */
+export const FRESHNESS_HALF_LIFE_DAYS = { default: 180, minimum: 7 } as const;
 /** Age can overturn at most this fraction of the relevance score on the default path. */
 export const FRESHNESS_TIE_WEIGHT = 0.001;
+const DAY_MS = 86_400_000;
 
-export function freshnessHalfLifeDays(request: ContextRequest): number {
-  return request.filters?.occurred_after || request.filters?.occurred_before
-    ? FRESHNESS_HALF_LIFE_DAYS.recent
-    : FRESHNESS_HALF_LIFE_DAYS.default;
+/** Half-life of an occurred_after window. An upper bound alone does not shorten it. */
+export function freshnessHalfLifeDays(request: ContextRequest, now: string): number | undefined {
+  const after = request.filters?.occurred_after;
+  if (!after) return undefined;
+  const start = Date.parse(after);
+  const end = request.filters?.occurred_before ? Date.parse(request.filters.occurred_before) : Date.parse(now);
+  const spanDays = (end - start) / DAY_MS;
+  if (!Number.isFinite(spanDays) || spanDays <= 0) return undefined;
+  return Math.max(FRESHNESS_HALF_LIFE_DAYS.minimum, spanDays);
 }
 
-/** Rank multiplier. Time-range queries use the decay directly; the default path keeps it inside a 0.1% band. */
+/** Rank multiplier. A recent window uses its span; other queries stay inside a 0.1% band. */
 export function freshnessRank(occurredAt: string, now: string, request: ContextRequest): number {
-  const decay = freshnessDecay(occurredAt, now, freshnessHalfLifeDays(request));
-  if (freshnessHalfLifeDays(request) === FRESHNESS_HALF_LIFE_DAYS.recent) return decay;
-  return 1 - FRESHNESS_TIE_WEIGHT + FRESHNESS_TIE_WEIGHT * decay;
+  const windowDays = freshnessHalfLifeDays(request, now);
+  const decay = freshnessDecay(occurredAt, now, windowDays ?? FRESHNESS_HALF_LIFE_DAYS.default);
+  if (windowDays === undefined) return 1 - FRESHNESS_TIE_WEIGHT + FRESHNESS_TIE_WEIGHT * decay;
+  return decay;
 }
 
 /** Exponential decay: 1 at the reference time, 0.5 after one half-life. Future events stay at 1. */

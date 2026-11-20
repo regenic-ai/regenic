@@ -1,6 +1,6 @@
 # 语义搜索准确度优化方案
 
-> 状态：步骤 0 已接入两套验收集。步骤 2 已在 EmbeddingGemma（MPS，float32，128 token）上对照过。min-max 加 top-k 的 recall@10 和 nDCG@10 在两类集合的每一类上都高于当时的 n-gram 词法基线；相对 RRF，只有英文 update 的 nDCG 更低。中文过时选中从 4 次升到 13 次，安全门禁没有过。查询侧上下文不实现。步骤 6 的分词 BM25 已接入词法基线：英文 recall 0.482 → 0.747、nDCG 0.367 → 0.606；中文 recall 0.196 → 0.395、nDCG 0.152 → 0.361；中文过时选中 4 → 14。混合 profile 未重跑，默认仍是 v5。MMR 和单条覆盖还没做。步骤 4 已接入。默认 180 天半衰期只占相关度的 0.1%：中文六类 recall 不变，nDCG 0.361 → 0.362，过时选中仍是 14；英文词法基线不变。查询带 `occurred_after` 或 `occurred_before` 时改用 7 天半衰期，衰减直接乘上相关度。整段按 180 天相乘会把中文 lookup recall 从 0.507 拉到 0.396，没有留在默认路径。步骤 3 仍负责压过时消息。
+> 状态：步骤 0 已接入两套验收集。步骤 2 已在 EmbeddingGemma（MPS，float32，128 token）上对照过。min-max 加 top-k 的 recall@10 和 nDCG@10 在两类集合的每一类上都高于当时的 n-gram 词法基线；相对 RRF，只有英文 update 的 nDCG 更低。中文过时选中从 4 次升到 13 次，安全门禁没有过。查询侧上下文不实现。步骤 6 的分词 BM25 已接入词法基线：英文 recall 0.482 → 0.747、nDCG 0.367 → 0.606；中文 recall 0.196 → 0.395、nDCG 0.152 → 0.361；中文过时选中 4 → 14。混合 profile 未重跑，默认仍是 v5。MMR 和单条覆盖还没做。步骤 4 已接入。默认 180 天半衰期只占相关度的 0.1%：中文六类 recall 不变，nDCG 0.361 → 0.362，过时选中仍是 14；英文词法基线不变。查询带 `occurred_after` 时，半衰期取该下界到 `occurred_before`（没有则到检索时刻）的跨度，最短 7 天，衰减直接乘上相关度。只有上界时仍走 180 天、0.1%。整段按 180 天相乘会把中文 lookup recall 从 0.507 拉到 0.396，没有留在默认路径。步骤 3 仍负责压过时消息。
 
 ## 1. 现状
 
@@ -11,7 +11,7 @@
    - 词法路：`Intl.Segmenter("zh", { granularity: "word" })` 分词，再按 BM25（`k1 = 1.2`，`b = 0.75`）打分，算法版本 `segment-bm25-v1`。桌面搜索带 `search_kind`，`IndexedEventRetriever` 因此不走 FTS，对已授权事件逐条打 BM25。FTS 只给不带 `search_kind` 的召回做分词后的布尔 OR。
    - 向量路：EmbeddingGemma（768 维），候选数为预算的 5 倍（50–1000）。默认不再按余弦下限丢弃，索引返回的 top-k 都进入融合。对照 profile `personal-hybrid-thread-rrf-v4` 仍用 `vector_min_score = 0.7`。
 3. 默认融合把两路分数各自 min-max 到 0–1，再按向量 0.6、词法 0.4 相加。对照 profile 仍用 RRF（`RRF_K = 60`）。之后按会话重排：`0.8·best + 0.15·term coverage + 0.05·support`。融合分保留候选上的 `recency`，引擎排序再乘一次衰减。
-4. 确定性引擎的相关度权重：anchor 4 / exact_match 3 / lexical 2。排序分是相关度乘以时间衰减。默认半衰期 180 天，年龄最多改动相关度的 0.1%。查询带 `occurred_after` 或 `occurred_before` 时半衰期 7 天，衰减直接乘上相关度。没有查询词时按衰减排序。
+4. 确定性引擎的相关度权重：anchor 4 / exact_match 3 / lexical 2。排序分是相关度乘以时间衰减。默认半衰期 180 天，年龄最多改动相关度的 0.1%。查询带 `occurred_after` 时，半衰期是窗口跨度，最短 7 天，衰减直接乘上相关度。只有 `occurred_before` 时仍是 180 天、0.1%。没有查询词时按衰减排序。
 
 已识别的问题：
 
@@ -103,9 +103,9 @@ LoCoMo 和中文的 PerLTQA 也像个人记忆，但是 CC BY-NC，没有放进�
 
 - 参考：Vespa freshness rank feature、Elastic `function_score` gauss decay、Qdrant decay functions。
 - 衰减是 `exp(-ln2 · age / halfLife)`。年龄相对检索时刻：`as_of` 用 `temporal.recorded_at`，否则用这次读取的 `recorded_at`。未来事件和无法解析的时间记 1。
-- 查询带 `occurred_after` 或 `occurred_before` 时，半衰期 7 天，`final = relevance × decay`。桌面端把「最近 / 近 / 过去 N 天 / 周 / 月」写成这两个过滤字段。请求上没有 `order = recent`。
+- 查询带 `occurred_after` 时，半衰期是窗口跨度，最短 7 天，`final = relevance × decay`。窗口终点用 `occurred_before`，没有则用检索时刻。只有 `occurred_before` 时不缩短半衰期。桌面端把「最近 / 近 / 过去 N 天 / 周 / 月」写成这两个过滤字段。请求上没有 `order = recent`。
 - 其余查询半衰期 180 天，但年龄只占相关度的 0.1%：`final = relevance × (0.999 + 0.001 × decay)`。相关度为 0 时（浏览、没有查询词）直接按衰减排序。
-- 词法基线重测，k = 10，对照的是步骤 6 锁住的分词 BM25。整段按 180 天相乘：中文总分 recall 0.395 → 0.363，lookup 0.507 → 0.396，temporal 0.283 → 0.250，update recall 仍是 0.375，过时选中 14 → 12。lookup 和 temporal 低于上一步，这档没有留在默认路径。0.1% 带宽：六类 recall 都不变，过时选中仍是 14。中文 nDCG 0.361 → 0.362，MRR 0.553 → 0.554；temporal nDCG 0.3096 → 0.3101，update nDCG 0.3649 → 0.3666。英文五类分数与步骤 6 相同。验收集的问句几乎都不带时间范围，7 天半衰期只由单测覆盖：差 7 天的事件衰减为 0.5。
+- 词法基线重测，k = 10，对照的是步骤 6 锁住的分词 BM25。整段按 180 天相乘：中文总分 recall 0.395 → 0.363，lookup 0.507 → 0.396，temporal 0.283 → 0.250，update recall 仍是 0.375，过时选中 14 → 12。lookup 和 temporal 低于上一步，这档没有留在默认路径。0.1% 带宽：六类 recall 都不变，过时选中仍是 14。中文 nDCG 0.361 → 0.362，MRR 0.553 → 0.554；temporal nDCG 0.3096 → 0.3101，update nDCG 0.3649 → 0.3666。英文五类分数与步骤 6 相同。验收集的问句几乎都不带时间范围。窗口正好 7 天时，窗口起点的事件衰减为 0.5；30 天窗口里 7 天前的事件按 30 天半衰期衰减。
 - 2025 年 11 月之后，没有来自有影响力作者、且结论明确的论文改写这一步。
 
 ### 步骤 5：查询改写（改为非默认）
@@ -128,7 +128,7 @@ LoCoMo 和中文的 PerLTQA 也像个人记忆，但是 CC BY-NC，没有放进�
 做法：
 
 - 词法算法从 `literal-unicode-v2` 升到 `segment-bm25-v1`。`context_lexical_meta.algorithm_version` 对不上就视为没有索引，沿用现有的重建。`contextLexicalTerms` 改为分词结果：拉丁整词保持现状，「Excel文件」仍是 `excel` 加「文件」，不产生 `ce`。CJK 不再发 1 到 3 字滑窗。
-- 桌面搜索的词法分改为这段文字上的 BM25，不再用命中词项比例。文档频率取自当前组织、当前 generation 的词法索引。索引未覆盖的事件仍进入候选，词频饱和之后文档频率项记 0，避免一小撮未覆盖文档把稀有词放到无穷大。`search_kind` 改为用索引给正文打分；文件名和附件正文仍在索引之外逐条扫，但用同一套分词。FTS 的 `MATCH` 从「全部词项 OR」改为分词后的 OR，排序用 `bm25()`，不再只返回布尔命中。
+- 桌面搜索的词法分改为这段文字上的 BM25，不再用命中词项比例。文档频率按这次已经加载的正文计算。桌面搜索带 `search_kind`，加载已授权事件的正文后再打分。FTS 路径只用已经加载的命中和未覆盖事件，不会为了文档频率去读其余正文。超过 128 字的词被跳过，同条消息里的其他词仍进索引。`search_kind` 改为用索引给正文打分；文件名和附件正文仍在索引之外逐条扫，但用同一套分词。FTS 的 `MATCH` 从「全部词项 OR」改为分词后的 OR，排序用 `bm25()`，不再只返回布尔命中。
 - 会话重排里的词项覆盖改成该会话单条消息的最高覆盖。`0.8·best + 0.15·coverage + 0.05·support` 的系数不动。覆盖不再把同一会话里互不相关的消息拼成整句。混合 profile 升到 `personal-hybrid-thread-minmax-v6`，融合权重仍是向量 0.6、词法 0.4。
 - MMR 只在 `assembleBudget` 填充带 `search_kind` 的搜索结果时使用，普通上下文组装仍按分数顺序。同一会话的冗余记 1，不同会话再用分词 Jaccard。下一条取得分 `λ·相关 − (1−λ)·与已选条的最大冗余`。相关度接近时，第二个会话会排在同一会话的第二条前面；其他会话没有可比候选时，同一个会话仍可以占满 k 条。
 - 高亮走同一分词。查询「团队」不再把「2 个队吧」里的「队」标出来。界面前后文窗口不动，邻居消息继续出现，只是不再因为单字被算成命中。

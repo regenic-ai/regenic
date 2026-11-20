@@ -44,12 +44,12 @@ export class IndexedEventRetriever implements ContextRetriever {
       return { candidates: [] };
     }
     const eligible = eligibleEventSources(plan);
-    const candidatesFor = async (sources: typeof eligible) => eventCandidatesFor(
-      materialize ? await materialize(sources.map((source) => source.event.event_id)) : sources,
-      plan.request,
-      retrievalTimeFor(plan),
-      eligible,
-    );
+    const candidatesFor = async (sources: typeof eligible) => {
+      const loaded = materialize
+        ? await materialize(sources.map((source) => source.event.event_id))
+        : sources;
+      return eventCandidatesFor(loaded, plan.request, retrievalTimeFor(plan));
+    };
     // Filename metadata is not part of legacy Event lexical coverage.
     if (!plan.request.query || plan.request.search_kind) {
       return { candidates: await candidatesFor(eligible) };

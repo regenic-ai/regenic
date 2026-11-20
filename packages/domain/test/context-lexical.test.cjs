@@ -1,6 +1,6 @@
 const assert = require("node:assert/strict");
 const { describe, it } = require("node:test");
-const { contextLexicalQueryTerms, contextLexicalTerms, scoreContextLexicalText } = require("../dist");
+const { boundedContextLexicalTerms, contextLexicalQueryTerms, contextLexicalTerms, scoreContextLexicalText } = require("../dist");
 
 describe("Context lexical terms", () => {
   it("keeps Latin words whole and segments CJK into words", () => {
@@ -14,6 +14,12 @@ describe("Context lexical terms", () => {
   it("does not treat a character inside another word as a query term", () => {
     assert.equal(scoreContextLexicalText("目前就发了2个队吧", "团队最新进展").lexical, 0);
     assert.ok(scoreContextLexicalText("团队本周进展", "团队最新进展").lexical > 0);
+  });
+
+  it("keeps the other words when one token is longer than 128 characters", () => {
+    const text = `批准 ${"a".repeat(129)}`;
+    assert.deepEqual(contextLexicalTerms(text), ["批准"]);
+    assert.deepEqual(boundedContextLexicalTerms(text, 50_000, 100_000), ["批准"]);
   });
 
   it("does not score Latin substrings of unrelated words as matches", () => {

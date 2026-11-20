@@ -331,31 +331,47 @@ describe("deterministic context engine", () => {
     assert.ok(Math.abs(values[0].candidate.scores.recency - (0.999 + 0.001 * decay)) < 1e-12);
   });
 
-  it("uses a 7-day half-life when the query sets a time range", async () => {
-    const historicalEvent = sourceEvent({
-      id: "event-recent-window",
-      external_id: "message-recent-window",
-      occurred_at: "2026-08-22T10:00:00.000Z",
-      ingested_at: "2026-08-22T10:00:00.000Z",
-      content_hash: "8".repeat(64),
-      text: "recent window",
-    });
-    const values = await new DeterministicEventRetriever().retrieve({
+  it("uses the requested window as the freshness half-life", async () => {
+    const retrieveAt = async (filters) => new DeterministicEventRetriever().retrieve({
       request: request({
         query: undefined,
         anchors: undefined,
-        filters: { occurred_after: "2026-08-01T00:00:00.000Z" },
+        filters,
         temporal: { mode: "as_of", recorded_at: "2026-08-29T10:00:00.000Z" },
         budget: { profile: "recent-window", max_tokens: 100, max_items: 5, max_raw_evidence: 5 },
       }),
       read_epoch: "authority:future-read",
       recorded_at: "2026-09-30T00:00:00.000Z",
       principal_policy_hash: POLICY_HASH,
-      events: [{ ...historicalEvent, status: "current" }],
+      events: [{
+        ...sourceEvent({
+          id: "event-recent-window",
+          external_id: "message-recent-window",
+          occurred_at: "2026-08-22T10:00:00.000Z",
+          ingested_at: "2026-08-22T10:00:00.000Z",
+          content_hash: "8".repeat(64),
+          text: "recent window",
+        }),
+        status: "current",
+      }],
     });
 
-    assert.equal(values.length, 1);
-    assert.ok(Math.abs(values[0].candidate.scores.recency - 0.5) < 1e-12);
+    const week = await retrieveAt({
+      occurred_after: "2026-08-22T10:00:00.000Z",
+      occurred_before: "2026-08-29T10:00:00.000Z",
+    });
+    assert.ok(Math.abs(week[0].candidate.scores.recency - 0.5) < 1e-12);
+
+    const month = await retrieveAt({
+      occurred_after: "2026-07-30T10:00:00.000Z",
+      occurred_before: "2026-08-29T10:00:00.000Z",
+    });
+    assert.ok(Math.abs(month[0].candidate.scores.recency - Math.exp(-Math.LN2 * 7 / 30)) < 1e-12);
+
+    const upperBound = await retrieveAt({ occurred_before: "2026-08-29T10:00:00.000Z" });
+    const sevenDays = 7 * 24 * 60 * 60 * 1000;
+    const decay = Math.exp(-Math.LN2 * sevenDays / (180 * 24 * 60 * 60 * 1000));
+    assert.ok(Math.abs(upperBound[0].candidate.scores.recency - (0.999 + 0.001 * decay)) < 1e-12);
   });
 
   it("rejects an as-of time beyond the authority read boundary", async () => {

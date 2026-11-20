@@ -209,6 +209,57 @@ describe("indexed Event retrieval", () => {
     );
   });
 
+  it("ranks a rare materialized word above a word shared by the loaded bodies", async () => {
+    const sourceFor = (id, hash) => ({
+      event: {
+        event_id: id,
+        org_id: "example-org",
+        source: "synthetic",
+        external_id: id,
+        operation: "create",
+        occurred_at: "2026-09-01T00:00:00.000Z",
+        ingested_at: "2026-09-01T00:01:00.000Z",
+        content_hash: hash,
+      },
+      thread_id: "thread-1",
+      required_scope_ids: ["scope-visible"],
+    });
+    const events = [
+      sourceFor("event-common-a", "a".repeat(64)),
+      sourceFor("event-common-b", "b".repeat(64)),
+      sourceFor("event-rare", "d".repeat(64)),
+    ];
+    const text = {
+      "event-common-a": "团队 会议",
+      "event-common-b": "团队 周报",
+      "event-rare": "火箭 发射",
+    };
+    const result = await new IndexedEventRetriever({
+      async matchAuthorized(input) {
+        return {
+          available: true,
+          algorithm_version: "segment-bm25-v1",
+          generation: "continuous-v1",
+          watermark: "authority:1",
+          covered: structuredClone(input.authorized),
+          matched: structuredClone(input.authorized),
+        };
+      },
+    }).retrieve({
+      request: { ...request(), query: "火箭 团队" },
+      read_epoch: "authority:1",
+      recorded_at: "2026-09-02T00:00:00.000Z",
+      principal_policy_hash: POLICY_HASH,
+      events,
+    }, async (ids) => ids.map((id) => ({
+      ...events.find((value) => value.event.event_id === id),
+      text: text[id],
+    })));
+
+    const lexical = (id) => result.candidates.find((value) => value.candidate.resource_id === id).candidate.scores.lexical;
+    assert.ok(lexical("event-rare") > lexical("event-common-a"));
+  });
+
   it("rejects a materializer that mutates authorized metadata", async () => {
     const { engine } = engineFixture({}, {
       async materialize(events) {
