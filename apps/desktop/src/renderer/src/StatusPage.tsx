@@ -89,8 +89,8 @@ export function StatusPage({
       <section className={`card status-summary tone-${status.tone}`}>
         <span className="status-dot" />
         <div className="status-summary-text">
-          <strong>{statusSummary(status)}</strong>
-          <span className="muted">{t("chrome.kernel", { state: chipLabel(status.chip) })}</span>
+          <strong>{statusSummary(status, t)}</strong>
+          <span className="muted">{t("chrome.kernel", { state: chipLabel(status.chip, t) })}</span>
         </div>
         <button type="button" className="ghost" disabled={loading} onClick={() => void load()}>
           {loading ? t("status.refreshing") : t("status.refresh")}

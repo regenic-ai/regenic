@@ -58,6 +58,7 @@ import { parseLocale } from "../shared/locale.ts";
 import {
   LOCAL_KERNEL_ORIGIN,
   loadDesktopPreference,
+  setHostLanguage,
   loadKernelPreference,
   loadSavedPersonalApiKey,
   parseKernelOrigin,
@@ -1005,6 +1006,17 @@ function applyAppIcon(window?: BrowserWindow): void {
   }
 }
 
+const rendererBoot = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+
+function rendererArguments(): string[] {
+  const locale = loadDesktopPreference(settingsFile()).locale;
+  return [
+    `--regenic-api=${apiOrigin}`,
+    `--regenic-locale=${locale}`,
+    `--regenic-boot=${rendererBoot}`,
+  ];
+}
+
 function createMainWindow(): BrowserWindow {
   const window = new BrowserWindow({
     width: 1200,
@@ -1021,7 +1033,7 @@ function createMainWindow(): BrowserWindow {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
-      additionalArguments: [`--regenic-api=${apiOrigin}`],
+      additionalArguments: rendererArguments(),
     },
   });
   window.on("close", (event) => {
@@ -1054,7 +1066,7 @@ function createTrayWindow(): BrowserWindow {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
-      additionalArguments: [`--regenic-api=${apiOrigin}`],
+      additionalArguments: rendererArguments(),
     },
   });
   window.on("blur", () => {
@@ -1230,6 +1242,7 @@ app.whenReady().then(async () => {
   if (!app.hasSingleInstanceLock()) {
     return;
   }
+  setHostLanguage(app.getLocale());
   applyAppIcon();
   installPersonalApiKeyInjection();
   ipcMain.handle("regenic:show-console", async () => {

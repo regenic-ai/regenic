@@ -80,6 +80,10 @@ export interface HostStats {
 
 export interface RegenicDesktop {
   apiOrigin: string;
+  /** Locale resolved before the first paint. Absent outside the desktop shell. */
+  locale?: Locale;
+  /** Changes when the desktop process creates its windows. */
+  boot?: string;
   getApiOrigin: () => Promise<string>;
   getKernelSettings: () => Promise<KernelSettingsView>;
   getDatabaseSettings: () => Promise<DatabaseSettingsView>;

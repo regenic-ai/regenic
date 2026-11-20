@@ -1,4 +1,4 @@
-import { t } from "../../shared/i18n.ts";
+import { t, type Translate } from "../../shared/i18n.ts";
 import type { HostStats, HostWatchKind } from "../../shared/host-watch.ts";
 import type { ConnectorAlert } from "./connector-alerts.ts";
 import {
@@ -60,6 +60,7 @@ export function buildShellStatus(
   host: HostStats | null,
   chip: EngineChipState,
   alerts: ConnectorAlert[],
+  translate: Translate = t,
 ): ShellStatus {
   const rows: ShellStatusRow[] = [];
   const meta: ShellStatusRow[] = [];
@@ -70,7 +71,7 @@ export function buildShellStatus(
     const coverage = aggregateInstallationSync(engine.installations);
     rows.push(
       {
-        label: t("engine.livePull"),
+        label: translate("engine.livePull"),
         value: [
           pullStatusLabel(pull),
           pull?.last_tick_at ? formatChatTime(pull.last_tick_at) : "",
@@ -85,21 +86,21 @@ export function buildShellStatus(
             : undefined,
       },
       {
-        label: t("engine.coverage"),
+        label: translate("engine.coverage"),
         value: coverage ? syncProgressSummary(coverage) : "—",
         tone: quiet(syncProgressTone(coverage)),
       },
       {
-        label: t("engine.freshness"),
+        label: translate("engine.freshness"),
         value: syncFreshnessSummary(engine.sync_readiness),
       },
       {
-        label: t("engine.eta"),
+        label: translate("engine.eta"),
         value: syncEtaSummary(engine.sync_readiness),
         tone: quiet(syncReadinessTone(engine.sync_readiness)),
       },
       {
-        label: t("engine.network"),
+        label: translate("engine.network"),
         value: [
           networkWatchLabel(pull?.network?.kind),
           pull?.network?.kind !== "ok" && pull?.network?.proxy ? pull.network.proxy : "",
@@ -110,9 +111,9 @@ export function buildShellStatus(
       },
     );
     meta.push(
-      { label: t("engine.org"), value: engine.org_id, mono: true },
-      { label: t("engine.database"), value: engine.database_path ?? "—", mono: true },
-      { label: t("engine.pluginDir"), value: engine.plugin_dir ?? "—", mono: true },
+      { label: translate("engine.org"), value: engine.org_id, mono: true },
+      { label: translate("engine.database"), value: engine.database_path ?? "—", mono: true },
+      { label: translate("engine.pluginDir"), value: engine.plugin_dir ?? "—", mono: true },
     );
     if (pull?.last_error) errors.push(pull.last_error);
     const networkHint = networkWatchHint(pull?.last_error_hint ?? pull?.network?.hint);
@@ -121,12 +122,12 @@ export function buildShellStatus(
   if (host) {
     rows.push(
       {
-        label: t("engine.memory"),
+        label: translate("engine.memory"),
         value: memoryWatchCopy(host.memory),
         tone: hostTone(host.memory.kind),
       },
       {
-        label: t("engine.disk"),
+        label: translate("engine.disk"),
         value: diskWatchCopy(host.disk),
         tone: hostTone(host.disk.kind),
       },
@@ -148,9 +149,11 @@ export function buildShellStatus(
   return { chip, tone, syncing, rows, meta, hints, errors, alerts };
 }
 
-export function statusSummary(status: ShellStatus): string {
+export function statusSummary(status: ShellStatus, translate: Translate = t): string {
   if (status.tone === "ok") {
-    return status.syncing ? t("chip.syncing") : t("shell.status.ok");
+    return status.syncing ? translate("chip.syncing") : translate("shell.status.ok");
   }
-  return status.chip === "running" ? t("shell.status.attention") : chipLabel(status.chip);
+  return status.chip === "running"
+    ? translate("shell.status.attention")
+    : chipLabel(status.chip, translate);
 }

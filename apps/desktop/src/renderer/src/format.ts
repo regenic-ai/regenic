@@ -1,4 +1,4 @@
-import { activeLocale, t } from "../../shared/i18n.ts";
+import { activeLocale, t, type Translate } from "../../shared/i18n.ts";
 import { localeTag } from "../../shared/locale.ts";
 import { firstLine } from "./message-view.ts";
 import type { EngineChipState } from "./types.ts";
@@ -98,20 +98,20 @@ export function formatChatTime(iso: string, now = new Date()): string {
   ).format(date);
 }
 
-export function chipLabel(state: EngineChipState): string {
+export function chipLabel(state: EngineChipState, translate: Translate = t): string {
   if (state === "running") {
-    return t("chip.running");
+    return translate("chip.running");
   }
   if (state === "syncing") {
-    return t("chip.syncing");
+    return translate("chip.syncing");
   }
   if (state === "degraded") {
-    return t("chip.degraded");
+    return translate("chip.degraded");
   }
   if (state === "error") {
-    return t("chip.error");
+    return translate("chip.error");
   }
-  return t("chip.stopped");
+  return translate("chip.stopped");
 }
 
 export function installationStatusLabel(
