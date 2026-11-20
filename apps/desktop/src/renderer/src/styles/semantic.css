@@ -31,7 +31,7 @@
 }
 .search-box input::-webkit-search-cancel-button { filter: invert(0.6); }
 
-.search-toolbar { display: flex; align-items: center; gap: 14px; padding: 0 4px; }
+.search-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 14px; padding: 0 4px; }
 .search-filter-toggle::after { content: " ▾"; }
 .search-filter-toggle.is-open::after { content: " ▴"; }
 .muted-link { color: var(--muted); }

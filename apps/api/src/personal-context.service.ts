@@ -51,6 +51,7 @@ import {
   type AgentRunRecord,
   type AgentRunStatus,
   selectContextIndexes,
+  ChannelDriverRegistry,
   type ContextAuthorityRead,
   CONTENT_PARTS_MEDIA_TYPE,
   parseStoredContentParts,
@@ -75,6 +76,12 @@ import {
 import { PersonalRuntimeService } from "./personal-runtime.service";
 import { PersonalContextError } from "./personal-context-error";
 import { PersonalConversationContextService } from "./personal-conversation-context.service";
+import {
+  applySearchAppClass,
+  isFilterRecord,
+  requireSearchAppClass,
+  stripAppScope,
+} from "./search-app-class";
 export { PersonalContextError } from "./personal-context-error";
 
 const FORBIDDEN_PERSONAL_KEYS = new Set(["id", "org_id", "principal", "schema_version"]);
@@ -105,6 +112,8 @@ export class PersonalContextService {
     private readonly runtime: PersonalRuntimeService,
     @Inject(PersonalConversationContextService)
     private readonly conversations: PersonalConversationContextService,
+    @Inject(ChannelDriverRegistry)
+    private readonly drivers: ChannelDriverRegistry,
   ) {}
 
   async assemble(input: unknown) {
@@ -122,7 +131,8 @@ export class PersonalContextService {
   }
 
   async searchExpanded(input: unknown) {
-    const body = strictBody(input, new Set(["query", "kind", "limit", "filters", "context"]));
+    const body = strictBody(input, new Set(["query", "kind", "limit", "filters", "context", "app_class"]));
+    const appClass = requireSearchAppClass(body.app_class);
     const context = body.context === undefined
       ? {}
       : strictNestedBody(body.context, new Set([
@@ -141,11 +151,15 @@ export class PersonalContextService {
         "limit cannot exceed context.max_messages",
       );
     }
+    const requestedFilters = stripAppScope(body.filters);
+    const filters = isFilterRecord(requestedFilters)
+      ? await applySearchAppClass(this.runtime, this.drivers, requestedFilters, appClass)
+      : requestedFilters;
     const search = await this.search({
       query: body.query,
       ...(body.kind === undefined ? {} : { kind: body.kind }),
       limit,
-      ...(body.filters === undefined ? {} : { filters: body.filters }),
+      ...(filters === undefined ? {} : { filters }),
     });
     const messageHits = search.items.filter((hit) => !hit.matches ||
       hit.matches.some((match) => match.kind !== "file"));

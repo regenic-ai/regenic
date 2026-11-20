@@ -156,3 +156,4 @@ export interface StandardPlaceholder {
   current_version_id: string | null;
 }
 export * from "./context-search";
+export * from "./search-app-scope";

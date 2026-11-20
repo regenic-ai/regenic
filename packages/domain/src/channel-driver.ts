@@ -87,6 +87,11 @@ import type {
   ThreadPrompt,
 } from "./thread-surface";
 import {
+  searchAgentScope,
+  type SearchAgentScope,
+  type SearchAppInstallation,
+} from "./search-app-scope";
+import {
   formatSurfaceGeneration,
   normalizePromptAnswers,
   threadIdOf,
@@ -475,6 +480,40 @@ export class ChannelDriverRegistry {
       (driver, installation) =>
         normalizeListTitle(driver.capabilities(installation).list_title),
     );
+  }
+
+  /**
+   * Agent/executor sessions to keep out of an ordinary-app search.
+   * Classification ignores enabled/disabled so a turned-off agent app does
+   * not start matching as ordinary history. A driver that owns only part of
+   * its source (server apps) contributes a thread prefix instead.
+   */
+  agentSearchScope(installations: readonly ConnectorInstallation[]): SearchAgentScope {
+    const described: SearchAppInstallation[] = [];
+    for (const installation of installations) {
+      const driver = this.get(installation.connector_type);
+      if (!driver) continue;
+      let agent = false;
+      try {
+        agent = driver.capabilities({ ...installation, status: "enabled" }).list_title === "prompt";
+      } catch {
+        continue;
+      }
+      if (!agent) continue;
+      if (driver.threadIdPrefix) {
+        let prefix = "";
+        try {
+          prefix = driver.threadIdPrefix(installation).trim();
+        } catch {
+          continue;
+        }
+        if (!prefix) continue;
+        described.push({ source: driver.source, agent: true, thread_prefix: prefix });
+        continue;
+      }
+      described.push({ source: driver.source, agent: true });
+    }
+    return searchAgentScope(described);
   }
 
   async resolveConversationLabels(

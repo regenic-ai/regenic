@@ -34,6 +34,25 @@ export function contextReadScope(
         : `s.occurred_at ${comparison} (${bind(second)}::timestamptz${comparison === "<=" ? " + INTERVAL '1 second'" : ""})`);
     }
   }
+  const appScope = query?.filters?.app_scope;
+  if (appScope) {
+    const sourceClause = appScope.agent_sources.length
+      ? dialect === "sqlite"
+        ? `s.source IN (SELECT value FROM json_each(${bind(JSON.stringify(appScope.agent_sources))}))`
+        : `s.source = ANY(${bind(appScope.agent_sources)}::text[])`
+      : undefined;
+    const prefixClauses = appScope.agent_thread_prefixes.map((prefix) =>
+      dialect === "sqlite"
+        ? `(s.thread_id IS NOT NULL AND instr(s.thread_id, ${bind(prefix)}) = 1)`
+        : `(s.thread_id IS NOT NULL AND strpos(s.thread_id, ${bind(prefix)}) = 1)`);
+    if (appScope.class === "agent") {
+      const parts = [sourceClause, ...prefixClauses].filter((part): part is string => part !== undefined);
+      conditions.push(parts.length ? `(${parts.join(" OR ")})` : "(1 = 0)");
+    } else {
+      if (sourceClause) conditions.push(`NOT (${sourceClause})`);
+      for (const prefix of prefixClauses) conditions.push(`NOT ${prefix}`);
+    }
+  }
   if (query?.anchors?.length) {
     const anchors = query.anchors.map((anchor) => {
       if (anchor.kind === "event") return `s.id = ${bind(anchor.id)}`;

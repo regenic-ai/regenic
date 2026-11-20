@@ -88,6 +88,12 @@ export const serverAppDriver: ChannelDriver = {
     };
   },
 
+  threadIdPrefix(installation) {
+    const id = appId(installation);
+    if (!id || !installation.id.trim()) return "";
+    return `${SERVER_APP_SOURCE}:${id}:${installation.id}:`;
+  },
+
   async connectInstallation(installation, host, env, context) {
     const manifest = manifestOf(installation);
     const ingest = manifest.capabilities.source?.push ? context.ingest : undefined;

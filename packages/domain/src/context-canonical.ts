@@ -99,6 +99,13 @@ export function hashContextRequest(request: ContextRequest): string {
             ...(filters.actor_ids ? { actor_ids: sortedStrings(filters.actor_ids) } : {}),
             ...(filters.occurred_after ? { occurred_after: normalizeTimestamp(filters.occurred_after) } : {}),
             ...(filters.occurred_before ? { occurred_before: normalizeTimestamp(filters.occurred_before) } : {}),
+            ...(filters.app_scope ? {
+              app_scope: {
+                class: filters.app_scope.class,
+                agent_sources: sortedStrings(filters.app_scope.agent_sources),
+                agent_thread_prefixes: sortedStrings(filters.app_scope.agent_thread_prefixes),
+              },
+            } : {}),
           },
         }
       : {}),

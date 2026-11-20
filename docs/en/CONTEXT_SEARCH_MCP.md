@@ -44,7 +44,7 @@ do not infer a message or page match from them. Legacy unlocated semantic hits
 remain Event-level evidence. Conversation windows and continuation rules below
 apply only to returned message/Event anchors.
 
-Searches current authorized text and expands each hit into a bounded conversation window.
+Searches current authorized text and expands each hit into a bounded conversation window. Ordinary apps are searched by default. Agent and executor sessions, including earlier executor answers, stay out unless `app_class` is `agent` or `all` (`app` is the default).
 
 ```json
 {

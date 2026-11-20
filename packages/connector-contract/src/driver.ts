@@ -436,6 +436,12 @@ export interface ChannelDriverCore {
     thread: ConversationThread,
   ): boolean;
   capabilities(installation: ConnectorInstallation): ChannelCapabilities;
+  /**
+   * Thread ids this install owns, as a prefix of `source:target`.
+   * Set it when several installs share `source` and only some are agent apps.
+   * Omit it when every thread of `source` belongs to this driver.
+   */
+  threadIdPrefix?(installation: ConnectorInstallation): string;
 }
 
 /** Mount and poll streams. Required while poll/hybrid is the live source mode. */
