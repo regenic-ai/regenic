@@ -177,6 +177,26 @@ export function deliveryNeedsYou(delivery?: {
   return delivery?.status === "dead" || delivery?.status === "uncertain" || delivery?.write_back === "failed";
 }
 
+/** A finished run can be closed. A scheduled run has no triggering message and can still be closed. */
+export function workCanAcknowledge(work: {
+  status?: string;
+  run_id?: string;
+  acknowledged_run_id?: string;
+  auto_completed?: boolean;
+  can_write_back?: boolean;
+  needs_operator?: boolean;
+  delivery?: { status?: string; write_back?: string };
+} | undefined, outcome: "done" | "failed"): boolean {
+  if (!work?.run_id || work.acknowledged_run_id === work.run_id) {
+    return false;
+  }
+  if (outcome === "failed") return work.status === "failed";
+  const sent = work.delivery?.write_back === "sent" && work.delivery.status === "acked";
+  return work.status === "done"
+    && work.auto_completed !== true
+    && (work.needs_operator === true || work.can_write_back !== true || sent);
+}
+
 export function workNextStepCopy(thread: {
   work?: {
     status?: string;

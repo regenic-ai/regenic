@@ -2,6 +2,7 @@ const assert = require("node:assert/strict");
 const { describe, it } = require("node:test");
 const {
   assertWorkRunWrite, planWorkObservation, prepareWorkRunStartCheckpoint, canClaimWorkRunStartItem,
+  prepareWorkAcknowledgment,
   prepareWorkRunStartFailure,
   prepareWorkItemCreation,
   prepareWorkItemCreationAbort,
@@ -1038,6 +1039,85 @@ describe("work observation transitions", () => {
     });
     input.handle.result = { summary: "NOTE\n只有证据" };
     assert.deepEqual(planWorkObservation(input).delivery, { kind: "keep" });
+  });
+
+  it("closes a finished scheduled run that has no triggering message", () => {
+    const input = fixture();
+    const item = {
+      ...input.item,
+      status: "done",
+      current_run_id: input.run.id,
+      version: 1,
+    };
+    const run = {
+      ...input.run,
+      status: "completed",
+      version: 1,
+      write_back_required: true,
+      result: { summary: "REPLY\n方方，表已经交了。" },
+    };
+    const delivery = {
+      id: "delivery-1",
+      org_id: item.org_id,
+      work_item_id: item.id,
+      run_id: run.id,
+      status: "acked",
+      write_back: "sent",
+      attempts: 1,
+      payload: { summary: "方方，表已经交了。" },
+      created_at: BEFORE,
+      updated_at: NOW,
+    };
+    const applied = prepareWorkAcknowledgment({
+      expected_item: item,
+      run_id: run.id,
+      trigger_event_id: "",
+      expected_version: 1,
+      expected_run_version: 1,
+      command_id: "ack-scheduled",
+      issued_at: NOW,
+      now: NOW,
+    }, {
+      item,
+      run,
+      delivery,
+      trigger_is_current_work: false,
+    });
+    assert.equal(applied.outcome, "applied");
+    if (applied.outcome === "applied") {
+      assert.equal(applied.item.acknowledged_run_id, run.id);
+    }
+    assert.throws(() => prepareWorkAcknowledgment({
+      expected_item: { ...item, head_event_id: "event-1" },
+      run_id: run.id,
+      trigger_event_id: "",
+      expected_version: 1,
+      expected_run_version: 1,
+      command_id: "ack-missing-trigger",
+      issued_at: NOW,
+      now: NOW,
+    }, {
+      item: { ...item, head_event_id: "event-1" },
+      run,
+      delivery,
+      trigger_is_current_work: false,
+    }), /triggering message/);
+    const held = prepareWorkAcknowledgment({
+      expected_item: item,
+      run_id: run.id,
+      trigger_event_id: "",
+      expected_version: 1,
+      expected_run_version: 1,
+      command_id: "ack-scheduled-hold",
+      issued_at: NOW,
+      now: NOW,
+    }, {
+      item,
+      run: { ...run, result: { summary: "HOLD\n\nNOTE\n需要你决定。" } },
+      delivery: null,
+      trigger_is_current_work: false,
+    });
+    assert.equal(held.outcome, "applied");
   });
 
   it("keeps empty result validation when no result was ever observed", () => {

@@ -1115,11 +1115,12 @@ export async function acknowledgeWorkResult(
           deliveryRow ? toWorkDelivery(deliveryRow) : null)),
     });
     if (result.outcome !== "applied") return result;
+    const unanchored = !input.trigger_event_id.trim();
     const reasonCodes = [...new Set([
       ...(triggerRow ? JSON.parse(triggerRow.reason_codes_json) as string[] : []),
       "result_acknowledged",
     ])];
-    const dispositionChanged = db.prepare(`UPDATE message_dispositions SET disposition = 'outside_current_work',
+    const dispositionChanged = !unanchored && db.prepare(`UPDATE message_dispositions SET disposition = 'outside_current_work',
       reason_codes_json = ?, decided_at = ?, version = version + 1
       WHERE org_id = ? AND event_id = ? AND disposition IN ('current_work', 'pending')`)
       .run(JSON.stringify(reasonCodes), input.now, orgId, input.trigger_event_id).changes > 0;
@@ -1146,7 +1147,7 @@ export async function acknowledgeWorkResult(
         .get(orgId, item.recipe_id) as { hide_on_success: number } | undefined
       : undefined;
     const hideOnSuccess = (runRow?.hide_on_success ?? recipeVisibility?.hide_on_success ?? 1) === 1;
-    if (savedItem.status === "done" && dispositionChanged
+    if (savedItem.status === "done" && (dispositionChanged || unanchored)
       && hideOnSuccess
       && !remainingCurrentWork && !unfinishedWork && !unresolvedDelivery
       && visibilityVersion === (item!.visibility_intent_version ?? 0)

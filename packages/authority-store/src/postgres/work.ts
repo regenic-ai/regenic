@@ -1451,14 +1451,17 @@ export async function acknowledgeWorkResult(
           asJson<string[]>(triggerRow.reason_codes), item, runRow ? toWorkRun(runRow) : null)),
     });
     if (result.outcome !== "applied") return result;
+    const unanchored = !input.trigger_event_id.trim();
     const reasonCodes = [...new Set([
       ...(triggerRow ? asJson<string[]>(triggerRow.reason_codes) : []),
       "result_acknowledged",
     ])];
-    await db.execute(`UPDATE message_dispositions SET disposition = 'outside_current_work',
-      reason_codes = $1, decided_at = $2, version = version + 1
-      WHERE org_id = $3 AND event_id = $4 AND disposition IN ('current_work', 'pending')`,
-    [jsonb(reasonCodes), input.now, orgId, input.trigger_event_id], client);
+    if (!unanchored) {
+      await db.execute(`UPDATE message_dispositions SET disposition = 'outside_current_work',
+        reason_codes = $1, decided_at = $2, version = version + 1
+        WHERE org_id = $3 AND event_id = $4 AND disposition IN ('current_work', 'pending')`,
+      [jsonb(reasonCodes), input.now, orgId, input.trigger_event_id], client);
+    }
     await refreshThreadHeadWithinTransaction(db, orgId, item!.thread_id, client);
     const savedRow = await db.queryOne<WorkItemRow>(`UPDATE work_items
       SET acknowledged_run_id = $1, version = $2, updated_at = $3
@@ -1507,16 +1510,18 @@ export async function acknowledgeWorkResult(
         input.issued_at, input.now,
       ], client);
     }
-    await db.execute(`INSERT INTO conversation_lifecycle_events (
-      id, org_id, thread_id, aggregate_type, aggregate_id, aggregate_version,
-      event_type, command_id, dedupe_key, schema_version, payload_json, occurred_at, created_at
-    ) VALUES ($1, $2, $3, 'source_event', $4, $5, 'current_work_changed', NULL, $6, 1, $7, $8, $9)`,
-    [
-      randomUUID(), orgId, item!.thread_id, input.trigger_event_id, savedItem.version ?? 0,
-      JSON.stringify(["source_event", input.trigger_event_id, savedItem.version ?? 0, "current_work_changed"]),
-      jsonb({ work_item_id: savedItem.id, disposition: "outside_current_work", reason: "result_acknowledged" }),
-      input.issued_at, input.now,
-    ], client);
+    if (!unanchored) {
+      await db.execute(`INSERT INTO conversation_lifecycle_events (
+        id, org_id, thread_id, aggregate_type, aggregate_id, aggregate_version,
+        event_type, command_id, dedupe_key, schema_version, payload_json, occurred_at, created_at
+      ) VALUES ($1, $2, $3, 'source_event', $4, $5, 'current_work_changed', NULL, $6, 1, $7, $8, $9)`,
+      [
+        randomUUID(), orgId, item!.thread_id, input.trigger_event_id, savedItem.version ?? 0,
+        JSON.stringify(["source_event", input.trigger_event_id, savedItem.version ?? 0, "current_work_changed"]),
+        jsonb({ work_item_id: savedItem.id, disposition: "outside_current_work", reason: "result_acknowledged" }),
+        input.issued_at, input.now,
+      ], client);
+    }
     await db.execute(`INSERT INTO conversation_lifecycle_events (
       id, org_id, thread_id, aggregate_type, aggregate_id, aggregate_version,
       event_type, command_id, dedupe_key, schema_version, payload_json, occurred_at, created_at
