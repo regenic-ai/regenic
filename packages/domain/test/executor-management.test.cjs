@@ -238,7 +238,9 @@ describe("http executor", () => {
     const body = JSON.parse(calls[0].init.body);
     assert.equal(body.run_id, "run-durable-1");
     assert.equal(body.evidence_text, "ticket");
-    assert.equal(body.task_instruction, "go");
+    assert.match(body.task_instruction, /^go\n\n## Unattended\n/);
+    assert.match(body.task_instruction, /QUIET/);
+    assert.match(body.task_instruction, /HOLD/);
     assert.equal(body.executor_config.prompt, "go");
   });
 

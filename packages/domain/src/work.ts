@@ -104,6 +104,12 @@ export interface RecipeTrigger {
   at_minute?: number;
   /** Pull only. ISO weekdays, Monday = 1. Omit to run every day. */
   weekdays?: number[];
+  /**
+   * Pull only. Days of the month, 1–31.
+   * A month that does not contain the day is skipped.
+   * When set, `weekdays` is ignored.
+   */
+  monthdays?: number[];
   /** Pull only. IANA zone for `at_minute`. */
   timezone?: string;
   /** Push only. Default true: one follow-up on the latest head after the current run. */
@@ -281,6 +287,8 @@ export interface WorkFace {
   head_event_id?: string;
   can_write_back?: boolean;
   has_result?: boolean;
+  /** The agent finished but a person must choose. Nothing was sent. */
+  needs_operator?: boolean;
   result_summary?: string;
   delivery?: WorkDeliveryFace;
   updated_at?: string;

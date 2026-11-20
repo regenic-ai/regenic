@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { RecipeDraft, Translate } from "./recipe-draft";
 import {
+  DEFAULT_MONTHDAY,
   DEFAULT_WEEKDAYS,
   FAST_INTERVAL_MS,
   SCHEDULE_PRESETS,
@@ -15,6 +16,7 @@ import {
 } from "./schedule";
 
 const WEEKDAYS = [1, 2, 3, 4, 5, 6, 7] as const;
+const MONTHDAYS = Array.from({ length: 31 }, (_, index) => index + 1);
 
 const WEEKDAY_KEYS = [
   "recipes.wd1",
@@ -37,7 +39,12 @@ export function ScheduleField({
     patch: Partial<
       Pick<
         RecipeDraft,
-        "schedule_mode" | "interval_ms" | "at_minute" | "weekdays" | "timezone"
+        | "schedule_mode"
+        | "interval_ms"
+        | "at_minute"
+        | "weekdays"
+        | "monthdays"
+        | "timezone"
       >
     >,
   ) => void;
@@ -52,6 +59,7 @@ export function ScheduleField({
       at_minute:
         draft.schedule_mode === "interval" ? undefined : draft.at_minute,
       weekdays: draft.schedule_mode === "weekly" ? draft.weekdays : undefined,
+      monthdays: draft.schedule_mode === "monthly" ? draft.monthdays : undefined,
       timezone: draft.schedule_mode === "interval" ? undefined : draft.timezone,
     },
     t,
@@ -68,6 +76,13 @@ export function ScheduleField({
       onChange({
         schedule_mode: "weekly",
         weekdays: draft.weekdays.length ? draft.weekdays : [...DEFAULT_WEEKDAYS],
+      });
+      return;
+    }
+    if (mode === "monthly") {
+      onChange({
+        schedule_mode: "monthly",
+        monthdays: draft.monthdays.length ? draft.monthdays : [DEFAULT_MONTHDAY],
       });
       return;
     }
@@ -98,6 +113,17 @@ export function ScheduleField({
     onChange({ schedule_mode: "weekly", weekdays });
   };
 
+  const toggleMonthday = (day: number) => {
+    const selected = draft.monthdays.includes(day);
+    if (selected && draft.monthdays.length === 1) {
+      return;
+    }
+    const monthdays = selected
+      ? draft.monthdays.filter((item) => item !== day)
+      : [...draft.monthdays, day].sort((left, right) => left - right);
+    onChange({ schedule_mode: "monthly", monthdays });
+  };
+
   return (
     <div className="schedule-field">
       <div className="seg" role="group" aria-label={t("recipes.interval")}>
@@ -106,6 +132,7 @@ export function ScheduleField({
             ["interval", "recipes.scheduleInterval"],
             ["daily", "recipes.scheduleDaily"],
             ["weekly", "recipes.scheduleWeekly"],
+            ["monthly", "recipes.scheduleMonthly"],
           ] as const
         ).map(([mode, label]) => (
           <button
@@ -206,6 +233,26 @@ export function ScheduleField({
               ))}
             </div>
           ) : null}
+          {draft.schedule_mode === "monthly" ? (
+            <div
+              className="schedule-days schedule-monthdays"
+              role="group"
+              aria-label={t("recipes.scheduleMonthDays")}
+            >
+              {MONTHDAYS.map((day) => (
+                <button
+                  key={day}
+                  type="button"
+                  className={draft.monthdays.includes(day) ? "active" : undefined}
+                  aria-pressed={draft.monthdays.includes(day)}
+                  aria-label={t("recipes.monthDay", { day })}
+                  onClick={() => toggleMonthday(day)}
+                >
+                  {day}
+                </button>
+              ))}
+            </div>
+          ) : null}
           <input
             type="time"
             className="schedule-time"
@@ -231,6 +278,9 @@ export function ScheduleField({
         <p className="recipe-hint">
           {t("recipes.scheduleZone", { zone: draft.timezone })}
         </p>
+      ) : null}
+      {draft.schedule_mode === "monthly" && draft.monthdays.some((day) => day > 28) ? (
+        <p className="recipe-hint">{t("recipes.scheduleMonthSkip")}</p>
       ) : null}
     </div>
   );

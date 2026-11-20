@@ -14,6 +14,7 @@ import {
   type ThreadPrompt,
   type WorkRun,
   taskInstructionOf,
+  withUnattendedReplyRules,
 } from "@regenic/connector-contract";
 import { dshLocaleTables } from "./locales";
 import { resolveOperatorDshBaseUrl } from "./dsh-url";
@@ -139,8 +140,9 @@ export const dshTaskExecutor: TaskExecutor = {
       : input.evidence_text;
     const stdin = composeDshStdin({
       skill: dshSkillOf(input.recipe.executor_config),
-      prompt:
+      prompt: withUnattendedReplyRules(
         input.task_instruction ?? taskInstructionOf(input.recipe.executor_config),
+      ),
       evidence_text,
     });
     const withTask = (await ctx.sysoutCreateWithTask?.()) === true;

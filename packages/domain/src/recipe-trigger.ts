@@ -282,11 +282,12 @@ export function shouldKeepPullSchedule(
     (existing.match.thread_id ?? "") === (next.match.thread_id ?? "") &&
     (existing.trigger.at_minute ?? null) === (next.trigger.at_minute ?? null) &&
     (existing.trigger.timezone ?? "") === (next.trigger.timezone ?? "") &&
-    weekdayKey(existing.trigger.weekdays) === weekdayKey(next.trigger.weekdays)
+    dayListKey(existing.trigger.weekdays) === dayListKey(next.trigger.weekdays) &&
+    dayListKey(existing.trigger.monthdays) === dayListKey(next.trigger.monthdays)
   );
 }
 
-function weekdayKey(days: readonly number[] | undefined): string {
+function dayListKey(days: readonly number[] | undefined): string {
   return [...(days ?? [])].sort((left, right) => left - right).join(",");
 }
 

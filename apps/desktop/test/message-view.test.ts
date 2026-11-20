@@ -583,6 +583,12 @@ describe("thread activity", () => {
       delivery: { status: "write_back", write_back: "sent" },
     }, "done"), false);
     assert.equal(workCanAcknowledge({
+      status: "done",
+      run_id: "run-1",
+      can_write_back: true,
+      needs_operator: true,
+    }, "done"), true);
+    assert.equal(workCanAcknowledge({
       status: "failed",
       run_id: "run-1",
     }, "failed"), true);
@@ -617,6 +623,32 @@ describe("thread activity", () => {
         "Ada",
       ),
       "审核不通过：地区不符",
+    );
+    assert.equal(
+      listPreview(
+        thread(chat.messages, {
+          work: {
+            id: "work-1",
+            status: "done",
+            result_summary: "HOLD\n\nNOTE\n两套口径冲突，需要你决定催哪一版。",
+          },
+        }),
+        "Ada",
+      ),
+      "两套口径冲突，需要你决定催哪一版。",
+    );
+    assert.equal(
+      listPreview(
+        thread(chat.messages, {
+          work: {
+            id: "work-1",
+            status: "done",
+            result_summary: "REPLY 请今天补交。\n\nNOTE\n内部口径",
+          },
+        }),
+        "Ada",
+      ),
+      "请今天补交。",
     );
     assert.match(workNextStepCopy({ record_class: "task" }) ?? "", /Create an automation/);
     assert.match(

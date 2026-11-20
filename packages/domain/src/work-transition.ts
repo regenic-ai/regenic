@@ -17,6 +17,7 @@ import {
 } from "./work";
 import type { WorkDeliveryPayload } from "./work-delivery";
 import { planWorkDeliveryCommand, enqueueWriteBack } from "./work-delivery";
+import { workOutboundReply } from "./executor";
 import { workStatusFromRun } from "./work-policy";
 import type { ConversationReadCursorPatch } from "./ingestion";
 
@@ -344,7 +345,9 @@ export function prepareWorkAcknowledgment(input: WorkAcknowledgment, facts: {
     || item.acknowledged_run_id === run.id) {
     return { outcome: "conflict", reason: "not_acknowledgeable" };
   }
-  if (completed && run.write_back_required === true && (
+  const reply = workOutboundReply(run.result?.summary);
+  if (completed && run.write_back_required === true
+    && reply.kind !== "hold" && reply.kind !== "silent" && (
     !delivery || delivery.run_id !== run.id || delivery.status !== "acked" || delivery.write_back !== "sent"
   )) {
     return { outcome: "conflict", reason: "not_acknowledgeable" };
@@ -1310,17 +1313,21 @@ export function planWorkObservation(input: {
   const nextItem = item.status === "skipped" || item.status === status
     ? item
     : { ...item, status, version: (item.version ?? 0) + 1, updated_at: now };
+  const outbound = workOutboundReply(nextRun.result?.summary);
+  const writeBack = run.write_back_required ?? input.can_write_back;
   const delivery: ObservedWorkDelivery = item.status === "skipped" || handle.status !== "completed" || run.status === "completed"
     ? { kind: "keep" }
-    : (run.write_back_required ?? input.can_write_back)
-      ? {
+    : !writeBack || outbound.kind === "silent" || outbound.kind === "hold"
+      ? writeBack ? { kind: "keep" } : { kind: "abandon" }
+      : {
           kind: "enqueue",
-          payload: {
-            summary: nextRun.result?.summary ?? "",
-            content: nextRun.result?.content,
-          },
-        }
-      : { kind: "abandon" };
+          payload: outbound.kind === "send"
+            ? { summary: outbound.text, content: undefined }
+            : {
+                summary: outbound.text,
+                content: nextRun.result?.content,
+              },
+        };
   return {
     run: nextRun,
     item: nextItem,

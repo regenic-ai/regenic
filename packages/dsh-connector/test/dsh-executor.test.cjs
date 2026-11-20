@@ -110,7 +110,10 @@ describe("dshTaskExecutor", () => {
         },
       }),
     );
-    assert.equal(remoteSent[0], "inline history for a remote DSH");
+    assert.match(remoteSent[0], /^## Unattended\n/);
+    assert.match(remoteSent[0], /QUIET/);
+    assert.match(remoteSent[0], /HOLD/);
+    assert.match(remoteSent[0], /\nWORK\ninline history for a remote DSH$/);
   });
 
   it("composes skill and prompt ahead of the work evidence", async () => {
@@ -155,7 +158,8 @@ describe("dshTaskExecutor", () => {
         },
       }),
     );
-    assert.match(sent[0], /^SKILL review\nReply with a decision\.\n\nWORK\nplease handle the ticket$/);
+    assert.match(sent[0], /^SKILL review\nReply with a decision\.\n\n## Unattended\n/);
+    assert.match(sent[0], /QUIET\n[\s\S]*\nWORK\nplease handle the ticket$/);
   });
 
   it("maps a live prompt to waiting_human and DSH turn/end to exit", async () => {

@@ -184,6 +184,7 @@ export function workCanAcknowledge(work: {
   acknowledged_run_id?: string;
   auto_completed?: boolean;
   can_write_back?: boolean;
+  needs_operator?: boolean;
   delivery?: { status?: string; write_back?: string };
 } | undefined, outcome: "done" | "failed"): boolean {
   if (!work?.run_id || work.acknowledged_run_id === work.run_id) {
@@ -193,7 +194,7 @@ export function workCanAcknowledge(work: {
   const sent = work.delivery?.write_back === "sent" && work.delivery.status === "acked";
   return work.status === "done"
     && work.auto_completed !== true
-    && (work.can_write_back !== true || sent);
+    && (work.needs_operator === true || work.can_write_back !== true || sent);
 }
 
 export function workNextStepCopy(thread: {
@@ -559,8 +560,35 @@ export function threadPreview(thread: InboxThread): string {
   return thread.label;
 }
 
+const REPLY_NOTE_LINE = /(?:^|\r?\n)NOTE[ \t]*(?:\r?\n|$)/;
+const REPLY_PROTOCOL_LINE = /^(QUIET|NO_REPLY|REPLY|HOLD)(?:[ \t]+(.*))?$/;
+
+/** Operator-facing result text. Protocol words stay off the workbench. */
+export function workOperatorText(summary: string | undefined): string {
+  const text = summary?.trim() ?? "";
+  if (!text) {
+    return "";
+  }
+  const breakAt = text.search(/\r?\n/);
+  const first = (breakAt === -1 ? text : text.slice(0, breakAt)).trim();
+  const rest = breakAt === -1 ? "" : text.slice(breakAt).replace(/^\r?\n/, "");
+  const token = REPLY_PROTOCOL_LINE.exec(first);
+  const inline = token?.[2]?.trim() ?? "";
+  const body = token ? [inline, rest].filter(Boolean).join("\n") : text;
+  const noteAt = REPLY_NOTE_LINE.exec(body);
+  const note = noteAt ? body.slice(noteAt.index + noteAt[0].length).trim() : "";
+  const message = (noteAt ? body.slice(0, noteAt.index) : body).trim();
+  if (!token) {
+    return noteAt ? [message, note].filter(Boolean).join("\n\n") : text;
+  }
+  if (token[1] === "QUIET" || token[1] === "NO_REPLY") {
+    return note || message;
+  }
+  return [message, note].filter(Boolean).join("\n\n");
+}
+
 export function listPreview(thread: InboxThread, title: string): string | null {
-  const resultLine = firstLine(thread.work?.result_summary, 88);
+  const resultLine = firstLine(workOperatorText(thread.work?.result_summary), 88);
   if (resultLine && !sameListLine(title, resultLine)) {
     return resultLine;
   }

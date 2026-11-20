@@ -86,6 +86,7 @@ import {
   planWorkDeliveryCommand,
   canonicalContextJson,
   automaticWorkCompletionReady,
+  workOutboundReply,
   type CommitWorkObservation,
   type CommitWorkObservationResult,
 } from "@regenic/domain";
@@ -186,10 +187,10 @@ function writeRecipe(db: Database.Database, recipe: Recipe, insertOnly = false):
           INSERT INTO recipes (
             id, org_id, name, match_json, executor_type, executor_config_json,
             can_write_back, include_context, enabled, trigger_kind,
-            trigger_interval_ms, trigger_at_minute, trigger_weekdays, trigger_timezone,
+            trigger_interval_ms, trigger_at_minute, trigger_weekdays, trigger_monthdays, trigger_timezone,
             trigger_coalesce, max_concurrent, next_run_at, created_at, updated_at,
             write_back_thread_id, hide_on_success, flow_json
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(id) DO ${insertOnly ? "NOTHING" : `UPDATE SET
             name = excluded.name,
             match_json = excluded.match_json,
@@ -203,6 +204,7 @@ function writeRecipe(db: Database.Database, recipe: Recipe, insertOnly = false):
             trigger_interval_ms = excluded.trigger_interval_ms,
             trigger_at_minute = excluded.trigger_at_minute,
             trigger_weekdays = excluded.trigger_weekdays,
+            trigger_monthdays = excluded.trigger_monthdays,
             trigger_timezone = excluded.trigger_timezone,
             trigger_coalesce = excluded.trigger_coalesce,
             max_concurrent = excluded.max_concurrent,
@@ -226,6 +228,7 @@ function writeRecipe(db: Database.Database, recipe: Recipe, insertOnly = false):
         pull.interval_ms,
         pull.at_minute,
         pull.weekdays,
+        pull.monthdays,
         pull.timezone,
         trigger.kind === "push" && trigger.coalesce !== false ? 1 : 0,
         recipe.max_concurrent ?? null,
@@ -866,6 +869,32 @@ function foldWorkThreadWithinTransaction(
   });
 }
 
+function closeQuietWorkWithinTransaction(
+  db: Database.Database, orgId: string, item: WorkItem, run: WorkRun, now: string,
+): void {
+  const dedupeKey = JSON.stringify(["work_item", item.id, "quiet_completed", run.id, 1]);
+  if (db.prepare("SELECT 1 FROM conversation_lifecycle_events WHERE org_id = ? AND dedupe_key = ?")
+    .get(orgId, dedupeKey)) return;
+  const saved = db.prepare(`UPDATE work_items SET acknowledged_run_id = ?, version = version + 1, updated_at = ?
+    WHERE org_id = ? AND id = ? AND current_run_id = ? RETURNING *`)
+    .get(run.id, now, orgId, item.id, run.id) as WorkItemRow | undefined;
+  if (!saved) return;
+  const savedItem = toWorkItem(saved);
+  db.prepare(`INSERT INTO conversation_lifecycle_events (
+    id, org_id, thread_id, aggregate_type, aggregate_id, aggregate_version,
+    event_type, dedupe_key, schema_version, payload_json, occurred_at, created_at
+  ) VALUES (?, ?, ?, 'work_item', ?, ?, 'work_acknowledged', ?, 1, ?, ?, ?)`)
+    .run(
+      randomUUID(), orgId, savedItem.thread_id, savedItem.id, savedItem.version ?? 0,
+      dedupeKey,
+      JSON.stringify({ work_item_id: savedItem.id, run_id: run.id, reason: "quiet_completed" }),
+      now, now,
+    );
+  if (run.hide_on_success !== false) {
+    foldWorkThreadWithinTransaction(db, orgId, savedItem.thread_id, savedItem.visibility_intent_version ?? 0, now);
+  }
+}
+
 function finishSuccessfulWorkWithinTransaction(
   db: Database.Database, orgId: string, workItemId: string, runId: string, now: string,
 ): void {
@@ -879,6 +908,10 @@ function finishSuccessfulWorkWithinTransaction(
   const item = toWorkItem(itemRow);
   const run = runRow ? toWorkRun(runRow) : null;
   if (!run || !automaticWorkCompletionReady(item, run, deliveryRow ? toWorkDelivery(deliveryRow) : null)) return;
+  if (!item.head_event_id) {
+    closeQuietWorkWithinTransaction(db, orgId, item, run, now);
+    return;
+  }
   const dedupeKey = JSON.stringify(["source_event", item.head_event_id, "work_completed", run.id, 1]);
   if (db.prepare("SELECT 1 FROM conversation_lifecycle_events WHERE org_id = ? AND dedupe_key = ?")
     .get(orgId, dedupeKey)) return;
@@ -912,6 +945,12 @@ function finishSuccessfulWorkWithinTransaction(
       JSON.stringify({ work_item_id: item.id, run_id: run.id, completion_policy_version: 1,
         disposition_version: trigger.version + 1,
         disposition: "outside_current_work", reason: "work_completed" }), now, now);
+  // A quiet answer does not send. Record it finished or the thread can never hide.
+  if (workOutboundReply(run.result?.summary).kind === "silent") {
+    db.prepare(`UPDATE work_items SET acknowledged_run_id = ?, version = version + 1, updated_at = ?
+      WHERE org_id = ? AND id = ? AND current_run_id = ?`)
+      .run(run.id, now, orgId, item.id, run.id);
+  }
   if (run.hide_on_success !== false) {
     foldWorkThreadWithinTransaction(db, orgId, item.thread_id, item.visibility_intent_version ?? 0, now);
   }
@@ -1797,6 +1836,7 @@ interface RecipeRow {
   trigger_interval_ms: number | null;
   trigger_at_minute: number | null;
   trigger_weekdays: string | null;
+  trigger_monthdays: string | null;
   trigger_timezone: string | null;
   trigger_coalesce: number | null;
   max_concurrent: number | null;

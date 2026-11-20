@@ -86,10 +86,35 @@ describe("schedule copy", () => {
     );
     assert.equal(
       scheduleCopy(
+        {
+          at_minute: 9 * 60,
+          timezone: "Asia/Shanghai",
+          monthdays: [1, 15],
+        },
+        zh,
+      ),
+      "每月1、15日 09:00",
+    );
+    assert.equal(
+      scheduleCopy(
+        { at_minute: 9 * 60, timezone: "Asia/Shanghai", monthdays: [1] },
+        zh,
+      ),
+      "每月1日 09:00",
+    );
+    assert.equal(
+      scheduleCopy(
         { at_minute: 9 * 60, timezone: "Asia/Shanghai", weekdays: [1, 3] },
         (key, vars) => translate("en", key, vars),
       ),
       "Weekly Mon, Wed at 09:00",
+    );
+    assert.equal(
+      scheduleCopy(
+        { at_minute: 9 * 60, timezone: "Asia/Shanghai", monthdays: [1, 15] },
+        (key, vars) => translate("en", key, vars),
+      ),
+      "Monthly on the 1st, 15th at 09:00",
     );
   });
 
@@ -128,6 +153,17 @@ describe("schedule copy", () => {
     });
     assert.deepEqual(weekly.weekdays, [1, 5]);
     assert.equal(weekly.at_minute, 8 * 60);
+    const monthly = pullTriggerFromDraft({
+      schedule_mode: "monthly",
+      interval_ms: 60 * 60_000,
+      at_minute: 9 * 60,
+      timezone: "Asia/Shanghai",
+      weekdays: [1, 2, 3, 4, 5],
+      monthdays: [15, 1],
+    });
+    assert.deepEqual(monthly.monthdays, [1, 15]);
+    assert.equal(monthly.weekdays, undefined);
+    assert.equal(monthly.at_minute, 9 * 60);
   });
 
   it("keeps a weekly clock in an exported rule file", () => {
@@ -157,5 +193,33 @@ describe("schedule copy", () => {
     assert.equal(parsed.recipes[0]?.trigger.at_minute, 9 * 60);
     assert.deepEqual(parsed.recipes[0]?.trigger.weekdays, [1, 2, 3, 4, 5]);
     assert.equal(parsed.recipes[0]?.trigger.timezone, "Asia/Shanghai");
+  });
+
+  it("keeps selected days of the month in an exported rule file", () => {
+    const recipe: RecipeView = {
+      id: "r1",
+      org_id: "local",
+      name: "First of the month",
+      match: { thread_id: "feishu:oc" },
+      trigger: {
+        kind: "pull",
+        interval_ms: 24 * 60 * 60 * 1000,
+        at_minute: 9 * 60,
+        monthdays: [1, 15],
+        timezone: "Asia/Shanghai",
+      },
+      executor_type: "dsh",
+      executor_config: {},
+      can_write_back: true,
+      include_context: true,
+      enabled: true,
+      created_at: "2026-08-27T00:00:00.000Z",
+      updated_at: "2026-08-27T00:00:00.000Z",
+    };
+    const parsed = parseRecipeBundle(
+      stringifyRecipeBundle(buildRecipeBundle([recipe], "2026-08-27T00:00:00.000Z")),
+    );
+    assert.deepEqual(parsed.recipes[0]?.trigger.monthdays, [1, 15]);
+    assert.equal(parsed.recipes[0]?.trigger.weekdays, undefined);
   });
 });

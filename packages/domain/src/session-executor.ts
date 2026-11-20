@@ -3,6 +3,7 @@ import {
   handleFromWait,
   prepareLocalAgentStart,
   taskInstructionOf,
+  withUnattendedReplyRules,
 } from "./executor";
 import type {
   ExecutorContext,
@@ -73,8 +74,9 @@ export function createSessionTaskExecutor(meta?: {
 
     async start(input: ExecutorStartInput, ctx: ExecutorContext) {
       const prepared = await prepareLocalAgentStart(input, ctx);
-      const prompt =
-        input.task_instruction ?? taskInstructionOf(input.recipe.executor_config) ?? "";
+      const prompt = withUnattendedReplyRules(
+        input.task_instruction ?? taskInstructionOf(input.recipe.executor_config),
+      );
       const evidence_text = prepared.evidence_text;
       const stdin = composeSessionStdin({ prompt, evidence_text });
       const withTask = (await ctx.sysoutCreateWithTask?.()) === true;

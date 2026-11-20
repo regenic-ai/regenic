@@ -205,10 +205,10 @@ async function writeRecipe(db: PgSql, recipe: Recipe, client?: PoolClient, inser
         INSERT INTO recipes (
           id, org_id, name, match_json, executor_type, executor_config_json,
           can_write_back, include_context, enabled, trigger_kind,
-          trigger_interval_ms, trigger_at_minute, trigger_weekdays, trigger_timezone,
+          trigger_interval_ms, trigger_at_minute, trigger_weekdays, trigger_monthdays, trigger_timezone,
           trigger_coalesce, max_concurrent, next_run_at, created_at, updated_at,
           write_back_thread_id, hide_on_success, flow_json
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
         ON CONFLICT (id) DO ${insertOnly ? "NOTHING" : `UPDATE SET
           name = EXCLUDED.name,
           match_json = EXCLUDED.match_json,
@@ -222,6 +222,7 @@ async function writeRecipe(db: PgSql, recipe: Recipe, client?: PoolClient, inser
           trigger_interval_ms = EXCLUDED.trigger_interval_ms,
           trigger_at_minute = EXCLUDED.trigger_at_minute,
           trigger_weekdays = EXCLUDED.trigger_weekdays,
+          trigger_monthdays = EXCLUDED.trigger_monthdays,
           trigger_timezone = EXCLUDED.trigger_timezone,
           trigger_coalesce = EXCLUDED.trigger_coalesce,
           max_concurrent = EXCLUDED.max_concurrent,
@@ -244,6 +245,7 @@ async function writeRecipe(db: PgSql, recipe: Recipe, client?: PoolClient, inser
         pull.interval_ms,
         pull.at_minute,
         pull.weekdays,
+        pull.monthdays,
         pull.timezone,
         trigger.kind === "push" && trigger.coalesce !== false,
         recipe.max_concurrent ?? null,
@@ -2263,6 +2265,7 @@ interface RecipeRow {
   trigger_interval_ms: number | null;
   trigger_at_minute: number | null;
   trigger_weekdays: string | null;
+  trigger_monthdays: string | null;
   trigger_timezone: string | null;
   trigger_coalesce: unknown;
   max_concurrent: number | null;

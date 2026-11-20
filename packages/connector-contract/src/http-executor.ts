@@ -2,6 +2,7 @@ import type { ThreadPrompt } from "./attention";
 import { executorLocaleTables } from "./executor-copy";
 import {
   taskInstructionOf,
+  withUnattendedReplyRules,
   type ExecutorCatalogEntry,
   type ExecutorContext,
   type ExecutorResumeInput,
@@ -75,8 +76,9 @@ export function createHttpTaskExecutor(options: HttpExecutorOptions): TaskExecut
           work_item_id: input.work_item.id,
           thread_id: input.work_item.thread_id,
           recipe_id: input.recipe.id,
-          task_instruction:
+          task_instruction: withUnattendedReplyRules(
             input.task_instruction ?? taskInstructionOf(input.recipe.executor_config),
+          ),
           evidence_text: input.evidence_text,
           executor_config: input.recipe.executor_config,
           ...(input.run_id ? { run_id: input.run_id } : {}),

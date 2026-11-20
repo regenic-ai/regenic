@@ -215,6 +215,7 @@ export interface WorkFace {
   head_event_id?: string;
   can_write_back?: boolean;
   has_result?: boolean;
+  needs_operator?: boolean;
   result_summary?: string;
   delivery?: WorkDeliveryFace;
   updated_at?: string;
@@ -360,10 +361,12 @@ export type RecipeTriggerKind = "push" | "pull" | "manual";
 export interface RecipeTrigger {
   kind: RecipeTriggerKind;
   interval_ms?: number;
-  /** Minute of day in `timezone` (0–1439). Set for a daily or weekly clock. */
+  /** Minute of day in `timezone` (0–1439). Set for a daily, weekly, or monthly clock. */
   at_minute?: number;
   /** ISO weekdays, Monday = 1. Omit to run every day. */
   weekdays?: number[];
+  /** Days of the month, 1–31. Months without that day are skipped. */
+  monthdays?: number[];
   timezone?: string;
   coalesce?: boolean;
 }

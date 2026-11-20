@@ -1,4 +1,4 @@
-export const PG_SCHEMA_VERSION = 88;
+export const PG_SCHEMA_VERSION = 89;
 
 /** Applied when an existing postgres authority DB is already at a prior baseline. */
 export const PG_MIGRATIONS = [
@@ -1029,6 +1029,10 @@ ON CONFLICT DO NOTHING;
     version: 88,
     sql: `ALTER TABLE recipes ADD COLUMN IF NOT EXISTS flow_json JSONB`,
   },
+  {
+    version: 89,
+    sql: `ALTER TABLE recipes ADD COLUMN IF NOT EXISTS trigger_monthdays TEXT`,
+  },
 ] as const;
 
 export const PG_BASELINE_SQL = `
@@ -1263,6 +1267,7 @@ CREATE TABLE recipes (
   trigger_interval_ms INTEGER,
   trigger_at_minute INTEGER,
   trigger_weekdays TEXT,
+  trigger_monthdays TEXT,
   trigger_timezone TEXT,
   trigger_coalesce BOOLEAN NOT NULL DEFAULT TRUE,
   max_concurrent INTEGER,
