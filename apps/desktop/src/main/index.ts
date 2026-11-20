@@ -53,7 +53,6 @@ import { collectHostStats, resetHostStatCache } from "./host-stats";
 import { formatBytes, portFromHttpOrigin } from "../shared/host-watch";
 import { waitForPersonalKernel } from "../shared/kernel-ready";
 import {
-  nodeOptionsWithApiHeap,
   sidecarRestartDelayMs,
   SIDECAR_STABLE_MS,
 } from "./sidecar-lifecycle";
@@ -331,7 +330,6 @@ function sidecarEnv(
   }
   env.PORT = String(port);
   env.LISTEN_HOST = "127.0.0.1";
-  env.NODE_OPTIONS = nodeOptionsWithApiHeap(env.NODE_OPTIONS);
   if (personalApiKey) {
     env.REGENIC_PERSONAL_API_KEY = personalApiKey;
   } else {
