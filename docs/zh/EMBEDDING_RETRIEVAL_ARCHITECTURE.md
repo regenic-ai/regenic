@@ -957,6 +957,10 @@ development 的阈值矩阵只在开发集运行；其它集合不调参。报�
 无需删除 Authority 或历史 snapshot。上述功能交付不包含组织 ACL、ANN、历史语义、多模态、
 选择性永久擦除、自动默认开启或真实用户数据质量认证。
 
+百万级真实对话的授权候选路径使用
+[百万消息搜索基准](SEARCH_SCALE_BENCHMARK.md) 单独测量，避免用小型质量 fixture
+推断大规模延迟。
+
 ### 桌面入口与模型管理补齐
 
 桌面搜索已接入 `/v1/me/context/search`：自然语言、精确 source/thread 过滤、
