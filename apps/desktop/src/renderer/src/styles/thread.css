@@ -32,6 +32,11 @@
   box-shadow: var(--shadow-inline);
 }
 
+.work-result,
+.work-result * {
+  -webkit-app-region: no-drag;
+}
+
 .composer-dock .work-result {
   margin: 0;
   max-width: none;

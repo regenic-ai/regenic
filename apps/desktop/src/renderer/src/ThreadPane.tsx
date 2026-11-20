@@ -35,6 +35,7 @@ import {
   threadLoadedCountCopy,
   threadTitle,
   deliveryNeedsYou,
+  workCanAcknowledge,
   workNextStepCopy,
 } from "./message-view";
 import { ThreadFaceTags } from "./ThreadFaceTags";
@@ -486,16 +487,10 @@ export const ThreadPane = memo(function ThreadPane({
       thread.work?.status === "waiting_human");
   const canAcknowledge = Boolean(onAcknowledgeWork)
     && Boolean(resultSummary)
-    && thread.work?.status === "done"
-    && Boolean(thread.work?.run_id)
-    && thread.work?.acknowledged_run_id !== thread.work?.run_id
-    && thread.work?.auto_completed !== true
-    && (thread.work?.can_write_back !== true || thread.work?.delivery?.write_back === "sent");
+    && workCanAcknowledge(thread.work, "done");
   const canAcknowledgeFailure = Boolean(onAcknowledgeWork)
     && Boolean(resultSummary)
-    && thread.work?.status === "failed"
-    && Boolean(thread.work?.run_id)
-    && thread.work?.acknowledged_run_id !== thread.work?.run_id;
+    && workCanAcknowledge(thread.work, "failed");
   const canBind = Boolean(onBindRecipe) && !thread.work?.recipe_id;
   const canForwardConversation = merged.some(canForwardItem);
   const tags = threadFaceTags(thread);
