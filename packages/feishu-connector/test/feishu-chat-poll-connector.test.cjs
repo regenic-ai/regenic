@@ -1515,6 +1515,53 @@ describe("FeishuChatEgress", () => {
     );
   });
 
+  it("sends composer marks as Feishu styles and keeps inbound styles", () => {
+    assert.equal(feishuOutgoingBody("plain").msg_type, "text");
+    assert.equal(feishuOutgoingBody("**not closed").msg_type, "text");
+    const bold = feishuOutgoingBody("**title**");
+    assert.equal(bold.msg_type, "post");
+    assert.deepEqual(bold.content.zh_cn.content, [[
+      { tag: "text", text: "title", style: ["bold"] },
+    ]]);
+    const mixed = feishuOutgoingBody("see *note* and ~~old~~ plus <u>line</u>");
+    assert.deepEqual(mixed.content.zh_cn.content, [[
+      { tag: "text", text: "see " },
+      { tag: "text", text: "note", style: ["italic"] },
+      { tag: "text", text: " and " },
+      { tag: "text", text: "old", style: ["lineThrough"] },
+      { tag: "text", text: " plus " },
+      { tag: "text", text: "line", style: ["underline"] },
+    ]]);
+    const both = feishuOutgoingBody("***both***");
+    assert.deepEqual(both.content.zh_cn.content, [[
+      { tag: "text", text: "both", style: ["bold", "italic"] },
+    ]]);
+    const mentioned = feishuOutgoingBody('**hi** <at user_id="ou_2">Ada</at>');
+    assert.deepEqual(mentioned.content.zh_cn.content, [[
+      { tag: "text", text: "hi", style: ["bold"] },
+      { tag: "text", text: " " },
+      { tag: "at", user_id: "ou_2", user_name: "Ada" },
+    ]]);
+    const inbound = extractFeishuText("post", JSON.stringify({
+      zh_cn: {
+        content: [[{
+          tag: "text",
+          text: "title",
+          style: ["bold", "italic", "underline", "lineThrough"],
+        }]],
+      },
+    }));
+    assert.equal(inbound, "<u>***~~title~~***</u>");
+    const roundTrip = feishuOutgoingBody(inbound);
+    assert.deepEqual(roundTrip.content.zh_cn.content, [[
+      {
+        tag: "text",
+        text: "title",
+        style: ["underline", "bold", "italic", "lineThrough"],
+      },
+    ]]);
+  });
+
   it("keeps a plain @name as text and falls back when post is unavailable", async () => {
     assert.equal(feishuOutgoingBody("hello @\u718a\u5cf0").msg_type, "text");
     const inline = feishuOutgoingBody('please <at user_id="ou_2">\u718a\u5cf0</at> look <at user_id="all"></at>');
