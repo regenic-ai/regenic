@@ -45,6 +45,7 @@ import {
   type ThreadMessageListHandle,
 } from "./ThreadMessageList";
 import { ThreadTitleField } from "./ThreadTitleField";
+import type { FindHit } from "./context-search";
 import { ThreadFindBar } from "./ThreadFindBar";
 import type {
   ForwardView,
@@ -94,6 +95,7 @@ export const ThreadPane = memo(function ThreadPane({
   createTargets = [],
   onForwardCreated,
   onAskAbout,
+  onRevealFind,
 }: {
   thread: InboxThread;
   locateEventId?: string;
@@ -129,9 +131,13 @@ export const ThreadPane = memo(function ThreadPane({
   createTargets?: CreateTarget[];
   onForwardCreated?: (result: ForwardView) => Promise<void>;
   onAskAbout?: () => void;
+  onRevealFind?: (hit: FindHit) => Promise<boolean>;
 }) {
   const { t } = useLocale();
   const [findOpen, setFindOpen] = useState(false);
+  const [findState, setFindState] = useState<{ query: string; eventId: string | null }>({ query: "", eventId: null });
+  const [findMiss, setFindMiss] = useState(false);
+  const findTicket = useRef(0);
   const [composerSeed, setComposerSeed] = useState<{ text: string; nonce: number } | null>(null);
   const [quote, setQuote] = useState<InboxViewItem | null>(null);
   const [pending, setPending] = useState<InboxViewItem[]>([]);
@@ -743,23 +749,37 @@ export const ThreadPane = memo(function ThreadPane({
           {/* When a prompt is up, fold the result into the dock — avoid two dense cards. */}
           {!conversationClosed && !awaitingPrompt ? workResult : null}
         </div>
-      </header>
-      {findOpen ? (
-        <div className="thread-find-anchor">
+        {findOpen ? (
           <ThreadFindBar
             key={thread.id}
             threadId={thread.id}
-            onLocate={(eventId) => {
-              listRef.current?.scrollToEvent(eventId);
+            anchorAt={() => {
+              const id = listRef.current?.firstVisibleEventId();
+              const item = id ? merged.find((entry) => entry.event.id === id) : undefined;
+              const at = item ? Date.parse(item.event.occurred_at) : Number.NaN;
+              return Number.isFinite(at) ? at : null;
             }}
+            onLocate={async (hit) => {
+              const ticket = ++findTicket.current;
+              setFindMiss(false);
+              if (listRef.current?.scrollToEvent(hit.id, { flash: false })) return;
+              listRef.current?.holdScroll();
+              const found = await onRevealFind?.(hit) ?? false;
+              if (ticket !== findTicket.current) return;
+              if (!found) setFindMiss(true);
+            }}
+            onState={setFindState}
             onClose={() => {
+              findTicket.current += 1;
               setFindOpen(false);
+              setFindMiss(false);
+              setFindState({ query: "", eventId: null });
               paneRef?.current?.focus();
             }}
           />
-        </div>
-      ) : null}
-      {locateUnavailable ? <p role="status" className="muted">{t("search.locateUnavailable")}</p> : null}
+        ) : null}
+      </header>
+      {locateUnavailable || findMiss ? <p role="status" className="muted">{t("search.locateUnavailable")}</p> : null}
       <ThreadMessageList
         ref={listRef}
         threadId={thread.id}
@@ -780,6 +800,9 @@ export const ThreadPane = memo(function ThreadPane({
         selectedIds={selectedIds}
         selecting={selectedIds.length > 0}
         onToggleSelect={toggleSelect}
+        findQuery={findOpen ? findState.query : ""}
+        findEventId={findOpen ? findState.eventId : null}
+        focusEventId={findOpen ? findState.eventId : null}
       />
       {showComposerDock ? (
         <div className="composer-dock">

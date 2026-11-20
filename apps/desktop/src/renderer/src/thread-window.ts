@@ -145,6 +145,11 @@ export function mergeOlderInbox(
   return prepend.length === 0 ? previous : [...prepend, ...previous];
 }
 
+/** Inbox `before` cursor that still includes the event at this timestamp. */
+export function inboxPageAroundEvent(occurredAt: string): { before: string; before_id: string } {
+  return { before: occurredAt, before_id: "\uffff" };
+}
+
 export function olderInboxCursor(
   items: InboxViewItem[],
 ): { before: string; before_id: string; before_external_id?: string } | null {

@@ -1,5 +1,6 @@
 import { memo, type ReactNode } from "react";
 import { stripAttachmentLines } from "./copy-message";
+import { findMarkRanges } from "./context-search";
 import { imagePreviewSrc } from "./image-preview";
 import { useLocale } from "./LocaleContext";
 import { parseRichBlocks } from "./message-view";
@@ -9,13 +10,18 @@ export const MessageBody = memo(function MessageBody({
   text,
   attachments,
   onPreviewImage,
+  findQuery = "",
+  findCurrent = false,
 }: {
   text: string;
   attachments?: InboxAttachment[];
   onPreviewImage?: (index: number) => void;
+  findQuery?: string;
+  findCurrent?: boolean;
 }) {
   const { t } = useLocale();
   const visible = stripAttachmentLines(text);
+  const mark = (value: string) => markFind(value, findQuery, findCurrent);
   return (
     <div className="rich-body">
       {visible
@@ -24,14 +30,14 @@ export const MessageBody = memo(function MessageBody({
               const Tag = block.level === 1 ? "h2" : block.level === 2 ? "h3" : "h4";
               return (
                 <Tag key={index} className="rich-heading">
-                  {renderInline(block.text)}
+                  {renderInline(block.text, mark)}
                 </Tag>
               );
             }
             if (block.type === "quote") {
               return (
                 <blockquote key={index} className="rich-quote">
-                  {renderInline(block.text)}
+                  {renderInline(block.text, mark)}
                 </blockquote>
               );
             }
@@ -40,7 +46,7 @@ export const MessageBody = memo(function MessageBody({
               return (
                 <Tag key={index} className="rich-list">
                   {block.items.map((item, itemIndex) => (
-                    <li key={itemIndex}>{renderInline(item)}</li>
+                    <li key={itemIndex}>{renderInline(item, mark)}</li>
                   ))}
                 </Tag>
               );
@@ -52,7 +58,7 @@ export const MessageBody = memo(function MessageBody({
                     <thead>
                       <tr>
                         {block.headers.map((header, headerIndex) => (
-                          <th key={headerIndex}>{renderInline(header)}</th>
+                          <th key={headerIndex}>{renderInline(header, mark)}</th>
                         ))}
                       </tr>
                     </thead>
@@ -60,7 +66,7 @@ export const MessageBody = memo(function MessageBody({
                       {block.rows.map((row, rowIndex) => (
                         <tr key={rowIndex}>
                           {row.map((cell, cellIndex) => (
-                            <td key={cellIndex}>{renderInline(cell)}</td>
+                            <td key={cellIndex}>{renderInline(cell, mark)}</td>
                           ))}
                         </tr>
                       ))}
@@ -72,13 +78,13 @@ export const MessageBody = memo(function MessageBody({
             if (block.type === "code") {
               return (
                 <pre key={index} className="rich-code">
-                  <code>{block.text}</code>
+                  <code>{mark(block.text)}</code>
                 </pre>
               );
             }
             return (
               <p key={index} className="rich-p">
-                {renderInline(block.text)}
+                {renderInline(block.text, mark)}
               </p>
             );
           })
@@ -119,21 +125,35 @@ export const MessageBody = memo(function MessageBody({
   );
 });
 
-function renderInline(text: string): ReactNode[] {
+function renderInline(text: string, mark: (value: string) => ReactNode): ReactNode[] {
   const pieces = text.split(/(`[^`]+`|\*\*[^*]+\*\*|~~[^~]+~~|\*[^*]+\*)/g);
   return pieces.map((piece, index) => {
     if (piece.startsWith("`") && piece.endsWith("`") && piece.length >= 2) {
-      return <code key={index}>{piece.slice(1, -1)}</code>;
+      return <code key={index}>{mark(piece.slice(1, -1))}</code>;
     }
     if (piece.startsWith("**") && piece.endsWith("**") && piece.length >= 4) {
-      return <strong key={index}>{piece.slice(2, -2)}</strong>;
+      return <strong key={index}>{mark(piece.slice(2, -2))}</strong>;
     }
     if (piece.startsWith("~~") && piece.endsWith("~~") && piece.length >= 4) {
-      return <s key={index}>{piece.slice(2, -2)}</s>;
+      return <s key={index}>{mark(piece.slice(2, -2))}</s>;
     }
     if (piece.startsWith("*") && piece.endsWith("*") && piece.length >= 2) {
-      return <em key={index}>{piece.slice(1, -1)}</em>;
+      return <em key={index}>{mark(piece.slice(1, -1))}</em>;
     }
-    return <span key={index}>{piece}</span>;
+    return <span key={index}>{mark(piece)}</span>;
   });
+}
+
+function markFind(text: string, query: string, current: boolean): ReactNode {
+  const ranges = findMarkRanges(text, query);
+  if (!ranges.length) return text;
+  const nodes: ReactNode[] = [];
+  let cursor = 0;
+  ranges.forEach(([start, end], index) => {
+    if (start > cursor) nodes.push(text.slice(cursor, start));
+    nodes.push(<mark key={index} className={`find-mark${current ? " is-current" : ""}`}>{text.slice(start, end)}</mark>);
+    cursor = end;
+  });
+  if (cursor < text.length) nodes.push(text.slice(cursor));
+  return nodes;
 }

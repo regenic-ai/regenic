@@ -18,7 +18,9 @@ import {
   SEARCH_WINDOW_PAGE,
   applySearchWindow,
   contextSearchInput,
+  findMarkRanges,
   mergeSearchMessages,
+  orderedFindHits,
   planContextSearchQuery,
   searchAnswerConversations,
   searchAnswerSegments,
@@ -30,6 +32,7 @@ import {
   searchSnippetPreview,
   searchWindowRequest,
 } from "../src/renderer/src/context-search.ts";
+import { inboxPageAroundEvent } from "../src/renderer/src/thread-window.ts";
 import { en, zh, type MessageKey } from "../src/shared/messages.ts";
 import { askSpeech } from "../src/renderer/src/ask-speech.ts";
 
@@ -131,6 +134,34 @@ test("semantic actions and search input are bounded and literal", () => {
     assert.throws(() => contextSearchInput(query, "", "", limit), /search.invalid/);
   }
   assert.ok(contextSearchInput("x", "", "", 20).limit <= SEARCH_CONTEXT.max_messages);
+});
+
+test("in-thread find walks hits in time order from the viewport", () => {
+  const items = [
+    { event_id: "later", occurred_at: "2026-11-19T09:24:00.000Z" },
+    { event_id: "early", occurred_at: "2026-11-17T12:08:00.000Z" },
+    { event_id: "later", occurred_at: "2026-11-19T09:24:00.000Z" },
+    { event_id: "mid", occurred_at: "2026-11-18T06:19:00.000Z" },
+  ];
+  assert.deepEqual(orderedFindHits(items, Date.parse("2026-11-18T00:00:00.000Z")), {
+    hits: [
+      { id: "early", occurredAt: "2026-11-17T12:08:00.000Z" },
+      { id: "mid", occurredAt: "2026-11-18T06:19:00.000Z" },
+      { id: "later", occurredAt: "2026-11-19T09:24:00.000Z" },
+    ],
+    index: 1,
+  });
+  assert.equal(orderedFindHits(items, Date.parse("2026-11-20T00:00:00.000Z")).index, 2);
+  assert.equal(orderedFindHits(items, null).index, 2);
+  assert.deepEqual(findMarkRanges("发一下发票，发票回单", "发票"), [[3, 5], [6, 8]]);
+  assert.deepEqual(findMarkRanges("Invoice", "invoice"), [[0, 7]]);
+  assert.deepEqual(findMarkRanges("没有这个词", "发票"), []);
+  const cursor = inboxPageAroundEvent("2026-11-19T09:12:00.000Z");
+  const includes = (at: string, id: string) =>
+    at < cursor.before || (at === cursor.before && id < cursor.before_id);
+  assert.equal(includes("2026-11-19T09:12:00.000Z", "evt-1"), true);
+  assert.equal(includes("2026-11-19T09:12:00.001Z", "evt-1"), false);
+  assert.equal(includes("2026-11-18T00:00:00.000Z", "evt-0"), true);
 });
 
 test("ask transcript hides the task prompt and working rows", () => {

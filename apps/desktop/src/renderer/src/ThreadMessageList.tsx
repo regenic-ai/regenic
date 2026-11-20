@@ -43,7 +43,9 @@ import {
 
 export interface ThreadMessageListHandle {
   scrollToEnd: () => void;
-  scrollToEvent: (eventId: string) => boolean;
+  scrollToEvent: (eventId: string, options?: { flash?: boolean }) => boolean;
+  holdScroll: () => void;
+  firstVisibleEventId: () => string | null;
 }
 
 export const ThreadMessageList = memo(
@@ -64,6 +66,9 @@ export const ThreadMessageList = memo(
     selectedIds?: string[];
     selecting?: boolean;
     onToggleSelect?: (id: string, range: boolean) => void;
+    findQuery?: string;
+    findEventId?: string | null;
+    focusEventId?: string | null;
   }>(function ThreadMessageList({
     threadId,
     items,
@@ -81,6 +86,9 @@ export const ThreadMessageList = memo(
     selectedIds = [],
     selecting = false,
     onToggleSelect,
+    findQuery = "",
+    findEventId = null,
+    focusEventId = null,
   }, ref) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const sizesRef = useRef(new Map<string, number>());
@@ -90,6 +98,7 @@ export const ThreadMessageList = memo(
   const expectPrependRef = useRef(false);
   const loadArmedRef = useRef(true);
   const lastScrollTopRef = useRef(0);
+  const appliedFocusRef = useRef<string | null>(null);
   const onLoadOlderRef = useRef(onLoadOlder);
   onLoadOlderRef.current = onLoadOlder;
   const itemsRef = useRef(items);
@@ -165,21 +174,42 @@ export const ThreadMessageList = memo(
     snapToCommittedEnd();
   }, [snapToCommittedEnd, syncLayout]);
 
-  const scrollToEvent = useCallback((eventId: string) => {
+  const scrollToEvent = useCallback((eventId: string, options?: { flash?: boolean }) => {
     const index = itemsRef.current.findIndex((item) => item.event.id === eventId);
     const node = scrollRef.current;
     if (index < 0 || !node) {
       return false;
     }
     stickRef.current = false;
-    node.scrollTop = Math.max(0, offsetsRef.current[index] ?? 0);
-    setHighlightedId(eventId);
+    node.scrollTop = Math.max(0, (offsetsRef.current[index] ?? 0) - 24);
+    if (options?.flash !== false) {
+      setHighlightedId(eventId);
+      window.setTimeout(() => setHighlightedId((current) => current === eventId ? null : current), 1_800);
+    }
     syncLayout(false);
-    window.setTimeout(() => setHighlightedId((current) => current === eventId ? null : current), 1_800);
     return true;
   }, [syncLayout]);
 
-  useImperativeHandle(ref, () => ({ scrollToEnd, scrollToEvent }), [scrollToEnd, scrollToEvent]);
+  const holdScroll = useCallback(() => {
+    stickRef.current = false;
+  }, []);
+
+  const firstVisibleEventId = useCallback(() => {
+    const node = scrollRef.current;
+    const current = itemsRef.current;
+    if (!node || !current.length) return null;
+    const top = node.scrollTop;
+    const offsets = offsetsRef.current;
+    let index = 0;
+    for (let cursor = 0; cursor < current.length; cursor += 1) {
+      const end = offsets[cursor + 1] ?? offsets[cursor] ?? 0;
+      index = cursor;
+      if (end > top + 8) break;
+    }
+    return current[index]?.event.id ?? null;
+  }, []);
+
+  useImperativeHandle(ref, () => ({ scrollToEnd, scrollToEvent, holdScroll, firstVisibleEventId }), [scrollToEnd, scrollToEvent, holdScroll, firstVisibleEventId]);
 
   useLayoutEffect(() => {
     sizesRef.current = new Map();
@@ -218,8 +248,18 @@ export const ThreadMessageList = memo(
     } else if (!loadingOlder) {
       expectPrependRef.current = false;
     }
-    syncLayout(stickRef.current);
-    if (prepended && node && prev) {
+    if (!focusEventId) appliedFocusRef.current = null;
+    const focusIndex = focusEventId
+      ? items.findIndex((item) => item.event.id === focusEventId)
+      : -1;
+    const applyFocus = Boolean(node && focusEventId && focusIndex >= 0 && appliedFocusRef.current !== focusEventId);
+    syncLayout(applyFocus ? false : stickRef.current);
+    if (applyFocus && node) {
+      appliedFocusRef.current = focusEventId;
+      stickRef.current = false;
+      node.scrollTop = Math.max(0, (offsetsRef.current[focusIndex] ?? 0) - 24);
+      syncLayout(false);
+    } else if (prepended && node && prev) {
       node.scrollTop += node.scrollHeight - prev.height;
       syncLayout(false);
     } else {
@@ -230,7 +270,7 @@ export const ThreadMessageList = memo(
       last,
       height: node?.scrollHeight ?? 0,
     };
-  }, [items, loadingOlder, snapToCommittedEnd, syncLayout]);
+  }, [items, focusEventId, loadingOlder, snapToCommittedEnd, syncLayout]);
 
   useLayoutEffect(() => {
     const node = scrollRef.current;
@@ -392,6 +432,7 @@ export const ThreadMessageList = memo(
             previous !== undefined &&
             sameSpeaker(previous, item) &&
             role !== "system";
+          const findCurrent = Boolean(findQuery.trim()) && item.event.id === findEventId;
           return (
             <WindowItem
               key={item.event.id}
@@ -399,6 +440,7 @@ export const ThreadMessageList = memo(
               top={offsetsRef.current[index] ?? 0}
               follow={follow}
               highlighted={item.event.id === highlightedId}
+              findCurrent={findCurrent}
               index={index}
               size={items.length}
               onMeasure={onMeasure}
@@ -419,6 +461,8 @@ export const ThreadMessageList = memo(
                     <MessageBody
                       text={item.body_text ?? ""}
                       attachments={item.attachments}
+                      findQuery={findQuery}
+                      findCurrent={findCurrent}
                       onPreviewImage={(fileIndex) =>
                         openPreview(previewImageId(item.event.id, fileIndex))
                       }
@@ -439,7 +483,7 @@ export const ThreadMessageList = memo(
                       <ChatCopyButton item={item} />
                     </span>
                   </div>
-                  <MessageBody text={item.body_text ?? ""} attachments={item.attachments} />
+                  <MessageBody text={item.body_text ?? ""} attachments={item.attachments} findQuery={findQuery} findCurrent={findCurrent} />
                 </div>
               ) : (
                 <ChatRow
@@ -456,6 +500,8 @@ export const ThreadMessageList = memo(
                   onToggleSelect={onToggleSelect}
                   onMenu={(event) => openMessageMenu(event, item, setMenu)}
                   onPreviewImage={openPreview}
+                  findQuery={findQuery}
+                  findCurrent={findCurrent}
                 />
               )}
             </WindowItem>
@@ -506,6 +552,7 @@ function WindowItem({
   top,
   follow,
   highlighted,
+  findCurrent = false,
   index,
   size,
   onMeasure,
@@ -515,6 +562,7 @@ function WindowItem({
   top: number;
   follow: boolean;
   highlighted: boolean;
+  findCurrent?: boolean;
   index: number;
   size: number;
   onMeasure: (id: string, height: number) => void;
@@ -537,7 +585,7 @@ function WindowItem({
   return (
     <li
       ref={ref}
-      className={`thread-window-item${follow ? " is-follow" : ""}${highlighted ? " is-context-evidence" : ""}`}
+      className={`thread-window-item${follow ? " is-follow" : ""}${highlighted ? " is-context-evidence" : ""}${findCurrent ? " is-find-current" : ""}`}
       style={{ top: `${top}px` }}
       aria-setsize={size}
       aria-posinset={index + 1}
@@ -561,6 +609,8 @@ const ChatRow = memo(function ChatRow({
   onToggleSelect,
   onMenu,
   onPreviewImage,
+  findQuery,
+  findCurrent,
 }: {
   item: InboxViewItem;
   role: MessageRole;
@@ -575,6 +625,8 @@ const ChatRow = memo(function ChatRow({
   onToggleSelect?: (id: string, range: boolean) => void;
   onMenu: (event: { preventDefault(): void; clientX: number; clientY: number }) => void;
   onPreviewImage: (id: string) => void;
+  findQuery: string;
+  findCurrent: boolean;
 }) {
   const { t } = useLocale();
   const receipt = receiptCopy(item);
@@ -682,6 +734,8 @@ const ChatRow = memo(function ChatRow({
         <MessageBody
           text={item.body_text ?? ""}
           attachments={item.attachments}
+          findQuery={findQuery}
+          findCurrent={findCurrent}
           onPreviewImage={(fileIndex) =>
             onPreviewImage(previewImageId(item.event.id, fileIndex))
           }

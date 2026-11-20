@@ -396,24 +396,21 @@
   .search-top-link span { display: none; }
 }
 
-/* Find inside one conversation: floats over the message list, top-right. */
+/* Find inside one conversation: a row in the thread header, never over a message. */
 .thread-nav-divider { width: 1px; height: 14px; margin: 0 4px; background: var(--line-12); }
 .thread-nav .item-tool svg { width: 15px; height: 15px; }
 .thread-nav .item-tool.is-on { background: var(--wash-8); }
-.thread-find-anchor { position: relative; z-index: 6; height: 0; }
 .thread-find {
-  position: absolute;
-  top: 10px;
-  right: 24px;
+  position: relative;
   display: flex;
   align-items: center;
   gap: 2px;
-  width: min(400px, calc(100% - 48px));
-  height: 40px;
+  width: auto;
+  height: 36px;
+  margin-top: 12px;
   padding: 0 6px 0 12px;
-  border-radius: var(--radius-menu);
-  background: var(--elevated);
-  box-shadow: var(--shadow-pop);
+  border-radius: 10px;
+  background: var(--wash-6);
   animation: find-in var(--dur-slow) var(--ease-out);
 }
 @keyframes find-in { from { opacity: 0; transform: translateY(-4px); } }

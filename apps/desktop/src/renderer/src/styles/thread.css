@@ -424,6 +424,31 @@
   border-radius: var(--radius-bubble);
 }
 
+.thread-window-item.is-find-current .chat-main,
+.thread-window-item.is-find-current .chat-system,
+.thread-window-item.is-find-current .chat-ticket {
+  outline: 2px solid #e8a317;
+  outline-offset: 3px;
+}
+
+.thread-window-item.is-find-current .msg-image,
+.thread-window-item.is-find-current .file-chip {
+  box-shadow: 0 0 0 3px #f0b429;
+}
+
+.find-mark {
+  padding: 0 2px;
+  border-radius: 3px;
+  background: #ffe08a;
+  color: var(--ink);
+  box-decoration-break: clone;
+}
+
+.find-mark.is-current {
+  background: #ffbf1a;
+  color: var(--ink);
+}
+
 .thread-scroll {
   flex: 1;
   min-height: 0;
