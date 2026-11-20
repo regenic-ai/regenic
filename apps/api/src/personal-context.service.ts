@@ -51,6 +51,8 @@ import {
   type AgentRunRecord,
   type AgentRunStatus,
   selectContextIndexes,
+  ChannelDriverRegistry,
+  type SearchAppClass,
   type ContextAuthorityRead,
   CONTENT_PARTS_MEDIA_TYPE,
   parseStoredContentParts,
@@ -75,6 +77,13 @@ import {
 import { PersonalRuntimeService } from "./personal-runtime.service";
 import { PersonalContextError } from "./personal-context-error";
 import { PersonalConversationContextService } from "./personal-conversation-context.service";
+import {
+  applySearchAppClass,
+  isFilterRecord,
+  requireSearchAppClass,
+  splitSearchAppClass,
+  stripAppScope,
+} from "./search-app-class";
 export { PersonalContextError } from "./personal-context-error";
 
 const FORBIDDEN_PERSONAL_KEYS = new Set(["id", "org_id", "principal", "schema_version"]);
@@ -105,6 +114,8 @@ export class PersonalContextService {
     private readonly runtime: PersonalRuntimeService,
     @Inject(PersonalConversationContextService)
     private readonly conversations: PersonalConversationContextService,
+    @Inject(ChannelDriverRegistry)
+    private readonly drivers: ChannelDriverRegistry,
   ) {}
 
   async assemble(input: unknown) {
@@ -114,7 +125,8 @@ export class PersonalContextService {
 
   async search(input: unknown) {
     return this.runContext(async () => {
-      const request = contextSearchRequest(input, {
+      const { appClass, body } = splitSearchAppClass(input);
+      const request = contextSearchRequest(await this.filtersForSearch(body, appClass), {
         id: randomUUID(), org_id: this.runtime.orgId(), principal: this.principal(),
       });
       return new ContextSearcher(this.runtime.requireHost().get("context")).search(request);
@@ -122,7 +134,8 @@ export class PersonalContextService {
   }
 
   async searchExpanded(input: unknown) {
-    const body = strictBody(input, new Set(["query", "kind", "limit", "filters", "context"]));
+    const body = strictBody(input, new Set(["query", "kind", "limit", "filters", "context", "app_class"]));
+    const appClass = requireSearchAppClass(body.app_class);
     const context = body.context === undefined
       ? {}
       : strictNestedBody(body.context, new Set([
@@ -141,11 +154,13 @@ export class PersonalContextService {
         "limit cannot exceed context.max_messages",
       );
     }
+    const requestedFilters = stripAppScope(body.filters);
     const search = await this.search({
       query: body.query,
       ...(body.kind === undefined ? {} : { kind: body.kind }),
       limit,
-      ...(body.filters === undefined ? {} : { filters: body.filters }),
+      app_class: appClass,
+      ...(requestedFilters === undefined ? {} : { filters: requestedFilters }),
     });
     const messageHits = search.items.filter((hit) => !hit.matches ||
       hit.matches.some((match) => match.kind !== "file"));
@@ -1549,6 +1564,29 @@ export class PersonalContextService {
 
   private principal() {
     return { actor_type: "human" as const, actor_id: this.runtime.orgId() };
+  }
+
+  private async filtersForSearch(body: unknown, appClass: SearchAppClass): Promise<unknown> {
+    if (!body || typeof body !== "object" || Array.isArray(body)) return body;
+    const record = { ...(body as Record<string, unknown>) };
+    const hasFilters = Object.prototype.hasOwnProperty.call(record, "filters");
+    const requested = hasFilters ? stripAppScope(record.filters) : undefined;
+    // An explicit empty object is invalid. Replacing it with the server scope
+    // would turn a rejected request into a successful search.
+    if (!isFilterRecord(requested) || (requested !== undefined && Object.keys(requested).length === 0)) {
+      return { ...record, filters: requested };
+    }
+    const filters = await applySearchAppClass(
+      this.runtime,
+      this.drivers,
+      requested,
+      appClass,
+    );
+    if (filters === undefined) {
+      delete record.filters;
+      return record;
+    }
+    return { ...record, filters };
   }
 
   private async runContext<T>(run: () => Promise<T>): Promise<T> {

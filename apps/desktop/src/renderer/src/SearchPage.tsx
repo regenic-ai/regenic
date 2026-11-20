@@ -11,6 +11,7 @@ import {
   searchMessageText,
   planContextSearchQuery,
   type SearchAnswerFilters,
+  type SearchAppClass,
   type SearchQueryPlan,
   searchSnippetPreview,
   searchWindowRequest,
@@ -69,6 +70,7 @@ export function SearchPage({ onSettings, onOpenConversation }: {
   const { t, locale } = useLocale();
   const [query, setQuery] = useState("");
   const [kind, setKind] = useState<"all" | "messages" | "files">("all");
+  const [appClass, setAppClass] = useState<SearchAppClass>("app");
   const [source, setSource] = useState("");
   const [thread, setThread] = useState("");
   const [limit, setLimit] = useState(DEFAULT_LIMIT);
@@ -78,6 +80,7 @@ export function SearchPage({ onSettings, onOpenConversation }: {
   const [submitted, setSubmitted] = useState("");
   const [submittedFilters, setSubmittedFilters] = useState<SearchAnswerFilters | null>(null);
   const [submittedIntent, setSubmittedIntent] = useState<SearchQueryPlan["intent"]>("lookup");
+  const [submittedAppClass, setSubmittedAppClass] = useState<SearchAppClass>("app");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [opening, setOpening] = useState<string | null>(null);
@@ -98,6 +101,7 @@ export function SearchPage({ onSettings, onOpenConversation }: {
       setBusy(false); setResult(null); setCards([]); setError(null);
       setOpening(null); setLoadingMore(null); setElapsed(null); setSubmittedFilters(null);
       setSubmittedIntent("lookup");
+      setSubmittedAppClass("app");
     };
     const unsubscribe = window.regenic?.onApiOriginChanged(reset);
     return () => {
@@ -111,7 +115,12 @@ export function SearchPage({ onSettings, onOpenConversation }: {
     pending.current?.abort(); pending.current = null; setBusy(false);
   }
 
-  async function search(text = query, filters = { source, thread, limit }, searchKind = kind) {
+  async function search(
+    text = query,
+    filters = { source, thread, limit },
+    searchKind = kind,
+    searchAppClass = appClass,
+  ) {
     pending.current?.abort();
     openPending.current?.abort();
     morePending.current?.abort();
@@ -123,7 +132,9 @@ export function SearchPage({ onSettings, onOpenConversation }: {
     try {
       const now = new Date();
       const plan = planContextSearchQuery(text, now);
-      const searchInput = contextSearchInput(text, filters.source, filters.thread, filters.limit, searchKind, now);
+      const searchInput = contextSearchInput(
+        text, filters.source, filters.thread, filters.limit, searchKind, now, searchAppClass,
+      );
       const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(90_000)]);
       const next = await searchPersonalContext(searchInput, signal).catch((caught: unknown) => {
         if (caught instanceof KernelRequestError && caught.code === "context_changed" && !signal.aborted) {
@@ -140,9 +151,11 @@ export function SearchPage({ onSettings, onOpenConversation }: {
               occurred_before: searchInput.filters.occurred_before,
               ...(searchInput.filters.sources ? { sources: searchInput.filters.sources } : {}),
               ...(searchInput.filters.thread_ids ? { thread_ids: searchInput.filters.thread_ids } : {}),
+              app_class: searchAppClass,
             }
           : null;
         setSubmitted(originalQuery); setSubmittedFilters(answerFilters); setSubmittedIntent(plan.intent);
+        setSubmittedAppClass(searchAppClass);
         if (searchInput.limit !== limit) setLimit(searchInput.limit);
         setElapsed(Math.round(performance.now() - started));
         const nextRecent = [originalQuery, ...recent.filter((entry) => entry !== originalQuery)].slice(0, RECENT_LIMIT);
@@ -284,6 +297,15 @@ export function SearchPage({ onSettings, onOpenConversation }: {
                 }}>{t(`search.kind.${value}`)}</button>
             ))}
           </div>
+          <div className="search-recent" role="group" aria-label={t("search.appClass")}>
+            {(["app", "agent", "all"] as const).map((value) => (
+              <button type="button" className="search-recent-chip" key={value}
+                aria-pressed={appClass === value} onClick={() => {
+                  setAppClass(value);
+                  if (query.trim()) void search(query, { source, thread, limit }, kind, value);
+                }}>{t(`search.appClass.${value}`)}</button>
+            ))}
+          </div>
           <button type="button" className={`link search-filter-toggle${filtersOpen ? " is-open" : ""}`}
             aria-expanded={filtersOpen} onClick={() => setFiltersOpen((value) => !value)}>
             {activeFilters ? t("search.filtersActive", { count: activeFilters }) : t("search.filters")}
@@ -341,6 +363,7 @@ export function SearchPage({ onSettings, onOpenConversation }: {
           <>
             <div className="semantic-search-meta">
               <span className="search-summary">{summary}</span>
+              <span className="muted">{t(`search.appClass.${submittedAppClass}`)}</span>
               <span className={`search-mode${result.generation ? " is-hybrid" : ""}`}
                 title={t(result.generation ? "search.hybridHint" : "search.lexicalHint")}>
                 {t(result.generation ? "search.hybrid" : "search.lexical")}

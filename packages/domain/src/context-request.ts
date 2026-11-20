@@ -33,12 +33,23 @@ export type ContextTemporalSelection =
   | { mode: "history"; valid_at?: string; recorded_at?: never }
   | { mode: "as_of"; valid_at?: string; recorded_at: string };
 
+/**
+ * Which side of the ordinary-app / agent-session split a search keeps.
+ * `agent_sources` and `agent_thread_prefixes` always name the agent side.
+ */
+export interface ContextAppScope {
+  class: "app" | "agent";
+  agent_sources: string[];
+  agent_thread_prefixes: string[];
+}
+
 export interface ContextRequestFilters {
   sources?: string[];
   thread_ids?: string[];
   actor_ids?: string[];
   occurred_after?: string;
   occurred_before?: string;
+  app_scope?: ContextAppScope;
 }
 
 export interface ContextRequest {

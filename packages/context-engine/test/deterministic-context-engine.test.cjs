@@ -388,6 +388,65 @@ describe("deterministic context engine", () => {
     );
   });
 
+  it("keeps agent and executor sessions out of an ordinary app search", async () => {
+    const events = [
+      sourceEvent({
+        id: "event-app",
+        external_id: "app-1",
+        source: "feishu",
+        thread_id: "feishu:chat",
+        occurred_at: "2026-08-29T10:00:00.000Z",
+        ingested_at: "2026-08-29T10:01:00.000Z",
+        content_hash: "5".repeat(64),
+        text: "hollyland published a video",
+      }),
+      sourceEvent({
+        id: "event-agent",
+        external_id: "agent-1",
+        source: "dsh",
+        thread_id: "dsh:session",
+        occurred_at: "2026-08-29T10:00:00.000Z",
+        ingested_at: "2026-08-29T10:01:00.000Z",
+        content_hash: "6".repeat(64),
+        text: "hollyland published a video",
+      }),
+      sourceEvent({
+        id: "event-mixed-agent",
+        external_id: "mixed-agent",
+        source: "server_app",
+        thread_id: "server_app:demo:inst-1:room",
+        occurred_at: "2026-08-29T10:00:00.000Z",
+        ingested_at: "2026-08-29T10:01:00.000Z",
+        content_hash: "7".repeat(64),
+        text: "hollyland published a video",
+      }),
+      sourceEvent({
+        id: "event-mixed-app",
+        external_id: "mixed-app",
+        source: "server_app",
+        thread_id: "server_app:notes:inst-2:room",
+        occurred_at: "2026-08-29T10:00:00.000Z",
+        ingested_at: "2026-08-29T10:01:00.000Z",
+        content_hash: "8".repeat(64),
+        text: "hollyland published a video",
+      }),
+    ];
+    const scope = {
+      agent_sources: ["dsh"],
+      agent_thread_prefixes: ["server_app:demo:inst-1:"],
+    };
+    const ids = async (appClass) => {
+      const result = await engine({ source: source(events) }).assemble(request({
+        query: undefined,
+        anchors: undefined,
+        filters: { app_scope: { class: appClass, ...scope } },
+      }));
+      return result.bundle.sections.flatMap((section) => section.items).map((item) => item.resource_id).sort();
+    };
+    assert.deepEqual(await ids("app"), ["event-app", "event-mixed-app"]);
+    assert.deepEqual(await ids("agent"), ["event-agent", "event-mixed-agent"]);
+  });
+
   it("does not resurrect a create when a tombstone falls outside content filters", async () => {
     const events = fixtureEvents().filter((event) => event.event.external_id === "message-deleted");
     const result = await engine({ source: source(events) }).assemble(request({

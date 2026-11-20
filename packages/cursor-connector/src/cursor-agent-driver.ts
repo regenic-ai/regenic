@@ -44,6 +44,7 @@ import { probeCursorCatalog } from "./probe";
 export const cursorAgentDriver: ChannelDriver = {
   connector_type: "cursor-agent",
   source: CURSOR_SOURCE,
+  agent_source: true,
   connector_protocol: CONNECTOR_PROTOCOL,
 
   install(input): NewConnectorInstallation {

@@ -68,9 +68,10 @@ const TOOLS = [
   {
     name: "search_conversations",
     description:
-      "Search all authorized chats and files. Use only when the task needs other chats. Hits may concern someone else; check before relying on them.",
+      "Search ordinary app chats and files. Agent and executor sessions are left out, so earlier AI transcripts are not treated as source evidence. Pass app_class \"agent\" to search only those sessions, or \"all\" to search both. Use only when the task needs other chats. Hits may concern someone else; check before relying on them.",
     properties: {
       query: str,
+      app_class: { type: "string", enum: ["app", "agent", "all"] },
       kind: { type: "string", enum: ["all", "messages", "files"] },
       limit: int(1, 20),
       filters: {

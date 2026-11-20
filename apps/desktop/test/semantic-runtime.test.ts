@@ -102,11 +102,16 @@ test("semantic actions and search input are bounded and literal", () => {
   assert.throws(() => semanticLaunchSettings({ ...DEFAULT_SEMANTIC_LAUNCH_SETTINGS, device: "cuda" }, 8, true));
   assert.equal(semanticLaunchSettings({ ...DEFAULT_SEMANTIC_LAUNCH_SETTINGS, device: "cuda" }, 8, true, true).device, "cuda");
   assert.deepEqual(contextSearchInput(" query ", " mail ", " literal/thread ", 20), {
-    query: "query", limit: 20, kind: "all", filters: { sources: ["mail"], thread_ids: ["literal/thread"] },
+    query: "query", limit: 20, kind: "all", app_class: "app",
+    filters: { sources: ["mail"], thread_ids: ["literal/thread"] },
     context: SEARCH_CONTEXT,
   });
 
-  assert.deepEqual(contextSearchInput("x", "", "", 1), { query: "x", limit: 1, kind: "all", context: SEARCH_CONTEXT });
+  assert.deepEqual(contextSearchInput("x", "", "", 1), {
+    query: "x", limit: 1, kind: "all", app_class: "app", context: SEARCH_CONTEXT,
+  });
+  assert.equal(contextSearchInput("x", "", "", 1, "all", new Date(), "agent").app_class, "agent");
+  assert.equal(contextSearchInput("x", "", "", 1, "all", new Date(), "all").app_class, "all");
   for (const kind of ["all", "messages", "files"] as const) {
     assert.equal(contextSearchInput("budget.xlsx", "", "", 10, kind).kind, kind);
   }
@@ -124,6 +129,7 @@ test("search turns explicit rolling periods into filters and removes them from s
       query: "hollyland 主要是谁在对接我们",
       limit: 10,
       kind: "all",
+      app_class: "app",
       filters: {
         occurred_after: "2026-10-08T03:04:05.000Z",
         occurred_before: "2026-11-08T03:04:05.000Z",

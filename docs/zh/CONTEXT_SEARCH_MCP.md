@@ -37,7 +37,7 @@ pnpm --filter @regenic/local-cli... build
 
 ### `search_conversations`
 
-搜索当前已授权文本，并把每个命中扩展为有界对话窗口。
+搜索当前已授权文本，并把每个命中扩展为有界对话窗口。默认只搜普通应用。Agent / 执行器会话（包括以前让执行器回答时产生的对话）不会混进来。需要时传 `app_class`：`app`（默认）、`agent` 或 `all`。
 
 ```json
 {

@@ -1,4 +1,9 @@
-import { contextLexicalCorpus, contextLexicalDocumentStats, scoreContextLexicalText } from "@regenic/domain";
+import {
+  contextLexicalCorpus,
+  contextLexicalDocumentStats,
+  matchesSearchAppScope,
+  scoreContextLexicalText,
+} from "@regenic/domain";
 import type { ContextLexicalCorpus } from "@regenic/domain";
 import { searchMatchesFor } from "./search-matches";
 import type {
@@ -266,6 +271,12 @@ function matchesFilters(source: AuthorizedContextSourceEvent, request: ContextRe
     return false;
   }
   if (filters.occurred_before && occurredAt > Date.parse(filters.occurred_before)) {
+    return false;
+  }
+  if (!matchesSearchAppScope(
+    { source: source.event.source, thread_id: source.thread_id },
+    filters.app_scope,
+  )) {
     return false;
   }
   return true;
