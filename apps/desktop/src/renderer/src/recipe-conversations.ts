@@ -13,6 +13,7 @@ export function recipeConversationOptions(threads: InboxThread[]): RecipeConvers
     thread_facet: thread.thread_facet,
     unit_kind: thread.unit_kind ?? undefined,
     has_work: Boolean(thread.work),
+    work_status: thread.work?.status,
     body_text: thread.messages[thread.messages.length - 1]?.body_text,
     conversation_name: conversationMatchName(thread),
   }));

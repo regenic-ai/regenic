@@ -129,7 +129,7 @@ export function recipeAllowsPullDispatch(recipe: Recipe): boolean {
   return (
     recipe.enabled &&
     trigger.kind === "pull" &&
-    Boolean(recipe.match.thread_id?.trim()) &&
+    recipeMatchIsSpecific(recipe.match) &&
     isPullIntervalMs(trigger.interval_ms)
   );
 }
@@ -367,6 +367,11 @@ export function findWorkItemByUnitKey(
 
 const PUSH_RETRY_DELAYS_MS = [30_000, 120_000, 480_000] as const;
 const PUSH_RETRY_MAX_ATTEMPTS = 3;
+
+/** A failed start still has automatic retries left. The next scheduled beat waits. */
+export function failedStartRetriesRemain(attempts: number): boolean {
+  return attempts < PUSH_RETRY_MAX_ATTEMPTS;
+}
 
 export function shouldRetryFailedPush(input: {
   status: WorkItemStatus;

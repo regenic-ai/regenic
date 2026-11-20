@@ -1,3 +1,4 @@
+import { recipeCoversConversation } from "../../../../../packages/domain/src/recipe-audience.ts";
 import type {
   RecipeConversationOption,
   RecipeMatch,
@@ -288,7 +289,11 @@ export function matchingConversations(
   }
   return conversations.filter((conversation) => {
     const subject = subjectFromConversation(conversation);
-    return subject ? recipeMatches(match, subject, triggerKind) : false;
+    return recipeCoversConversation({
+      trigger: triggerKind,
+      workStatus: conversation.work_status,
+      matched: subject !== null && recipeMatches(match, subject, triggerKind),
+    });
   });
 }
 
@@ -312,8 +317,8 @@ export function shouldConfirmRecipeSave(input: {
   if (
     input.isNew &&
     input.canWriteBack &&
-    input.triggerKind === "push" &&
-    input.scope === "source"
+    input.scope === "source" &&
+    (input.triggerKind === "push" || input.triggerKind === "pull")
   ) {
     return true;
   }

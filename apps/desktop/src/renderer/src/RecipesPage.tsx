@@ -188,12 +188,9 @@ export function RecipesPage({
     ? t("recipes.saveNeedExecutor")
     : taskInstructionRequired && !taskInstruction.trim()
       ? t("recipes.saveNeedInstruction")
-      : (draft.scope === "thread" || draft.trigger_kind === "pull") &&
-          !draft.thread_id
+      : draft.scope === "thread" && !draft.thread_id
         ? t("recipes.saveNeedConversation")
-        : draft.trigger_kind !== "pull" &&
-            draft.scope === "source" &&
-            !draft.source.trim()
+        : draft.scope === "source" && !draft.source.trim()
           ? t("recipes.saveNeedSource")
           : null;
   const executorByType = useMemo(
@@ -232,7 +229,7 @@ export function RecipesPage({
     (savedRecipe.write_back_thread_id ?? "") === draft.write_back_thread_id &&
     (Boolean(draft.write_back_thread_id) ||
       savedRecipe.match.thread_id === draftMatch(draft).thread_id);
-  const writeBackAwaitsThread = (draft.scope === "thread" || draft.trigger_kind === "pull") &&
+  const writeBackAwaitsThread = draft.scope === "thread" &&
     !draft.thread_id && !draft.write_back_thread_id;
   const writeBackSaveBlocker = draft.can_write_back && !canWriteBack && !writeBackUnchanged &&
     !writeBackAwaitsThread
@@ -278,6 +275,12 @@ export function RecipesPage({
     }
     return matchingConversations(match, initialConversations, draft.trigger_kind) ?? [];
   }, [draft, initialConversations]);
+  const unsendableCount = draft.trigger_kind === "pull" &&
+    draft.can_write_back &&
+    !draft.write_back_thread_id &&
+    draft.scope !== "thread"
+    ? tryChoices.filter((item) => item.can_send === false).length
+    : 0;
   const tryThreadId = tryChoices.some((item) => item.id === trySample)
     ? trySample
     : (tryChoices[0]?.id ?? null);
@@ -292,8 +295,7 @@ export function RecipesPage({
     write_back_thread_id: next.write_back_thread_id || null,
     hide_on_success: next.hide_on_success,
     include_context: next.include_context,
-    max_concurrent:
-      next.trigger_kind === "pull" ? null : parseMaxConcurrent(next.max_concurrent),
+    max_concurrent: parseMaxConcurrent(next.max_concurrent),
     enabled: next.enabled,
   });
   const dirty =
@@ -538,6 +540,10 @@ export function RecipesPage({
             after: writeBack
               ? t("recipes.writeBackYes")
               : t("recipes.writeBackNo"),
+            rhythm:
+              draft.trigger_kind === "pull" && draft.scope !== "thread"
+                ? t(writeBack ? "recipes.saveConfirmRhythmReply" : "recipes.saveConfirmRhythm")
+                : "",
           }),
         )
       ) {
@@ -802,7 +808,16 @@ export function RecipesPage({
                     />
                   </RecipeRow>
                 ) : null}
-                {draft.trigger_kind !== "pull" ? (
+
+                </div>
+              </section>
+
+              <section className="recipe-section">
+                <header className="recipe-section-head">
+                  <span className="recipe-step-no" aria-hidden="true">2</span>
+                  <h3>{t("recipes.stageScope")}</h3>
+                </header>
+                <div className="recipe-rows">
                 <RecipeRow label={t("recipes.watchLegend")}>
                   <div className="seg">
                     {scopeChoices(t).map((choice) => (
@@ -814,7 +829,13 @@ export function RecipesPage({
                           if (
                             choice.id === "tasks" &&
                             draft.scope !== "tasks" &&
-                            !window.confirm(t("recipes.scopeTasksConfirm"))
+                            !window.confirm(
+                              t(
+                                draft.trigger_kind === "pull"
+                                  ? "recipes.scopeTasksConfirmPull"
+                                  : "recipes.scopeTasksConfirm",
+                              ),
+                            )
                           ) {
                             return;
                           }
@@ -830,8 +851,12 @@ export function RecipesPage({
                   {draft.scope === "tasks" ? (
                     <p className="recipe-hint recipe-scope-warn">{t("recipes.scopeTasksWarn")}</p>
                   ) : null}
+                  {draft.trigger_kind === "pull" ? (
+                    <p className="recipe-hint">
+                      {t(draft.scope === "thread" ? "recipes.pullThreadHint" : "recipes.pullScopeHint")}
+                    </p>
+                  ) : null}
                 </RecipeRow>
-                ) : null}
 
                 {draft.scope === "source" ? (
                   <RecipeRow label={t("recipes.source")}>
@@ -859,11 +884,11 @@ export function RecipesPage({
                   </RecipeRow>
                 ) : null}
 
-                {draft.trigger_kind !== "pull" && draft.scope !== "thread"
+                {draft.scope !== "thread"
                   ? unitKindField(draft, sources, setDraft, t)
                   : null}
 
-                {draft.scope === "thread" || draft.trigger_kind === "pull" ? (
+                {draft.scope === "thread" ? (
                   <RecipeRow label={t("recipes.conversation")}>
                     <MenuSelect
                       value={draft.thread_id}
@@ -892,16 +917,6 @@ export function RecipesPage({
                     />
                   </RecipeRow>
                 ) : null}
-
-                </div>
-              </section>
-
-              <section className="recipe-section">
-                <header className="recipe-section-head">
-                  <span className="recipe-step-no" aria-hidden="true">2</span>
-                  <h3>{t("recipes.stageScope")}</h3>
-                </header>
-                <div className="recipe-rows">
                 <TextFilterConditions key={`${draft.id ?? "new"}:${filterEditorVersion}`} draft={draft} setDraft={setDraft} t={t} />
                 <RecipeRow label={t("recipes.previewTitle")}>
                   <MatchPreview
@@ -909,6 +924,12 @@ export function RecipesPage({
                     draft={draft}
                     t={t}
                   />
+                  {draft.trigger_kind === "pull" && draft.scope !== "thread" ? (
+                    <p className="recipe-hint">{t("recipes.pullScopeBeat")}</p>
+                  ) : null}
+                  {unsendableCount > 0 ? (
+                    <p className="recipe-hint">{t("recipes.previewPullSkip", { count: unsendableCount })}</p>
+                  ) : null}
                   {priorityGroup.length > 0 ? (
                     <PriorityPanel rows={priorityGroup} t={t} />
                   ) : null}
@@ -1071,9 +1092,11 @@ export function RecipesPage({
                       <p className="recipe-hint">
                         {t(draft.write_back_thread_id
                           ? "recipes.writeBackHintSelected"
-                          : draft.trigger_kind === "pull"
+                          : draft.trigger_kind === "pull" && draft.scope === "thread"
                             ? "recipes.writeBackHintPull"
-                            : "recipes.writeBackHint")}
+                            : draft.trigger_kind === "pull"
+                              ? "recipes.writeBackHintPullScope"
+                              : "recipes.writeBackHint")}
                       </p>
                     ) : null}
                   </RecipeRow>
@@ -1245,6 +1268,8 @@ export function RecipesPage({
                   ["recipes.flow.newTask", "recipes.flow.agent", "recipes.flow.backToSource"]],
                 ["schedule", ClockIcon, "recipes.starterSchedule", "recipes.starterScheduleBody",
                   ["recipes.flow.hourly", "recipes.flow.agent", "recipes.flow.backToChat"]],
+                ["sweep", ClockIcon, "recipes.starterSweep", "recipes.starterSweepBody",
+                  ["recipes.flow.hourly", "recipes.flow.agent", "recipes.flow.backToSource"]],
               ] as const
             ).map(([kind, Icon, titleKey, bodyKey, flow]) => (
               <button

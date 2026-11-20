@@ -51,15 +51,7 @@ export function normalizeRecipe(
   }
   const match = normalizeMatch(input.match ?? existing?.match ?? {});
   const trigger = normalizeRecipeTrigger(input.trigger ?? existing?.trigger, match);
-  if (trigger.kind === "pull") {
-    if (!match.thread_id) {
-      throw new PersonalConnectorError(
-        "invalid_config",
-        "Pull recipes need a conversation",
-        400,
-      );
-    }
-  } else if (recipeSpecificity(match) === 0 || !recipeMatchIsSpecific(match)) {
+  if (recipeSpecificity(match) === 0 || !recipeMatchIsSpecific(match)) {
     throw new PersonalConnectorError(
       "invalid_config",
       "Recipe match needs a thread, a unit kind, a task class, or source plus a non-utterance class",

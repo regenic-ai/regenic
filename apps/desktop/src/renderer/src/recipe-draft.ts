@@ -117,7 +117,6 @@ export function applyTriggerKind(draft: RecipeDraft, kind: RecipeTriggerKind): R
     return {
       ...draft,
       trigger_kind: "pull",
-      scope: "thread",
       include_context: true,
       can_write_back: true,
       interval_ms: draft.interval_ms || 60 * 60 * 1000,
@@ -164,10 +163,9 @@ export interface RecipeDraft {
   /** Saved match when editing, so fields the form does not show survive a save. */
   base_match?: RecipeMatch;
   base_scope?: RecipeScope;
-  base_pull?: boolean;
 }
 
-export type StarterKind = "chat" | "channel" | "schedule";
+export type StarterKind = "chat" | "channel" | "schedule" | "sweep";
 
 export function emptyDraft(executorType = ""): RecipeDraft {
   return {
@@ -237,6 +235,20 @@ export function starterDraft(
         thread_title: first?.label ?? "",
         source: first?.source ?? base.source,
         can_write_back: first?.can_send !== false,
+      },
+      "pull",
+    );
+  }
+  if (kind === "sweep") {
+    const source = sources[0];
+    return applyTriggerKind(
+      {
+        ...base,
+        scope: "source",
+        source: source?.id ?? "",
+        thread_id: "",
+        thread_title: "",
+        can_write_back: true,
       },
       "pull",
     );
@@ -354,21 +366,16 @@ export function draftFromRecipe(
     enabled: recipe.enabled,
     base_match: { ...recipe.match },
     base_scope: scope,
-    base_pull: recipe.trigger?.kind === "pull",
   };
 }
 
-/** Saved match fields the form does not edit, kept while scope and trigger family stay put. */
+/** Saved match fields the form does not edit, kept while the scope stays put. */
 function hiddenMatch(draft: RecipeDraft): RecipeMatch | null {
   const base = draft.base_match;
-  if (
-    !base ||
-    draft.scope !== draft.base_scope ||
-    (draft.trigger_kind === "pull") !== Boolean(draft.base_pull)
-  ) {
+  if (!base || draft.scope !== draft.base_scope) {
     return null;
   }
-  if (draft.trigger_kind === "pull" || draft.scope === "thread") {
+  if (draft.scope === "thread") {
     return {
       ...(base.source ? { source: base.source } : {}),
       ...(base.record_class ? { record_class: base.record_class } : {}),
@@ -394,13 +401,6 @@ export function draftMatch(draft: RecipeDraft): RecipeMatch {
 
 function draftScopeMatch(draft: RecipeDraft): RecipeMatch {
   const hidden = hiddenMatch(draft);
-  if (draft.trigger_kind === "pull") {
-    return {
-      ...hidden,
-      ...(draft.thread_id.trim() ? { thread_id: draft.thread_id.trim() } : {}),
-      ...(draft.thread_facet ? { thread_facet: draft.thread_facet } : {}),
-    };
-  }
   if (draft.scope === "source" && !draft.source.trim()) {
     return {};
   }
@@ -435,10 +435,7 @@ export function draftTrigger(draft: RecipeDraft): RecipeView["trigger"] {
   return { kind: "push", coalesce: draft.coalesce };
 }
 
-export function canAutoStart(match: RecipeMatch, draft: RecipeDraft): boolean {
-  if (draft.trigger_kind === "pull") {
-    return Boolean(match.thread_id && draft.interval_ms);
-  }
+function matchIsSpecific(match: RecipeMatch): boolean {
   return Boolean(
     match.thread_id ||
       match.unit_kind ||
@@ -447,15 +444,19 @@ export function canAutoStart(match: RecipeMatch, draft: RecipeDraft): boolean {
   );
 }
 
-export function scopeError(draft: RecipeDraft, t: Translate): string {
+export function canAutoStart(match: RecipeMatch, draft: RecipeDraft): boolean {
   if (draft.trigger_kind === "pull") {
-    if (!draft.thread_id.trim()) {
-      return t("recipes.errPullThread");
-    }
+    return Boolean(matchIsSpecific(match) && draft.interval_ms);
+  }
+  return matchIsSpecific(match);
+}
+
+export function scopeError(draft: RecipeDraft, t: Translate): string {
+  if (draft.trigger_kind === "pull" && !draft.interval_ms) {
     return t("recipes.errInterval");
   }
   if (draft.scope === "thread") {
-    return t("recipes.errThread");
+    return t(draft.trigger_kind === "pull" ? "recipes.errPullThread" : "recipes.errThread");
   }
   if (draft.scope === "source" && !draft.source.trim()) {
     return t("recipes.errSource");
@@ -477,7 +478,7 @@ export function suggestedRecipeName(
   t: Translate,
 ): string {
   const executor = catalog?.label ?? t("recipes.executorFallback");
-  if (draft.trigger_kind === "pull") {
+  if (draft.trigger_kind === "pull" && draft.scope === "thread") {
     const title = draft.thread_title.trim() || t("recipes.thisConversation");
     return t("recipes.suggestedPull", { title, executor });
   }
@@ -579,28 +580,21 @@ export function recipeChain(
   t: Translate,
 ): Array<{ stage: RecipeChainStage; label: string }> {
   const kind = recipe.trigger?.kind ?? "push";
-  let source: string;
-  if (kind === "pull") {
-    source =
-      conversations.find((item) => item.id === recipe.match.thread_id)?.label ??
-      (recipe.match.thread_id ? shortThread(recipe.match.thread_id) : t("recipes.thisConversation"));
-  } else {
-    source = [
-      matchWhenCopy(recipe, sources, conversations, t),
-      ...(kind === "push" && recipe.match.text_contains
-        ? [t("recipes.filterContainsSummary", { text: recipe.match.text_contains })]
-        : []),
-      ...(kind === "push" && recipe.match.text_excludes
-        ? [t("recipes.filterExcludesSummary", { text: recipe.match.text_excludes })]
-        : []),
-      ...(recipe.match.title_contains
-        ? [t("recipes.filterTitleContainsSummary", { text: recipe.match.title_contains })]
-        : []),
-      ...(recipe.match.title_excludes
-        ? [t("recipes.filterTitleExcludesSummary", { text: recipe.match.title_excludes })]
-        : []),
-    ].join(" · ");
-  }
+  const source = [
+    matchWhenCopy(recipe, sources, conversations, t),
+    ...(kind === "push" && recipe.match.text_contains
+      ? [t("recipes.filterContainsSummary", { text: recipe.match.text_contains })]
+      : []),
+    ...(kind === "push" && recipe.match.text_excludes
+      ? [t("recipes.filterExcludesSummary", { text: recipe.match.text_excludes })]
+      : []),
+    ...(recipe.match.title_contains
+      ? [t("recipes.filterTitleContainsSummary", { text: recipe.match.title_contains })]
+      : []),
+    ...(recipe.match.title_excludes
+      ? [t("recipes.filterTitleExcludesSummary", { text: recipe.match.title_excludes })]
+      : []),
+  ].join(" · ");
   const trigger =
     kind === "pull"
       ? scheduleCopy(recipe.trigger, t)

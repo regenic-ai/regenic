@@ -24,6 +24,7 @@ const {
   hiddenExecutorThreadIds,
   matchRecipe,
   recipeConversationTitle,
+  recipeCoversConversation,
   recipeMatches,
   recipeTextMatches,
   recipeTitleMatches,
@@ -54,6 +55,7 @@ const {
   occupiedRecipeSlots,
   normalizeRecipeMaxConcurrent,
   shouldAcceptPushRecord,
+  failedStartRetriesRemain,
   shouldRetryFailedPush,
   recipeSpecificity,
   recipePreemptedBy,
@@ -84,6 +86,8 @@ const {
   deliveryNeedsAttention,
   deliveryFaceOf,
   WORK_DELIVERY_MAX_ATTEMPTS,
+  WORK_ITEM_STATUSES,
+  isActiveWorkStatus,
 } = require("../dist");
 
 describe("recordClassFromType", () => {
@@ -285,6 +289,29 @@ describe("recipe auto-start specification", () => {
     assert.equal(recipeAllowsPushDispatch(push), true);
     assert.equal(recipeAllowsPushDispatch(pull), false);
     assert.equal(recipeAllowsPullDispatch(pull), true);
+    assert.equal(recipeAllowsPullDispatch(makeRecipe("wide", { record_class: "task" }, {
+      kind: "pull",
+      interval_ms: 60 * 60 * 1000,
+    })), true);
+    assert.equal(recipeAllowsPullDispatch(makeRecipe("vague", { source: "chat-src" }, {
+      kind: "pull",
+      interval_ms: 60 * 60 * 1000,
+    })), false);
+    for (const status of WORK_ITEM_STATUSES) {
+      assert.equal(
+        recipeCoversConversation({ trigger: "pull", workStatus: status, matched: true }),
+        isActiveWorkStatus(status),
+      );
+    }
+    assert.equal(recipeCoversConversation({
+      trigger: "pull", workStatus: "done", matched: false,
+    }), false);
+    assert.equal(recipeCoversConversation({
+      trigger: "push", workStatus: "done", matched: true,
+    }), true);
+    assert.equal(recipeCoversConversation({
+      trigger: "pull", matched: true,
+    }), true);
     assert.equal(selectRecipeForSubject([pull, manual, push], subject).id, "push");
     assert.equal(selectRecipeForSubject([pull, manual], subject).id, "manual");
   });
@@ -439,6 +466,9 @@ describe("recipe auto-start specification", () => {
       }),
       false,
     );
+    assert.equal(failedStartRetriesRemain(0), true);
+    assert.equal(failedStartRetriesRemain(2), true);
+    assert.equal(failedStartRetriesRemain(3), false);
   });
 
   it("advances pull schedules only against the recipe snapshot it observed", async () => {

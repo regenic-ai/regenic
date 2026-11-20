@@ -282,7 +282,7 @@ export function MatchPreview({
 }) {
   let body: string;
   if (!preview.ready) {
-    if (draft.trigger_kind === "pull" || draft.scope === "thread") {
+    if (draft.scope === "thread") {
       body = t("recipes.previewNeedChat");
     } else if (draft.scope === "source" && !draft.source.trim()) {
       body = t("recipes.previewNeedSource");
@@ -420,7 +420,7 @@ export function MoreOptions({
   const id = useId();
   const advancedDirty =
     (draft.trigger_kind === "push" && !draft.coalesce) ||
-    (draft.trigger_kind !== "pull" && Boolean(draft.max_concurrent.trim())) ||
+    Boolean(draft.max_concurrent.trim()) ||
     draft.hide_on_success;
   const [open, setOpen] = useState(advancedDirty);
   return (
@@ -471,8 +471,7 @@ export function MoreOptions({
             </SwitchRow>
           </RecipeRow>
         ) : null}
-        {draft.trigger_kind !== "pull" ? (
-          <RecipeRow label={t("recipes.maxConcurrent")} hint={t("recipes.maxConcurrentHint")}
+        <RecipeRow label={t("recipes.maxConcurrent")} hint={t("recipes.maxConcurrentHint")}
             descriptionId={`${id}-concurrency-hint`}>
             <input
               aria-label={t("recipes.maxConcurrent")} aria-describedby={`${id}-concurrency-hint`}
@@ -489,7 +488,6 @@ export function MoreOptions({
               }
             />
           </RecipeRow>
-        ) : null}
         {draft.can_write_back ? (
           <p className="recipe-hint">{t("recipes.writeBackMatchHint")}</p>
         ) : null}

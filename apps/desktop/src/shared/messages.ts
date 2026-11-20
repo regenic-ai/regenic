@@ -553,7 +553,7 @@ export const en = {
   "recipes.flow.backToChat": "Reply in chat",
   "recipes.flow.backToSource": "Reply at source",
   "recipes.step1Title": "When it starts",
-  "recipes.step1Body": "When a new message arrives, or at a set time for one chat.",
+  "recipes.step1Body": "When a new message arrives, or on a schedule for the conversations you choose.",
   "recipes.step2Title": "Who does it",
   "recipes.step2Body": "Pick an Agent and say what it should do.",
   "recipes.step3Title": "Where the result goes",
@@ -566,10 +566,14 @@ export const en = {
   "recipes.starterChannelBody": "When a connected app gets a new task, hand it to an Agent.",
   "recipes.starterSchedule": "Check a chat on a schedule",
   "recipes.starterScheduleBody": "Look at one chat on a timer and send the result back.",
+  "recipes.starterSweep": "Review an app on a schedule",
+  "recipes.starterSweepBody": "Each occurrence reviews that app's open tasks again. New ones join. Closed ones stay out.",
   "recipes.goEngine": "Add an Agent in Connected Apps",
   "recipes.goInbox": "Open Workbench",
   "recipes.scopeTasksConfirm":
     "This watches every task across all apps. Continue?",
+  "recipes.scopeTasksConfirmPull":
+    "Open tasks are reviewed again on every occurrence, across all apps. Continue?",
   "recipes.openLastRun": "Open last run",
   "recipes.previewTitle": "Would cover now",
   "recipes.previewNeedChat": "Pick a chat to see what this automation would cover.",
@@ -638,7 +642,11 @@ export const en = {
   "recipes.runHistoryLess": "Show less",
   "recipes.runHistoryNoSummary": "No summary",
   "recipes.saveConfirm":
-    "Save this automation?\n\nCoverage: {coverage}\nAfter: {after}",
+    "Save this automation?\n\nCoverage: {coverage}\nAfter: {after}{rhythm}",
+  "recipes.saveConfirmRhythm":
+    "\n\nOpen tasks are reviewed again on every occurrence.",
+  "recipes.saveConfirmRhythmReply":
+    "\n\nOpen tasks are reviewed again on every occurrence, and each review can send another reply to that conversation.",
   "recipes.priorityTitle": "Priority when automations overlap",
   "recipes.priorityLead": "More specific automations run first; rank 1 wins. Scheduled automations run on their own time and are not ranked.",
   "recipes.priorityRank": "#{rank} of {total}",
@@ -690,7 +698,7 @@ export const en = {
   "recipes.triggerRow": "Trigger",
   "recipes.result": "Result",
   "recipes.stageTrigger": "When it starts",
-  "recipes.stageScope": "Which messages",
+  "recipes.stageScope": "Which work",
   "recipes.stageHandler": "Who does it",
   "recipes.stageDestination": "Where the result goes",
   "recipes.chainLabel": "Flow",
@@ -704,7 +712,7 @@ export const en = {
   "recipes.triggerPushHint":
     "A new incoming message starts it. What this automation sends back does not.",
   "recipes.triggerPullHint":
-    "On the interval or clock time you set, recent messages in this chat go to the Agent.",
+    "On the interval or clock time you set, each matching conversation goes to the Agent.",
   "recipes.triggerManualHint": "Nothing starts by itself. Open the chat and press Handle now.",
   "recipes.interval": "How often",
   "recipes.interval15m": "Every 15 minutes",
@@ -755,7 +763,7 @@ export const en = {
   "recipes.wdFull6": "Saturday",
   "recipes.wdFull7": "Sunday",
   "recipes.scheduleZone": "Uses this computer’s time zone ({zone}). After you save, it waits for that time.",
-  "recipes.intervalFastHint": "Shorter than 15 minutes runs the Agent often.",
+  "recipes.intervalFastHint": "Shorter than 15 minutes runs the Agent often. On a wide schedule, that is once per open task.",
   "recipes.coalesceCheck": "Wait for the current run, then use the latest message",
   "recipes.coalesceHint":
     "On by default. Five messages in a row become one follow-up, not five jobs.",
@@ -763,7 +771,7 @@ export const en = {
   "recipes.pillPull": "Scheduled",
   "recipes.pillManual": "Manual",
   "recipes.errInterval": "Pick how often this should run.",
-  "recipes.errPullThread": "A schedule needs one conversation.",
+  "recipes.errPullThread": "Pick a conversation.",
   "recipes.outcomeBack": "Send back to the chat",
   "recipes.outcomeBackTo": "Send to {name}",
   "recipes.outcomeKeep": "Keep in Workbench",
@@ -808,9 +816,16 @@ export const en = {
   "recipes.formEdit": "Edit automation",
   "recipes.formBind": "Create automation for this chat",
   "recipes.noExecutor": "Add an Agent in Connected Apps before you can save an automation.",
-  "recipes.watchLegend": "Which work",
+  "recipes.watchLegend": "Scope",
   "recipes.scopeTasks": "All tasks",
   "recipes.scopeTasksHint": "Any conversation already treated as a task.",
+  "recipes.pullScopeHint":
+    "Open tasks are reviewed again on every occurrence. Closed ones stay out.",
+  "recipes.pullScopeBeat":
+    "At each occurrence, a conversation still running skips that beat, one still syncing waits and then starts, and one that cannot take a reply is skipped.",
+  "recipes.pullThreadHint":
+    "If this conversation is still running, this beat is skipped. If its history is still syncing, the run waits, then starts. If it cannot take a reply, this beat is skipped.",
+  "recipes.previewPullSkip": "{count} can't take a reply and will be skipped.",
   "recipes.scopeTasksWarn": "Broad — affects every app.",
   "recipes.scopeSource": "One app",
   "recipes.scopeSourceHint": "Tasks from one installed app.",
@@ -835,6 +850,8 @@ export const en = {
   "recipes.writeBackHint": "When the Agent finishes, send the result to the original chat.",
   "recipes.writeBackHintPull":
     "The result goes back to this chat. It will not start this automation again.",
+  "recipes.writeBackHintPullScope":
+    "Each matching conversation gets its own result. While a task stays open, it can get another one every occurrence. Sending it back does not start this automation again.",
   "recipes.writeBackUnavailable":
     "This destination is unavailable. Choose a sendable conversation or Keep here.",
   "recipes.writeBackTargetUnavailable": "{name} (unavailable)",
@@ -853,7 +870,7 @@ export const en = {
   "recipes.includeContextHint":
     "On: the agent gets recent messages from this chat and earlier results for this item. Agents that can look things up read further back in this chat as needed. Off: only the latest item.",
   "recipes.includeContextHintPull":
-    "A schedule always sends recent messages from this chat and earlier results for this item. Agents that can look things up read further back as needed.",
+    "A schedule always sends recent messages from each chat and earlier results for that item. Agents that can look things up read further back as needed.",
   "recipes.maxConcurrent": "At once",
   "recipes.maxConcurrentUnlimited": "No limit",
   "recipes.maxConcurrentHint":
@@ -2107,7 +2124,7 @@ export const zh: Record<MessageKey, string> = {
   "recipes.flow.backToChat": "发回会话",
   "recipes.flow.backToSource": "发回来源",
   "recipes.step1Title": "何时开始",
-  "recipes.step1Body": "有新消息时，或到点查看一条会话。",
+  "recipes.step1Body": "有新消息时，或按你选的范围到点处理。",
   "recipes.step2Title": "交给谁",
   "recipes.step2Body": "选一个 Agent，写明要它做什么。",
   "recipes.step3Title": "结果放哪",
@@ -2120,9 +2137,12 @@ export const zh: Record<MessageKey, string> = {
   "recipes.starterChannelBody": "一个已连接应用来了新任务，就交给 Agent。",
   "recipes.starterSchedule": "定时查看会话",
   "recipes.starterScheduleBody": "按时间检查一条会话，把结果发回去。",
+  "recipes.starterSweep": "定时巡检一个应用",
+  "recipes.starterSweepBody": "每个周期再看这个应用里还开着的任务。新出现的会进入，关掉的不再进入。",
   "recipes.goEngine": "去「连接应用」添加 Agent",
   "recipes.goInbox": "打开工作台",
   "recipes.scopeTasksConfirm": "这个自动化会覆盖所有应用里的任务。确定继续？",
+  "recipes.scopeTasksConfirmPull": "还开着的任务，每个周期都会再看一次，范围是所有应用。确定继续？",
   "recipes.openLastRun": "打开上次运行",
   "recipes.previewTitle": "当前会覆盖",
   "recipes.previewNeedChat": "先选一条会话，才能预览覆盖范围。",
@@ -2191,7 +2211,11 @@ export const zh: Record<MessageKey, string> = {
   "recipes.runHistoryLess": "收起",
   "recipes.runHistoryNoSummary": "无摘要",
   "recipes.saveConfirm":
-    "保存这个自动化？\n\n覆盖范围：{coverage}\n完成后：{after}",
+    "保存这个自动化？\n\n覆盖范围：{coverage}\n完成后：{after}{rhythm}",
+  "recipes.saveConfirmRhythm":
+    "\n\n还开着的任务，每个周期都会再看一次。",
+  "recipes.saveConfirmRhythmReply":
+    "\n\n还开着的任务，每个周期都会再看一次，每次都可能再往会话里发一条结果。",
   "recipes.priorityTitle": "重叠时的优先级",
   "recipes.priorityLead": "条件越具体越优先，第 1 名先处理。定时自动化按自己的时间运行，不参与排序。",
   "recipes.priorityRank": "第 {rank}/{total}",
@@ -2243,7 +2267,7 @@ export const zh: Record<MessageKey, string> = {
   "recipes.triggerRow": "触发",
   "recipes.result": "结果",
   "recipes.stageTrigger": "何时开始",
-  "recipes.stageScope": "哪些消息",
+  "recipes.stageScope": "哪些工作",
   "recipes.stageHandler": "交给谁",
   "recipes.stageDestination": "结果放哪",
   "recipes.chainLabel": "自动化",
@@ -2255,7 +2279,7 @@ export const zh: Record<MessageKey, string> = {
   "recipes.triggerPull": "定时查看",
   "recipes.triggerManual": "手动开始",
   "recipes.triggerPushHint": "新来的消息会开始处理。这个自动化自己发回去的内容不会再次触发。",
-  "recipes.triggerPullHint": "按你设的间隔或时刻，把这条会话最近的消息交给 Agent。",
+  "recipes.triggerPullHint": "按你设的间隔或时刻，把范围内每条会话交给 Agent。",
   "recipes.triggerManualHint": "不会自己开始。打开会话，点「立即处理」。",
   "recipes.interval": "多久一次",
   "recipes.interval15m": "每 15 分钟",
@@ -2306,14 +2330,14 @@ export const zh: Record<MessageKey, string> = {
   "recipes.wdFull6": "周六",
   "recipes.wdFull7": "周日",
   "recipes.scheduleZone": "按这台电脑的时区（{zone}）。保存后，等到这个时刻再跑。",
-  "recipes.intervalFastHint": "短于 15 分钟时，Agent 会跑得很勤。",
+  "recipes.intervalFastHint": "短于 15 分钟时，Agent 会跑得很勤。范围较宽时，每条还开着的任务都会这样跑。",
   "recipes.coalesceCheck": "有进行中的任务时，先等它结束，再用最新一条",
   "recipes.coalesceHint": "默认打开。连来五条消息，只会再处理一轮。",
   "recipes.pillPush": "新消息",
   "recipes.pillPull": "定时",
   "recipes.pillManual": "手动",
   "recipes.errInterval": "请选择多久跑一次。",
-  "recipes.errPullThread": "按时间跑必须选一条会话。",
+  "recipes.errPullThread": "请选择一条会话。",
   "recipes.outcomeBack": "发回原会话",
   "recipes.outcomeBackTo": "发回到 {name}",
   "recipes.outcomeKeep": "留在工作台",
@@ -2356,9 +2380,16 @@ export const zh: Record<MessageKey, string> = {
   "recipes.formEdit": "编辑自动化",
   "recipes.formBind": "为这条会话创建自动化",
   "recipes.noExecutor": "保存自动化前，先到「连接应用」添加 Agent。",
-  "recipes.watchLegend": "看哪些",
+  "recipes.watchLegend": "范围",
   "recipes.scopeTasks": "全部任务",
   "recipes.scopeTasksHint": "已经被当成任务的会话。",
+  "recipes.pullScopeHint":
+    "还开着的任务，每个周期都会再看一次。关掉的不再进入。",
+  "recipes.pullScopeBeat":
+    "到点时，还在进行的跳过这一拍，还在同步的等完再开始，发不回结果的会跳过。",
+  "recipes.pullThreadHint":
+    "这条会话如果还在进行，就跳过这一拍。历史还在同步时，会等同步完再开始。发不回结果时，这一拍会跳过。",
+  "recipes.previewPullSkip": "{count} 条目前发不回，到点会跳过。",
   "recipes.scopeTasksWarn": "范围很宽——覆盖所有应用。",
   "recipes.scopeSource": "一个应用",
   "recipes.scopeSourceHint": "只看来自这个应用的任务。",
@@ -2380,6 +2411,7 @@ export const zh: Record<MessageKey, string> = {
   "recipes.writeBackCheck": "处理完后发回原会话",
   "recipes.writeBackHint": "Agent 做完后，把结果发回原会话。",
   "recipes.writeBackHintPull": "结果会发回这条会话，不会再次触发本自动化。",
+  "recipes.writeBackHintPullScope": "每条命中的会话各自收到结果。任务一直开着时，每个周期都可能再收到一条。发回去不会再次触发本自动化。",
   "recipes.writeBackUnavailable": "此目标不可用，请选择可发送的会话，或留在本地。",
   "recipes.writeBackTargetUnavailable": "{name}（不可用）",
   "recipes.writeBackNoTargets": "暂无可用的会话",
@@ -2397,7 +2429,7 @@ export const zh: Record<MessageKey, string> = {
   "recipes.includeContextHint":
     "打开后，Agent 会拿到这条会话最近的消息和这件事之前的处理结果；能自行查阅的 Agent 还会按需翻看更早的记录。关闭则只带最近这一条。",
   "recipes.includeContextHintPull":
-    "按时间跑总会带上这条会话最近的消息和这件事之前的处理结果；能自行查阅的 Agent 还会按需翻看更早的记录。",
+    "按时间跑总会带上每条会话最近的消息和这件事之前的处理结果；能自行查阅的 Agent 还会按需翻看更早的记录。",
   "recipes.maxConcurrent": "同时处理",
   "recipes.maxConcurrentUnlimited": "不限制",
   "recipes.maxConcurrentHint": "最多同时处理几条。留空不限制。",

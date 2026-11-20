@@ -221,6 +221,16 @@ describe("recipe match preview", () => {
     );
     assert.equal(
       shouldConfirmRecipeSave({
+        isNew: true,
+        triggerKind: "pull",
+        scope: "source",
+        canWriteBack: true,
+        preview: { ready: true, count: 2, samples: ["A", "B"], sample_ids: ["a", "b"] },
+      }),
+      true,
+    );
+    assert.equal(
+      shouldConfirmRecipeSave({
         isNew: false,
         triggerKind: "manual",
         scope: "tasks",
@@ -258,6 +268,23 @@ describe("recipe match preview", () => {
     assert.equal(rows[1]?.id, "broad");
     assert.equal(rows[1]?.rank, 2);
     assert.equal(rows[1]?.is_self, true);
+  });
+
+  it("a schedule covers open tasks and leaves finished ones out", () => {
+    const open = { ...task, id: "feishu:open", work_status: "open" as const };
+    const finished = { ...task, id: "feishu:done", work_status: "done" as const };
+    assert.deepEqual(
+      matchingConversations({ record_class: "task" }, [finished, open, chat], "pull")?.map(
+        (item) => item.id,
+      ),
+      ["feishu:open"],
+    );
+    assert.deepEqual(
+      matchingConversations({ record_class: "task" }, [finished, open], "push")?.map(
+        (item) => item.id,
+      ),
+      ["feishu:done", "feishu:open"],
+    );
   });
 
   it("lists every matching chat as a try sample", () => {

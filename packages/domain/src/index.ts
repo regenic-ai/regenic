@@ -122,6 +122,7 @@ export * from "./unit-kind";
 export * from "./work";
 export * from "./flow";
 export * from "./recipe-match";
+export * from "./recipe-audience";
 export * from "./specification";
 export * from "./recipe-trigger";
 export * from "./job-control";
