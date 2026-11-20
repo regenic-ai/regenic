@@ -263,6 +263,12 @@ export function RecipesPage({
     }
     return matchingConversations(match, initialConversations, draft.trigger_kind) ?? [];
   }, [draft, initialConversations]);
+  const unsendableCount = draft.trigger_kind === "pull" &&
+    draft.can_write_back &&
+    !draft.write_back_thread_id &&
+    draft.scope !== "thread"
+    ? tryChoices.filter((item) => item.can_send === false).length
+    : 0;
   const tryThreadId = tryChoices.some((item) => item.id === trySample)
     ? trySample
     : (tryChoices[0]?.id ?? null);
@@ -522,6 +528,10 @@ export function RecipesPage({
             after: writeBack
               ? t("recipes.writeBackYes")
               : t("recipes.writeBackNo"),
+            rhythm:
+              draft.trigger_kind === "pull" && draft.scope !== "thread"
+                ? t("recipes.saveConfirmRhythm")
+                : "",
           }),
         )
       ) {
@@ -797,7 +807,13 @@ export function RecipesPage({
                           if (
                             choice.id === "tasks" &&
                             draft.scope !== "tasks" &&
-                            !window.confirm(t("recipes.scopeTasksConfirm"))
+                            !window.confirm(
+                              t(
+                                draft.trigger_kind === "pull"
+                                  ? "recipes.scopeTasksConfirmPull"
+                                  : "recipes.scopeTasksConfirm",
+                              ),
+                            )
                           ) {
                             return;
                           }
@@ -812,6 +828,11 @@ export function RecipesPage({
                   </div>
                   {draft.scope === "tasks" ? (
                     <p className="recipe-hint recipe-scope-warn">{t("recipes.scopeTasksWarn")}</p>
+                  ) : null}
+                  {draft.trigger_kind === "pull" ? (
+                    <p className="recipe-hint">
+                      {t(draft.scope === "thread" ? "recipes.pullThreadHint" : "recipes.pullScopeHint")}
+                    </p>
                   ) : null}
                 </RecipeRow>
 
@@ -889,6 +910,9 @@ export function RecipesPage({
                     draft={draft}
                     t={t}
                   />
+                  {unsendableCount > 0 ? (
+                    <p className="recipe-hint">{t("recipes.previewPullSkip", { count: unsendableCount })}</p>
+                  ) : null}
                   {priorityGroup.length > 0 ? (
                     <PriorityPanel rows={priorityGroup} t={t} />
                   ) : null}

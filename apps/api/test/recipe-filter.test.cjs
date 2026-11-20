@@ -508,6 +508,32 @@ describe("recipe text filters", () => {
     assert.equal((await f.authority.getWorkItem(ORG, lagging.id)).status, "running");
   });
 
+  it("does not sweep a finished task again", async (t) => {
+    const f = await fixture(t, {
+      match: { record_class: "task", source: "test-chat" },
+      trigger: { kind: "pull", interval_ms: 60_000 },
+      can_write_back: false,
+      include_context: false,
+    });
+    await f.ingest("done already", { scopeId: "closed" });
+    await f.ingest("still open", { scopeId: "open" });
+    const closed = (await f.authority.listWorkItems(ORG)).find((item) =>
+      item.thread_id.endsWith(":closed"));
+    const dismissed = await f.authority.dismissWorkItem({
+      expected_item: closed,
+      now: f.now,
+    });
+    assert.equal(dismissed.outcome, "applied");
+    await f.dispatch.dispatchPullRecipes();
+    const opened = (await f.authority.listWorkItems(ORG)).filter(
+      (item) => item.recipe_id === f.recipe.id,
+    );
+    assert.equal(opened.length, 1);
+    assert.equal(opened[0].thread_id.endsWith(":open"), true);
+    assert.equal(f.starts(), 1);
+    assert.ok((await f.authority.getRecipe(ORG, f.recipe.id)).next_run_at > f.now);
+  });
+
   it("advances a scheduled rule when nothing matches", async (t) => {
     const f = await fixture(t, {
       match: { record_class: "task", source: "missing-app" },

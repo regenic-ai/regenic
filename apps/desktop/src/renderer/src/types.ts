@@ -425,8 +425,10 @@ export interface RecipeConversationOption {
   record_class?: RecordClass;
   thread_facet?: ThreadFacet;
   unit_kind?: string;
-  /** True when Current work already has an open/running work face. */
+  /** True when Current work already has a work face. */
   has_work?: boolean;
+  /** Current job status. A schedule covers open, running, and waiting only. */
+  work_status?: WorkItemStatus;
   body_text?: string;
   /** Name the kernel filters on: a workbench rename, or the app's conversation name. */
   conversation_name?: string;

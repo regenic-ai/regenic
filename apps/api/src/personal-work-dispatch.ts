@@ -363,7 +363,12 @@ export class PersonalWorkDispatch {
         hint: surface?.thread_facet,
       });
       const job = faces.get(id);
-      // A later reply does not change what the conversation is. The editor
+      // A finished task stays a task, but a schedule should not open it again.
+      // One saved chat does not come through here, so it still runs every time.
+      if (job && !isActiveWorkStatus(job.status)) {
+        continue;
+      }
+      // A later reply does not change what an open conversation is. The editor
       // preview stamps the head with the current job's class and facet.
       const subject = job
         ? {

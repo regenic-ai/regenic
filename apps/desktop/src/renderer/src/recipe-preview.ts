@@ -287,6 +287,15 @@ export function matchingConversations(
     return null;
   }
   return conversations.filter((conversation) => {
+    if (
+      triggerKind === "pull" &&
+      conversation.work_status &&
+      conversation.work_status !== "open" &&
+      conversation.work_status !== "running" &&
+      conversation.work_status !== "waiting_human"
+    ) {
+      return false;
+    }
     const subject = subjectFromConversation(conversation);
     return subject ? recipeMatches(match, subject, triggerKind) : false;
   });
