@@ -149,6 +149,7 @@ ALTER TABLE recipes ADD COLUMN trigger_timezone TEXT;
       for (const name of ["context_artifact_segments", "search_answers"]) {
         assert.ok(inspect.prepare("SELECT name FROM sqlite_master WHERE name = ?").get(name));
       }
+      assert.ok(inspect.prepare("PRAGMA table_info(recipes)").all().some((column) => column.name === "trigger_monthdays"));
       assert.deepEqual(inspect.pragma("foreign_key_check"), []);
     } finally {
       inspect.close();

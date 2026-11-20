@@ -1908,6 +1908,11 @@ export class SqliteAuthorityStore
             this.database.exec(migration.sql);
           }
           backfillRecipeFlowJson(this.database);
+        } else if (migration.version === 89) {
+          // Same rewind: a current database already has the monthly column.
+          if (!this.columnExists("recipes", "trigger_monthdays")) {
+            this.database.exec(migration.sql);
+          }
         } else {
           this.database.exec(migration.sql);
         }
