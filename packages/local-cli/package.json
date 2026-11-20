@@ -10,6 +10,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "start": "node dist/main.js",
+    "bench:conversation-scale": "pnpm --filter @regenic/lexical-index... build && node test/conversation-scale.bench.cjs",
     "bench:semantic": "pnpm --filter @regenic/local-cli... build && node test/semantic-retrieval.bench.cjs",
     "test": "pnpm --filter @regenic/local-cli... build && node --test test/*.test.cjs",
     "typecheck": "tsc -p tsconfig.json --noEmit"
