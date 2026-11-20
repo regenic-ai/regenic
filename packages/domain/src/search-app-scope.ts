@@ -139,6 +139,32 @@ export function contextFiltersForAppClass(
   };
 }
 
+/**
+ * Drops prefixes that belong to installs positively classified as ordinary.
+ * Whole sources and prefixes with no current install stay recorded.
+ */
+export function releaseSearchAgentPrefixes(
+  scope: SearchAgentScope,
+  ordinaryThreadPrefixes: readonly string[],
+): SearchAgentScope {
+  if (ordinaryThreadPrefixes.length === 0) return scope;
+  const drop = new Set(ordinaryThreadPrefixes.map((prefix) => prefix.trim()).filter(Boolean));
+  return {
+    agent_sources: scope.agent_sources,
+    agent_thread_prefixes: scope.agent_thread_prefixes.filter((prefix) => !drop.has(prefix)),
+  };
+}
+
+/**
+ * A stored prefix ends with `:`. Conversation ids that stop on the installation
+ * itself (`server_app:app:inst`) still belong to that install, while
+ * `server_app:app:inst-2` does not.
+ */
+export function threadMatchesAgentPrefix(threadId: string, prefix: string): boolean {
+  if (threadId.startsWith(prefix)) return true;
+  return prefix.endsWith(":") && threadId === prefix.slice(0, -1);
+}
+
 export function matchesSearchAppScope(
   event: { source: string; thread_id?: string },
   scope: ContextAppScope | undefined,
@@ -146,6 +172,6 @@ export function matchesSearchAppScope(
   if (!scope) return true;
   const agent = scope.agent_sources.includes(event.source)
     || (event.thread_id !== undefined && scope.agent_thread_prefixes.some((prefix) =>
-      event.thread_id!.startsWith(prefix)));
+      threadMatchesAgentPrefix(event.thread_id!, prefix)));
   return scope.class === "agent" ? agent : !agent;
 }

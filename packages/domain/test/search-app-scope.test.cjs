@@ -5,6 +5,7 @@ const {
   matchesSearchAppScope,
   mergeSearchAgentScope,
   parseSearchAgentScope,
+  releaseSearchAgentPrefixes,
   searchAgentScope,
 } = require("@regenic/domain");
 
@@ -64,6 +65,14 @@ describe("search app scope", () => {
     }, scope), true);
     assert.equal(matchesSearchAppScope({
       source: "server_app",
+      thread_id: "server_app:demo:inst-1",
+    }, scope), false);
+    assert.equal(matchesSearchAppScope({
+      source: "server_app",
+      thread_id: "server_app:demo:inst-10:room",
+    }, scope), true);
+    assert.equal(matchesSearchAppScope({
+      source: "server_app",
       thread_id: "server_app:demo:inst-1:room",
     }, { ...scope, class: "agent" }), true);
   });
@@ -88,6 +97,13 @@ describe("search app scope", () => {
       agent_sources: ["dsh", ""],
       agent_thread_prefixes: ["server_app:demo:inst-1:", "not-a-prefix", 3],
     }), {
+      agent_sources: ["dsh"],
+      agent_thread_prefixes: ["server_app:demo:inst-1:"],
+    });
+    assert.deepEqual(releaseSearchAgentPrefixes({
+      agent_sources: ["dsh"],
+      agent_thread_prefixes: ["server_app:demo:inst-1:", "server_app:notes:inst-2:"],
+    }, ["server_app:notes:inst-2:"]), {
       agent_sources: ["dsh"],
       agent_thread_prefixes: ["server_app:demo:inst-1:"],
     });

@@ -427,15 +427,33 @@ describe("SQLite context artifact store", () => {
       thread_id: "server_app:demo:inst-1:room",
       content_hash: HASH_A,
     });
+    await store.append({
+      ...base,
+      source: "server_app",
+      external_id: "agent-bare",
+      thread_id: "server_app:demo:inst-1",
+      content_hash: HASH_A,
+    });
+    await store.append({
+      ...base,
+      source: "server_app",
+      external_id: "other-install",
+      thread_id: "server_app:demo:inst-10:room",
+      content_hash: HASH_A,
+    });
     const scope = {
       agent_sources: ["dsh"],
       agent_thread_prefixes: ["server_app:demo:inst-1:"],
     };
-    const sourcesOf = async (appClass) => (await store.openContextRead("example-org", {
+    const threadsOf = async (appClass) => (await store.openContextRead("example-org", {
       filters: { app_scope: { class: appClass, ...scope } },
-    })).events.map((event) => event.source).sort();
-    assert.deepEqual(await sourcesOf("app"), ["feishu"]);
-    assert.deepEqual(await sourcesOf("agent"), ["dsh", "server_app"]);
+    })).events.map((event) => event.thread_id).sort();
+    assert.deepEqual(await threadsOf("app"), ["feishu:chat-1", "server_app:demo:inst-10:room"]);
+    assert.deepEqual(await threadsOf("agent"), [
+      "dsh:session-1",
+      "server_app:demo:inst-1",
+      "server_app:demo:inst-1:room",
+    ]);
     store.close();
   });
 

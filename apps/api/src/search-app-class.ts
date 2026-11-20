@@ -4,6 +4,7 @@ import {
   isSearchAppClass,
   mergeSearchAgentScope,
   parseSearchAgentScope,
+  releaseSearchAgentPrefixes,
   sameSearchAgentScope,
   type ConnectorInstallation,
   type ContextRequestFilters,
@@ -83,8 +84,12 @@ export async function applySearchAppClass(
   }
   const installations = await runtime.requireHost().get("authority")
     .listInstallations(runtime.orgId());
-  const live = drivers.agentSearchScope(installations);
-  const scope = await retainSearchAgentScope(runtime, live);
+  const classified = classifyInstallations(drivers, installations);
+  const scope = await retainSearchAgentScope(
+    runtime,
+    classified.agent,
+    classified.ordinary_thread_prefixes,
+  );
   if (appClass === "all") return filters;
   return contextFiltersForAppClass(filters, appClass, scope);
 }
@@ -99,28 +104,48 @@ export async function retainInstallationAgentScope(
   installation: ConnectorInstallation,
 ): Promise<void> {
   if (!drivers?.agentSearchScope) return;
-  await retainSearchAgentScope(runtime, drivers.agentSearchScope([installation]));
+  const classified = classifyInstallations(drivers, [installation]);
+  await retainSearchAgentScope(
+    runtime,
+    classified.agent,
+    classified.ordinary_thread_prefixes,
+  );
+}
+
+function classifyInstallations(
+  drivers: ChannelDriverRegistry,
+  installations: readonly ConnectorInstallation[],
+): { agent: SearchAgentScope; ordinary_thread_prefixes: string[] } {
+  if (drivers.searchClassification) return drivers.searchClassification(installations);
+  return {
+    agent: drivers.agentSearchScope(installations),
+    ordinary_thread_prefixes: [],
+  };
 }
 
 async function retainSearchAgentScope(
   runtime: SearchRuntime,
   scope: SearchAgentScope,
+  ordinaryThreadPrefixes: readonly string[] = [],
 ): Promise<SearchAgentScope> {
   const authority = runtime.requireHost().get("authority") as AgentScopePrefs;
   const orgId = runtime.orgId();
   let merged = scope;
   try {
     const current = await readRetainedAgentScope(authority, orgId);
-    merged = mergeSearchAgentScope(current, scope);
+    merged = releaseSearchAgentPrefixes(
+      mergeSearchAgentScope(current, scope),
+      ordinaryThreadPrefixes,
+    );
     if (
       sameSearchAgentScope(current, merged)
       || typeof authority.putUiPref !== "function"
     ) {
       return merged;
     }
-    const again = mergeSearchAgentScope(
-      await readRetainedAgentScope(authority, orgId),
-      merged,
+    const again = releaseSearchAgentPrefixes(
+      mergeSearchAgentScope(await readRetainedAgentScope(authority, orgId), merged),
+      ordinaryThreadPrefixes,
     );
     await authority.putUiPref(
       orgId,

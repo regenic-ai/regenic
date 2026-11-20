@@ -1236,4 +1236,41 @@ describe("channel driver registry", () => {
       agent_thread_prefixes: [],
     });
   });
+
+  it("names an ordinary shared-source install without releasing an unclassified one", () => {
+    const drivers = new ChannelDriverRegistry()
+      .register(stubDriver({
+        connector_type: "server-app",
+        source: "server_app",
+        threadIdPrefix: (installation) => `server_app:demo:${installation.id}:`,
+        capabilities(installation) {
+          if (installation.config.broken) throw new Error("bad manifest");
+          return {
+            sync: true,
+            reply: false,
+            create: false,
+            agent_sessions: installation.config.agent === true,
+          };
+        },
+      }));
+    const installation = {
+      id: "inst-2",
+      org_id: "org",
+      connector_type: "server-app",
+      status: "enabled",
+      config: {},
+      created_at: "2026-01-01T00:00:00.000Z",
+    };
+    assert.deepEqual(drivers.searchClassification([
+      installation,
+      { ...installation, id: "inst-3", config: { broken: true } },
+      { ...installation, id: "inst-1", config: { agent: true } },
+    ]), {
+      agent: {
+        agent_sources: [],
+        agent_thread_prefixes: ["server_app:demo:inst-1:"],
+      },
+      ordinary_thread_prefixes: ["server_app:demo:inst-2:"],
+    });
+  });
 });

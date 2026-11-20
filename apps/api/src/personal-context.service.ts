@@ -1571,7 +1571,9 @@ export class PersonalContextService {
     const record = { ...(body as Record<string, unknown>) };
     const hasFilters = Object.prototype.hasOwnProperty.call(record, "filters");
     const requested = hasFilters ? stripAppScope(record.filters) : undefined;
-    if (!isFilterRecord(requested)) {
+    // An explicit empty object is invalid. Replacing it with the server scope
+    // would turn a rejected request into a successful search.
+    if (!isFilterRecord(requested) || (requested !== undefined && Object.keys(requested).length === 0)) {
       return { ...record, filters: requested };
     }
     const filters = await applySearchAppClass(

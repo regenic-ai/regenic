@@ -300,6 +300,14 @@ test("agent thread prefix stays specific without an app id", () => {
       },
     },
   }).agent_sessions, false);
+  assert.equal(serverAppDriver.capabilities({
+    ...installation,
+    config: { manifest: { capabilities: { agent: true } } },
+  }).agent_sessions, true);
+  assert.throws(() => serverAppDriver.capabilities({
+    ...installation,
+    config: { manifest: { capabilities: {} } },
+  }));
 });
 
 function fakeHost(token) {

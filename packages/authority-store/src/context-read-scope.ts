@@ -41,10 +41,15 @@ export function contextReadScope(
         ? `s.source IN (SELECT value FROM json_each(${bind(JSON.stringify(appScope.agent_sources))}))`
         : `s.source = ANY(${bind(appScope.agent_sources)}::text[])`
       : undefined;
-    const prefixClauses = appScope.agent_thread_prefixes.map((prefix) =>
-      dialect === "sqlite"
-        ? `(s.thread_id IS NOT NULL AND instr(s.thread_id, ${bind(prefix)}) = 1)`
-        : `(s.thread_id IS NOT NULL AND strpos(s.thread_id, ${bind(prefix)}) = 1)`);
+    const prefixClauses = appScope.agent_thread_prefixes.map((prefix) => {
+      const starts = dialect === "sqlite"
+        ? `instr(s.thread_id, ${bind(prefix)}) = 1`
+        : `strpos(s.thread_id, ${bind(prefix)}) = 1`;
+      const exact = prefix.endsWith(":")
+        ? ` OR s.thread_id = ${bind(prefix.slice(0, -1))}`
+        : "";
+      return `(s.thread_id IS NOT NULL AND (${starts}${exact}))`;
+    });
     if (appScope.class === "agent") {
       const parts = [sourceClause, ...prefixClauses].filter((part): part is string => part !== undefined);
       conditions.push(parts.length ? `(${parts.join(" OR ")})` : "(1 = 0)");
