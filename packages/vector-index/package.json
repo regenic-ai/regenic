@@ -7,6 +7,7 @@
   "exports": { ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" } },
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "bench:authorization": "pnpm build && node test/vector-authorization-scale.bench.cjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "pnpm --filter @regenic/vector-index... build && node --test test/*.test.cjs"
   },

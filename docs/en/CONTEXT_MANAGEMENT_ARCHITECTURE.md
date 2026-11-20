@@ -83,6 +83,16 @@ authorized universe independently of bundle item budgets. Broad, unfiltered
 queries still enumerate authorized metadata, and exact vector search still
 scans covered vectors; this is not an ANN index or constant-time retrieval.
 
+The vector sidecar reuses a staged authorization snapshot only while its
+organization, generation, authorization hash/count, and projection remain
+unchanged. It returns compact coverage instead of materializing every covered
+key. In the synthetic two-dimensional million-Event isolation benchmark this
+reduced repeated authorized vector lookup from 14.81 seconds to 8.49 seconds
+(42.7%); authorization hashing took another 192 ms. The remaining time is the
+exact covered-chunk scan, so this result is not an end-to-end or ANN latency
+claim. Projection writes and lifecycle reconciliation invalidate the staged
+authorization state synchronously.
+
 ### 2.4 Snapshots are immutable
 
 A `ContextSnapshot` records an exact selection at a fixed read epoch. Changes to

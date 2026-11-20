@@ -860,6 +860,33 @@ float32 Buffer，避免每个 768 维 chunk 创建数组。向量候选池按证
 最少 50、最多 1000；默认 20 条结果最多读取 100 个向量候选正文。
 10k lexical 授权匹配门槛为 500 ms，4000×768 vector 授权匹配门槛为 300 ms。
 
+2026-11-20 增加独立的百万授权向量基准：
+
+```powershell
+pnpm --filter @regenic/vector-index bench:authorization -- `
+  --messages 1000000 `
+  --database vector-authorization-scale.db `
+  --output vector-authorization-scale.json
+```
+
+该基准使用 2 维合成单位向量，刻意降低余弦计算成本，以隔离授权 staging、coverage
+物化和 SQLite chunk 读取。AMD EPYC 7763、100 万个全覆盖 Event 的结果如下：
+
+| 路径 | 延迟 | 返回 coverage key |
+| --- | ---: | ---: |
+| 每次重建授权表并返回完整 coverage | 14805.4 ms | 1000000 |
+| 新授权快照首次 compact staging | 16946.1 ms | 0 |
+| 同一授权快照复用 | 8485.8 ms | 0 |
+
+授权 hash 另耗时 192.2 ms。复用路径相对旧路径降低 42.7%，并避免向 Node 物化百万
+coverage key；首次 staging 只在 organization、generation、授权 hash/count 或向量投影
+变化时发生。compact proof 仍验证当前授权集合，投影发布、reconcile、generation 删除、
+视觉权限变化和组织清理会同步失效缓存。
+
+剩余 8.49 秒即使在 2 维向量上仍然存在，证明百万级瓶颈已经转为 exact scan 的 chunk
+读取与物化，而非授权 staging 或高维点积。本优化不改变精确排名与召回率，也不把它描述
+为 ANN。下一阶段需评估**授权域内** ANN；不能先做全库 top-k 再过滤 ACL。
+
 相同 org、embedding generation 和查询文本的 query vector 以 SHA-256 键在进程内缓存，
 最多 128 项；不保存原始查询，失败不缓存，generation 切换自然失效。这会显著改善刷新和
 重复搜索，但第一次真实模型推理仍取决于本机 CPU/GPU、模型服务排队和冷启动，

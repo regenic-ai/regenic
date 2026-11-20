@@ -6,7 +6,7 @@ const { performance } = require("node:perf_hooks");
 const { createHash } = require("node:crypto");
 const { describe, it } = require("node:test");
 const Database = require("better-sqlite3");
-const { embeddingGeneration } = require("@regenic/domain");
+const { contextVectorAuthorizationHash, embeddingGeneration } = require("@regenic/domain");
 const { SqliteContextVectorIndex } = require("../dist");
 
 const model = {
@@ -451,22 +451,51 @@ describe("SQLite vector projection and independent durable jobs", () => {
       event_id: `event-${String(value).padStart(5, "0")}`,
       content_hash: contentHash,
     }));
+    const authorization_hash = contextVectorAuthorizationHash(authorized);
     const started = performance.now();
     const result = await index.matchAuthorized({
       org_id: "org",
       generation: scaleGeneration.id,
       authorized,
+      authorization_hash,
       query_vector: [1, ...Array.from({ length: scaleModel.dimensions - 1 }, () => 0)],
       limit: 100,
     });
     const elapsed = performance.now() - started;
-    assert.equal(result.covered.length, 4000);
+    assert.deepEqual(result.covered, []);
+    assert.deepEqual(result.coverage, {
+      authorization_hash,
+      authorized_count: 4000,
+      covered_count: 4000,
+      complete: true,
+      uncovered: [],
+    });
     assert.equal(result.matched.length, 100);
     assert.deepEqual(
       result.matched.slice(0, 3).map((value) => value.event_id),
       ["event-00000", "event-00001", "event-00002"],
     );
     assert.ok(elapsed < 300, `authorized vector search took ${elapsed.toFixed(1)}ms`);
+    const reused = await index.matchAuthorized({
+      org_id: "org",
+      generation: scaleGeneration.id,
+      authorized,
+      authorization_hash,
+      query_vector: [1, ...Array.from({ length: scaleModel.dimensions - 1 }, () => 0)],
+      limit: 100,
+    });
+    assert.deepEqual(reused.coverage, result.coverage);
+    await assert.rejects(
+      index.matchAuthorized({
+        org_id: "org",
+        generation: scaleGeneration.id,
+        authorized,
+        authorization_hash: "e".repeat(64),
+        query_vector: [1, ...Array.from({ length: scaleModel.dimensions - 1 }, () => 0)],
+        limit: 100,
+      }),
+      /authorization hash/,
+    );
     index.close();
     const corrupt = new Database(path);
     corrupt.prepare(
@@ -484,6 +513,39 @@ describe("SQLite vector projection and independent durable jobs", () => {
       }),
       (error) => error.reason === "corrupt",
     );
+  });
+
+  it("invalidates compact authorization coverage when vector publication changes", async (t) => {
+    const f = await fixture(t);
+    await reconcile(f.index, [head("covered"), head("pending")]);
+    const jobs = await claim(f.index);
+    const coveredJob = jobs.find((job) => job.event_id === "covered");
+    const pendingJob = jobs.find((job) => job.event_id === "pending");
+    await f.index.complete({ job: coveredJob, owner: "owner", now: at, chunks: [chunk()] });
+    const authorized = [
+      { event_id: "covered", content_hash: hash },
+      { event_id: "pending", content_hash: hash },
+    ];
+    const authorization_hash = contextVectorAuthorizationHash(authorized);
+    const partial = await query(f.index, authorized, { authorization_hash });
+    assert.deepEqual(partial.covered, []);
+    assert.deepEqual(partial.coverage, {
+      authorization_hash,
+      authorized_count: 2,
+      covered_count: 1,
+      complete: false,
+      uncovered: [{ event_id: "pending", content_hash: hash }],
+    });
+
+    await f.index.complete({ job: pendingJob, owner: "owner", now: at, chunks: [chunk([0, 1])] });
+    const complete = await query(f.index, authorized, { authorization_hash });
+    assert.deepEqual(complete.coverage, {
+      authorization_hash,
+      authorized_count: 2,
+      covered_count: 2,
+      complete: true,
+      uncovered: [],
+    });
   });
 
   it("searches an authorization set above 10000 and retains the global top-k, not the first k", async (t) => {

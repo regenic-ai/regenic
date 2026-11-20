@@ -5,6 +5,7 @@ import Database from "better-sqlite3";
 import { definePlugin } from "@regenic/plugin-host";
 import {
   canonicalContextJson,
+  contextVectorAuthorizationHash,
   embeddingGeneration,
   validateEmbeddingVector,
   ContextVectorUnavailableError,
@@ -53,6 +54,7 @@ interface JobRow {
 interface AuthorizedChunkRow {
   event_id: string;
   content_hash: string;
+  body_length: number | null;
   chunk_count: number;
   ordinal: number | null;
   start: number | null;
@@ -60,6 +62,14 @@ interface AuthorizedChunkRow {
   vector: Buffer | null;
   origin_json: string | null;
   text_hash: string;
+}
+
+interface VectorAuthorizationStateRow {
+  org_id: string;
+  generation: string;
+  authorization_hash: string;
+  authorized_count: number;
+  covered_count: number;
 }
 
 export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVectorGenerationStore, EmbeddingJobStore {
@@ -134,7 +144,22 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
           );
           CREATE TEMP TABLE IF NOT EXISTS vector_authorized (
             event_id TEXT PRIMARY KEY,
+            content_hash TEXT NOT NULL,
+            body_length INTEGER
+          ) WITHOUT ROWID;
+          CREATE TEMP TABLE IF NOT EXISTS vector_uncovered (
+            event_id TEXT PRIMARY KEY,
             content_hash TEXT NOT NULL
+          ) WITHOUT ROWID;
+          CREATE TEMP TABLE IF NOT EXISTS vector_authorization_state (
+            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+            org_id TEXT NOT NULL,
+            generation TEXT NOT NULL,
+            authorization_hash TEXT NOT NULL,
+            authorized_count INTEGER NOT NULL CHECK (authorized_count >= 0),
+            covered_count INTEGER NOT NULL CHECK (
+              covered_count >= 0 AND covered_count <= authorized_count
+            )
           ) WITHOUT ROWID;
         `);
         if (version !== 5) {
@@ -175,6 +200,7 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
       const previous = this.db.prepare("SELECT enabled FROM visual_policies WHERE org_id=?")
         .get(orgId) as { enabled: number } | undefined;
       if (previous?.enabled === Number(enabled)) return;
+      this.invalidateVectorAuthorization();
       if (!enabled) {
         const readChunks = this.db.prepare(`
           SELECT ordinal,start,end,origin_json FROM chunks
@@ -325,6 +351,7 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
       }
       if (this.db.prepare("SELECT 1 FROM jobs WHERE org_id=? AND generation=? AND status='running' AND lease_until>?")
         .get(orgId, generation, new Date().toISOString())) throw new Error("Generation still has a live indexing lease");
+      this.invalidateVectorAuthorization();
       this.db.prepare(`INSERT INTO retired_generations
         SELECT org_id,generation,manifest_json,? FROM generations WHERE org_id=? AND generation=?`)
         .run(new Date().toISOString(), orgId, generation);
@@ -347,6 +374,7 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
       keys.add(key);
     }
     this.db.transaction(() => {
+      this.invalidateVectorAuthorization();
       for (const head of input.heads) {
         const previous = this.db.prepare("SELECT event_id,fence FROM source_heads WHERE org_id=? AND source=? AND external_id=?")
           .get(input.org_id, head.source, head.external_id) as { event_id: string; fence: number } | undefined;
@@ -512,6 +540,7 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
     }
     return this.db.transaction(() => {
       if (!this.ownsJob(job, owner, now)) return false;
+      this.invalidateVectorAuthorization();
       this.assertVisualPermission(job.org_id, chunks);
       this.db.prepare("DELETE FROM coverage WHERE org_id=? AND generation=? AND event_id=?")
         .run(job.org_id, job.generation, job.event_id);
@@ -660,27 +689,76 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
     const queryNorm = Math.sqrt(input.query_vector.reduce((sum, value) => sum + value * value, 0));
     bounded(input.limit, 1, 1000);
     if (!Array.isArray(input.authorized)) throw new Error("Invalid vector authorization set");
-    const bodyLengths = new Map<string, number>();
-    const seen = new Set<string>();
-    for (const key of input.authorized) {
-      required(key.event_id);
-      if (!validHash(key.content_hash) || seen.has(key.event_id)) throw new Error("Invalid vector authorization key");
-      seen.add(key.event_id);
-      if (key.body_length !== undefined) {
-        bounded(key.body_length, 0, Number.MAX_SAFE_INTEGER);
-        bodyLengths.set(key.event_id, key.body_length);
-      }
+    if (input.authorization_hash !== undefined && !validHash(input.authorization_hash)) {
+      throw new Error("Invalid vector authorization hash");
     }
     return this.db.transaction(() => {
-      this.db.prepare("DELETE FROM vector_authorized").run();
-      const authorize = this.db.prepare(
-        "INSERT INTO vector_authorized (event_id, content_hash) VALUES (?, ?)",
-      );
-      for (const key of input.authorized) {
-        authorize.run(key.event_id, key.content_hash);
+      const state = input.authorization_hash
+        ? this.vectorAuthorizationState(input)
+        : null;
+      let uncovered: Array<{ event_id: string; content_hash: string }>;
+      let coveredCount: number;
+      if (state) {
+        uncovered = this.db.prepare(
+          "SELECT event_id,content_hash FROM vector_uncovered ORDER BY event_id",
+        ).all() as Array<{ event_id: string; content_hash: string }>;
+        coveredCount = state.covered_count;
+      } else {
+        const seen = new Set<string>();
+        for (const key of input.authorized) {
+          required(key.event_id);
+          if (!validHash(key.content_hash) || seen.has(key.event_id)) {
+            throw new Error("Invalid vector authorization key");
+          }
+          seen.add(key.event_id);
+          if (key.body_length !== undefined) {
+            bounded(key.body_length, 0, Number.MAX_SAFE_INTEGER);
+          }
+        }
+        if (
+          input.authorization_hash !== undefined
+          && input.authorization_hash !== contextVectorAuthorizationHash(input.authorized)
+        ) {
+          throw new Error("Invalid vector authorization hash");
+        }
+        this.invalidateVectorAuthorization();
+        const authorize = this.db.prepare(
+          "INSERT INTO vector_authorized (event_id, content_hash, body_length) VALUES (?, ?, ?)",
+        );
+        for (const key of input.authorized) {
+          authorize.run(key.event_id, key.content_hash, key.body_length ?? null);
+        }
+        uncovered = this.db.prepare(`
+          SELECT a.event_id,a.content_hash
+          FROM vector_authorized a
+          LEFT JOIN coverage c
+            ON c.org_id=? AND c.generation=?
+            AND c.event_id=a.event_id AND c.content_hash=a.content_hash
+          LEFT JOIN source_heads h
+            ON h.org_id=c.org_id AND h.source=c.source
+            AND h.external_id=c.external_id AND h.event_id=c.event_id
+          WHERE c.event_id IS NULL OR h.event_id IS NULL
+          ORDER BY a.event_id
+        `).all(input.org_id, input.generation) as Array<{ event_id: string; content_hash: string }>;
+        coveredCount = input.authorized.length - uncovered.length;
+        const saveUncovered = this.db.prepare(
+          "INSERT INTO vector_uncovered (event_id,content_hash) VALUES (?,?)",
+        );
+        for (const key of uncovered) saveUncovered.run(key.event_id, key.content_hash);
+        if (input.authorization_hash) {
+          this.db.prepare(`INSERT INTO vector_authorization_state (
+            singleton,org_id,generation,authorization_hash,authorized_count,covered_count
+          ) VALUES (1,?,?,?,?,?)`).run(
+            input.org_id,
+            input.generation,
+            input.authorization_hash,
+            input.authorized.length,
+            coveredCount,
+          );
+        }
       }
       const rows = this.db.prepare(`
-        SELECT c.event_id, c.content_hash, c.chunk_count,
+        SELECT c.event_id, c.content_hash, a.body_length, c.chunk_count,
                ch.ordinal, ch.start, ch.end, ch.vector, ch.origin_json, ch.text_hash
         FROM vector_authorized a
         JOIN coverage c
@@ -764,7 +842,7 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
             }
           }
           const eligibleChunk = input.search_kind === "files" ? Boolean(origin)
-            : input.search_kind === "messages" ? !origin && chunk.end! <= (bodyLengths.get(first.event_id) ?? 0)
+            : input.search_kind === "messages" ? !origin && chunk.end! <= (first.body_length ?? 0)
             : true;
           if (eligibleChunk && (!best || score > best.score)) {
             best = {
@@ -783,7 +861,7 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
           throw new ContextVectorUnavailableError("corrupt");
         }
         const key = { event_id: first.event_id, content_hash: first.content_hash };
-        covered.push(key);
+        if (!input.authorization_hash) covered.push(key);
         if (!best) continue;
         matched.push({
           ...key, ...best,
@@ -824,7 +902,6 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
         return Number(Math.max(-1, Math.min(1, cosine)).toFixed(9));
       }
       matched.sort(rank);
-      covered.sort((a, b) => compare(a.event_id, b.event_id));
       const meta = this.db.prepare("SELECT reconciled_epoch FROM generations WHERE org_id=? AND generation=?")
         .get(input.org_id, input.generation) as { reconciled_epoch: string | null };
       const skipped = this.db.prepare(`SELECT j.event_id,j.content_hash FROM vector_authorized a
@@ -834,7 +911,18 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
         WHERE j.org_id=? AND j.generation=? AND j.status='skipped' ORDER BY j.event_id`)
         .all(input.org_id, input.generation) as Array<{ event_id: string; content_hash: string }>;
       return {
-        generation: input.generation, covered, matched: matched.slice(0, input.limit),
+        generation: input.generation,
+        covered: input.authorization_hash ? [] : covered.sort((a, b) => compare(a.event_id, b.event_id)),
+        ...(input.authorization_hash ? {
+          coverage: {
+            authorization_hash: input.authorization_hash,
+            authorized_count: input.authorized.length,
+            covered_count: coveredCount,
+            complete: uncovered.length === 0,
+            uncovered,
+          },
+        } : {}),
+        matched: matched.slice(0, input.limit),
         ...(skipped.length ? { skipped } : {}),
         ...(meta.reconciled_epoch ? { reconciled_epoch: meta.reconciled_epoch } : {}),
       };
@@ -844,11 +932,33 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
   async clearOrganization(orgId: string): Promise<void> {
     required(orgId);
     this.db.transaction(() => {
+      this.invalidateVectorAuthorization();
       this.db.prepare("DELETE FROM generations WHERE org_id=?").run(orgId);
       this.db.prepare("DELETE FROM source_heads WHERE org_id=?").run(orgId);
       this.db.prepare("DELETE FROM retired_generations WHERE org_id=?").run(orgId);
     }).immediate();
     this.db.pragma("wal_checkpoint(TRUNCATE)");
+  }
+
+  private vectorAuthorizationState(
+    input: Parameters<ContextVectorIndex["matchAuthorized"]>[0],
+  ): VectorAuthorizationStateRow | null {
+    const state = this.db.prepare(`SELECT org_id,generation,authorization_hash,
+      authorized_count,covered_count FROM vector_authorization_state WHERE singleton=1`)
+      .get() as VectorAuthorizationStateRow | undefined;
+    return state
+      && state.org_id === input.org_id
+      && state.generation === input.generation
+      && state.authorization_hash === input.authorization_hash
+      && state.authorized_count === input.authorized.length
+      ? state
+      : null;
+  }
+
+  private invalidateVectorAuthorization(): void {
+    this.db.prepare("DELETE FROM vector_authorization_state").run();
+    this.db.prepare("DELETE FROM vector_uncovered").run();
+    this.db.prepare("DELETE FROM vector_authorized").run();
   }
 
   private manifest(orgId: string, id: string): EmbeddingGeneration {

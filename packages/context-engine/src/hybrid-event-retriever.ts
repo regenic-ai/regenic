@@ -3,6 +3,7 @@ import {
   ContextVectorUnavailableError,
   EmbeddingError,
   assertEmbeddingDescriptor,
+  contextVectorAuthorizationHash,
   validateEmbeddingVector,
   contextLexicalQueryTerms,
   contextLexicalTerms,
@@ -13,6 +14,8 @@ import {
   type ContextRetrievalResult,
   type ContextRetrievalTrace,
   type ContextVectorIndex,
+  type ContextVectorAuthorizationKey,
+  type ContextVectorCoverageProof,
   type ContextVectorGenerationStore,
   type EmbeddingGeneration,
   type EmbeddingProvider,
@@ -110,6 +113,15 @@ export class HybridEventRetriever implements ContextRetriever {
     if (materialize && plan.request.search_kind === "messages") {
       for (const source of await materialize([...allowed.keys()])) allowed.set(source.event.event_id, source);
     }
+    const authorized: ContextVectorAuthorizationKey[] = eligible.map((source) => ({
+      event_id: source.event.event_id,
+      content_hash: source.event.content_hash!,
+      ...(plan.request.search_kind === "messages" ? {
+        body_length: (allowed.get(source.event.event_id)!.search_body
+          ?? allowed.get(source.event.event_id)!.text ?? "").length,
+      } : {}),
+    }));
+    const authorizationHash = contextVectorAuthorizationHash(authorized);
     let result: Awaited<ReturnType<ContextVectorIndex["matchAuthorized"]>>;
     let generation = this.generation;
     let embeddingDegradation: string | undefined;
@@ -124,12 +136,7 @@ export class HybridEventRetriever implements ContextRetriever {
       );
       result = await this.index.matchAuthorized({
         org_id: plan.request.org_id, generation: generation.id, query_vector: [...queryVector],
-        authorized: eligible.map((source) => ({
-          event_id: source.event.event_id, content_hash: source.event.content_hash!,
-          ...(plan.request.search_kind === "messages" ? {
-            body_length: (allowed.get(source.event.event_id)!.search_body ?? allowed.get(source.event.event_id)!.text ?? "").length,
-          } : {}),
-        })), limit: vectorLimit,
+        authorized, authorization_hash: authorizationHash, limit: vectorLimit,
         ...(plan.request.search_kind ? { query: plan.request.query, search_kind: plan.request.search_kind } : {}),
       });
     } catch (error) {
@@ -141,9 +148,7 @@ export class HybridEventRetriever implements ContextRetriever {
       try {
         result = await this.index.matchAuthorizedText({
           org_id: plan.request.org_id, generation: generation.id, query: plan.request.query,
-          authorized: eligible.map((source) => ({
-            event_id: source.event.event_id, content_hash: source.event.content_hash!,
-          })), limit: vectorLimit,
+          authorized, authorization_hash: authorizationHash, limit: vectorLimit,
         });
       } catch (indexError) {
         if (indexError instanceof ContextVectorUnavailableError) return {
@@ -157,13 +162,33 @@ export class HybridEventRetriever implements ContextRetriever {
     if (!result || result.generation !== generation.id || !Array.isArray(result.covered) ||
       !Array.isArray(result.matched) || result.matched.length > vectorLimit) throw new ContextEngineError("invalid_candidate", "Invalid vector result");
     const covered = new Set<string>();
-    for (const key of result.covered) {
-      const source = allowed.get(key?.event_id);
-      if (!source || key.content_hash !== source.event.content_hash || covered.has(key.event_id)) {
-        throw new ContextEngineError("invalid_candidate", "Unauthorized or duplicate vector coverage");
+    const uncovered = new Set<string>();
+    let coveredCount: number;
+    if (result.coverage !== undefined) {
+      validateVectorCoverageProof(
+        result.coverage,
+        authorizationHash,
+        authorized.length,
+        allowed,
+        uncovered,
+      );
+      if (result.covered.length !== 0) {
+        throw new ContextEngineError("invalid_candidate", "Ambiguous vector coverage");
       }
-      covered.add(key.event_id);
+      coveredCount = result.coverage.covered_count;
+    } else {
+      for (const key of result.covered) {
+        const source = allowed.get(key?.event_id);
+        if (!source || key.content_hash !== source.event.content_hash || covered.has(key.event_id)) {
+          throw new ContextEngineError("invalid_candidate", "Unauthorized or duplicate vector coverage");
+        }
+        covered.add(key.event_id);
+      }
+      coveredCount = covered.size;
     }
+    const isCovered = (eventId: string) => result.coverage !== undefined
+      ? allowed.has(eventId) && !uncovered.has(eventId)
+      : covered.has(eventId);
     if (result.skipped !== undefined && !Array.isArray(result.skipped)) {
       throw new ContextEngineError("invalid_candidate", "Invalid vector skip result");
     }
@@ -171,7 +196,8 @@ export class HybridEventRetriever implements ContextRetriever {
     for (const key of result.skipped ?? []) {
       const source = allowed.get(key?.event_id);
       if (!source || key.content_hash !== source.event.content_hash ||
-        skipped.has(key.event_id) || covered.has(key.event_id)) {
+        skipped.has(key.event_id) || isCovered(key.event_id) ||
+        (result.coverage !== undefined && !uncovered.has(key.event_id))) {
         throw new ContextEngineError("invalid_candidate", "Unauthorized or duplicate vector skip");
       }
       skipped.add(key.event_id);
@@ -179,7 +205,7 @@ export class HybridEventRetriever implements ContextRetriever {
     const seen = new Set<string>();
     for (const hit of result.matched) {
       const source = allowed.get(hit?.event_id);
-      if (!source || !covered.has(hit.event_id) || seen.has(hit.event_id) ||
+      if (!source || !isCovered(hit.event_id) || seen.has(hit.event_id) ||
         hit.content_hash !== source.event.content_hash || !Number.isFinite(hit.score) ||
         hit.score < -1 || hit.score > 1 || !Number.isSafeInteger(hit.chunk_ordinal) || hit.chunk_ordinal < 0 ||
         !Number.isSafeInteger(hit.start) || !Number.isSafeInteger(hit.end) || hit.start < 0 ||
@@ -233,7 +259,7 @@ export class HybridEventRetriever implements ContextRetriever {
       !/^[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]$/u.test(term));
     const admittedLexical = rankedLexical.filter((value) => {
       if (plan.request.search_kind) return true;
-      if (!covered.has(value.candidate.resource_id) || significantTerms.length === 0) return true;
+      if (!isCovered(value.candidate.resource_id) || significantTerms.length === 0) return true;
       const terms = new Set(contextLexicalTerms(allowed.get(value.candidate.resource_id)?.text));
       return significantTerms.some((term) => terms.has(term));
     });
@@ -248,7 +274,7 @@ export class HybridEventRetriever implements ContextRetriever {
     trace.mode = "hybrid";
     trace.generation = generation.id;
     trace.model_revision = generation.model.model_revision;
-    trace.covered_count = covered.size;
+    trace.covered_count = coveredCount;
     trace.routes = [...ranks.values()].sort((a, b) => compare(a.event_id, b.event_id));
     const candidates = new Map(admittedLexical.map((candidate) => [candidate.candidate.resource_id, candidate]));
     for (const hit of vector) {
@@ -289,7 +315,7 @@ export class HybridEventRetriever implements ContextRetriever {
       candidates: [...candidates.values()].sort((a, b) => compare(a.candidate.candidate_id, b.candidate.candidate_id)),
       degradation_flags: [...(lexical.degradation_flags ?? []),
         ...(embeddingDegradation ? [embeddingDegradation] : []),
-        ...(covered.size + skipped.size < allowed.size ? ["vector_index_partial"] : [])],
+        ...(coveredCount + skipped.size < allowed.size ? ["vector_index_partial"] : [])],
       trace,
     };
   }
@@ -352,6 +378,40 @@ export class HybridEventRetriever implements ContextRetriever {
       }
       throw error;
     }
+  }
+}
+
+function validateVectorCoverageProof(
+  proof: ContextVectorCoverageProof,
+  authorizationHash: string,
+  authorizedCount: number,
+  allowed: Map<string, AuthorizedContextSourceEvent>,
+  uncovered: Set<string>,
+): void {
+  if (
+    !proof
+    || proof.authorization_hash !== authorizationHash
+    || proof.authorized_count !== authorizedCount
+    || !Number.isSafeInteger(proof.covered_count)
+    || proof.covered_count < 0
+    || proof.covered_count > authorizedCount
+    || typeof proof.complete !== "boolean"
+    || !Array.isArray(proof.uncovered)
+  ) {
+    throw new ContextEngineError("invalid_candidate", "Invalid vector coverage proof");
+  }
+  for (const key of proof.uncovered) {
+    const source = allowed.get(key?.event_id);
+    if (!source || key.content_hash !== source.event.content_hash || uncovered.has(key.event_id)) {
+      throw new ContextEngineError("invalid_candidate", "Unauthorized or duplicate vector coverage");
+    }
+    uncovered.add(key.event_id);
+  }
+  if (
+    proof.covered_count !== authorizedCount - uncovered.size
+    || proof.complete !== (uncovered.size === 0)
+  ) {
+    throw new ContextEngineError("invalid_candidate", "Inconsistent vector coverage proof");
   }
 }
 
