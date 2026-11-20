@@ -172,6 +172,8 @@ export function InboxWorkspace({
   const [settledQuery, setSettledQuery] = useState("");
   const [directoryThreads, setDirectoryThreads] = useState<InboxThread[]>([]);
   const [directoryLoading, setDirectoryLoading] = useState(false);
+  const [directoryError, setDirectoryError] = useState(false);
+  const [directoryRetry, setDirectoryRetry] = useState(0);
   useEffect(() => {
     const query = titleQuery.trim();
     if (!query) {
@@ -185,22 +187,30 @@ export function InboxWorkspace({
     if (!settledQuery || pinFilter === "pinned") {
       setDirectoryThreads([]);
       setDirectoryLoading(false);
+      setDirectoryError(false);
       return;
     }
     const controller = new AbortController();
+    let cancelled = false;
     setDirectoryLoading(true);
+    setDirectoryError(false);
     void fetchConversationDirectory({ q: settledQuery, limit: 40 }, { signal: controller.signal })
       .then((rows) => {
-        if (!controller.signal.aborted) setDirectoryThreads(rows.map(directoryInboxThread));
+        if (cancelled) return;
+        setDirectoryThreads(rows.map(directoryInboxThread));
+        setDirectoryError(false);
       })
       .catch(() => {
-        if (!controller.signal.aborted) setDirectoryThreads([]);
+        if (!cancelled) setDirectoryError(true);
       })
       .finally(() => {
-        if (!controller.signal.aborted) setDirectoryLoading(false);
+        if (!cancelled) setDirectoryLoading(false);
       });
-    return () => controller.abort();
-  }, [settledQuery, pinFilter]);
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [settledQuery, pinFilter, directoryRetry]);
   const pool = searching
     ? mergeInboxDirectoryHits(mergeInboxThreadLists(threads, otherThreads), directoryThreads)
     : threads;
@@ -541,6 +551,23 @@ export function InboxWorkspace({
                 <span className="dot" />
                 {t("inbox.searchingOlder")}
               </div>
+            ) : directoryError ? (
+              <EmptyState
+                compact
+                icon={<SearchIcon />}
+                title={t("inbox.searchIncompleteTitle")}
+                actions={
+                  <button
+                    type="button"
+                    className="ghost"
+                    onClick={() => setDirectoryRetry((current) => current + 1)}
+                  >
+                    {t("menuSelect.retry")}
+                  </button>
+                }
+              >
+                <p>{t("inbox.searchIncomplete")}</p>
+              </EmptyState>
             ) : (
               <EmptyState
                 compact

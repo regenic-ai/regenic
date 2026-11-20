@@ -47,8 +47,16 @@ describe("conversation directory", () => {
     const recent = "2026-08-24T02:00:00.000Z";
     const older = "2026-08-24T01:00:00.000Z";
     await store.commitIngest({
-      appends: [event("recent", "notes", recent), event("older", "crm", older)],
-      dispositions: [decision("recent", recent), decision("older", older)],
+      appends: [
+        event("recent", "notes", recent),
+        event("older", "crm", older),
+        event("quiet", "quiet", "2026-08-24T00:00:00.000Z"),
+      ],
+      dispositions: [
+        decision("recent", recent),
+        decision("older", older),
+        decision("quiet", "2026-08-24T00:00:00.000Z"),
+      ],
     });
     store.close();
     const db = new Database(path);
@@ -59,8 +67,10 @@ describe("conversation directory", () => {
     );
     const recentThread = threads.get("notes");
     const olderThread = threads.get("crm");
+    const quietThread = threads.get("quiet");
     assert.equal(typeof recentThread, "string");
     assert.equal(typeof olderThread, "string");
+    assert.equal(typeof quietThread, "string");
     db.prepare(`
       INSERT INTO connector_installations (
         id, org_id, connector_type, status, config_json, created_at, updated_at
@@ -73,6 +83,19 @@ describe("conversation directory", () => {
       ) VALUES ('crm', 'crm', ?, 'Regenic project', 'chat', 1, ?, ?)
     `).run(olderThread, older, older);
     db.prepare(`
+      INSERT INTO connector_installations (
+        id, org_id, connector_type, status, config_json, created_at, updated_at
+      ) VALUES ('other', 'other-org', 'synthetic', 'enabled', '{}', ?, ?)
+    `).run(older, older);
+    db.prepare(`
+      INSERT INTO connector_stream_members (
+        installation_id, stream_key, thread_id, label, kind,
+        generation, discovered_at, last_seen_at
+      ) VALUES
+        ('other', 'leak-older', ?, 'Z Regenic leaked', 'chat', 1, ?, ?),
+        ('other', 'leak-quiet', ?, 'Regenic leaked', 'chat', 1, ?, ?)
+    `).run(olderThread, older, older, quietThread, older, older);
+    db.prepare(`
       INSERT INTO conversation_prefs (org_id, thread_id, title, pinned, updated_at)
       VALUES ('local-owner', ?, 'team regenic notes', 0, ?)
     `).run(recentThread, recent);
@@ -83,6 +106,7 @@ describe("conversation directory", () => {
       assert.equal(ranked[0]?.thread_id, olderThread);
       assert.equal(ranked[0]?.catalog_label, "Regenic project");
       assert.equal(ranked[1]?.thread_id, recentThread);
+      assert.equal(ranked.some((row) => row.thread_id === quietThread), false);
       const exact = await reopened.searchConversationDirectory("local-owner", {
         thread_id: recentThread,
       });

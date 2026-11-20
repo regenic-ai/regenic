@@ -20,6 +20,8 @@ export interface InboxThread {
   label: string;
   title: string | null;
   conversation_label: string | null;
+  /** Catalog or preference name used only to match a directory hit. */
+  directory_label?: string;
   conversation_kind: string | null;
   unit_kind: string | null;
   unit_kind_label: string | null;
@@ -291,7 +293,7 @@ export function directoryInboxThread(item: {
   };
 }
 
-/** Keep a loaded row, and fill in a directory name when that row has none. */
+/** Keep a loaded row's title, and remember the directory name for matching. */
 export function mergeInboxDirectoryHits(
   loaded: readonly InboxThread[],
   hits: readonly InboxThread[],
@@ -299,17 +301,27 @@ export function mergeInboxDirectoryHits(
   const byId = new Map(hits.map((hit) => [hit.id, hit]));
   const overlaid = loaded.map((thread) => {
     const hit = byId.get(thread.id);
-    if (!hit || thread.title?.trim() || thread.conversation_label?.trim()) {
+    if (!hit) {
       return thread;
+    }
+    const directoryName = directoryHitName(hit);
+    const named = thread.title?.trim() || thread.conversation_label?.trim();
+    if (named) {
+      return directoryName ? { ...thread, directory_label: directoryName } : thread;
     }
     return {
       ...thread,
       label: hit.label,
       title: hit.title,
       conversation_label: hit.conversation_label,
+      ...(directoryName ? { directory_label: directoryName } : {}),
     };
   });
   return mergeInboxThreadLists(overlaid, hits);
+}
+
+function directoryHitName(hit: InboxThread): string {
+  return hit.conversation_label?.trim() || hit.title?.trim() || hit.label.trim();
 }
 
 export function mergeInboxThreadLists(
@@ -380,6 +392,7 @@ export function filterInboxThreadsByTitle(
       thread.title,
       thread.conversation_label,
       thread.label,
+      thread.directory_label,
     ];
     return fields.some((field) => field?.toLowerCase().includes(needle));
   });

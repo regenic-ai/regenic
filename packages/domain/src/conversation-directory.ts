@@ -143,6 +143,11 @@ export function conversationDirectoryStatement(
         ON m.thread_id = th.thread_id
         AND m.label IS NOT NULL
         AND m.label <> ''
+        AND EXISTS (
+          SELECT 1 FROM connector_installations i
+          WHERE i.id = m.installation_id
+            AND i.org_id = th.org_id
+        )
       WHERE ${where.join(" AND ")}
       GROUP BY
         th.thread_id, e.source, th.face_occurred_at, th.has_current_work, p.title, ${hidden.column}

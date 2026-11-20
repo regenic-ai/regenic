@@ -235,6 +235,27 @@ describe("inbox title search", () => {
     assert.equal(merged[1]?.hidden, true);
   });
 
+  it("matches a directory name without replacing a loaded title", () => {
+    const loaded = { ...thread({ id: "synthetic:crm" }), title: "Weekly notes" };
+    const hit = directoryInboxThread({
+      id: "synthetic:crm",
+      label: "Regenic project",
+      source: "synthetic",
+      can_send: true,
+      hidden: false,
+      conversation_name: "Regenic project",
+    });
+    const merged = mergeInboxDirectoryHits([loaded], [hit]);
+    assert.equal(merged[0]?.title, "Weekly notes");
+    assert.equal(merged[0]?.directory_label, "Regenic project");
+    assert.deepEqual(
+      filterInboxThreadsByTitle(merged, "rege", (item) => item.title ?? item.label).map(
+        (item) => item.id,
+      ),
+      ["synthetic:crm"],
+    );
+  });
+
   it("keeps scanning unloaded pages while a title search is active, then stops at the cap", () => {
     const base = {
       searching: true,
