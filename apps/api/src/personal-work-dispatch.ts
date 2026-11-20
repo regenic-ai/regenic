@@ -22,6 +22,7 @@ import {
   recipeStartInflight,
   recipeWantsContext,
   recipeConversationTitle,
+  recipeCoversConversation,
   recipeMatches,
   recipeTextMatches,
   recipeTitleMatches,
@@ -273,8 +274,8 @@ export class PersonalWorkDispatch {
 
   /**
    * Conversations this tick should open. A saved thread stays one target.
-   * A wider match uses inbox heads plus the current job on each conversation,
-   * the same class and facet the editor preview reads from a head.
+   * A wider match uses inbox heads plus the current job. Inclusion is
+   * recipeCoversConversation, the same rule the editor preview calls.
    */
   private async pullTargets(recipe: Recipe): Promise<Array<{
     threadId: string;
@@ -363,13 +364,8 @@ export class PersonalWorkDispatch {
         hint: surface?.thread_facet,
       });
       const job = faces.get(id);
-      // A finished task stays a task, but a schedule should not open it again.
-      // One saved chat does not come through here, so it still runs every time.
-      if (job && !isActiveWorkStatus(job.status)) {
-        continue;
-      }
       // A later reply does not change what an open conversation is. The editor
-      // preview stamps the head with the current job's class and facet.
+      // preview reads the same audience rule.
       const subject = job
         ? {
             record_class: job.record_class,
@@ -380,7 +376,14 @@ export class PersonalWorkDispatch {
             ...(projected?.title ? { title: projected.title } : {}),
           }
         : projected;
-      if (!subject || !recipeMatches(recipe.match, subject, "pull")) {
+      if (
+        !subject ||
+        !recipeCoversConversation({
+          trigger: "pull",
+          workStatus: job?.status,
+          matched: recipeMatches(recipe.match, subject, "pull"),
+        })
+      ) {
         continue;
       }
       targets.push({ threadId: id, subject });

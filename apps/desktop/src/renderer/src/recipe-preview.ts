@@ -1,3 +1,4 @@
+import { recipeCoversConversation } from "../../../../../packages/domain/src/recipe-audience.ts";
 import type {
   RecipeConversationOption,
   RecipeMatch,
@@ -287,17 +288,12 @@ export function matchingConversations(
     return null;
   }
   return conversations.filter((conversation) => {
-    if (
-      triggerKind === "pull" &&
-      conversation.work_status &&
-      conversation.work_status !== "open" &&
-      conversation.work_status !== "running" &&
-      conversation.work_status !== "waiting_human"
-    ) {
-      return false;
-    }
     const subject = subjectFromConversation(conversation);
-    return subject ? recipeMatches(match, subject, triggerKind) : false;
+    return recipeCoversConversation({
+      trigger: triggerKind,
+      workStatus: conversation.work_status,
+      matched: subject !== null && recipeMatches(match, subject, triggerKind),
+    });
   });
 }
 

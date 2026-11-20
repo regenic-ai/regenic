@@ -24,6 +24,7 @@ const {
   hiddenExecutorThreadIds,
   matchRecipe,
   recipeConversationTitle,
+  recipeCoversConversation,
   recipeMatches,
   recipeTextMatches,
   recipeTitleMatches,
@@ -84,6 +85,8 @@ const {
   deliveryNeedsAttention,
   deliveryFaceOf,
   WORK_DELIVERY_MAX_ATTEMPTS,
+  WORK_ITEM_STATUSES,
+  isActiveWorkStatus,
 } = require("../dist");
 
 describe("recordClassFromType", () => {
@@ -293,6 +296,21 @@ describe("recipe auto-start specification", () => {
       kind: "pull",
       interval_ms: 60 * 60 * 1000,
     })), false);
+    for (const status of WORK_ITEM_STATUSES) {
+      assert.equal(
+        recipeCoversConversation({ trigger: "pull", workStatus: status, matched: true }),
+        isActiveWorkStatus(status),
+      );
+    }
+    assert.equal(recipeCoversConversation({
+      trigger: "pull", workStatus: "done", matched: false,
+    }), false);
+    assert.equal(recipeCoversConversation({
+      trigger: "push", workStatus: "done", matched: true,
+    }), true);
+    assert.equal(recipeCoversConversation({
+      trigger: "pull", matched: true,
+    }), true);
     assert.equal(selectRecipeForSubject([pull, manual, push], subject).id, "push");
     assert.equal(selectRecipeForSubject([pull, manual], subject).id, "manual");
   });
