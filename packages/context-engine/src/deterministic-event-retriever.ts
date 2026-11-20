@@ -1,4 +1,10 @@
-import { matchesSearchAppScope, scoreContextLexicalText } from "@regenic/domain";
+import {
+  contextLexicalCorpus,
+  contextLexicalDocumentStats,
+  matchesSearchAppScope,
+  scoreContextLexicalText,
+} from "@regenic/domain";
+import type { ContextLexicalCorpus } from "@regenic/domain";
 import { searchMatchesFor } from "./search-matches";
 import type {
   AuthorizedContextSourceEvent,
@@ -40,11 +46,41 @@ export class DeterministicEventRetriever implements ContextRetriever {
     const sources = materialize
       ? await materialize(eligible.map((source) => source.event.event_id))
       : eligible;
-    return sources
-      .map((source) => eventCandidateFor(source, plan.request, retrievalTime))
-      .filter((candidate): candidate is RetrievedContextCandidate => candidate !== null)
-      .sort((left, right) => compare(left.candidate.candidate_id, right.candidate.candidate_id));
+    return eventCandidatesFor(sources, plan.request, retrievalTime);
   }
+}
+
+/** Scores every source against one corpus so document frequency does not depend on which subset is returned. */
+export function eventCandidatesFor(
+  sources: AuthorizedContextSourceEvent[],
+  request: ContextRequest,
+  recordedAt: string,
+  corpusSources: AuthorizedContextSourceEvent[] = sources,
+): RetrievedContextCandidate[] {
+  const corpus = request.query ? lexicalCorpus(corpusSources, request) : undefined;
+  const candidates = sources
+    .map((source) => eventCandidateFor(source, request, recordedAt, corpus))
+    .filter((candidate): candidate is RetrievedContextCandidate => candidate !== null)
+    .sort((left, right) => compare(left.candidate.candidate_id, right.candidate.candidate_id));
+  const maxLexical = candidates.reduce((max, candidate) => Math.max(max, candidate.candidate.scores.lexical ?? 0), 0);
+  if (maxLexical > 0) {
+    for (const candidate of candidates) {
+      const lexical = candidate.candidate.scores.lexical ?? 0;
+      if (lexical > 0) candidate.candidate.scores.lexical = lexical / maxLexical;
+    }
+  }
+  return candidates;
+}
+
+function lexicalCorpus(
+  sources: AuthorizedContextSourceEvent[],
+  request: ContextRequest,
+): ContextLexicalCorpus {
+  return contextLexicalCorpus(sources.map((source) => contextLexicalDocumentStats(lexicalCorpusText(source, request))));
+}
+
+function lexicalCorpusText(source: AuthorizedContextSourceEvent, request: ContextRequest): string | undefined {
+  return request.search_kind === "files" ? undefined : request.search_kind ? source.search_body ?? source.text : source.text;
 }
 
 export function retrievalTimeFor(plan: AuthorizedContextRetrievalPlan): string {
@@ -94,8 +130,9 @@ export function eventCandidateFor(
   source: AuthorizedContextSourceEvent,
   request: ContextRequest,
   recordedAt: string,
+  corpus?: ContextLexicalCorpus,
 ): RetrievedContextCandidate | null {
-  const material = eventCandidateMaterialFor(source, request, recordedAt);
+  const material = eventCandidateMaterialFor(source, request, recordedAt, corpus);
   if (request.query && (request.search_kind
     ? !material?.item.search_matches?.length : material?.candidate.scores.lexical === 0)) {
     return null;
@@ -107,6 +144,7 @@ export function eventCandidateMaterialFor(
   source: AuthorizedContextSourceEvent,
   request: ContextRequest,
   recordedAt: string,
+  corpus?: ContextLexicalCorpus,
 ): RetrievedContextCandidate | null {
   const contentHash = source.event.content_hash;
   if (!contentHash) {
@@ -118,7 +156,7 @@ export function eventCandidateMaterialFor(
       .flatMap((part) => [part.filename, part.media_type, part.text])),
   ] : [source.text];
   const queryScore = searchTexts.reduce((score, text) => {
-    const next = scoreContextLexicalText(text, request.query);
+    const next = scoreContextLexicalText(text, request.query, corpus);
     return {
       lexical: Math.max(score.lexical, next.lexical),
       exact_match: Math.max(score.exact_match, next.exact_match),
@@ -153,7 +191,7 @@ export function eventCandidateMaterialFor(
       anchor: anchorScore(source, request),
       exact_match: queryScore.exact_match,
       lexical: queryScore.lexical,
-      recency: recencyScore(source.event.occurred_at, recordedAt),
+      recency: freshnessRank(source.event.occurred_at, recordedAt, request),
     },
     estimated_tokens: estimatedTokens,
   };
@@ -181,9 +219,36 @@ function anchorScore(source: AuthorizedContextSourceEvent, request: ContextReque
   return matchesAnchors(source, request) ? 1 : 0;
 }
 
-function recencyScore(occurredAt: string, recordedAt: string): number {
-  const ageDays = Math.max(0, Date.parse(recordedAt) - Date.parse(occurredAt)) / 86_400_000;
-  return 1 / (1 + ageDays);
+/** Default decay only separates near-tied relevance. A recent window uses its own span. */
+export const FRESHNESS_HALF_LIFE_DAYS = { default: 180, minimum: 7 } as const;
+/** Age can overturn at most this fraction of the relevance score on the default path. */
+export const FRESHNESS_TIE_WEIGHT = 0.001;
+const DAY_MS = 86_400_000;
+
+/** Half-life of an occurred_after window. An upper bound alone does not shorten it. */
+export function freshnessHalfLifeDays(request: ContextRequest, now: string): number | undefined {
+  const after = request.filters?.occurred_after;
+  if (!after) return undefined;
+  const start = Date.parse(after);
+  const end = request.filters?.occurred_before ? Date.parse(request.filters.occurred_before) : Date.parse(now);
+  const spanDays = (end - start) / DAY_MS;
+  if (!Number.isFinite(spanDays) || spanDays <= 0) return undefined;
+  return Math.max(FRESHNESS_HALF_LIFE_DAYS.minimum, spanDays);
+}
+
+/** Rank multiplier. A recent window uses its span; other queries stay inside a 0.1% band. */
+export function freshnessRank(occurredAt: string, now: string, request: ContextRequest): number {
+  const windowDays = freshnessHalfLifeDays(request, now);
+  const decay = freshnessDecay(occurredAt, now, windowDays ?? FRESHNESS_HALF_LIFE_DAYS.default);
+  if (windowDays === undefined) return 1 - FRESHNESS_TIE_WEIGHT + FRESHNESS_TIE_WEIGHT * decay;
+  return decay;
+}
+
+/** Exponential decay: 1 at the reference time, 0.5 after one half-life. Future events stay at 1. */
+export function freshnessDecay(occurredAt: string, now: string, halfLifeDays: number): number {
+  const ageMs = Date.parse(now) - Date.parse(occurredAt);
+  if (!Number.isFinite(ageMs) || ageMs <= 0 || !Number.isFinite(halfLifeDays) || halfLifeDays <= 0) return 1;
+  return Math.exp(-Math.LN2 * ageMs / (halfLifeDays * 86_400_000));
 }
 
 function estimateTokens(text: string | undefined): number {

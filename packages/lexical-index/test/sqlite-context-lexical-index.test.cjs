@@ -92,7 +92,7 @@ describe("SQLite Context lexical index", () => {
     index.close();
   });
 
-  it("normalizes full-width text and finds one-, two-, and three-character CJK terms", async () => {
+  it("normalizes full-width text and matches segmented CJK words", async () => {
     const dir = await root();
     const index = new SqliteContextLexicalIndex(join(dir, "context.lexical.db"));
     await index.replaceOrganization(replacement([
@@ -100,13 +100,17 @@ describe("SQLite Context lexical index", () => {
       { ...key("event-width", HASH_B), text: "ＡＰＰＲＯＶＥＤ roadmap" },
     ]));
 
-    for (const query of ["批", "批准", "发布批"]) {
+    for (const [query, matched] of [
+      ["批", []],
+      ["批准", [key("event-cjk", HASH_A)]],
+      ["发布批", [key("event-cjk", HASH_A)]],
+    ]) {
       const result = await index.matchAuthorized({
         org_id: "example-org",
         query,
         authorized: [key("event-cjk", HASH_A)],
       });
-      assert.deepEqual(result.matched, [key("event-cjk", HASH_A)]);
+      assert.deepEqual(result.matched, matched);
     }
     assert.deepEqual((await index.matchAuthorized({
       org_id: "example-org",
@@ -156,7 +160,7 @@ describe("SQLite Context lexical index", () => {
     index = new SqliteContextLexicalIndex(path);
     assert.deepEqual(await index.getStatus("example-org"), {
       available: true,
-      algorithm_version: "literal-unicode-v2",
+      algorithm_version: "segment-bm25-v1",
       generation: "continuous-v1",
       watermark: "authority:2",
     });
@@ -191,7 +195,7 @@ describe("SQLite Context lexical index", () => {
     await index.clearOrganization("example-org");
     assert.deepEqual(await index.getStatus("example-org"), {
       available: true,
-      algorithm_version: "literal-unicode-v2",
+      algorithm_version: "segment-bm25-v1",
     });
     index.close();
   });
@@ -206,7 +210,7 @@ describe("SQLite Context lexical index", () => {
 
     const result = await index.matchAuthorized({
       org_id: "example-org",
-      query: "批",
+      query: "批准",
       authorized: [key("event-large", HASH_A), key("event-normal", HASH_B)],
     });
 
@@ -229,7 +233,7 @@ describe("SQLite Context lexical index", () => {
       authorized: [key("event-a", HASH_A)],
     }), {
       available: false,
-      algorithm_version: "literal-unicode-v2",
+      algorithm_version: "segment-bm25-v1",
       matched: [],
       covered: [],
     });

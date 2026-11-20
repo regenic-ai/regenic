@@ -324,7 +324,7 @@ it("searches beyond 10000 authorized events and validates a complete large-scope
   assert.ok(!result.degradation_flags.includes("vector_index_capacity"));
 });
 
-it("rejects covered single-character weak matches but preserves uncovered lexical evidence", async () => {
+it("drops a document that only shares a character inside another word", async () => {
   const weak = event("weak", "每月十日核对账单。");
   for (const covered of [true, false]) {
     const retriever = new HybridEventRetriever(new DeterministicEventRetriever(), {
@@ -335,12 +335,12 @@ it("rejects covered single-character weak matches but preserves uncovered lexica
     }; } }, generation);
     const result = await retriever.retrieve({ ...fixture().plan, events: [weak],
       request: { ...request, query: "火星上的向日葵怎样授粉？" } });
-    assert.equal(result.candidates.length, covered ? 0 : 1);
+    assert.equal(result.candidates.length, 0);
   }
 });
 
 it("preserves explicit CJK single-character queries and ASCII single-letter identifiers", async () => {
-  for (const [text, query] of [["每月十日核对账单。", "日"], ["C", "C API"]]) {
+  for (const [text, query] of [["15日发货", "日"], ["C", "C API"]]) {
     const value = event("single", text);
     const retriever = new HybridEventRetriever(new DeterministicEventRetriever(), {
       descriptor, async countTokens() { return [12]; }, async embed() { return [[1, 0]]; },

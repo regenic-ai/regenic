@@ -271,6 +271,7 @@ export class HybridEventRetriever implements ContextRetriever {
     for (const [id, value] of candidates) {
       const route = ranks.get(id);
       if (!route) continue;
+      const recency = value.candidate.scores.recency;
       value.candidate.scores = {
         anchor: value.candidate.scores.anchor ?? 0,
         hybrid: fuseHybridRoute(this.profile, {
@@ -279,6 +280,7 @@ export class HybridEventRetriever implements ContextRetriever {
           vectorRank: route.vector_rank,
           vectorScore: vectorRaw.get(id),
         }, lexicalRange, vectorRange),
+        ...(recency === undefined ? {} : { recency }),
       };
     }
     rerankThreads(candidates, allowed, ranks, plan.request.query);
@@ -403,7 +405,7 @@ function relativeScore(score: number, range: { min: number; max: number }): numb
 
 function lexicalScore(value: RetrievedContextCandidate): number {
   const scores = value.candidate.scores;
-  return 3 * (scores.exact_match ?? 0) + 2 * (scores.lexical ?? 0) + (scores.recency ?? 0);
+  return 3 * (scores.exact_match ?? 0) + 2 * (scores.lexical ?? 0);
 }
 
 function rerankThreads(
