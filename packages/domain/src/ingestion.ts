@@ -123,20 +123,31 @@ export class BlobGenerationConflictError extends Error {
   }
 }
 
+/** One inbox page can name hundreds of blobs. Opening them all at once hits EMFILE. */
+const BLOB_READ_CONCURRENCY = 8;
+
 export async function collectAvailableBlobs(
   get: (hash: string) => Promise<Uint8Array>,
   hashes: readonly string[],
 ): Promise<Map<string, Uint8Array>> {
+  const unique = [...new Set(hashes.filter((hash) => hash.length > 0))];
   const found = new Map<string, Uint8Array>();
-  await Promise.all(
-    [...new Set(hashes.filter((hash) => hash.length > 0))].map(async (hash) => {
-      try {
-        found.set(hash, await get(hash));
-      } catch {
-        // Missing or unreadable blobs stay absent; callers treat that as empty.
+  let cursor = 0;
+  const workers = Array.from(
+    { length: Math.min(BLOB_READ_CONCURRENCY, unique.length) },
+    async () => {
+      while (cursor < unique.length) {
+        const hash = unique[cursor];
+        cursor += 1;
+        try {
+          found.set(hash, await get(hash));
+        } catch {
+          // Missing or unreadable blobs stay absent; callers treat that as empty.
+        }
       }
-    }),
+    },
   );
+  await Promise.all(workers);
   return found;
 }
 
