@@ -564,6 +564,8 @@ export const en = {
   "recipes.starterChannelBody": "When a connected app gets a new task, hand it to an Agent.",
   "recipes.starterSchedule": "Check a chat on a schedule",
   "recipes.starterScheduleBody": "Look at one chat on a timer and send the result back.",
+  "recipes.starterSweep": "Review an app on a schedule",
+  "recipes.starterSweepBody": "Each run goes through that app's tasks, including ones that show up later.",
   "recipes.goEngine": "Add an Agent in Connected Apps",
   "recipes.goInbox": "Open Workbench",
   "recipes.scopeTasksConfirm":
@@ -702,7 +704,7 @@ export const en = {
   "recipes.triggerPushHint":
     "A new incoming message starts it. What this automation sends back does not.",
   "recipes.triggerPullHint":
-    "On the interval or clock time you set, recent messages in this chat go to the Agent.",
+    "On the interval or clock time you set, each matching conversation goes to the Agent.",
   "recipes.triggerManualHint": "Nothing starts by itself. Open the chat and press Handle now.",
   "recipes.interval": "How often",
   "recipes.interval15m": "Every 15 minutes",
@@ -833,6 +835,8 @@ export const en = {
   "recipes.writeBackHint": "When the Agent finishes, send the result to the original chat.",
   "recipes.writeBackHintPull":
     "The result goes back to this chat. It will not start this automation again.",
+  "recipes.writeBackHintPullScope":
+    "Each matching conversation gets its own result. Sending it back does not start this automation again.",
   "recipes.writeBackUnavailable":
     "This destination is unavailable. Choose a sendable conversation or Keep here.",
   "recipes.writeBackTargetUnavailable": "{name} (unavailable)",
@@ -2116,6 +2120,8 @@ export const zh: Record<MessageKey, string> = {
   "recipes.starterChannelBody": "一个已连接应用来了新任务，就交给 Agent。",
   "recipes.starterSchedule": "定时查看会话",
   "recipes.starterScheduleBody": "按时间检查一条会话，把结果发回去。",
+  "recipes.starterSweep": "定时巡检一个应用",
+  "recipes.starterSweepBody": "到点后处理这个应用里的任务，之后新出现的也会进入。",
   "recipes.goEngine": "去「连接应用」添加 Agent",
   "recipes.goInbox": "打开工作台",
   "recipes.scopeTasksConfirm": "这个自动化会覆盖所有应用里的任务。确定继续？",
@@ -2251,7 +2257,7 @@ export const zh: Record<MessageKey, string> = {
   "recipes.triggerPull": "定时查看",
   "recipes.triggerManual": "手动开始",
   "recipes.triggerPushHint": "新来的消息会开始处理。这个自动化自己发回去的内容不会再次触发。",
-  "recipes.triggerPullHint": "按你设的间隔或时刻，把这条会话最近的消息交给 Agent。",
+  "recipes.triggerPullHint": "按你设的间隔或时刻，把范围内每条会话交给 Agent。",
   "recipes.triggerManualHint": "不会自己开始。打开会话，点「立即处理」。",
   "recipes.interval": "多久一次",
   "recipes.interval15m": "每 15 分钟",
@@ -2376,6 +2382,7 @@ export const zh: Record<MessageKey, string> = {
   "recipes.writeBackCheck": "处理完后发回原会话",
   "recipes.writeBackHint": "Agent 做完后，把结果发回原会话。",
   "recipes.writeBackHintPull": "结果会发回这条会话，不会再次触发本自动化。",
+  "recipes.writeBackHintPullScope": "每条命中的会话各自收到结果。发回去不会再次触发本自动化。",
   "recipes.writeBackUnavailable": "此目标不可用，请选择可发送的会话，或留在本地。",
   "recipes.writeBackTargetUnavailable": "{name}（不可用）",
   "recipes.writeBackNoTargets": "暂无可用的会话",

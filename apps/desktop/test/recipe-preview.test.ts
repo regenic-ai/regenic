@@ -221,6 +221,16 @@ describe("recipe match preview", () => {
     );
     assert.equal(
       shouldConfirmRecipeSave({
+        isNew: true,
+        triggerKind: "pull",
+        scope: "source",
+        canWriteBack: true,
+        preview: { ready: true, count: 2, samples: ["A", "B"], sample_ids: ["a", "b"] },
+      }),
+      true,
+    );
+    assert.equal(
+      shouldConfirmRecipeSave({
         isNew: false,
         triggerKind: "manual",
         scope: "tasks",

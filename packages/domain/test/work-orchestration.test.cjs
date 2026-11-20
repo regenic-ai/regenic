@@ -285,6 +285,14 @@ describe("recipe auto-start specification", () => {
     assert.equal(recipeAllowsPushDispatch(push), true);
     assert.equal(recipeAllowsPushDispatch(pull), false);
     assert.equal(recipeAllowsPullDispatch(pull), true);
+    assert.equal(recipeAllowsPullDispatch(makeRecipe("wide", { record_class: "task" }, {
+      kind: "pull",
+      interval_ms: 60 * 60 * 1000,
+    })), true);
+    assert.equal(recipeAllowsPullDispatch(makeRecipe("vague", { source: "chat-src" }, {
+      kind: "pull",
+      interval_ms: 60 * 60 * 1000,
+    })), false);
     assert.equal(selectRecipeForSubject([pull, manual, push], subject).id, "push");
     assert.equal(selectRecipeForSubject([pull, manual], subject).id, "manual");
   });

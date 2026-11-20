@@ -57,6 +57,15 @@ describe("recipe draft", () => {
     assert.equal(canAutoStart(draftMatch(draft), draft), true);
     const channel = starterDraft("channel", emptyDraft(), [{ id: "chat", label: "Chat" }], conversations);
     assert.deepEqual(draftMatch(channel), { source: "chat", record_class: "task" });
+    const sweep = starterDraft("sweep", emptyDraft(), [{ id: "chat", label: "Chat" }], conversations);
+    assert.equal(sweep.trigger_kind, "pull");
+    assert.equal(sweep.scope, "source");
+    assert.deepEqual(draftMatch(sweep), { source: "chat", record_class: "task" });
+    assert.equal(canAutoStart(draftMatch(sweep), sweep), true);
+    const scheduled = applyTriggerKind(channel, "pull");
+    assert.equal(scheduled.scope, "source");
+    assert.equal(draftMatch(scheduled).source, "chat");
+    assert.equal(draftMatch(scheduled).thread_id, undefined);
   });
 
   it("preserves filters through editing and scope changes, and clears blank fields", () => {
@@ -91,7 +100,7 @@ describe("recipe draft", () => {
 
   it("enables context for new rules and starters without changing saved rules", () => {
     assert.equal(emptyDraft().include_context, true);
-    for (const kind of ["chat", "channel", "schedule"] as const) {
+    for (const kind of ["chat", "channel", "schedule", "sweep"] as const) {
       assert.equal(starterDraft(kind, emptyDraft(), [], []).include_context, true);
     }
     assert.equal(draftFromRecipe(rule).include_context, false);

@@ -129,7 +129,7 @@ export function recipeAllowsPullDispatch(recipe: Recipe): boolean {
   return (
     recipe.enabled &&
     trigger.kind === "pull" &&
-    Boolean(recipe.match.thread_id?.trim()) &&
+    recipeMatchIsSpecific(recipe.match) &&
     isPullIntervalMs(trigger.interval_ms)
   );
 }

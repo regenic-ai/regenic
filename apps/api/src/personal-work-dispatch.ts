@@ -21,6 +21,7 @@ import {
   recipeStartInflight,
   recipeWantsContext,
   recipeConversationTitle,
+  recipeMatches,
   recipeTextMatches,
   recipeTitleMatches,
   recipeTriggerOf,
@@ -37,7 +38,7 @@ import {
   type WorkRunStartCheckpointResult,
   type WorkContextAccess,
 } from "@regenic/domain";
-import { resolveInboxBody } from "./inbox-body";
+import { resolveInboxBodies, resolveInboxBody } from "./inbox-body";
 import { PersonalConnectorError } from "./personal-errors";
 import { PersonalWorkChannel } from "./personal-work-channel";
 import { PersonalWorkWait } from "./personal-work-wait";
@@ -163,63 +164,57 @@ export class PersonalWorkDispatch {
       if (!recipeAllowsPullDispatch(recipe)) {
         continue;
       }
-      const threadId = recipe.match.thread_id?.trim();
-      const interval = recipe.trigger.interval_ms;
-      if (!threadId || !interval) {
-        continue;
-      }
-      try {
-        parseConversationThread(threadId);
-      } catch {
-        continue;
-      }
-      if (items.some((item) => item.recipe_id === recipe.id && isActiveWorkStatus(item.status))) {
-        continue;
-      }
       const nowIso = now.toISOString();
       if (!isPullDue(recipe, nowIso)) {
         continue;
       }
-      if (recipeWantsContext(recipe)) {
-        if (
-          await shouldDeferWorkForThread(authority, orgId, threadId)
-        ) {
-          continue;
-        }
+      const targets = await this.pullTargets(recipe);
+      const explicitThread = Boolean(recipe.match.thread_id?.trim());
+      if (explicitThread && targets.length === 0) {
+        continue;
       }
       const fireAt = recipe.next_run_at ?? nowIso;
       const unit_key = pullUnitKey(recipe.id, fireAt);
-      const existing = await authority.getWorkItemByUnitKey(
-        orgId,
-        threadId,
-        unit_key,
-      );
-      if (existing) {
-        await this.retryOrResume(
-          existing,
-          recipe,
-          undefined,
-          recipe.max_concurrent !== undefined,
+      let conflict = false;
+      let progressed = false;
+      let deferred = false;
+      for (const target of targets) {
+        if (
+          items.some(
+            (item) =>
+              item.recipe_id === recipe.id &&
+              item.thread_id === target.threadId &&
+              isActiveWorkStatus(item.status),
+          )
+        ) {
+          progressed = true;
+          continue;
+        }
+        if (
+          recipeWantsContext(recipe) &&
+          (await shouldDeferWorkForThread(authority, orgId, target.threadId))
+        ) {
+          deferred = true;
+          continue;
+        }
+        const existing = await authority.getWorkItemByUnitKey(
+          orgId,
+          target.threadId,
+          unit_key,
         );
-      } else {
-        const subject = workSubjectFromEvent({
-          type: recipe.match.record_class === "task" ? "task" : "message",
-          source: recipe.match.source ?? threadId.split(":")[0] ?? "",
-          thread_id: threadId,
-          unit_kind: recipe.match.unit_kind,
-          hint: recipe.match.thread_facet,
-        });
-        if (!subject) {
+        if (existing) {
+          await this.retryOrResume(existing, recipe, undefined, false);
+          progressed = true;
           continue;
         }
         const created = await authority.createWorkItem({
           item: {
             id: `work-${randomUUID()}`,
             org_id: orgId,
-            thread_id: threadId,
+            thread_id: target.threadId,
             unit_key,
-            record_class: subject.record_class,
-            thread_facet: subject.thread_facet,
+            record_class: target.subject.record_class,
+            thread_facet: target.subject.thread_facet,
             status: "open",
             recipe_id: recipe.id,
             created_at: nowIso,
@@ -229,16 +224,18 @@ export class PersonalWorkDispatch {
           expected_recipe: recipe,
         });
         if (created.outcome === "conflict") {
-          continue;
+          conflict = true;
+          break;
         }
         const opened = created.item;
         items.push(opened);
-        await this.beginStart(
-          opened,
-          recipe,
-          undefined,
-          recipe.max_concurrent !== undefined,
-        );
+        // Claim the start before the clock moves. A queued start would see a
+        // stale recipe snapshot once next_run_at is advanced.
+        await this.beginStart(opened, recipe, undefined, false);
+        progressed = true;
+      }
+      if (conflict || (!progressed && deferred)) {
+        continue;
       }
       await authority.advanceRecipePullSchedule({
         expected_recipe: recipe,
@@ -246,6 +243,83 @@ export class PersonalWorkDispatch {
         updated_at: nowIso,
       });
     }
+  }
+
+  /**
+   * Conversations this tick should open. A saved thread stays one target.
+   * A wider match is resolved from inbox heads, the same set the editor previews.
+   */
+  private async pullTargets(recipe: Recipe): Promise<Array<{
+    threadId: string;
+    subject: NonNullable<ReturnType<typeof workSubjectFromEvent>>;
+  }>> {
+    const threadId = recipe.match.thread_id?.trim();
+    if (threadId) {
+      try {
+        parseConversationThread(threadId);
+      } catch {
+        return [];
+      }
+      const subject = workSubjectFromEvent({
+        type: recipe.match.record_class === "task" ? "task" : "message",
+        source: recipe.match.source ?? threadId.split(":")[0] ?? "",
+        thread_id: threadId,
+        unit_kind: recipe.match.unit_kind,
+        hint: recipe.match.thread_facet,
+      });
+      return subject ? [{ threadId, subject }] : [];
+    }
+    const host = this.runtime.requireHost();
+    const orgId = this.runtime.orgId();
+    const authority = host.get("authority");
+    const [shown, hidden, prefs, hiddenExecutors] = await Promise.all([
+      authority.listInbox(orgId, { heads: true, list: "shown" }),
+      authority.listInbox(orgId, { heads: true, list: "hidden" }),
+      authority.listConversationPrefs(orgId),
+      authority.listHiddenExecutorThreadIds(orgId),
+    ]);
+    const hiddenExecutorIds = new Set(hiddenExecutors);
+    const titleByThread = new Map(prefs.map((pref) => [pref.thread_id, pref.title]));
+    const heads = new Map<string, (typeof shown)[number]>();
+    for (const item of [...shown, ...hidden]) {
+      const id = item.event.thread_id?.trim();
+      if (!id || hiddenExecutorIds.has(id) || heads.has(id)) {
+        continue;
+      }
+      heads.set(id, item);
+    }
+    const bodies = await resolveInboxBodies(
+      authority,
+      host.get("blobs"),
+      [...heads.values()].map((item) => item.event.content_hash),
+      "meta",
+    );
+    const targets: Array<{
+      threadId: string;
+      subject: NonNullable<ReturnType<typeof workSubjectFromEvent>>;
+    }> = [];
+    for (const [id, item] of heads) {
+      const surface = item.event.content_hash
+        ? bodies.get(item.event.content_hash)?.surface
+        : undefined;
+      const subject = workSubjectFromEvent({
+        type: surface?.type,
+        source: item.event.source,
+        thread_id: id,
+        unit_kind: surface?.unit_kind,
+        title: recipeConversationTitle({
+          customTitle: titleByThread.get(id),
+          conversationLabel: surface?.conversation_label,
+        }),
+        hint: surface?.thread_facet,
+      });
+      if (!subject || !recipeMatches(recipe.match, subject, "pull")) {
+        continue;
+      }
+      targets.push({ threadId: id, subject });
+    }
+    targets.sort((left, right) => (left.threadId < right.threadId ? -1 : 1));
+    return targets;
   }
 
   async retryOrResume(

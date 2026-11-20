@@ -312,8 +312,8 @@ export function shouldConfirmRecipeSave(input: {
   if (
     input.isNew &&
     input.canWriteBack &&
-    input.triggerKind === "push" &&
-    input.scope === "source"
+    input.scope === "source" &&
+    (input.triggerKind === "push" || input.triggerKind === "pull")
   ) {
     return true;
   }

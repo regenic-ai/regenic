@@ -363,6 +363,36 @@ describe("recipe text filters", () => {
     assert.equal(f.starts(), 1);
   });
 
+  it("fans a scheduled rule out across matching conversations and caps starts", async (t) => {
+    const f = await fixture(t, {
+      match: { record_class: "task", source: "test-chat" },
+      trigger: { kind: "pull", interval_ms: 60_000 },
+      max_concurrent: 1,
+      can_write_back: false,
+      include_context: false,
+    });
+    await f.ingest("review one", { scopeId: "room" });
+    await f.ingest("review two", { scopeId: "other" });
+    await f.dispatch.dispatchPullRecipes();
+    const opened = (await f.authority.listWorkItems(ORG)).filter(
+      (item) => item.recipe_id === f.recipe.id,
+    );
+    assert.equal(opened.length, 2);
+    assert.equal(f.starts(), 1);
+    assert.ok((await f.authority.getRecipe(ORG, f.recipe.id)).next_run_at > f.now);
+  });
+
+  it("advances a scheduled rule when nothing matches", async (t) => {
+    const f = await fixture(t, {
+      match: { record_class: "task", source: "missing-app" },
+      trigger: { kind: "pull", interval_ms: 60_000 },
+      can_write_back: false,
+    });
+    await f.dispatch.dispatchPullRecipes();
+    assert.equal(f.starts(), 0);
+    assert.ok((await f.authority.getRecipe(ORG, f.recipe.id)).next_run_at > f.now);
+  });
+
   it("runs a scheduled rule with stored conditions even without any message", async (t) => {
     const f = await fixture(t, {
       match: { thread_id: "test-chat:room", text_excludes: "draft" },

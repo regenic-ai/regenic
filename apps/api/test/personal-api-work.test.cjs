@@ -2218,19 +2218,36 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
       ).json();
       assert.equal(typed.config.scope.match.unit_kind, "crm.order_review");
       assert.equal(typed.config.trigger.kind, "push");
-      const pullMissing = await fetch(`${origin}/v1/me/flows`, {
+      const pullVague = await fetch(`${origin}/v1/me/flows`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: flowJson({
           name: "Morning digest",
-          match: { record_class: "task" },
+          match: { source: "feishu" },
           trigger: { kind: "pull", interval_ms: 3_600_000 },
           executor_type: "dsh",
           executor_config: { prompt: "Summarize updates." },
           write_back_thread_id: "dsh:results",
         }),
       });
-      assert.equal(pullMissing.status, 400);
+      assert.equal(pullVague.status, 400);
+      const pullTasks = await (
+        await fetch(`${origin}/v1/me/flows`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: flowJson({
+            name: "Morning tasks",
+            match: { record_class: "task" },
+            trigger: { kind: "pull", interval_ms: 3_600_000 },
+            executor_type: "dsh",
+            executor_config: { prompt: "Summarize updates." },
+            write_back_thread_id: "dsh:results",
+          }),
+        })
+      ).json();
+      assert.equal(pullTasks.config.scope.match.record_class, "task");
+      assert.equal(pullTasks.config.scope.match.thread_id, undefined);
+      assert.equal(pullTasks.config.trigger.kind, "pull");
       const pulled = await (
         await fetch(`${origin}/v1/me/flows`, {
           method: "POST",
@@ -2252,7 +2269,7 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
       assert.ok(pulled.next_run_at);
       assert.equal(created.config.handler.params.prompt, "Reply with a decision.");
       const recipes = await (await fetch(`${origin}/v1/me/flows`)).json();
-      assert.equal(recipes.length, 3);
+      assert.equal(recipes.length, 4);
       const listed = recipes.find((recipe) => recipe.name === "Feishu tasks");
       assert.equal(listed.config.handler.params.prompt, "Reply with a decision.");
       assert.equal(listed.config.include_context, true);
