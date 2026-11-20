@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { ContextLexicalKey } from "./context-lexical";
 import type { EmbeddingGeneration } from "./embedding-provider";
 
@@ -39,11 +40,42 @@ export interface ContextVectorMatch extends ContextLexicalKey {
   }>;
 }
 
+export interface ContextVectorAuthorizationKey extends ContextLexicalKey {
+  body_length?: number;
+}
+
+export interface ContextVectorCoverageProof {
+  authorization_hash: string;
+  authorized_count: number;
+  covered_count: number;
+  complete: boolean;
+  uncovered: ContextLexicalKey[];
+}
+
+export function contextVectorAuthorizationHash(
+  keys: readonly ContextVectorAuthorizationKey[],
+): string {
+  const hash = createHash("sha256");
+  hash.update(`${keys.length}\0`);
+  let chunk = "";
+  for (const key of keys) {
+    const bodyLength = key.body_length === undefined ? "-" : String(key.body_length);
+    chunk += `${key.event_id.length}:${key.event_id}${key.content_hash}${bodyLength.length}:${bodyLength}`;
+    if (chunk.length >= 64 * 1024) {
+      hash.update(chunk);
+      chunk = "";
+    }
+  }
+  if (chunk) hash.update(chunk);
+  return hash.digest("hex");
+}
+
 export interface ContextVectorIndex {
   matchAuthorizedText?(input: {
     org_id: string;
     generation: string;
-    authorized: Array<ContextLexicalKey & { body_length?: number }>;
+    authorized: ContextVectorAuthorizationKey[];
+    authorization_hash?: string;
     query: string;
     limit: number;
   }): ReturnType<ContextVectorIndex["matchAuthorized"]>;
@@ -51,7 +83,8 @@ export interface ContextVectorIndex {
   matchAuthorized(input: {
     org_id: string;
     generation: string;
-    authorized: Array<ContextLexicalKey & { body_length?: number }>;
+    authorized: ContextVectorAuthorizationKey[];
+    authorization_hash?: string;
     query_vector: number[];
     limit: number;
     query?: string;
@@ -59,6 +92,7 @@ export interface ContextVectorIndex {
   }): Promise<{
     generation: string;
     covered: ContextLexicalKey[];
+    coverage?: ContextVectorCoverageProof;
     skipped?: ContextLexicalKey[];
     matched: ContextVectorMatch[];
     reconciled_epoch?: string;

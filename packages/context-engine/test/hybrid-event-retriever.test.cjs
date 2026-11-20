@@ -3,6 +3,7 @@ const { createHash } = require("node:crypto");
 const { it } = require("node:test");
 const {
   embeddingGeneration, EmbeddingError, ContextVectorUnavailableError,
+  contextVectorAuthorizationHash,
   MemoryContextArtifactStore, MemoryContextRetrieverRegistry, validateContextSnapshot,
   ContextRetrievalTraceSchema,
 } = require("@regenic/domain");
@@ -45,6 +46,7 @@ function fixture(options = {}) {
   const index = {
     async matchAuthorized(input) {
       assert.deepEqual(input.authorized.map((key) => key.event_id).sort(), ["literal", "semantic"]);
+      assert.equal(input.authorization_hash, contextVectorAuthorizationHash(input.authorized));
       if (options.indexError) throw options.indexError;
       const result = {
         generation: generation.id,
@@ -52,6 +54,16 @@ function fixture(options = {}) {
         matched: [{ event_id: "semantic", content_hash: events[0].event.content_hash, score: 0.9,
           chunk_ordinal: 0, start: 0, end: events[0].text.length, ...options.hit }],
       };
+      if (options.compact) {
+        result.covered = [];
+        result.coverage = {
+          authorization_hash: options.proofHash ?? input.authorization_hash,
+          authorized_count: input.authorized.length,
+          covered_count: input.authorized.length,
+          complete: true,
+          uncovered: [],
+        };
+      }
       if (options.partial) result.covered = result.covered.slice(0, 1);
       if (options.skipped) result.skipped = [
         { event_id: "literal", content_hash: events[1].event.content_hash },
@@ -82,6 +94,21 @@ function fixture(options = {}) {
     principal_policy_hash: "b".repeat(64) };
   return { engine, retriever, plan, get calls() { return calls; } };
 }
+
+it("accepts compact vector coverage bound to the exact authorization snapshot", async () => {
+  const f = fixture({ compact: true });
+  const result = await f.retriever.retrieve(f.plan);
+  assert.equal(result.trace.covered_count, 2);
+  assert.equal(result.trace.mode, "hybrid");
+});
+
+it("rejects compact vector coverage for another authorization snapshot", async () => {
+  const f = fixture({ compact: true, proofHash: "f".repeat(64) });
+  await assert.rejects(
+    f.retriever.retrieve(f.plan),
+    /Invalid vector coverage proof/,
+  );
+});
 
 it("admits semantic zero-lexical evidence, deduplicates and pins replayable retrieval trace", async () => {
   const f = fixture();
