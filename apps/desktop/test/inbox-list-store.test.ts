@@ -123,6 +123,152 @@ describe("InboxListStore", () => {
       snap.items.map((row) => row.thread_id),
       ["crm:order-0", "crm:order-2", "crm:order-1", "dsh:session-job"],
     );
+    assert.equal(store.cursor?.before_id, "n0");
+    assert.equal(snap.hasOlder, true);
+  });
+
+  it("keeps paging after the loaded tail when a live refresh returns the first page", () => {
+    const recent = at(item("n2", "new", "crm:order-2"), "2026-08-23T00:02:00.000Z");
+    const mid = at(item("n1", "mid", "crm:order-1"), "2026-08-23T00:01:00.000Z");
+    const older = at(item("n0", "old", "crm:order-0"), "2026-08-23T00:00:00.000Z");
+    const ancient = at(item("n9", "ancient", "crm:order-9"), "2026-08-22T00:00:00.000Z");
+    const store = new InboxListStore();
+    store.reduce({
+      kind: "liveLoaded",
+      list: "shown",
+      pinned: [],
+      live: [recent, mid],
+      activeWork: [],
+      nextBefore: { before: mid.event.occurred_at, before_id: mid.event.id },
+      hasOlder: true,
+    });
+    store.reduce({
+      kind: "olderLoaded",
+      items: [older],
+      nextBefore: { before: older.event.occurred_at, before_id: older.event.id },
+      hasOlder: true,
+    });
+    const refreshed = store.reduce({
+      kind: "liveChanged",
+      pinned: [],
+      live: [recent, mid],
+      activeWork: [],
+      nextBefore: { before: mid.event.occurred_at, before_id: mid.event.id },
+      hasOlder: true,
+      pageSize: 2,
+    });
+    assert.equal(refreshed.nextBefore?.before_id, "n0");
+    assert.equal(refreshed.hasOlder, true);
+    const snap = store.reduce({
+      kind: "olderLoaded",
+      items: [ancient],
+      nextBefore: { before: ancient.event.occurred_at, before_id: ancient.event.id },
+      hasOlder: true,
+    });
+    assert.deepEqual(
+      snap.items.map((row) => row.thread_id),
+      ["crm:order-0", "crm:order-9", "crm:order-2", "crm:order-1"],
+    );
+    assert.equal(store.cursor?.before_id, "n9");
+  });
+
+  it("still uses the first-page cursor when a live refresh has no older rows yet", () => {
+    const recent = at(item("n2", "new", "crm:order-2"), "2026-08-23T00:02:00.000Z");
+    const mid = at(item("n1", "mid", "crm:order-1"), "2026-08-23T00:01:00.000Z");
+    const store = new InboxListStore();
+    store.reduce({
+      kind: "liveLoaded",
+      list: "shown",
+      pinned: [],
+      live: [recent, mid],
+      activeWork: [],
+      nextBefore: { before: mid.event.occurred_at, before_id: mid.event.id },
+      hasOlder: true,
+    });
+    const snap = store.reduce({
+      kind: "liveChanged",
+      pinned: [],
+      live: [recent, mid],
+      activeWork: [],
+      nextBefore: { before: mid.event.occurred_at, before_id: mid.event.id },
+      hasOlder: true,
+      pageSize: 2,
+    });
+    assert.deepEqual(
+      snap.items.map((row) => row.thread_id),
+      ["crm:order-2", "crm:order-1"],
+    );
+    assert.equal(store.cursor?.before_id, "n1");
+    assert.equal(snap.hasOlder, true);
+  });
+
+  it("continues after a live row that a refresh pushed into history", () => {
+    const newer = at(item("n3", "newer", "crm:order-3"), "2026-08-23T00:03:00.000Z");
+    const recent = at(item("n2", "new", "crm:order-2"), "2026-08-23T00:02:00.000Z");
+    const mid = at(item("n1", "mid", "crm:order-1"), "2026-08-23T00:01:00.000Z");
+    const store = new InboxListStore();
+    store.reduce({
+      kind: "liveLoaded",
+      list: "shown",
+      pinned: [],
+      live: [recent, mid],
+      activeWork: [],
+      nextBefore: { before: mid.event.occurred_at, before_id: mid.event.id },
+      hasOlder: true,
+      pageSize: 2,
+    });
+    const snap = store.reduce({
+      kind: "liveChanged",
+      pinned: [],
+      live: [newer, recent],
+      activeWork: [],
+      nextBefore: { before: recent.event.occurred_at, before_id: recent.event.id },
+      hasOlder: true,
+      pageSize: 2,
+    });
+    assert.deepEqual(
+      snap.items.map((row) => row.thread_id),
+      ["crm:order-1", "crm:order-3", "crm:order-2"],
+    );
+    assert.equal(store.cursor?.before_id, "n1");
+    assert.equal(snap.hasOlder, true);
+  });
+
+  it("does not reopen an exhausted history tail from the first page flag", () => {
+    const recent = at(item("n2", "new", "crm:order-2"), "2026-08-23T00:02:00.000Z");
+    const mid = at(item("n1", "mid", "crm:order-1"), "2026-08-23T00:01:00.000Z");
+    const older = at(item("n0", "old", "crm:order-0"), "2026-08-23T00:00:00.000Z");
+    const store = new InboxListStore();
+    store.reduce({
+      kind: "liveLoaded",
+      list: "shown",
+      pinned: [],
+      live: [recent, mid],
+      activeWork: [],
+      nextBefore: { before: mid.event.occurred_at, before_id: mid.event.id },
+      hasOlder: true,
+    });
+    store.reduce({
+      kind: "olderLoaded",
+      items: [older],
+      nextBefore: { before: older.event.occurred_at, before_id: older.event.id },
+      hasOlder: false,
+    });
+    const snap = store.reduce({
+      kind: "liveChanged",
+      pinned: [],
+      live: [recent, mid],
+      activeWork: [],
+      nextBefore: { before: mid.event.occurred_at, before_id: mid.event.id },
+      hasOlder: true,
+      pageSize: 2,
+    });
+    assert.equal(store.cursor?.before_id, "n0");
+    assert.equal(snap.hasOlder, false);
+    assert.equal(
+      snap.items.some((row) => row.thread_id === "crm:order-0"),
+      true,
+    );
   });
 
   it("drops a live-window head that disappeared and keeps older history", () => {
