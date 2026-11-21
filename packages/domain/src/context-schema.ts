@@ -437,6 +437,9 @@ export const ContextRetrievalTraceSchema = z.object({
     algorithm_version: z.literal("sqlite-vec-authorized-exact-v1"),
     authorized_chunks: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
     candidate_chunks: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+    authorization_update: z.enum(["rebuilt", "reused", "delta"]).optional(),
+    added_events: nonNegativeIntegerSchema.optional(),
+    removed_events: nonNegativeIntegerSchema.optional(),
   }).strict().optional(),
   routes: z.array(z.object({
     event_id: nonEmptyStringSchema,
@@ -454,7 +457,23 @@ export const ContextRetrievalTraceSchema = z.object({
 }).strict().superRefine((trace, context) => {
   if (trace.covered_count > trace.authorized_count ||
     (trace.vector_acceleration !== undefined &&
-      trace.vector_acceleration.candidate_chunks > trace.vector_acceleration.authorized_chunks) ||
+      (
+        trace.vector_acceleration.candidate_chunks > trace.vector_acceleration.authorized_chunks
+        || (
+          trace.vector_acceleration.authorization_update === "delta"
+          && (
+            trace.vector_acceleration.added_events === undefined
+            || trace.vector_acceleration.removed_events === undefined
+          )
+        )
+        || (
+          trace.vector_acceleration.authorization_update !== "delta"
+          && (
+            trace.vector_acceleration.added_events !== undefined
+            || trace.vector_acceleration.removed_events !== undefined
+          )
+        )
+      )) ||
     new Set(trace.routes.map((route) => route.event_id)).size !== trace.routes.length ||
     (trace.mode === "hybrid" && (!trace.generation || !trace.model_revision)) ||
     trace.routes.some((route) =>

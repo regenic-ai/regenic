@@ -3,7 +3,10 @@ import {
   ContextVectorUnavailableError,
   EmbeddingError,
   assertEmbeddingDescriptor,
+  contextVectorAuthorizationAccumulator,
   contextVectorAuthorizationHash,
+  contextVectorAuthorizationHashFromAccumulator,
+  updateContextVectorAuthorizationAccumulator,
   validateEmbeddingVector,
   contextLexicalQueryTerms,
   contextLexicalTerms,
@@ -15,6 +18,7 @@ import {
   type ContextRetrievalTrace,
   type ContextVectorIndex,
   type ContextVectorAuthorizationKey,
+  type ContextVectorAuthorizationDelta,
   type ContextVectorCoverageProof,
   type ContextVectorGenerationStore,
   type EmbeddingGeneration,
@@ -66,6 +70,7 @@ const RRF_K = 60;
 export class HybridEventRetriever implements ContextRetriever {
   readonly id = HYBRID_EVENT_RETRIEVER_ID;
   private readonly queryVectors = new Map<string, Promise<number[]>>();
+  private authorizationSnapshot?: VectorAuthorizationSnapshot;
 
   constructor(
     private readonly lexical: ContextRetriever,
@@ -121,13 +126,18 @@ export class HybridEventRetriever implements ContextRetriever {
           ?? allowed.get(source.event.event_id)!.text ?? "").length,
       } : {}),
     }));
-    const authorizationHash = contextVectorAuthorizationHash(authorized);
     let result: Awaited<ReturnType<ContextVectorIndex["matchAuthorized"]>>;
     let generation = this.generation;
     let embeddingDegradation: string | undefined;
     const vectorLimit = vectorCandidateLimit(plan);
+    let authorization: PreparedVectorAuthorization | undefined;
     try {
       generation = await this.generations?.activeGeneration(plan.request.org_id) ?? this.generation;
+      authorization = this.prepareAuthorization(
+        plan.request.org_id,
+        generation.id,
+        authorized,
+      );
       assertEmbeddingDescriptor(this.provider.descriptor, generation.model);
       const queryVector = await this.queryVector(
         plan.request.org_id,
@@ -136,7 +146,11 @@ export class HybridEventRetriever implements ContextRetriever {
       );
       result = await this.index.matchAuthorized({
         org_id: plan.request.org_id, generation: generation.id, query_vector: [...queryVector],
-        authorized, authorization_hash: authorizationHash, limit: vectorLimit,
+        authorized,
+        authorization_hash: authorization.hash,
+        authorization_accumulator: authorization.accumulator,
+        ...(authorization.delta ? { authorization_delta: authorization.delta } : {}),
+        limit: vectorLimit,
         ...(plan.request.search_kind ? { query: plan.request.query, search_kind: plan.request.search_kind } : {}),
       });
     } catch (error) {
@@ -146,9 +160,18 @@ export class HybridEventRetriever implements ContextRetriever {
       if (!plan.request.search_kind || plan.request.search_kind === "messages" ||
         !this.index.matchAuthorizedText) return fallback(embeddingDegradation);
       try {
+        authorization ??= this.prepareAuthorization(
+          plan.request.org_id,
+          generation.id,
+          authorized,
+        );
         result = await this.index.matchAuthorizedText({
           org_id: plan.request.org_id, generation: generation.id, query: plan.request.query,
-          authorized, authorization_hash: authorizationHash, limit: vectorLimit,
+          authorized,
+          authorization_hash: authorization.hash,
+          authorization_accumulator: authorization.accumulator,
+          ...(authorization.delta ? { authorization_delta: authorization.delta } : {}),
+          limit: vectorLimit,
           search_kind: plan.request.search_kind,
         });
       } catch (indexError) {
@@ -159,6 +182,9 @@ export class HybridEventRetriever implements ContextRetriever {
         throw indexError;
       }
     }
+    this.authorizationSnapshot = authorization?.snapshot;
+    const authorizationHash = authorization?.hash
+      ?? contextVectorAuthorizationHash(authorized);
     // Invalid keys or chunk bindings are a boundary failure, never a lexical fallback.
     if (!result || result.generation !== generation.id || !Array.isArray(result.covered) ||
       !Array.isArray(result.matched) || result.matched.length > vectorLimit) throw new ContextEngineError("invalid_candidate", "Invalid vector result");
@@ -171,6 +197,28 @@ export class HybridEventRetriever implements ContextRetriever {
         || !Number.isSafeInteger(result.acceleration.candidate_chunks)
         || result.acceleration.candidate_chunks < 1
         || result.acceleration.candidate_chunks > result.acceleration.authorized_chunks
+        || (
+          result.acceleration.authorization_update !== undefined
+          && !["rebuilt", "reused", "delta"].includes(
+            result.acceleration.authorization_update,
+          )
+        )
+        || (
+          result.acceleration.authorization_update === "delta"
+          && (
+            !Number.isSafeInteger(result.acceleration.added_events)
+            || result.acceleration.added_events! < 0
+            || !Number.isSafeInteger(result.acceleration.removed_events)
+            || result.acceleration.removed_events! < 0
+          )
+        )
+        || (
+          result.acceleration.authorization_update !== "delta"
+          && (
+            result.acceleration.added_events !== undefined
+            || result.acceleration.removed_events !== undefined
+          )
+        )
       )
     ) {
       throw new ContextEngineError("invalid_candidate", "Invalid vector acceleration proof");
@@ -394,6 +442,128 @@ export class HybridEventRetriever implements ContextRetriever {
       throw error;
     }
   }
+
+  private prepareAuthorization(
+    orgId: string,
+    generation: string,
+    keys: ContextVectorAuthorizationKey[],
+  ): PreparedVectorAuthorization {
+      const previous = this.authorizationSnapshot;
+      const listHash = vectorAuthorizationListHash(keys);
+      if (
+        previous
+        && previous.org_id === orgId
+        && previous.generation === generation
+        && previous.keys.size === keys.length
+        && previous.list_hash === listHash
+      ) {
+        return {
+          hash: previous.hash,
+          accumulator: previous.accumulator,
+          snapshot: previous,
+        };
+      }
+      if (!previous || previous.org_id !== orgId || previous.generation !== generation) {
+        const accumulator = contextVectorAuthorizationAccumulator(keys);
+        const hash = contextVectorAuthorizationHashFromAccumulator(keys.length, accumulator);
+        return {
+          hash,
+          accumulator,
+          snapshot: {
+            org_id: orgId,
+            generation,
+            hash,
+            accumulator,
+            list_hash: listHash,
+            keys: new Map(keys.map((key) => [key.event_id, structuredClone(key)])),
+          },
+        };
+      }
+      const current = new Map<string, ContextVectorAuthorizationKey>();
+      const added: ContextVectorAuthorizationKey[] = [];
+      for (const key of keys) {
+        const copy = structuredClone(key);
+        current.set(key.event_id, copy);
+        const old = previous.keys.get(key.event_id);
+        if (!old || !sameAuthorizationKey(old, key)) added.push(copy);
+      }
+      const removed: ContextVectorAuthorizationKey[] = [];
+      for (const [eventId, key] of previous.keys) {
+        const next = current.get(eventId);
+        if (!next || !sameAuthorizationKey(key, next)) removed.push(structuredClone(key));
+      }
+      const accumulator = updateContextVectorAuthorizationAccumulator(
+        previous.accumulator,
+        added,
+        removed,
+      );
+      const hash = contextVectorAuthorizationHashFromAccumulator(keys.length, accumulator);
+      const delta: ContextVectorAuthorizationDelta | undefined =
+        hash === previous.hash && added.length === 0 && removed.length === 0
+          ? undefined
+          : {
+              previous_authorization_hash: previous.hash,
+              previous_accumulator: previous.accumulator,
+              accumulator,
+              added,
+              removed,
+            };
+      return {
+        hash,
+        accumulator,
+        ...(delta ? { delta } : {}),
+        snapshot: {
+          org_id: orgId,
+          generation,
+          hash,
+          accumulator,
+          list_hash: listHash,
+          keys: current,
+        },
+      };
+  }
+}
+
+interface VectorAuthorizationSnapshot {
+  org_id: string;
+  generation: string;
+  hash: string;
+  accumulator: string;
+  list_hash: string;
+  keys: Map<string, ContextVectorAuthorizationKey>;
+}
+
+interface PreparedVectorAuthorization {
+  hash: string;
+  accumulator: string;
+  delta?: ContextVectorAuthorizationDelta;
+  snapshot: VectorAuthorizationSnapshot;
+}
+
+function sameAuthorizationKey(
+  left: ContextVectorAuthorizationKey,
+  right: ContextVectorAuthorizationKey,
+): boolean {
+  return left.content_hash === right.content_hash
+    && left.body_length === right.body_length;
+}
+
+function vectorAuthorizationListHash(
+  keys: readonly ContextVectorAuthorizationKey[],
+): string {
+  const hash = createHash("sha256");
+  hash.update(`${keys.length}\0`);
+  let chunk = "";
+  for (const key of keys) {
+    const bodyLength = key.body_length === undefined ? "-" : String(key.body_length);
+    chunk += `${key.event_id.length}:${key.event_id}${key.content_hash}${bodyLength.length}:${bodyLength}`;
+    if (chunk.length >= 64 * 1024) {
+      hash.update(chunk);
+      chunk = "";
+    }
+  }
+  if (chunk) hash.update(chunk);
+  return hash.digest("hex");
 }
 
 function validateVectorCoverageProof(

@@ -3,8 +3,10 @@ const { dirname, resolve } = require("node:path");
 const { performance } = require("node:perf_hooks");
 const Database = require("better-sqlite3");
 const {
-  contextVectorAuthorizationHash,
+  contextVectorAuthorizationAccumulator,
+  contextVectorAuthorizationHashFromAccumulator,
   embeddingGeneration,
+  updateContextVectorAuthorizationAccumulator,
 } = require("@regenic/domain");
 const { SqliteContextVectorIndex } = require("../dist");
 
@@ -79,7 +81,11 @@ const authorized = Array.from({ length: count }, (_, value) => ({
   content_hash: contentHash,
 }));
 const hashStarted = performance.now();
-const authorizationHash = contextVectorAuthorizationHash(authorized);
+const authorizationAccumulator = contextVectorAuthorizationAccumulator(authorized);
+const authorizationHash = contextVectorAuthorizationHashFromAccumulator(
+  authorized.length,
+  authorizationAccumulator,
+);
 const authorizationHashMs = performance.now() - hashStarted;
 const base = {
   org_id: "benchmark",
@@ -93,14 +99,52 @@ const legacy = await measured(() => index.matchAuthorized(base));
 const compactCold = await measured(() => index.matchAuthorized({
   ...base,
   authorization_hash: authorizationHash,
+  authorization_accumulator: authorizationAccumulator,
 }));
 const compactWarm = [];
 for (let sample = 0; sample < samples; sample += 1) {
   compactWarm.push(await measured(() => index.matchAuthorized({
     ...base,
     authorization_hash: authorizationHash,
+    authorization_accumulator: authorizationAccumulator,
   })));
 }
+const removed = [authorized[0]];
+const reducedAuthorized = authorized.slice(1);
+const reducedAccumulator = updateContextVectorAuthorizationAccumulator(
+  authorizationAccumulator,
+  [],
+  removed,
+);
+const reducedHash = contextVectorAuthorizationHashFromAccumulator(
+  reducedAuthorized.length,
+  reducedAccumulator,
+);
+const incrementalRemove = await measured(() => index.matchAuthorized({
+  ...base,
+  authorized: reducedAuthorized,
+  authorization_hash: reducedHash,
+  authorization_accumulator: reducedAccumulator,
+  authorization_delta: {
+    previous_authorization_hash: authorizationHash,
+    previous_accumulator: authorizationAccumulator,
+    accumulator: reducedAccumulator,
+    added: [],
+    removed,
+  },
+}));
+const incrementalRestore = await measured(() => index.matchAuthorized({
+  ...base,
+  authorization_hash: authorizationHash,
+  authorization_accumulator: authorizationAccumulator,
+  authorization_delta: {
+    previous_authorization_hash: reducedHash,
+    previous_accumulator: reducedAccumulator,
+    accumulator: authorizationAccumulator,
+    added: removed,
+    removed: [],
+  },
+}));
 index.close();
 
 const report = {
@@ -118,6 +162,8 @@ const report = {
     p50_ms: percentile(compactWarm.map((measurement) => measurement.elapsed), 0.5),
     p95_ms: percentile(compactWarm.map((measurement) => measurement.elapsed), 0.95),
   },
+  incremental_remove: summary(incrementalRemove),
+  incremental_restore: summary(incrementalRestore),
 };
 if (outputPath) {
   mkdirSync(dirname(outputPath), { recursive: true });
