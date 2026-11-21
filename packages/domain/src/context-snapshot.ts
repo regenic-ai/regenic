@@ -13,6 +13,11 @@ export interface ContextRetrievalTrace {
   model_revision?: string;
   authorized_count: number;
   covered_count: number;
+  vector_acceleration?: {
+    algorithm_version: "sqlite-vec-authorized-exact-v1";
+    authorized_chunks: number;
+    candidate_chunks: number;
+  };
   routes: Array<{
     event_id: string;
     lexical_rank?: number;

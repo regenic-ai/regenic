@@ -13,6 +13,7 @@ void main();
 async function main() {
 const options = argumentsFor(process.argv.slice(2));
 const count = numberOption(options, "messages", 1_000_000);
+const samples = numberOption(options, "samples", 10);
 const databasePath = resolve(options.database ?? "vector-authorization-scale.db");
 const outputPath = options.output ? resolve(options.output) : undefined;
 mkdirSync(dirname(databasePath), { recursive: true });
@@ -47,7 +48,6 @@ if (existing !== count) {
     DELETE FROM source_heads;
   `);
   const vector = Buffer.alloc(8);
-  vector.writeFloatLE(1, 0);
   database.transaction(() => {
     const insertHead = database.prepare("INSERT INTO source_heads VALUES (?,?,?,?,?)");
     const insertCoverage = database.prepare("INSERT INTO coverage VALUES (?,?,?,?,?,?,?)");
@@ -58,6 +58,8 @@ if (existing !== count) {
     `);
     for (let value = 0; value < count; value += 1) {
       const eventId = `event-${String(value).padStart(7, "0")}`;
+      vector.writeFloatLE(Math.sqrt(1 - value / count), 0);
+      vector.writeFloatLE(Math.sqrt(value / count), 4);
       insertHead.run("benchmark", "synthetic", eventId, eventId, 1);
       insertCoverage.run(
         "benchmark", generation.id, eventId, contentHash, "synthetic", eventId, 1,
@@ -92,10 +94,13 @@ const compactCold = await measured(() => index.matchAuthorized({
   ...base,
   authorization_hash: authorizationHash,
 }));
-const compactWarm = await measured(() => index.matchAuthorized({
-  ...base,
-  authorization_hash: authorizationHash,
-}));
+const compactWarm = [];
+for (let sample = 0; sample < samples; sample += 1) {
+  compactWarm.push(await measured(() => index.matchAuthorized({
+    ...base,
+    authorization_hash: authorizationHash,
+  })));
+}
 index.close();
 
 const report = {
@@ -107,7 +112,12 @@ const report = {
   authorization_hash_ms: rounded(authorizationHashMs),
   legacy: summary(legacy),
   compact_cold: summary(compactCold),
-  compact_warm: summary(compactWarm),
+  compact_warm: {
+    ...summary(compactWarm[0]),
+    samples_ms: compactWarm.map((measurement) => rounded(measurement.elapsed)),
+    p50_ms: percentile(compactWarm.map((measurement) => measurement.elapsed), 0.5),
+    p95_ms: percentile(compactWarm.map((measurement) => measurement.elapsed), 0.95),
+  },
 };
 if (outputPath) {
   mkdirSync(dirname(outputPath), { recursive: true });
@@ -119,7 +129,11 @@ console.log(JSON.stringify(report, null, 2));
 async function measured(operation) {
   const started = performance.now();
   const result = await operation();
-  return { elapsed: performance.now() - started, result };
+  return {
+    elapsed: performance.now() - started,
+    result,
+    rss: process.memoryUsage().rss,
+  };
 }
 
 function summary(measurement) {
@@ -129,11 +143,18 @@ function summary(measurement) {
     covered_count: measurement.result.coverage?.covered_count
       ?? measurement.result.covered.length,
     matched: measurement.result.matched.length,
+    acceleration: measurement.result.acceleration,
+    rss_mib: rounded(measurement.rss / (1024 * 1024)),
   };
 }
 
 function rounded(value) {
   return Number(value.toFixed(3));
+}
+
+function percentile(values, percentileValue) {
+  const sorted = [...values].sort((left, right) => left - right);
+  return rounded(sorted[Math.ceil(sorted.length * percentileValue) - 1]);
 }
 
 function numberOption(values, key, fallback) {

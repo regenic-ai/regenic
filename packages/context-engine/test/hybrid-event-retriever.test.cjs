@@ -64,6 +64,9 @@ function fixture(options = {}) {
           uncovered: [],
         };
       }
+      if (options.acceleration) {
+        result.acceleration = options.acceleration;
+      }
       if (options.partial) result.covered = result.covered.slice(0, 1);
       if (options.skipped) result.skipped = [
         { event_id: "literal", content_hash: events[1].event.content_hash },
@@ -96,10 +99,16 @@ function fixture(options = {}) {
 }
 
 it("accepts compact vector coverage bound to the exact authorization snapshot", async () => {
-  const f = fixture({ compact: true });
+  const acceleration = {
+    algorithm_version: "sqlite-vec-authorized-exact-v1",
+    authorized_chunks: 2,
+    candidate_chunks: 2,
+  };
+  const f = fixture({ compact: true, acceleration });
   const result = await f.retriever.retrieve(f.plan);
   assert.equal(result.trace.covered_count, 2);
   assert.equal(result.trace.mode, "hybrid");
+  assert.deepEqual(result.trace.vector_acceleration, acceleration);
 });
 
 it("rejects compact vector coverage for another authorization snapshot", async () => {
@@ -107,6 +116,18 @@ it("rejects compact vector coverage for another authorization snapshot", async (
   await assert.rejects(
     f.retriever.retrieve(f.plan),
     /Invalid vector coverage proof/,
+  );
+});
+
+it("rejects an invalid native vector acceleration proof", async () => {
+  const f = fixture({ compact: true, acceleration: {
+    algorithm_version: "sqlite-vec-authorized-exact-v1",
+    authorized_chunks: 1,
+    candidate_chunks: 2,
+  } });
+  await assert.rejects(
+    f.retriever.retrieve(f.plan),
+    /Invalid vector acceleration proof/,
   );
 });
 

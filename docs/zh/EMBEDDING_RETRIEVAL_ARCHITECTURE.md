@@ -865,6 +865,7 @@ float32 Buffer，避免每个 768 维 chunk 创建数组。向量候选池按证
 ```powershell
 pnpm --filter @regenic/vector-index bench:authorization -- `
   --messages 1000000 `
+  --samples 10 `
   --database vector-authorization-scale.db `
   --output vector-authorization-scale.json
 ```
@@ -883,9 +884,23 @@ coverage key；首次 staging 只在 organization、generation、授权 hash/cou
 变化时发生。compact proof 仍验证当前授权集合，投影发布、reconcile、generation 删除、
 视觉权限变化和组织清理会同步失效缓存。
 
-剩余 8.49 秒即使在 2 维向量上仍然存在，证明百万级瓶颈已经转为 exact scan 的 chunk
-读取与物化，而非授权 staging 或高维点积。本优化不改变精确排名与召回率，也不把它描述
-为 ANN。下一阶段需评估**授权域内** ANN；不能先做全库 top-k 再过滤 ACL。
+随后无显式 message/file 过滤的语义路径加入授权域原生精确 KNN 加速：只把当前授权且
+coverage/source-head 有效的 chunk 复制到连接内 `sqlite-vec` 临时表，原生 cosine KNN
+先选出少量 Event，再读取这些 Event 的完整 chunk，并沿用原有完整性校验和精确余弦重排。
+候选窗口从 `max(limit * 4, 100)` 开始；如果 Event 边界距离并列就翻倍，最坏扩到全表，
+因此保留全局稳定 top-k，不降低召回率，也不是近似 ANN。
+
+同一百万 Event 隔离基准的 10 次原生暖查询 P50 为 334.95 ms、P95 为 338.07 ms，只进入
+精确重排 400 个候选 chunk；P50 相对前一版 8.49 秒暖扫描降低 96.1%，相对旧版 14.74 秒
+降低 97.7%。授权 hash 另耗时 212.09 ms，因此 P50 索引与 hash 合计约 547 ms；
+首次授权/native staging 为 16.69 秒。staging 后进程 RSS 为 1057.48 MiB，比紧邻的旧路径
+测量高 30.61 MiB。这些数字不包含 Authority 枚举、query embedding 和答案生成，不能作为
+端到端延迟承诺。
+
+这是**授权域内精确 KNN 加速**：未授权向量不会进入临时表、候选生成、计数或排名，不能
+替换成全库 KNN 后过滤 ACL。带 message/file `search_kind` 的查询继续走原精确过滤路径。
+投影发布、reconcile、generation 删除、视觉权限变化和组织清理会同步失效授权快照与
+临时向量表。原生扩展无法加载时 sidecar 会发出显式 warning，并保留旧精确扫描路径。
 
 相同 org、embedding generation 和查询文本的 query vector 以 SHA-256 键在进程内缓存，
 最多 128 项；不保存原始查询，失败不缓存，generation 切换自然失效。这会显著改善刷新和

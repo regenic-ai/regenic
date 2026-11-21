@@ -470,6 +470,11 @@ describe("SQLite vector projection and independent durable jobs", () => {
       complete: true,
       uncovered: [],
     });
+    assert.deepEqual(result.acceleration, {
+      algorithm_version: "sqlite-vec-authorized-exact-v1",
+      authorized_chunks: 4000,
+      candidate_chunks: 4000,
+    });
     assert.equal(result.matched.length, 100);
     assert.deepEqual(
       result.matched.slice(0, 3).map((value) => value.event_id),
@@ -485,6 +490,7 @@ describe("SQLite vector projection and independent durable jobs", () => {
       limit: 100,
     });
     assert.deepEqual(reused.coverage, result.coverage);
+    assert.deepEqual(reused.acceleration, result.acceleration);
     await assert.rejects(
       index.matchAuthorized({
         org_id: "org",
@@ -670,8 +676,14 @@ describe("SQLite vector projection and independent durable jobs", () => {
     for (const job of await claim(index)) {
       assert.equal(await index.complete({ job, owner: "owner", now: at, chunks: [chunk(), chunk([1, 0], 1)] }), true);
     }
-    const result = await query(index, [{ event_id: "event-b", content_hash: hash }, { event_id: "event-a", content_hash: hash }], { limit: 1 });
-    assert.equal(result.covered.length, 2);
+    const authorized = [{ event_id: "event-b", content_hash: hash }, { event_id: "event-a", content_hash: hash }];
+    const result = await query(index, authorized, {
+      authorization_hash: contextVectorAuthorizationHash(authorized),
+      limit: 1,
+    });
+    assert.equal(result.covered.length, 0);
+    assert.equal(result.coverage.covered_count, 2);
+    assert.equal(result.acceleration.authorized_chunks, 4);
     assert.equal(result.reconciled_epoch, "authority:1");
     assert.deepEqual(result.matched.map((match) => [match.event_id, match.chunk_ordinal, match.score]), [["event-a", 0, 1]]);
     assert.deepEqual((await query(index, [{ event_id: "event-a", content_hash: "c".repeat(64) }])).covered, []);
