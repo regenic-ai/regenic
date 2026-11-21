@@ -138,4 +138,67 @@ describe("conversation directory", () => {
       reopened.close();
     }
   });
+
+  it("copies a catalog page name onto the thread and leaves other threads alone", async () => {
+    const root = await mkdtemp(join(tmpdir(), "regenic-directory-page-"));
+    roots.push(root);
+    const path = join(root, "authority.db");
+    const store = new SqliteAuthorityStore(path);
+    const at = "2026-08-24T00:00:00.000Z";
+    await store.commitIngest({
+      appends: [event("quiet", "quiet", at)],
+      dispositions: [decision("quiet", at)],
+    });
+    store.close();
+    const db = new Database(path);
+    db.prepare(`
+      INSERT INTO connector_installations (
+        id, org_id, connector_type, status, config_json, created_at, updated_at
+      ) VALUES ('feishu', 'local-owner', 'feishu-chat', 'enabled', '{}', ?, ?)
+    `).run(at, at);
+    const quietThread = db
+      .prepare("SELECT thread_id FROM events WHERE external_id = ?")
+      .get("quiet").thread_id;
+    db.close();
+    const reopened = new SqliteAuthorityStore(path);
+    try {
+      await reopened.applySyncCatalogPage({
+        installation_id: "feishu",
+        members: [{
+          stream_key: "chat:quiet",
+          thread_id: quietThread,
+          label: "安静会话",
+        }],
+        now: at,
+        complete: true,
+      });
+      const copied = await reopened.searchConversationDirectory("local-owner", {
+        thread_id: quietThread,
+      });
+      assert.equal(copied[0].display_name, "安静会话");
+      await reopened.rememberConversationNames("local-owner", [{
+        thread_id: quietThread,
+        display_name: "手改",
+        kind: "conversation",
+      }]);
+      await reopened.applySyncCatalogPage({
+        installation_id: "feishu",
+        members: [{
+          stream_key: "chat:other",
+          thread_id: "feishu:oc_other",
+          label: "另一群",
+        }],
+        now: "2026-08-24T01:00:00.000Z",
+        complete: true,
+      });
+      const named = await reopened.searchConversationDirectory("local-owner", {
+        thread_id: quietThread,
+      });
+      assert.equal(named.length, 1);
+      assert.equal(named[0].display_name, "手改");
+      assert.equal(named[0].catalog_label, "安静会话");
+    } finally {
+      reopened.close();
+    }
+  });
 });

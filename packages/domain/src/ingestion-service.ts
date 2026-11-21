@@ -326,13 +326,13 @@ export class IngestionService {
         }
         for (const item of planned) markCompleted(item.index);
         markResolvedDuplicates(planned);
-        const orgId = planned[0]?.identity.org_id;
-        if (orgId) {
-          await this.rememberConversationNames(orgId, planned.map((item) => item.record));
-        }
       } catch (error) {
         await this.authorityStore.releaseBlobReservations(request.blob_reservations ?? []);
         throw error;
+      }
+      const orgId = planned[0]?.identity.org_id;
+      if (orgId) {
+        await this.rememberConversationNames(orgId, planned.map((item) => item.record));
       }
       overlay.clear();
     };
@@ -891,7 +891,8 @@ export class IngestionService {
     try {
       await this.authorityStore.rememberConversationNames(orgId, names);
     } catch {
-      // The directory reads the stored message when this write does not land.
+      // The messages are already committed. The next record or catalog page
+      // that carries this chat name writes it again.
     }
   }
 

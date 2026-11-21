@@ -80,6 +80,23 @@ export function resolveCatalogFieldOptions(
   return filterCatalogFieldOptions(field, source, values);
 }
 
+/**
+ * A paged option list is filtered by the connector. The rows already loaded
+ * stay as the name cache, so a selected chat keeps its title when another
+ * kind is unchecked and drops out of the current page.
+ */
+export function catalogFieldOptions(
+  field: CatalogField & { dynamic_options?: boolean },
+  fieldOptions: CatalogOption[] | undefined,
+  remoteOptions: CatalogOption[] | undefined,
+  values: Record<string, unknown>,
+): CatalogOption[] | undefined {
+  if (field.dynamic_options) {
+    return remoteOptions ?? fieldOptions;
+  }
+  return resolveCatalogFieldOptions(field, fieldOptions, remoteOptions, values);
+}
+
 export function catalogFieldUsesSelect(
   options: CatalogOption[] | undefined,
 ): boolean {

@@ -1455,7 +1455,9 @@ export async function applySyncCatalogPage(db: PgSql, input: ApplySyncCatalogPag
       }
       return next;
     });
-    await rememberCatalogConversationNames(db, input.installation_id, saved.members);
+    // Only this page. The saved catalog already has older names, and rewriting
+    // every member on each page repeats the same updates for the whole census.
+    await rememberCatalogConversationNames(db, input.installation_id, input.members);
     return saved;
   }
 

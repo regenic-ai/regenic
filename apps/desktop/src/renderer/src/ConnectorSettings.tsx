@@ -7,7 +7,7 @@ import {
   connectorImportSummary,
 } from "./connector-import";
 import {
-  resolveCatalogFieldOptions,
+  catalogFieldOptions,
 } from "./connector-config";
 import {
   connectorFieldMissing,
@@ -433,7 +433,7 @@ function ConnectorSettingsForm({
   }, [kind.connector_type, needsRemote, prerequisitesReady, optionsAttempt]);
   const resolvedFields = kind.fields.map((field) => ({
       ...field,
-      options: resolveCatalogFieldOptions(
+      options: catalogFieldOptions(
         field,
         field.options,
         remoteOptions[field.key],

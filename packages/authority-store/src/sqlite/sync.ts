@@ -1541,7 +1541,9 @@ export async function applySyncCatalogPage(db: Database.Database, input: ApplySy
       return next;
     });
     const saved = apply.immediate();
-    rememberCatalogConversationNames(db, input.installation_id, saved.members);
+    // Only this page. The saved catalog already has older names, and rewriting
+    // every member on each page repeats the same updates for the whole census.
+    rememberCatalogConversationNames(db, input.installation_id, input.members);
     return saved;
   }
 
