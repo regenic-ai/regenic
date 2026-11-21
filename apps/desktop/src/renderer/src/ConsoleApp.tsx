@@ -37,7 +37,7 @@ import {
 } from "../../shared/connection-state.ts";
 import { NAV_SHORTCUTS, Sidebar } from "./console-chrome";
 import { connectorAlerts } from "./connector-alerts";
-import { engineRevision } from "./console-refresh";
+import { createRefreshJoin, engineRevision } from "./console-refresh";
 import { EnginePage } from "./EnginePage";
 import { engineChip, releaseOtherLivePulls } from "./format";
 import { buildShellStatus } from "./shell-status";
@@ -199,8 +199,7 @@ export function ConsoleApp() {
   navRef.current = nav;
   const selectedIdRef = useRef(selectedId);
   selectedIdRef.current = selectedId;
-  const refreshInFlight = useRef(false);
-  const refreshAgain = useRef(false);
+  const refreshJoin = useRef(createRefreshJoin());
   const workspaceEpoch = useRef(0);
   const inboxDigestRef = useRef<string | null>(null);
   const openedAtRef = useRef<Record<string, string>>({});
@@ -835,170 +834,165 @@ export function ConsoleApp() {
   };
 
   const refresh = useCallback(async () => {
-    if (refreshInFlight.current) {
-      refreshAgain.current = true;
-      return;
-    }
-    refreshInFlight.current = true;
-    try {
-      do {
-        refreshAgain.current = false;
-        const epoch = workspaceEpoch.current;
-        const detailed = navRef.current === "engine";
-        const pulse = await fetchRuntimePulse({
-          detailed,
-          current: engineRef.current,
-        });
-        const nextEngine = pulse.engine;
-        engineRef.current = nextEngine;
-        if (workspaceEpoch.current !== epoch) {
-          continue;
-        }
-        const digest = nextEngine.inbox_digest ?? "";
-        const requested = listViewRef.current;
-        const decision = decideInboxSync({
-          requestedList: requested,
-          lastFetchedList: lastFetchedListRef.current,
-          digest,
-          previousDigest: inboxDigestRef.current,
-          storeSize: listStoreRef.current.size,
-          now: Date.now(),
-          lastFullAt: lastFullRef.current,
-        });
-        if (decision.mode !== "skip") {
-          const token = listStoreRef.current.token;
-          const page = await fetchInboxHeads(
-            inboxHeadsRequest({
-              decision,
-              list: requested,
-              pageSize: LIST_HEADS_PAGE_SIZE,
-              previousDigest: inboxDigestRef.current,
-            }),
-          );
+    await refreshJoin.current.run(async () => {
+      try {
+        do {
+          refreshJoin.current.beginPass();
+          const epoch = workspaceEpoch.current;
+          const detailed = navRef.current === "engine";
+          const pulse = await fetchRuntimePulse({
+            detailed,
+            current: engineRef.current,
+          });
+          const nextEngine = pulse.engine;
+          engineRef.current = nextEngine;
           if (workspaceEpoch.current !== epoch) {
             continue;
           }
-          if (listViewRef.current !== requested) {
-            listHeadsCacheRef.current = rememberInboxListHeads(
-              listHeadsCacheRef.current,
-              requested,
-              headsPageCacheEntry(page),
-              false,
-            );
-            const cached = listHeadsCacheRef.current[requested];
-            if (cached) {
-              setOtherListItems(cached.items);
-            }
-            continue;
-          }
-          if (!listStoreRef.current.acceptsList(token)) {
-            listHeadsCacheRef.current = rememberInboxListHeads(
-              listHeadsCacheRef.current,
-              requested,
-              headsPageCacheEntry(page),
-              false,
-            );
-            continue;
-          }
-          const fact = inboxHeadsFact({
-            decision,
-            page,
-            list: requested,
-            pageSize: LIST_HEADS_PAGE_SIZE,
+          const digest = nextEngine.inbox_digest ?? "";
+          const requested = listViewRef.current;
+          const decision = decideInboxSync({
+            requestedList: requested,
+            lastFetchedList: lastFetchedListRef.current,
+            digest,
+            previousDigest: inboxDigestRef.current,
+            storeSize: listStoreRef.current.size,
+            now: Date.now(),
+            lastFullAt: lastFullRef.current,
           });
-          await commitHeads(fact);
-          if (
-            workspaceEpoch.current !== epoch ||
-            listViewRef.current !== requested ||
-            !listStoreRef.current.acceptsList(token)
-          ) {
-            continue;
-          }
-          const clocks = nextInboxSyncClocks(
-            {
-              digest: inboxDigestRef.current,
-              lastFullAt: lastFullRef.current,
-              lastFetchedList: lastFetchedListRef.current,
-            },
-            {
-              fact,
-              digest,
-              list: requested,
-              now: Date.now(),
-            },
-          );
-          inboxDigestRef.current = clocks.digest;
-          lastFullRef.current = clocks.lastFullAt;
-          lastFetchedListRef.current = clocks.lastFetchedList;
-        }
-        const openId = selectedIdRef.current;
-        if (openId) {
-          const openMessages = messagesRef.current[openId] ?? [];
-          const openBusy =
-            openInFlightSeq.current[openId] != null &&
-            !loadedThreadsRef.current.has(openId);
-          const skipOpenPoll =
-            sseConnectedRef.current &&
-            loadedThreadsRef.current.has(openId) &&
-            !threadHasPendingImagePreviews(openMessages);
-          if (openBusy) {
-            // A cold open is already reading this thread. Starting another
-            // would bump the generation and discard the page in flight.
-          } else if (!skipOpenPoll) {
-            const knownOpen =
-              loadedThreadsRef.current.has(openId) || openMessages.length > 0;
-            const loaded = await ensureThread(
-              openId,
-              knownOpen ? "poll" : "open",
+          if (decision.mode !== "skip") {
+            const token = listStoreRef.current.token;
+            const page = await fetchInboxHeads(
+              inboxHeadsRequest({
+                decision,
+                list: requested,
+                pageSize: LIST_HEADS_PAGE_SIZE,
+                previousDigest: inboxDigestRef.current,
+              }),
             );
             if (workspaceEpoch.current !== epoch) {
               continue;
             }
-            if (loadedThreadsRef.current.has(openId)) {
-              maybeRefreshOpenedReceipts(openId);
+            if (listViewRef.current !== requested) {
+              listHeadsCacheRef.current = rememberInboxListHeads(
+                listHeadsCacheRef.current,
+                requested,
+                headsPageCacheEntry(page),
+                false,
+              );
+              const cached = listHeadsCacheRef.current[requested];
+              if (cached) {
+                setOtherListItems(cached.items);
+              }
+              continue;
             }
-            await ackOpenThread(openId, loaded);
-          } else {
-            await ackOpenThread(openId, messagesRef.current[openId]);
+            if (!listStoreRef.current.acceptsList(token)) {
+              listHeadsCacheRef.current = rememberInboxListHeads(
+                listHeadsCacheRef.current,
+                requested,
+                headsPageCacheEntry(page),
+                false,
+              );
+              continue;
+            }
+            const fact = inboxHeadsFact({
+              decision,
+              page,
+              list: requested,
+              pageSize: LIST_HEADS_PAGE_SIZE,
+            });
+            await commitHeads(fact);
+            if (
+              workspaceEpoch.current !== epoch ||
+              listViewRef.current !== requested ||
+              !listStoreRef.current.acceptsList(token)
+            ) {
+              continue;
+            }
+            const clocks = nextInboxSyncClocks(
+              {
+                digest: inboxDigestRef.current,
+                lastFullAt: lastFullRef.current,
+                lastFetchedList: lastFetchedListRef.current,
+              },
+              {
+                fact,
+                digest,
+                list: requested,
+                now: Date.now(),
+              },
+            );
+            inboxDigestRef.current = clocks.digest;
+            lastFullRef.current = clocks.lastFullAt;
+            lastFetchedListRef.current = clocks.lastFetchedList;
           }
+          const openId = selectedIdRef.current;
+          if (openId) {
+            const openMessages = messagesRef.current[openId] ?? [];
+            const openBusy =
+              openInFlightSeq.current[openId] != null &&
+              !loadedThreadsRef.current.has(openId);
+            const skipOpenPoll =
+              sseConnectedRef.current &&
+              loadedThreadsRef.current.has(openId) &&
+              !threadHasPendingImagePreviews(openMessages);
+            if (openBusy) {
+              // A cold open is already reading this thread. Starting another
+              // would bump the generation and discard the page in flight.
+            } else if (!skipOpenPoll) {
+              const knownOpen =
+                loadedThreadsRef.current.has(openId) || openMessages.length > 0;
+              const loaded = await ensureThread(
+                openId,
+                knownOpen ? "poll" : "open",
+              );
+              if (workspaceEpoch.current !== epoch) {
+                continue;
+              }
+              if (loadedThreadsRef.current.has(openId)) {
+                maybeRefreshOpenedReceipts(openId);
+              }
+              await ackOpenThread(openId, loaded);
+            } else {
+              await ackOpenThread(openId, messagesRef.current[openId]);
+            }
+          }
+          if (workspaceEpoch.current !== epoch) {
+            continue;
+          }
+          delayRef.current = sseConnectedRef.current
+            ? SSE_FALLBACK_POLL_MS
+            : decision.mode === "skip"
+              ? IDLE_POLL_MS
+              : POLL_MS;
+          setEngine((current) => {
+            const merged =
+              current?.catalog?.length && !nextEngine.catalog?.length
+                ? { ...nextEngine, catalog: current.catalog }
+                : nextEngine;
+            const next = engineRevision(current, detailed) === engineRevision(merged, detailed)
+              ? current
+              : merged;
+            engineRef.current = next;
+            return next;
+          });
+          setReachability(pulse.reachability);
+          setError(
+            pulse.reachability === "offline"
+              ? translate("chrome.cannotReach", { origin: currentApiOrigin() })
+              : null,
+          );
+        } while (refreshJoin.current.passRequested());
+      } catch (caught) {
+        if (isKernelTimeoutError(caught)) {
+          setReachability("degraded");
+          setError(null);
+        } else {
+          setReachability("offline");
+          setError(translate("chrome.cannotReach", { origin: currentApiOrigin() }));
         }
-        if (workspaceEpoch.current !== epoch) {
-          continue;
-        }
-        delayRef.current = sseConnectedRef.current
-          ? SSE_FALLBACK_POLL_MS
-          : decision.mode === "skip"
-            ? IDLE_POLL_MS
-            : POLL_MS;
-        setEngine((current) => {
-          const merged =
-            current?.catalog?.length && !nextEngine.catalog?.length
-              ? { ...nextEngine, catalog: current.catalog }
-              : nextEngine;
-          const next = engineRevision(current, detailed) === engineRevision(merged, detailed)
-            ? current
-            : merged;
-          engineRef.current = next;
-          return next;
-        });
-        setReachability(pulse.reachability);
-        setError(
-          pulse.reachability === "offline"
-            ? translate("chrome.cannotReach", { origin: currentApiOrigin() })
-            : null,
-        );
-      } while (refreshAgain.current);
-    } catch (caught) {
-      if (isKernelTimeoutError(caught)) {
-        setReachability("degraded");
-        setError(null);
-      } else {
-        setReachability("offline");
-        setError(translate("chrome.cannotReach", { origin: currentApiOrigin() }));
       }
-    } finally {
-      refreshInFlight.current = false;
-    }
+    });
   }, []);
 
   const localeReady = useRef(false);
@@ -1071,7 +1065,7 @@ export function ConsoleApp() {
     setListPending(true);
     setOtherListItems([]);
     setThreadError({});
-    refreshAgain.current = true;
+    refreshJoin.current.requestAgain();
     await refresh();
   }, [refresh]);
 
@@ -1103,7 +1097,7 @@ export function ConsoleApp() {
       },
       onInboxDigest: (digest) => {
         if (digest && digest !== inboxDigestRef.current) {
-          refreshAgain.current = true;
+          refreshJoin.current.requestAgain();
           void refresh();
           const openId = selectedIdRef.current;
           if (openId && loadedThreadsRef.current.has(openId)) {

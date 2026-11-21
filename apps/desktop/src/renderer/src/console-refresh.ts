@@ -1,5 +1,49 @@
 import type { PersonalEngineView } from "./types";
 
+/**
+ * Coalesces overlapping refreshes. A caller that arrives mid-flight waits until
+ * the current pass and the follow-up it requested have both finished.
+ */
+export function createRefreshJoin(): {
+  requestAgain(): void;
+  beginPass(): void;
+  passRequested(): boolean;
+  run(work: () => Promise<void>): Promise<void>;
+} {
+  let inFlight = false;
+  let again = false;
+  let tail: Promise<void> = Promise.resolve();
+
+  const join = {
+    requestAgain() {
+      again = true;
+    },
+    beginPass() {
+      again = false;
+    },
+    passRequested() {
+      return again;
+    },
+    run(work: () => Promise<void>): Promise<void> {
+      if (inFlight) {
+        again = true;
+        return tail.then(() => (again && !inFlight ? join.run(work) : undefined));
+      }
+      const job = (async () => {
+        inFlight = true;
+        try {
+          await work();
+        } finally {
+          inFlight = false;
+        }
+      })();
+      tail = job.then(() => undefined, () => undefined);
+      return job;
+    },
+  };
+  return join;
+}
+
 export function engineRevision(
   engine: PersonalEngineView | null,
   detailed: boolean,

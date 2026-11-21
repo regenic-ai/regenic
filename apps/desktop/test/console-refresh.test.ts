@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { engineRevision } from "../src/renderer/src/console-refresh.ts";
+import { createRefreshJoin, engineRevision } from "../src/renderer/src/console-refresh.ts";
 import type { ConnectorCatalogItem, PersonalEngineView } from "../src/renderer/src/types.ts";
 
 function engineWithCatalog(title: string, step: string): PersonalEngineView {
@@ -30,6 +30,52 @@ function engineWithCatalog(title: string, step: string): PersonalEngineView {
     executor_catalog: [],
   };
 }
+
+describe("refresh join", () => {
+  it("waits until the follow-up pass finishes", async () => {
+    const join = createRefreshJoin();
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let passes = 0;
+    const first = join.run(async () => {
+      do {
+        join.beginPass();
+        passes += 1;
+        if (passes === 1) await gate;
+      } while (join.passRequested());
+    });
+    await Promise.resolve();
+    let secondDone = false;
+    const second = join.run(async () => {
+      passes += 1;
+    }).then(() => {
+      secondDone = true;
+    });
+    await Promise.resolve();
+    assert.equal(secondDone, false);
+    assert.equal(passes, 1);
+    release();
+    await first;
+    await second;
+    assert.equal(passes, 2);
+    assert.equal(secondDone, true);
+  });
+
+  it("runs the queued pass when another refresh was requested mid-flight", async () => {
+    const join = createRefreshJoin();
+    let passes = 0;
+    await join.run(async () => {
+      do {
+        join.beginPass();
+        passes += 1;
+        if (passes === 1) join.requestAgain();
+      } while (join.passRequested());
+    });
+    assert.equal(passes, 2);
+  });
+});
 
 describe("engineRevision", () => {
   it("changes when resolved catalog copy changes", () => {
