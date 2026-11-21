@@ -299,6 +299,10 @@ export class InboxListStore {
         (id) => !pinnedSet.has(id) && !this.liveIds.includes(id),
       ),
     );
+    // A non-replace refresh only carries the first page. Remember whether
+    // the client had already walked to the end of a loaded tail before
+    // adopting that page's hasOlder flag.
+    const keepExhaustedTail = previousHistory.length > 0 && !this.hasOlder;
     this.nextBefore = fact.nextBefore;
     this.hasOlder = fact.hasOlder;
     const occupied = new Set([
@@ -338,6 +342,15 @@ export class InboxListStore {
         keep.push(id);
       }
       this.historyIds = keep;
+      if (keep.length > 0) {
+        const tail = headsCursorOf(takeHeads(this.catalog, keep));
+        if (tail) {
+          this.nextBefore = tail;
+        }
+        if (keepExhaustedTail) {
+          this.hasOlder = false;
+        }
+      }
     }
   }
 
