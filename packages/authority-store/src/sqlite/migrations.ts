@@ -1,4 +1,4 @@
-export const LATEST_SCHEMA_VERSION = 89;
+export const LATEST_SCHEMA_VERSION = 90;
 
 export const PRE_MERGE_LIFECYCLE_REPAIR_SQL = `
   ALTER TABLE work_items ADD COLUMN current_run_id TEXT REFERENCES work_runs(id);
@@ -1706,5 +1706,9 @@ export const MIGRATIONS = [
   {
     version: 89,
     sql: "ALTER TABLE recipes ADD COLUMN trigger_monthdays TEXT",
+  },
+  {
+    version: 90,
+    sql: "ALTER TABLE thread_heads ADD COLUMN display_name TEXT",
   },
 ] as const;

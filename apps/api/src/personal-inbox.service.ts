@@ -8,6 +8,7 @@ import {
   type CopyLocale,
   arrangeMessage,
   collectLatestInbound,
+  conversationDirectoryLabel,
   conversationId,
   inboxDigest,
   isExecutorSysoutBody,
@@ -764,23 +765,22 @@ export class PersonalInboxService {
       authority.listInstallations(orgId),
     ]);
     return rows.map((row) => {
-      const title = directoryName(row.pref_title);
-      const catalog = directoryName(row.catalog_label);
       let thread: ConversationThread;
       try {
         thread = parseConversationThread(row.thread_id);
       } catch {
         thread = { source: row.source, target: row.thread_id };
       }
+      const label = conversationDirectoryLabel(row);
       return {
         id: row.thread_id,
-        label: title || catalog || row.thread_id,
+        label: label.label,
         source: row.source,
         can_send: this.drivers.canSend(installations, thread),
         hidden: row.hidden,
         pinned: row.pinned,
         has_work: row.has_current_work,
-        ...(title || catalog ? { conversation_name: title || catalog } : {}),
+        ...(label.conversation_name ? { conversation_name: label.conversation_name } : {}),
       };
     });
   }
@@ -2461,9 +2461,5 @@ async function latestInboundByThread(
   return new Map([...fromSiblings, ...cached]);
 }
 
-
-function directoryName(value: string | null): string {
-  return value?.replace(/\s+/g, " ").trim() ?? "";
-}
 
 export { PersonalKernelStoppedError };

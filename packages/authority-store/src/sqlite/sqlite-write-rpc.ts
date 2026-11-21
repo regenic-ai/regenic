@@ -141,6 +141,7 @@ export const AUTHORITY_WRITE_METHODS = [
   "handoffAgentRun",
   "cancelAgentRun",
   "projectStandardUsage",
+  "rememberConversationNames",
   "putConversationPref",
   "setConversationVisibility",
   "setConversationPolicyHidden",

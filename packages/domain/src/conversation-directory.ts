@@ -1,3 +1,5 @@
+import { conversationId, surfaceFromParts } from "@regenic/connector-contract";
+
 /** A capped conversation-name lookup. It does not page message bodies. */
 export interface ConversationDirectoryQuery {
   q?: string;
@@ -12,11 +14,118 @@ export interface ConversationDirectoryEntry {
   thread_id: string;
   source: string;
   pref_title: string | null;
+  /** Name remembered from a message or a one-time label lookup. */
+  display_name: string | null;
   catalog_label: string | null;
   hidden: boolean;
   pinned: boolean;
   has_current_work: boolean;
   face_occurred_at: string;
+  face_event_id: string;
+  face_content_hash: string | null;
+}
+
+/** A chat title may replace a stored name. A prompt excerpt only fills a blank. */
+export type ConversationNameKind = "conversation" | "prompt";
+
+export interface ConversationNameUpdate {
+  thread_id: string;
+  display_name: string;
+  kind: ConversationNameKind;
+}
+
+export function collapsedConversationName(value: string | null | undefined): string {
+  return value?.replace(/\s+/g, " ").trim() ?? "";
+}
+
+/** Ids the directory used to show in place of a missing title. */
+export function opaqueConversationName(value: string, threadId?: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return true;
+  }
+  if (threadId && (trimmed === threadId.trim() || threadId.endsWith(`:${trimmed}`))) {
+    return true;
+  }
+  if (/^oc_[0-9a-f]+$/i.test(trimmed)) {
+    return true;
+  }
+  return /^session-[0-9a-f-]{8,}$/i.test(trimmed);
+}
+
+export function usableConversationName(
+  value: string | null | undefined,
+  threadId?: string,
+): string {
+  const name = collapsedConversationName(value);
+  if (!name || opaqueConversationName(name, threadId)) {
+    return "";
+  }
+  return name;
+}
+
+export function conversationDirectoryLabel(row: {
+  thread_id: string;
+  pref_title?: string | null;
+  display_name?: string | null;
+  catalog_label?: string | null;
+}): { label: string; conversation_name?: string } {
+  const name =
+    usableConversationName(row.pref_title, row.thread_id) ||
+    usableConversationName(row.catalog_label, row.thread_id) ||
+    usableConversationName(row.display_name, row.thread_id);
+  return name
+    ? { label: name, conversation_name: name }
+    : { label: row.thread_id };
+}
+
+export function shouldRememberConversationName(
+  current: string | null | undefined,
+  update: Pick<ConversationNameUpdate, "display_name" | "kind">,
+  threadId: string,
+): boolean {
+  const next = usableConversationName(update.display_name, threadId);
+  if (!next) {
+    return false;
+  }
+  const stored = usableConversationName(current, threadId);
+  if (!stored) {
+    return true;
+  }
+  if (update.kind === "prompt") {
+    return false;
+  }
+  return stored !== next;
+}
+
+/** Chat titles already carried on the ingested records. Message text is not a title. */
+export function conversationNamesFromRecords(
+  records: readonly {
+    source: string;
+    external_id: string;
+    occurred_at: string;
+    content?: ReadonlyArray<{ role?: string; media_type?: string; text?: string }>;
+  }[],
+): ConversationNameUpdate[] {
+  const byThread = new Map<string, ConversationNameUpdate & { at: string }>();
+  for (const record of records) {
+    const threadId = conversationId(record.source, record.external_id);
+    const surface = surfaceFromParts([...(record.content ?? [])]);
+    const conversation = usableConversationName(surface?.conversation_label, threadId);
+    if (!conversation) {
+      continue;
+    }
+    const current = byThread.get(threadId);
+    if (!current || record.occurred_at >= current.at) {
+      byThread.set(threadId, {
+        thread_id: threadId,
+        display_name: conversation,
+        kind: "conversation",
+        at: record.occurred_at,
+      });
+    }
+  }
+  return [...byThread.values()].map(({ at: _at, ...name }) => name);
 }
 
 export const CONVERSATION_DIRECTORY_DEFAULT_LIMIT = 40;
@@ -67,7 +176,7 @@ export function rankConversationDirectory(
 }
 
 function directoryFields(row: ConversationDirectoryEntry): string[] {
-  return [row.pref_title, row.catalog_label, row.thread_id]
+  return [row.pref_title, row.display_name, row.catalog_label, row.thread_id]
     .flatMap((field) => {
       const text = field?.trim().toLowerCase();
       return text ? [text] : [];
@@ -109,14 +218,16 @@ export function conversationDirectoryStatement(
   if (like) {
     where.push(`(
       lower(COALESCE(p.title, '')) LIKE ? ESCAPE '\\'
+      OR lower(COALESCE(th.display_name, '')) LIKE ? ESCAPE '\\'
       OR lower(COALESCE(m.label, '')) LIKE ? ESCAPE '\\'
       OR lower(th.thread_id) LIKE ? ESCAPE '\\'
     )`);
-    params.push(like.contains, like.contains, like.contains);
+    params.push(like.contains, like.contains, like.contains, like.contains);
   }
   const order = like
     ? `ORDER BY MAX(CASE
         WHEN lower(COALESCE(p.title, '')) LIKE ? ESCAPE '\\'
+          OR lower(COALESCE(th.display_name, '')) LIKE ? ESCAPE '\\'
           OR lower(COALESCE(m.label, '')) LIKE ? ESCAPE '\\'
           OR lower(th.thread_id) LIKE ? ESCAPE '\\'
         THEN 0 ELSE 1 END),
@@ -124,7 +235,7 @@ export function conversationDirectoryStatement(
       th.thread_id DESC`
     : "ORDER BY th.face_occurred_at DESC, th.thread_id DESC";
   if (like) {
-    params.push(like.prefix, like.prefix, like.prefix);
+    params.push(like.prefix, like.prefix, like.prefix, like.prefix);
   }
   params.push(conversationDirectoryLimit(query?.limit));
   return {
@@ -135,6 +246,9 @@ export function conversationDirectoryStatement(
         th.face_occurred_at AS face_occurred_at,
         th.has_current_work AS has_current_work,
         p.title AS pref_title,
+        th.display_name AS display_name,
+        th.face_event_id AS face_event_id,
+        e.content_hash AS face_content_hash,
         ${hidden.column} AS hidden,
         ${hidden.pinned} AS pinned,
         MAX(m.label) AS catalog_label
@@ -153,7 +267,9 @@ export function conversationDirectoryStatement(
         )
       WHERE ${where.join(" AND ")}
       GROUP BY
-        th.thread_id, e.source, th.face_occurred_at, th.has_current_work, p.title, ${hidden.column}, ${hidden.pinned}
+        th.thread_id, e.source, th.face_occurred_at, th.has_current_work, p.title,
+        th.display_name, th.face_event_id, e.content_hash,
+        ${hidden.column}, ${hidden.pinned}
       ${order}
       LIMIT ?
     `,

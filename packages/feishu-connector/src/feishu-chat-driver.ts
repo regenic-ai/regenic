@@ -828,7 +828,8 @@ async function listRecentFeishuChats(
 ): Promise<FeishuChat[]> {
   try {
     if (client.listRecentChats) {
-      return await client.listRecentChats(kinds, { names: false });
+      // /im/v1/chats already returns name. The flag only fills a p2p row that came back blank.
+      return await client.listRecentChats(kinds, { names: true });
     }
     if (client.listAllChats) {
       return await client.listAllChats(1, kinds);

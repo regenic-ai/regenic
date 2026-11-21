@@ -117,6 +117,23 @@ describe("conversation directory", () => {
       const recentPage = await reopened.searchConversationDirectory("local-owner", { limit: 1 });
       assert.equal(recentPage.length, 1);
       assert.equal(recentPage[0].thread_id, recentThread);
+      await reopened.rememberConversationNames("local-owner", [{
+        thread_id: quietThread,
+        display_name: "安静会话",
+        kind: "conversation",
+      }]);
+      await reopened.rememberConversationNames("local-owner", [{
+        thread_id: quietThread,
+        display_name: "不要覆盖",
+        kind: "prompt",
+      }]);
+      const remembered = await reopened.searchConversationDirectory("local-owner", {
+        q: "安静",
+      });
+      assert.equal(remembered.length, 1);
+      assert.equal(remembered[0].thread_id, quietThread);
+      assert.equal(remembered[0].display_name, "安静会话");
+      assert.equal(typeof remembered[0].face_event_id, "string");
     } finally {
       reopened.close();
     }

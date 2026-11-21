@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { loadRecipeConversations } from "../src/renderer/src/recipe-conversations.ts";
+import { loadRecipeConversations, mergeRecipeConversationOptions } from "../src/renderer/src/recipe-conversations.ts";
 import { conversationChoices, emptyDraft, writeBackAvailable, writeBackChoices } from "../src/renderer/src/recipe-draft.ts";
 import type { InboxHeadsPage } from "../src/renderer/src/api.ts";
 import type { InboxViewItem } from "../src/renderer/src/types.ts";
@@ -98,5 +98,28 @@ describe("recipe conversation discovery", () => {
     await assert.rejects(loadRecipeConversations(async () => {
       assert.fail("Cancelled searches must not issue requests");
     }, cancelled.signal), { name: "AbortError" });
+  });
+
+  it("keeps a known conversation name when a directory row only has an id", () => {
+    const named = {
+      id: "feishu:oc_49f69c535fcf3a9eb4c5eb246ac10671",
+      label: "合合信息camscanner-Bioby日报",
+      source: "feishu",
+      can_send: true,
+      has_work: false,
+      conversation_name: "合合信息camscanner-Bioby日报",
+    };
+    const merged = mergeRecipeConversationOptions(
+      [named],
+      [{ ...named, label: named.id, conversation_name: undefined }],
+    );
+    assert.equal(merged[0]?.label, "合合信息camscanner-Bioby日报");
+    assert.equal(merged[0]?.conversation_name, "合合信息camscanner-Bioby日报");
+    const renamed = mergeRecipeConversationOptions(merged, [{
+      ...named,
+      label: "CamScanner 日报",
+      conversation_name: "CamScanner 日报",
+    }]);
+    assert.equal(renamed[0]?.label, "CamScanner 日报");
   });
 });

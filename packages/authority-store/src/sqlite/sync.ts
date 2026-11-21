@@ -64,6 +64,7 @@ import {
   commitIngestUnlocked,
 } from "./events";
 import {
+  rememberCatalogConversationNames,
   setConversationPolicyVisibilityUnlocked,
   putDispositionIfAbsentWithinTransaction,
 } from "./inbox";
@@ -1539,7 +1540,9 @@ export async function applySyncCatalogPage(db: Database.Database, input: ApplySy
       }
       return next;
     });
-    return apply.immediate();
+    const saved = apply.immediate();
+    rememberCatalogConversationNames(db, input.installation_id, saved.members);
+    return saved;
   }
 
 export async function noteSyncCatalogStream(db: Database.Database, input: NoteSyncCatalogStreamInput): Promise<void> {
