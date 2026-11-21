@@ -479,12 +479,17 @@ export function workRevision(item: Pick<InboxViewItem, "work">): string {
   return [
     work.id,
     work.status,
+    String(work.version ?? ""),
+    work.run_id ?? "",
+    work.acknowledged_run_id ?? "",
     work.has_result ? "1" : "0",
     work.can_write_back === false ? "0" : "1",
     work.updated_at ?? "",
     delivery?.status ?? "",
     delivery?.write_back ?? "",
+    String(delivery?.version ?? ""),
     String(delivery?.attempts ?? 0),
+    delivery?.last_error ?? "",
   ].join("\t");
 }
 

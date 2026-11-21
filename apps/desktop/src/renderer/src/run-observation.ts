@@ -99,6 +99,20 @@ export function mentionsUnsent(text: string): boolean {
   return /未代发|没有代发|没有发出|没有发送|未发送|没有回复对方|was not sent|did not send/i.test(text);
 }
 
+const SEND_EXCEPTION_LIMIT = 280;
+
+/** Channel rejection for a send that did not land. Empty when delivery is settled. */
+export function sendException(
+  run: Pick<RecipeLastRun, "status" | "summary" | "delivery">,
+): string | null {
+  const action = runAction(run);
+  if (action !== "uncertain" && action !== "send_failed") return null;
+  const error = run.delivery?.last_error?.replace(/\s+/g, " ").trim();
+  if (!error) return null;
+  if (error.length <= SEND_EXCEPTION_LIMIT) return error;
+  return `${error.slice(0, SEND_EXCEPTION_LIMIT - 1).trimEnd()}…`;
+}
+
 function deliveryAction(delivery: {
   status: WorkDeliveryStatus;
   write_back: WorkWriteBackState;

@@ -11,6 +11,7 @@ import {
   parseRunText,
   runAction,
   runClockCopy,
+  sendException,
   runElapsedMs,
   runStatusLabel,
   sameTaskText,
@@ -354,6 +355,7 @@ export function RunCard({
   const text = parseRunText(run.summary);
   const action = runAction(run);
   const actionLink = action ? actionLinkCopy(action, t) : null;
+  const exception = compact ? null : sendException(run);
 
   useEffect(() => setOpen(processOpen), [processOpen, run.run_id]);
   useEffect(() => {
@@ -448,6 +450,7 @@ export function RunCard({
           ) : null}
         </p>
       ) : null}
+      {exception ? <p className="run-exception" role="alert">{exception}</p> : null}
       {!compact && staleCount > 0 ? (
         <button type="button" className="run-stale" onClick={onRevealStale} disabled={!onRevealStale}>
           <span aria-hidden="true">⚠</span>
