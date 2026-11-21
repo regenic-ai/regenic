@@ -20,8 +20,7 @@ import {
 import { nextMessageSelection, selectedInOrder } from "./message-selection";
 import type { CreateTarget } from "./inbox-drafts";
 import { WorkContextStrip } from "./WorkContextStrip";
-import { WorkResultCard } from "./WorkResultCard";
-import { AgentReadsCard } from "./AgentReadsCard";
+import { ThreadRunCard } from "./ThreadRuns";
 import { PromptHandoffDock } from "./PromptHandoffDock";
 import { ThreadPromptPanel } from "./ThreadPromptPanel";
 import { threadSyncLabel, threadSyncTone } from "./format";
@@ -458,8 +457,18 @@ export const ThreadPane = memo(function ThreadPane({
         ? workNextStepCopy(thread)
         : null;
   const heading = threadTitle(thread);
-  const workResult = resultSummary ? (
-    <WorkResultCard key={`${thread.id}:${resultSummary}`} text={resultSummary} />
+  const revealEvent = (eventId: string) => {
+    listRef.current?.scrollToEvent(eventId);
+  };
+  const runCard = (compact: boolean) => thread.work?.run_id ? (
+    <ThreadRunCard
+      key={`${thread.id}:${thread.work.run_id}`}
+      work={thread.work}
+      heading={heading}
+      messages={merged}
+      compact={compact}
+      onRevealEvent={revealEvent}
+    />
   ) : null;
   const showComposerDock =
     selectedIds.length > 0 ||
@@ -739,11 +748,8 @@ export const ThreadPane = memo(function ThreadPane({
             ) : null}
           </div>
           {workHint ? <p className="work-hint">{workHint}</p> : null}
-          {thread.work?.run_id ? (
-            <AgentReadsCard runId={thread.work.run_id} revision={thread.work.updated_at} />
-          ) : null}
           {/* When a prompt is up, fold the result into the dock — avoid two dense cards. */}
-          {!conversationClosed && !awaitingPrompt ? workResult : null}
+          {!conversationClosed ? runCard(awaitingPrompt) : null}
         </div>
         {findOpen ? (
           <ThreadFindBar
@@ -885,8 +891,8 @@ export const ThreadPane = memo(function ThreadPane({
               }}
             />
             </>
-          ) : conversationClosed && resultSummary && !forward ? (
-            workResult
+          ) : conversationClosed && thread.work?.run_id && !forward ? (
+            runCard(false)
           ) : conversationClosed && !forward && !activityNote ? (
             <p className="thread-activity">{t("composer.unavailable")}</p>
           ) : null}

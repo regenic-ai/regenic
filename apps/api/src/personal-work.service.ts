@@ -55,11 +55,12 @@ import {
   type WorkRun,
   type WorkRunStartCommand,
   type WorkRunStatus,
+  type WorkDelivery,
   type WorkDeliveryRetrySnapshot,
   type WorkDeliveryCommand,
   type WorkStore,
 } from "@regenic/domain";
-import { resolveInboxBodies } from "./inbox-body";
+import { resolveInboxBodies, resolveInboxBody } from "./inbox-body";
 import { PersonalConnectorError, storeBusyError } from "./personal-errors";
 import { PersonalInboxService } from "./personal-inbox.service";
 import { PersonalExecutorService } from "./personal-executor.service";
@@ -133,10 +134,24 @@ export interface WorkRunView {
 }
 
 export interface RecipeLastRun {
+  run_id: string;
   status: WorkRunStatus;
+  started_at: string;
   at: string;
   summary?: string;
   thread_id?: string;
+  executor_type: string;
+  trigger_kind?: WorkRun["trigger_kind"];
+  delivery?: Pick<WorkDelivery, "status" | "write_back" | "last_error"> & {
+    /** True only when the channel accepted the outbound message. */
+    accepted?: boolean;
+  };
+}
+
+export interface WorkRunDetailView {
+  run: RecipeLastRun;
+  task?: string;
+  trigger_text?: string;
 }
 
 export interface RecipeView extends Recipe {
@@ -343,6 +358,64 @@ export class PersonalWorkService implements OnModuleDestroy {
   /** What the agent looked up in chats while working this run. */
   async workRunReads(runId: string) {
     return { run_id: runId, reads: await this.contextAccess.reads(runId) };
+  }
+
+  /** Every run of one work item, newest first. */
+  async workItemRuns(workItemId: string): Promise<{ runs: RecipeLastRun[] }> {
+    const host = this.runtime.requireHost();
+    const authority = host.get("authority");
+    const orgId = this.runtime.orgId();
+    const item = await authority.getWorkItem(orgId, workItemId);
+    if (!item || isSystemRecipeId(item.recipe_id)) {
+      throw new PersonalConnectorError("not_found", "Work item not found", 404);
+    }
+    const [runs, deliveries] = await Promise.all([
+      authority.listWorkRuns(orgId, item.id),
+      authority.listWorkDeliveries(orgId),
+    ]);
+    const deliveryByRun = deliveriesByRun(
+      deliveries.filter((delivery) => delivery.work_item_id === item.id),
+    );
+    return {
+      runs: runs
+        .filter((run) => run.work_item_id === item.id)
+        .sort(newestRunsFirst)
+        .map((run) => runObservation(run, item.thread_id, deliveryByRun.get(run.id))),
+    };
+  }
+
+  /** One run with the task text frozen on it and the first line of what triggered it. */
+  async workRunDetail(runId: string): Promise<WorkRunDetailView> {
+    const host = this.runtime.requireHost();
+    const authority = host.get("authority");
+    const orgId = this.runtime.orgId();
+    const run = await authority.getWorkRun(orgId, runId);
+    const item = run ? await authority.getWorkItem(orgId, run.work_item_id) : null;
+    if (!run || !item) {
+      throw new PersonalConnectorError("not_found", "Work run not found", 404);
+    }
+    const deliveries = (await authority.listWorkDeliveries(orgId))
+      .filter((delivery) => delivery.run_id === run.id);
+    const task = taskInstructionOf(run.executor_config);
+    const triggerText = run.trigger_kind === "pull"
+      ? undefined
+      : await this.triggerLine(item.head_event_id);
+    return {
+      run: runObservation(run, item.thread_id, deliveriesByRun(deliveries).get(run.id)),
+      ...(task ? { task } : {}),
+      ...(triggerText ? { trigger_text: triggerText } : {}),
+    };
+  }
+
+  private async triggerLine(eventId: string | undefined): Promise<string | undefined> {
+    if (!eventId) return undefined;
+    const host = this.runtime.requireHost();
+    const authority = host.get("authority");
+    const event = await authority.getEvent(this.runtime.orgId(), eventId);
+    if (!event?.content_hash) return undefined;
+    const body = await resolveInboxBody(authority, host.get("blobs"), event.content_hash, "meta");
+    const line = body.body_text?.split(/\r?\n/).find((part) => part.trim())?.trim();
+    return line ? line.slice(0, TRIGGER_LINE_MAX) : undefined;
   }
 
   async getPersonalDispatchPolicy(): Promise<PersonalDispatchPolicy> {
@@ -771,19 +844,22 @@ export class PersonalWorkService implements OnModuleDestroy {
     const host = this.runtime.requireHost();
     const orgId = this.runtime.orgId();
     const authority = host.get("authority");
-    const [recipes, runs, items] = await Promise.all([
+    const [recipes, runs, items, deliveries] = await Promise.all([
       authority.listRecipes(orgId),
       authority.listWorkRuns(orgId),
       authority.listWorkItems(orgId),
+      authority.listWorkDeliveries(orgId),
     ]);
     const threadByWorkItem = new Map(
       items.map((item) => [item.id, item.thread_id] as const),
     );
+    const deliveryByRun = deliveriesByRun(deliveries);
     return recipes.filter((recipe) => !isSystemRecipeId(recipe.id)).map((recipe) => {
       const recent_runs = recentRunsForRecipe(
         runs,
         recipe.id,
         threadByWorkItem,
+        deliveryByRun,
       );
       return {
         ...recipe,
@@ -2137,6 +2213,7 @@ export class PersonalWorkService implements OnModuleDestroy {
 }
 
 const RECIPE_RECENT_RUN_LIMIT = 5;
+const TRIGGER_LINE_MAX = 200;
 
 class CancellationJobLeaseLostError extends Error {}
 
@@ -2219,32 +2296,71 @@ function cancellationErrorCode(error: unknown): string {
   return /^[a-z0-9_]{1,120}$/i.test(candidate) ? candidate : error.name || "cancellation_failed";
 }
 
+function newestRunsFirst(left: WorkRun, right: WorkRun): number {
+  return left.updated_at < right.updated_at
+    ? 1
+    : left.updated_at > right.updated_at
+      ? -1
+      : 0;
+}
+
+function deliveriesByRun(deliveries: WorkDelivery[]): Map<string, WorkDelivery> {
+  const byRun = new Map<string, WorkDelivery>();
+  for (const delivery of deliveries) {
+    if (!delivery.run_id) continue;
+    const previous = byRun.get(delivery.run_id);
+    if (!previous || previous.updated_at < delivery.updated_at) {
+      byRun.set(delivery.run_id, delivery);
+    }
+  }
+  return byRun;
+}
+
+export function runObservation(
+  run: WorkRun,
+  threadId: string | undefined,
+  delivery: WorkDelivery | undefined,
+): RecipeLastRun {
+  const summary = run.result?.summary?.trim();
+  const thread_id = threadId?.trim();
+  return {
+    run_id: run.id,
+    status: run.status,
+    started_at: run.created_at,
+    at: run.updated_at,
+    ...(summary ? { summary } : {}),
+    ...(thread_id ? { thread_id } : {}),
+    executor_type: run.executor_type,
+    ...(run.trigger_kind ? { trigger_kind: run.trigger_kind } : {}),
+    ...(delivery
+      ? {
+          delivery: {
+            status: delivery.status,
+            write_back: delivery.write_back,
+            ...(delivery.channel_receipt?.accepted === true ? { accepted: true } : {}),
+            ...(delivery.last_error ? { last_error: delivery.last_error } : {}),
+          },
+        }
+      : {}),
+  };
+}
+
 function recentRunsForRecipe(
   runs: WorkRun[],
   recipeId: string,
   threadByWorkItem: Map<string, string>,
+  deliveries: Map<string, WorkDelivery>,
   limit = RECIPE_RECENT_RUN_LIMIT,
 ): RecipeLastRun[] {
   return runs
     .filter((run) => run.recipe_id === recipeId)
-    .sort((left, right) =>
-      left.updated_at < right.updated_at
-        ? 1
-        : left.updated_at > right.updated_at
-          ? -1
-          : 0,
-    )
+    .sort(newestRunsFirst)
     .slice(0, limit)
-    .map((run) => {
-      const summary = run.result?.summary?.trim();
-      const thread_id = threadByWorkItem.get(run.work_item_id)?.trim();
-      return {
-        status: run.status,
-        at: run.updated_at,
-        ...(summary ? { summary } : {}),
-        ...(thread_id ? { thread_id } : {}),
-      };
-    });
+    .map((run) => runObservation(
+      run,
+      threadByWorkItem.get(run.work_item_id),
+      deliveries.get(run.id),
+    ));
 }
 
 function missingCatalogFields(

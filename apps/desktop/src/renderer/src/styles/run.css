@@ -1,0 +1,902 @@
+.run-card {
+  --run-fill: var(--elevated);
+  margin: 10px 0 0;
+  max-width: 52em;
+  padding: 12px 16px;
+  border-radius: var(--radius-card);
+  background: var(--run-fill);
+  box-shadow: var(--shadow-inline);
+  display: grid;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.run-card,
+.run-card * {
+  -webkit-app-region: no-drag;
+}
+
+.run-card.is-compact {
+  padding: 8px 14px;
+  gap: 4px;
+}
+
+.composer-dock .run-card {
+  margin: 0;
+  max-width: none;
+}
+
+.run-status-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
+}
+
+.run-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.run-icon {
+  flex-shrink: 0;
+}
+
+.run-icon.is-spin {
+  animation: run-spin 900ms linear infinite;
+}
+
+@keyframes run-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.run-status-line.is-done .run-icon {
+  color: var(--green);
+}
+
+.run-status-line.is-failed .run-status {
+  color: var(--risk);
+}
+
+.run-status-line.is-running .run-status {
+  color: var(--teal);
+}
+
+.run-status-line.is-waiting .run-status {
+  color: var(--blue-text);
+}
+
+.run-status-line.is-muted .run-status {
+  color: var(--muted);
+}
+
+.run-status-line > * + *:not(.run-status-trailing)::before {
+  content: "·";
+  margin-right: 8px;
+  color: var(--subtle);
+}
+
+.run-status-line.is-slow .run-clock,
+.run-slow {
+  color: var(--orange);
+}
+
+.run-status-trailing {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.run-collapse {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.run-collapse svg {
+  transform: rotate(180deg);
+}
+
+.run-collapse:hover {
+  background: var(--wash-6);
+  color: var(--text);
+}
+
+/* Thread: one-line bar, expands into the card */
+.run-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  max-width: 52em;
+  min-height: 34px;
+  margin: 10px 0 0;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--elevated);
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  line-height: 16px;
+  text-align: left;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+  transition: background var(--dur-slow) var(--ease-out);
+}
+
+.run-bar:hover {
+  background: color-mix(in srgb, var(--elevated) 70%, var(--wash-6));
+}
+
+.run-bar:focus-visible {
+  outline: 2px solid var(--blue-text);
+  outline-offset: 1px;
+}
+
+.run-bar .run-status {
+  flex-shrink: 0;
+  font-weight: 600;
+}
+
+.run-bar.is-done .run-icon {
+  color: var(--green);
+}
+
+.run-bar.is-failed .run-status {
+  color: var(--risk);
+}
+
+.run-bar.is-running .run-status {
+  color: var(--teal);
+}
+
+.run-bar.is-waiting .run-status {
+  color: var(--blue-text);
+}
+
+.run-bar.is-muted .run-status {
+  color: var(--muted);
+}
+
+.run-bar-meta {
+  display: inline-flex;
+  gap: 8px;
+  flex-shrink: 0;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.run-bar-meta > * + *::before {
+  content: "·";
+  margin-right: 8px;
+  color: var(--subtle);
+}
+
+.run-bar-preview {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: color-mix(in srgb, var(--text) 80%, var(--muted));
+  font-size: 13px;
+}
+
+.run-bar-stale {
+  flex-shrink: 0;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--orange) 10%, transparent);
+  color: var(--orange);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.run-bar .run-caret {
+  flex-shrink: 0;
+  color: var(--muted);
+}
+
+.composer-dock .run-bar {
+  margin: 0;
+  max-width: none;
+}
+
+.run-card.is-thread {
+  max-height: min(45vh, 440px);
+  overflow: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--line);
+  box-shadow: none;
+}
+
+.run-copy {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.run-copy:hover {
+  color: var(--text);
+}
+
+.run-label {
+  margin: 0;
+  color: var(--risk);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.run-conclusion {
+  position: relative;
+}
+
+.run-conclusion-clip.is-collapsed {
+  max-height: 4.5em;
+  overflow: hidden;
+}
+
+.run-conclusion-clip.is-expanded {
+  max-height: 40vh;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding-right: 4px;
+}
+
+.run-conclusion .rich-body {
+  font-size: 13px;
+  line-height: 1.5;
+  max-width: none;
+}
+
+.run-conclusion-fade {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 22px;
+  height: 2.2em;
+  pointer-events: none;
+  background: linear-gradient(to bottom, transparent, var(--run-fill));
+}
+
+.run-conclusion:not(:has(.run-toggle)) .run-conclusion-fade {
+  bottom: 0;
+}
+
+.run-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.run-toggle:hover {
+  color: var(--text);
+}
+
+.run-caret {
+  display: inline-flex;
+  transition: transform var(--dur-slow) var(--ease-out);
+}
+
+.run-toggle.is-open .run-caret {
+  transform: rotate(180deg);
+}
+
+.run-caret.is-side {
+  transform: rotate(-90deg);
+}
+
+.run-toggle.is-open .run-caret.is-side {
+  transform: rotate(0deg);
+}
+
+.run-thinking,
+.run-empty {
+  margin: 0;
+  color: var(--muted);
+}
+
+.run-progress {
+  display: grid;
+  gap: 6px;
+}
+
+.run-progress .run-reads {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--wash-6);
+}
+
+.run-thinking {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.run-thinking-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--teal);
+  animation: run-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes run-pulse {
+  50% {
+    opacity: 0.3;
+  }
+}
+
+.run-action {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.run-action.is-replied {
+  color: var(--green);
+}
+
+.run-action.is-partial,
+.run-action.is-suggested {
+  color: var(--text);
+}
+
+.run-action.is-send_failed,
+.run-action.is-uncertain {
+  color: var(--risk);
+}
+
+.run-action.is-decide {
+  color: var(--blue-text);
+}
+
+.run-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--blue-text);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.run-link:hover {
+  text-decoration: underline;
+}
+
+.run-stale {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  justify-self: start;
+  padding: 3px 8px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--orange) 10%, transparent);
+  color: var(--orange);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.run-stale:not(:disabled):hover {
+  background: color-mix(in srgb, var(--orange) 16%, transparent);
+}
+
+.run-process-toggle {
+  margin-top: 0;
+}
+
+.run-process-body {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 14px;
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--wash-6);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.run-process-body dt {
+  color: var(--muted);
+}
+
+.run-process-body dd {
+  margin: 0;
+  min-width: 0;
+}
+
+.run-process-body .rich-body {
+  font-size: 12px;
+}
+
+.run-process-muted {
+  margin: 0;
+  color: var(--muted);
+}
+
+.run-reads {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 4px;
+}
+
+.run-reads li {
+  display: flex;
+  gap: 8px;
+}
+
+.run-task-text {
+  margin: 0;
+  white-space: pre-wrap;
+  max-height: 3em;
+  overflow: hidden;
+}
+
+.run-task-text.is-open {
+  max-height: none;
+}
+
+.run-task-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.run-badge {
+  padding: 0 6px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--orange) 12%, transparent);
+  color: var(--orange);
+  font-size: 11px;
+  line-height: 18px;
+}
+
+/* Earlier processing */
+.run-earlier {
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+
+.run-earlier-list {
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 2px;
+}
+
+.run-row {
+  display: grid;
+  grid-template-columns: auto auto auto 1fr;
+  align-items: center;
+  gap: 2px 12px;
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: 8px;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  line-height: 16px;
+  text-align: left;
+  font-variant-numeric: tabular-nums;
+}
+
+.run-row:hover,
+.run-row.is-current {
+  background: var(--wash-6);
+}
+
+.run-row .run-status {
+  font-weight: 600;
+}
+
+.run-row .run-row-when,
+.run-row .run-row-took {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.run-row-summary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: color-mix(in srgb, var(--text) 80%, var(--muted));
+}
+
+.run-row.is-done .run-icon {
+  color: var(--green);
+}
+
+.run-row.is-failed .run-status {
+  color: var(--risk);
+}
+
+.run-row.is-running .run-status {
+  color: var(--teal);
+}
+
+.run-row.is-waiting .run-status {
+  color: var(--blue-text);
+}
+
+.run-row.is-muted .run-status {
+  color: var(--muted);
+}
+
+.run-earlier .run-card {
+  margin: 4px 0 6px;
+  box-shadow: none;
+  background: var(--wash-6);
+  --run-fill: transparent;
+}
+
+/* Automation health and rows */
+.run-history {
+  display: grid;
+  gap: 8px;
+  margin: 24px 36px 0;
+}
+
+.run-history-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+
+.run-history-title {
+  margin: 0;
+  color: var(--text);
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 600;
+}
+
+.run-health {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
+}
+
+.run-health.is-failed {
+  color: var(--risk);
+}
+
+.run-history-box {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.run-history-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.run-history-list li + li {
+  border-top: 1px solid var(--line);
+}
+
+.run-history-row {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto 7.5em 5.5em 12px;
+  align-items: center;
+  column-gap: 12px;
+  width: 100%;
+  min-height: 38px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  line-height: 18px;
+  text-align: left;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: background var(--dur-slow) var(--ease-out);
+}
+
+.run-history-row:hover,
+.run-history-row.is-current {
+  background: var(--wash-6);
+}
+
+.run-history-row:focus-visible {
+  outline: 2px solid var(--blue-text);
+  outline-offset: -2px;
+}
+
+.run-row-icon {
+  display: inline-flex;
+  justify-content: center;
+  color: var(--muted);
+}
+
+.run-history-row.is-done .run-row-icon {
+  color: var(--green);
+}
+
+.run-history-row.is-failed .run-row-icon {
+  color: var(--risk);
+}
+
+.run-history-row.is-running .run-row-icon {
+  color: var(--teal);
+}
+
+.run-history-row.is-waiting .run-row-icon {
+  color: var(--blue-text);
+}
+
+.run-history-row .run-row-summary {
+  color: var(--text);
+}
+
+.run-history-row.is-muted .run-row-summary {
+  color: var(--muted);
+}
+
+.run-history-row .run-row-action {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.run-history-row .run-row-action.is-replied {
+  color: var(--green);
+}
+
+.run-history-row .run-row-action.is-partial,
+.run-history-row .run-row-action.is-suggested {
+  color: var(--text);
+}
+
+.run-history-row .run-row-action.is-send_failed,
+.run-history-row .run-row-action.is-uncertain {
+  color: var(--risk);
+}
+
+.run-history-row .run-row-action.is-decide {
+  color: var(--blue-text);
+}
+
+.run-history-row .run-row-when,
+.run-history-row .run-row-took {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+  text-align: right;
+}
+
+.run-row-caret {
+  display: inline-flex;
+  color: var(--subtle);
+  transform: rotate(-90deg);
+}
+
+.run-history-row:hover .run-row-caret {
+  color: var(--muted);
+}
+
+.run-history-more {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  width: 100%;
+  min-height: 34px;
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.run-history-more:hover {
+  background: var(--wash-6);
+  color: var(--text);
+}
+
+.run-history-more.is-open .run-caret {
+  transform: rotate(180deg);
+}
+
+@media (max-width: 720px) {
+  .run-history {
+    margin: 20px 20px 0;
+  }
+
+  .run-history-row {
+    grid-template-columns: 16px minmax(0, 1fr) auto 12px;
+  }
+
+  .run-history-row .run-row-action,
+  .run-history-row .run-row-took {
+    display: none;
+  }
+}
+
+/* Run detail panel */
+.run-panel-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: color-mix(in srgb, var(--ink, #1c1c1c) 12%, transparent);
+  animation: run-fade var(--dur-slow) var(--ease-out);
+}
+
+.run-panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 41;
+  width: min(520px, 92vw);
+  display: flex;
+  flex-direction: column;
+  background: var(--elevated);
+  box-shadow: var(--shadow-pop);
+  animation: run-slide var(--dur-slower) var(--ease-out);
+  -webkit-app-region: no-drag;
+}
+
+.run-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 18px 20px 10px;
+}
+
+.run-panel-head h2 {
+  flex: 1;
+  margin: 0;
+  font-size: 15px;
+  outline: none;
+}
+
+.run-panel-nav {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.run-panel-body {
+  flex: 1;
+  overflow: auto;
+  padding: 0 20px 16px;
+}
+
+.run-panel-body .run-card {
+  margin: 0;
+  max-width: none;
+  box-shadow: none;
+  padding: 0;
+  --run-fill: var(--elevated);
+}
+
+.run-panel-body .run-conclusion-clip.is-collapsed {
+  max-height: none;
+  overflow: visible;
+}
+
+.run-panel-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 20px 18px;
+  border-top: 1px solid var(--line);
+}
+
+@keyframes run-slide {
+  from {
+    transform: translateX(24px);
+    opacity: 0;
+  }
+}
+
+@keyframes run-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+/* Ask */
+.ask-turn-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  margin: 4px 0 0 36px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
+}
+
+.ask-turn-meta .run-reads {
+  flex-basis: 100%;
+  margin-top: 4px;
+}
+
+.ask-thinking-clock {
+  margin-left: 4px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.ask-rail-state {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
+.ask-rail-state.is-failed {
+  color: var(--risk);
+}
+
+.ask-rail-state.is-running {
+  color: var(--teal);
+}
+
+.ask-rail-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .run-icon.is-spin,
+  .run-thinking-dot,
+  .run-panel,
+  .run-panel-scrim {
+    animation: none;
+  }
+}

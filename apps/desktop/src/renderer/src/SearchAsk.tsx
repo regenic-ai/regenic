@@ -7,8 +7,9 @@ import {
   startSearchQuestion,
   type SearchQuestion,
 } from "./api";
-import { AgentReadsCard } from "./AgentReadsCard";
 import { askSpeech } from "./ask-speech";
+import { AskTurns, askTurns } from "./AskTurns";
+import { RunStatusIcon } from "./RunCard";
 import { ArrowUpIcon, ChevronIcon, CloseIcon, PlusIcon, SparkleIcon } from "./Icons";
 import { KernelRequestError } from "./kernel-request";
 import { MessageBody } from "./MessageBody";
@@ -26,6 +27,7 @@ interface StoredQuestion {
   scopeThreadId?: string;
   scopeTitle?: string;
   executorType?: string;
+  askedAt?: string;
 }
 
 function loadQuestions(): StoredQuestion[] {
@@ -238,6 +240,7 @@ export function SearchAsk({ scope, scopeNonce = 0, onClearScope }: {
   const [items, setItems] = useState<InboxViewItem[]>([]);
   const [agents, setAgents] = useState<Array<{ value: string; label: string }>>([]);
   const [agent, setAgent] = useState(loadExecutor);
+  const [railStates, setRailStates] = useState<Record<string, "running" | "failed" | undefined>>({});
   const log = useRef<HTMLDivElement>(null);
   const loadedQuestion = useRef<string | null>(null);
 
@@ -288,6 +291,12 @@ export function SearchAsk({ scope, scopeNonce = 0, onClearScope }: {
         const next = await fetchSearchQuestion(selectedId, controller.signal);
         if (controller.signal.aborted) return;
         setLive(next);
+        const railState = next.run_status && STOPPED_RUN.has(next.run_status)
+          ? "failed"
+          : next.run_status && SETTLED_RUN.has(next.run_status) ? undefined : "running";
+        setRailStates((current) => current[selectedId] === railState
+          ? current
+          : { ...current, [selectedId]: railState });
         if (next.agent_thread_id) {
           const page = await fetchInbox(
             { thread_id: next.agent_thread_id, limit: 200 },
@@ -322,7 +331,11 @@ export function SearchAsk({ scope, scopeNonce = 0, onClearScope }: {
   const speech = items.filter(askSpeech);
   const answered = speech.some((item) => item.kind === "assistant");
   const settled = Boolean(live?.run_status && SETTLED_RUN.has(live.run_status));
-  const thinking = Boolean(selected) && !settled && !error && !answered;
+  const turns = askTurns(items, speech, selected?.askedAt);
+  const lastTurn = turns[turns.length - 1];
+  const lastAnswered = Boolean(lastTurn?.answers.length);
+  const thinking = Boolean(selected) && !settled && !error && (!answered || !lastAnswered);
+  const lastQuestionText = lastTurn?.question?.body_text?.trim() || selected?.query || "";
 
   function startNew() {
     setSelectedId(null);
@@ -342,6 +355,7 @@ export function SearchAsk({ scope, scopeNonce = 0, onClearScope }: {
         setItems(page);
         return;
       }
+      const askedAt = new Date().toISOString();
       const created = await startSearchQuestion({
         query: text,
         ...(scope ? { thread_id: scope.threadId } : {}),
@@ -352,6 +366,7 @@ export function SearchAsk({ scope, scopeNonce = 0, onClearScope }: {
         query: created.query || text,
         ...(scope ? { scopeThreadId: scope.threadId, scopeTitle: scope.title } : {}),
         ...(created.executor_type || agent ? { executorType: created.executor_type || agent } : {}),
+        askedAt: askedAt,
       };
       const next = [stored, ...questions.filter((entry) => entry.id !== stored.id)];
       setQuestions(next);
@@ -395,7 +410,22 @@ export function SearchAsk({ scope, scopeNonce = 0, onClearScope }: {
                   title={entry.query}
                   onClick={() => { setSelectedId(entry.id); setError(null); setDraft(""); }}
                 >
-                  <span>{entry.query}</span>
+                  <span>
+                    {entry.query}
+                    {railStates[entry.id] ? (
+                      <span
+                        className={`ask-rail-state is-${railStates[entry.id]}`}
+                        title={railStates[entry.id] === "failed" ? t("run.ask.failedDot") : t("run.ask.live")}
+                      >
+                        {railStates[entry.id] === "failed"
+                          ? <span className="ask-rail-dot" aria-hidden="true" />
+                          : <RunStatusIcon status="running" />}
+                        <span className="sr-only">
+                          {railStates[entry.id] === "failed" ? t("run.ask.failedDot") : t("run.ask.live")}
+                        </span>
+                      </span>
+                    ) : null}
+                  </span>
                   {entry.scopeTitle ? <small>{entry.scopeTitle}</small> : null}
                 </button>
               </li>
@@ -412,30 +442,14 @@ export function SearchAsk({ scope, scopeNonce = 0, onClearScope }: {
                 <p className="ask-thread-scope">{t("search.ask.scope", { title: selected.scopeTitle })}</p>
               ) : null}
               <article className="ask-message is-user"><MessageBody text={selected.query} /></article>
-              {live?.run_id ? (
-                <div className="ask-reads">
-                  <AgentReadsCard runId={live.run_id} revision={`${live.run_status ?? ""}:${speech.length}`} />
-                </div>
-              ) : null}
-              {speech.map((item) => item.kind === "user" ? (
-                <article key={item.event.id} className="ask-message is-user">
-                  <MessageBody text={item.body_text ?? ""} attachments={item.attachments} />
-                </article>
-              ) : (
-                <article key={item.event.id} className="ask-message is-assistant">
-                  <span className="ask-avatar" aria-hidden="true"><SparkleIcon /></span>
-                  <div className="ask-message-body">
-                    <MessageBody text={item.body_text ?? ""} attachments={item.attachments} />
-                  </div>
-                </article>
-              ))}
-              {thinking ? (
-                <div className="ask-message is-assistant is-thinking">
-                  <span className="ask-avatar" aria-hidden="true"><SparkleIcon /></span>
-                  <span className="ask-thinking">{t("search.ask.thinking")}</span>
-                </div>
-              ) : null}
-              {stopped ? <p className="ask-error" role="alert">{t("search.ask.runFailed")}</p> : null}
+              <AskTurns
+                turns={turns}
+                runId={live?.run_id}
+                revision={`${live?.run_status ?? ""}:${speech.length}`}
+                thinking={thinking}
+                stopped={stopped}
+                onRetry={() => void submit(lastQuestionText)}
+              />
               {error ? <p className="ask-error" role="alert">{error}</p> : null}
             </div>
           </div>
