@@ -4,6 +4,7 @@ import {
   fetchConversationDirectory,
   type ConversationDirectoryItem,
 } from "./api";
+import { mergeRecipeConversationOptions } from "./recipe-conversations";
 import type { RecipeConversationOption } from "./types";
 
 const DIRECTORY_LIMIT = 40;
@@ -42,7 +43,7 @@ export function useRecipeConversationCatalog(
       .then((pages) => {
         if (controller.signal.aborted || loadRef.current !== entry) return;
         setDiscovered((current) =>
-          mergeDirectoryOptions(current, pages.flat().map(directoryOption)),
+          mergeRecipeConversationOptions(current, pages.flat().map(directoryOption)),
         );
         setReady(true);
       })
@@ -85,7 +86,7 @@ export function useRecipeConversationCatalog(
       if (signal.aborted) return;
       const page = capConversationDirectory(rows);
       setSearchCapped(page.capped);
-      setDiscovered((current) => mergeDirectoryOptions(current, page.rows.map(directoryOption)));
+      setDiscovered((current) => mergeRecipeConversationOptions(current, page.rows.map(directoryOption)));
     });
   }, []);
 
@@ -107,7 +108,7 @@ export function useRecipeConversationCatalog(
   }, [active, start]);
 
   const conversations = useMemo(() => {
-    return mergeDirectoryOptions(initialConversations, discovered);
+    return mergeRecipeConversationOptions(initialConversations, discovered);
   }, [initialConversations, discovered]);
 
   return { conversations, load, search, searchCapped, ready };
@@ -116,7 +117,7 @@ export function useRecipeConversationCatalog(
 function directoryOption(item: ConversationDirectoryItem): RecipeConversationOption {
   return {
     id: item.id,
-    label: item.label,
+    label: item.conversation_name || item.label,
     source: item.source,
     can_send: item.can_send,
     has_work: item.has_work,
@@ -124,13 +125,3 @@ function directoryOption(item: ConversationDirectoryItem): RecipeConversationOpt
   };
 }
 
-function mergeDirectoryOptions(
-  current: readonly RecipeConversationOption[],
-  next: readonly RecipeConversationOption[],
-): RecipeConversationOption[] {
-  const byId = new Map(current.map((item) => [item.id, item]));
-  for (const item of next) {
-    byId.set(item.id, item);
-  }
-  return [...byId.values()];
-}

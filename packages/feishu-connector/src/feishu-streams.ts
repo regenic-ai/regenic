@@ -37,7 +37,7 @@ export function createFeishuStreams(
   return chats.map((chat) => ({
     stream_key: feishuStreamKey(chat.chat_id),
     thread_id: `${FEISHU_SOURCE}:${chat.chat_id}`,
-    label: chat.name ?? chat.chat_id,
+    ...(chat.name?.trim() ? { label: chat.name.trim() } : {}),
     pace: { ...FEISHU_STREAM_PACE },
     connector: new FeishuChatPollConnector(client, {
       connector_id: installation.id,

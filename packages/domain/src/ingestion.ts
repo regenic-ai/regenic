@@ -7,6 +7,7 @@ import type {
 import type {
   ConversationDirectoryEntry,
   ConversationDirectoryQuery,
+  ConversationNameUpdate,
 } from "./conversation-directory";
 import type { SyncPollHint, SyncStore } from "./sync-contracts";
 import type { SyncWorkStore } from "./sync-work";
@@ -807,6 +808,10 @@ export interface AuthorityStore {
     orgId: string,
     query?: ConversationDirectoryQuery,
   ): Promise<ConversationDirectoryEntry[]>;
+  rememberConversationNames(
+    orgId: string,
+    names: readonly ConversationNameUpdate[],
+  ): Promise<void>;
   summarizeInbox(orgId: string): Promise<InboxSummary>;
   listConversationPrefs(orgId: string): Promise<ConversationPref[]>;
   getConversationPref(

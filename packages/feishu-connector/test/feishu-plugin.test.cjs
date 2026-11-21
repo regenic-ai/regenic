@@ -372,7 +372,7 @@ describe("feishuChatDriver", () => {
       {
         async listRecentChats(types, options) {
           assert.deepEqual(types, ["group", "p2p"]);
-          assert.equal(options?.names, false);
+          assert.equal(options?.names, true);
           return [
             { chat_id: "oc_g", name: "Team", chat_mode: "group" },
             { chat_id: "oc_p", name: "Ada", chat_mode: "p2p" },

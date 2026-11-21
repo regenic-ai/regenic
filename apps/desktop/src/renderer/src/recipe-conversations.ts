@@ -1,4 +1,4 @@
-import { groupInboxThreads, type InboxThread } from "./inbox.ts";
+import { groupInboxThreads, opaqueConversationLabel, type InboxThread } from "./inbox.ts";
 import { threadTitle } from "./message-view.ts";
 import type { InboxHeadsPage } from "./api";
 import type { InboxViewItem, RecipeConversationOption } from "./types";
@@ -30,6 +30,33 @@ function conversationMatchName(thread: InboxThread): string | undefined {
     return undefined;
   }
   return label;
+}
+
+/** A directory row that only has an id must not erase a name the inbox already has. */
+export function mergeRecipeConversationOptions(
+  current: readonly RecipeConversationOption[],
+  next: readonly RecipeConversationOption[],
+): RecipeConversationOption[] {
+  const byId = new Map(current.map((item) => [item.id, item]));
+  for (const item of next) {
+    const previous = byId.get(item.id);
+    if (
+      previous &&
+      opaqueConversationLabel(item.label, item.id) &&
+      !opaqueConversationLabel(previous.label, previous.id)
+    ) {
+      byId.set(item.id, {
+        ...item,
+        label: previous.label,
+        ...(previous.conversation_name
+          ? { conversation_name: previous.conversation_name }
+          : {}),
+      });
+      continue;
+    }
+    byId.set(item.id, item);
+  }
+  return [...byId.values()];
 }
 
 /** Inbox heads are paginated separately for shown and hidden conversations. */

@@ -263,6 +263,22 @@ export function inboxRuleOptions(
     .sort((left, right) => left.label.localeCompare(right.label));
 }
 
+/** A raw thread id or chat id, not a title a person can pick from. */
+export function opaqueConversationLabel(label: string, id: string): boolean {
+  const text = label.replace(/\s+/g, " ").trim();
+  if (!text) {
+    return true;
+  }
+  if (text === id) {
+    return true;
+  }
+  const target = id.includes(":") ? id.slice(id.indexOf(":") + 1) : id;
+  if (target && text === target) {
+    return true;
+  }
+  return /^oc_[0-9a-f]+$/i.test(text) || /^session-[0-9a-f-]{8,}$/i.test(text);
+}
+
 export function directoryInboxThread(item: {
   id: string;
   label: string;
@@ -272,14 +288,15 @@ export function directoryInboxThread(item: {
   pinned?: boolean;
   conversation_name?: string;
 }): InboxThread {
+  const name = item.conversation_name?.replace(/\s+/g, " ").trim();
   return {
     id: item.id,
     source: item.source,
     channel: item.source,
     channel_label: item.source,
-    label: item.label,
-    title: item.conversation_name ?? null,
-    conversation_label: item.conversation_name ?? item.label,
+    label: name || item.label,
+    title: name || null,
+    conversation_label: name || (opaqueConversationLabel(item.label, item.id) ? null : item.label),
     conversation_kind: null,
     unit_kind: null,
     unit_kind_label: null,

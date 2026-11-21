@@ -347,6 +347,7 @@ import {
   listConversationPrefs,
   listInbox,
   searchConversationDirectory,
+  rememberConversationNames,
   putConversationPref,
   setConversationVisibility,
   setConversationPolicyHidden,
@@ -934,6 +935,13 @@ export class PostgresAuthorityStore
     query?: import("@regenic/domain").ConversationDirectoryQuery,
   ): Promise<import("@regenic/domain").ConversationDirectoryEntry[]> {
     return searchConversationDirectory(this.sql, orgId, query);
+  }
+
+  async rememberConversationNames(
+    orgId: string,
+    names: readonly import("@regenic/domain").ConversationNameUpdate[],
+  ): Promise<void> {
+    return rememberConversationNames(this.sql, orgId, names);
   }
 
   async summarizeInbox(orgId: string): Promise<InboxSummary> {

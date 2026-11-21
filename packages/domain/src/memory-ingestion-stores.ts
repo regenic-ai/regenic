@@ -10,10 +10,11 @@ import {
   type InboxDispositionTransitionResult,
   type InboxItem,
 } from "./arrangement";
-import { rankConversationDirectory } from "./conversation-directory";
+import { rankConversationDirectory, shouldRememberConversationName, usableConversationName } from "./conversation-directory";
 import type {
   ConversationDirectoryEntry,
   ConversationDirectoryQuery,
+  ConversationNameUpdate,
 } from "./conversation-directory";
 import type {
   AuthorityStore,
@@ -330,6 +331,7 @@ export class MemoryAuthorityStore
     decision: ArrangementDecision;
   }>();
   private readonly prefs = new Map<string, ConversationPref>();
+  private readonly conversationNames = new Map<string, string>();
   private readonly visibilityCommands = new Map<
     string,
     { command: string; pref: ConversationPref }
@@ -1042,15 +1044,36 @@ export class MemoryAuthorityStore
           thread_id: threadId,
           source: item.event.source,
           pref_title: pref?.title ?? null,
+          display_name: this.conversationNames.get(prefKey(orgId, threadId)) ?? null,
           catalog_label: null,
           hidden: pref?.hidden === true,
           pinned: pref?.pinned === true,
           has_current_work: item.decision.disposition === "current_work",
           face_occurred_at: item.event.occurred_at,
+          face_event_id: item.event.id,
+          face_content_hash: item.event.content_hash ?? null,
         });
       }
     }
     return rankConversationDirectory([...seen.values()], query);
+  }
+
+  async rememberConversationNames(
+    orgId: string,
+    names: readonly ConversationNameUpdate[],
+  ): Promise<void> {
+    for (const name of names) {
+      const threadId = name.thread_id.trim();
+      const next = usableConversationName(name.display_name, threadId);
+      if (!threadId || !next) {
+        continue;
+      }
+      const key = prefKey(orgId, threadId);
+      if (!shouldRememberConversationName(this.conversationNames.get(key), name, threadId)) {
+        continue;
+      }
+      this.conversationNames.set(key, next);
+    }
   }
 
   async summarizeInbox(orgId: string): Promise<InboxSummary> {

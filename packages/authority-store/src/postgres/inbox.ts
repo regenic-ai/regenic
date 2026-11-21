@@ -26,8 +26,11 @@ import {
   normalizeInboxLimit,
   conversationDirectoryStatement,
   numberConversationDirectorySql,
+  shouldRememberConversationName,
+  usableConversationName,
   type ConversationDirectoryEntry,
   type ConversationDirectoryQuery,
+  type ConversationNameUpdate,
   TASK_INBOX_REASON,
   WORK_OBSERVE_AGAIN_STATUSES,
   assertConversationPolicyVisibility,
@@ -413,6 +416,9 @@ export async function searchConversationDirectory(
     face_occurred_at: Date | string;
     has_current_work: boolean | number;
     pref_title: string | null;
+    display_name: string | null;
+    face_event_id: string;
+    face_content_hash: string | null;
     hidden: number;
     pinned: number | boolean;
     catalog_label: string | null;
@@ -421,6 +427,7 @@ export async function searchConversationDirectory(
     thread_id: row.thread_id,
     source: row.source,
     pref_title: row.pref_title,
+    display_name: row.display_name,
     catalog_label: row.catalog_label,
     hidden: row.hidden === 1,
     pinned: row.pinned === 1 || row.pinned === true,
@@ -428,7 +435,60 @@ export async function searchConversationDirectory(
     face_occurred_at: row.face_occurred_at instanceof Date
       ? row.face_occurred_at.toISOString()
       : String(row.face_occurred_at),
+    face_event_id: row.face_event_id,
+    face_content_hash: row.face_content_hash,
   }));
+}
+
+export async function rememberCatalogConversationNames(
+  db: PgSql,
+  installationId: string,
+  members: readonly { thread_id?: string | null; label?: string | null }[],
+): Promise<void> {
+  const installation = await db.queryOne<{ org_id: string }>(
+    `SELECT org_id FROM connector_installations WHERE id = $1`,
+    [installationId],
+  );
+  if (!installation) {
+    return;
+  }
+  const names: ConversationNameUpdate[] = [];
+  for (const member of members) {
+    const threadId = member.thread_id?.trim() ?? "";
+    const name = usableConversationName(member.label, threadId);
+    if (!threadId || !name) {
+      continue;
+    }
+    names.push({ thread_id: threadId, display_name: name, kind: "conversation" });
+  }
+  if (names.length > 0) {
+    await rememberConversationNames(db, installation.org_id, names);
+  }
+}
+
+export async function rememberConversationNames(
+  db: PgSql,
+  orgId: string,
+  names: readonly ConversationNameUpdate[],
+): Promise<void> {
+  for (const name of names) {
+    const threadId = name.thread_id.trim();
+    const next = usableConversationName(name.display_name, threadId);
+    if (!threadId || !next) {
+      continue;
+    }
+    const current = await db.queryOne<{ display_name: string | null }>(
+      `SELECT display_name FROM thread_heads WHERE org_id = $1 AND thread_id = $2`,
+      [orgId, threadId],
+    );
+    if (!current || !shouldRememberConversationName(current.display_name, name, threadId)) {
+      continue;
+    }
+    await db.query(
+      `UPDATE thread_heads SET display_name = $1 WHERE org_id = $2 AND thread_id = $3`,
+      [next, orgId, threadId],
+    );
+  }
 }
 
 export async function summarizeInbox(db: PgSql, orgId: string): Promise<InboxSummary> {

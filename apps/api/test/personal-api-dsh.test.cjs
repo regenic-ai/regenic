@@ -131,6 +131,10 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
       assert.equal(heads[0].conversation_label, "只用一句话回复：pong");
       assert.equal(heads[0].body_text, undefined);
       assert.equal(heads[0].event.external_id, "session-x:50");
+      const directory = await (await fetch(`${origin}/v1/me/inbox/directory`)).json();
+      assert.equal(directory[0]?.id, "dsh:session-x");
+      assert.equal(directory[0]?.label, "dsh:session-x");
+      assert.equal(directory[0]?.conversation_name, undefined);
     } finally {
       await app.close();
     }
@@ -193,6 +197,10 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
       ],
     });
     authority.close();
+    const { DatabaseSync } = require("node:sqlite");
+    const wiped = new DatabaseSync(database);
+    wiped.prepare("UPDATE thread_heads SET display_name = NULL").run();
+    wiped.close();
     const { app, origin } = await startPersonalApi(database, blobRoot);
     try {
       const heads = await (await fetch(`${origin}/v1/me/inbox?heads=1`)).json();
@@ -201,6 +209,10 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
       assert.equal(heads[0].conversation_label, "只用一句话回复：pong");
       assert.equal(heads[0].body_text, undefined);
       assert.equal(heads[0].event.external_id, "session-long:32");
+      const directory = await (await fetch(`${origin}/v1/me/inbox/directory`)).json();
+      const named = directory.find((item) => item.id === "dsh:session-long");
+      assert.equal(named?.label, "dsh:session-long");
+      assert.equal(named?.conversation_name, undefined);
     } finally {
       await app.close();
     }

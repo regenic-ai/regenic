@@ -72,6 +72,7 @@ import {
   recipeAllowsPushDispatch,
   shouldAcceptPushRecord,
 } from "./recipe-trigger";
+import { conversationNamesFromRecords } from "./conversation-directory";
 import { recipeConversationTitle, recipeTextMatches, recipeTitleMatches } from "./recipe-match";
 import { isPushInboxDecision } from "./inbox-query";
 import {
@@ -328,6 +329,10 @@ export class IngestionService {
       } catch (error) {
         await this.authorityStore.releaseBlobReservations(request.blob_reservations ?? []);
         throw error;
+      }
+      const orgId = planned[0]?.identity.org_id;
+      if (orgId) {
+        await this.rememberConversationNames(orgId, planned.map((item) => item.record));
       }
       overlay.clear();
     };
@@ -867,8 +872,28 @@ export class IngestionService {
       }
       throw error;
     }
+    const orgId = creates[0]?.identity.org_id;
+    if (orgId) {
+      await this.rememberConversationNames(orgId, creates.map((item) => item.record));
+    }
     reconcilePendingDuplicates(records, creates);
     markResolvedDuplicates(creates);
+  }
+
+  private async rememberConversationNames(
+    orgId: string,
+    records: readonly IngestRecord[],
+  ): Promise<void> {
+    const names = conversationNamesFromRecords(records);
+    if (names.length === 0) {
+      return;
+    }
+    try {
+      await this.authorityStore.rememberConversationNames(orgId, names);
+    } catch {
+      // The messages are already committed. The next record or catalog page
+      // that carries this chat name writes it again.
+    }
   }
 
   private async prepareConversationEffects(

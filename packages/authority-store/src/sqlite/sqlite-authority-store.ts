@@ -296,6 +296,7 @@ import {
   listConversationPrefs,
   listInbox,
   searchConversationDirectory,
+  rememberConversationNames,
   putConversationPref,
   setConversationVisibility,
   setConversationPolicyHidden,
@@ -952,6 +953,14 @@ export class SqliteAuthorityStore
     query?: import("@regenic/domain").ConversationDirectoryQuery,
   ): Promise<import("@regenic/domain").ConversationDirectoryEntry[]> {
     return searchConversationDirectory(this.database, orgId, query);
+  }
+
+  async rememberConversationNames(
+    orgId: string,
+    names: readonly import("@regenic/domain").ConversationNameUpdate[],
+  ): Promise<void> {
+    this.assertWritable();
+    rememberConversationNames(this.database, orgId, names);
   }
 
   async summarizeInbox(orgId: string): Promise<InboxSummary> {
@@ -1919,6 +1928,10 @@ export class SqliteAuthorityStore
         } else if (migration.version === 89) {
           // Same rewind: a current database already has the monthly column.
           if (!this.columnExists("recipes", "trigger_monthdays")) {
+            this.database.exec(migration.sql);
+          }
+        } else if (migration.version === 90) {
+          if (!this.columnExists("thread_heads", "display_name")) {
             this.database.exec(migration.sql);
           }
         } else {

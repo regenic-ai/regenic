@@ -64,6 +64,7 @@ import {
   commitIngestUnlocked,
 } from "./events";
 import {
+  rememberCatalogConversationNames,
   setConversationPolicyVisibilityUnlocked,
   putDispositionIfAbsentWithinTransaction,
 } from "./inbox";
@@ -1539,7 +1540,11 @@ export async function applySyncCatalogPage(db: Database.Database, input: ApplySy
       }
       return next;
     });
-    return apply.immediate();
+    const saved = apply.immediate();
+    // Only this page. The saved catalog already has older names, and rewriting
+    // every member on each page repeats the same updates for the whole census.
+    rememberCatalogConversationNames(db, input.installation_id, input.members);
+    return saved;
   }
 
 export async function noteSyncCatalogStream(db: Database.Database, input: NoteSyncCatalogStreamInput): Promise<void> {

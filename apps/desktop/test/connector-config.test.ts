@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  catalogFieldOptions,
   catalogFieldUsesSelect,
   configWithOptionNames,
   filterCatalogFieldOptions,
@@ -110,5 +111,36 @@ describe("resolveCatalogFieldOptions", () => {
       options,
     );
     assert.equal(catalogFieldUsesSelect(options), true);
+  });
+});
+
+describe("catalogFieldOptions", () => {
+  const remembered = [
+    { value: "oc_g", label: "Group · 日报", kind: "group", title: "日报" },
+    { value: "oc_p", label: "Direct · 熊蜂", kind: "p2p", title: "熊蜂" },
+  ];
+
+  it("keeps a selected chat name when the other kind is unchecked", () => {
+    assert.deepEqual(
+      catalogFieldOptions(
+        { key: "chat_ids", dynamic_options: true, filter_options_by: "kinds" },
+        undefined,
+        remembered,
+        { kinds: ["group"] },
+      ),
+      remembered,
+    );
+  });
+
+  it("still filters a static option list", () => {
+    assert.deepEqual(
+      catalogFieldOptions(
+        { key: "chat_ids", filter_options_by: "kinds" },
+        remembered,
+        undefined,
+        { kinds: ["group"] },
+      ),
+      [remembered[0]],
+    );
   });
 });

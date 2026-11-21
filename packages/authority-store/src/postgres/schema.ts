@@ -1,4 +1,4 @@
-export const PG_SCHEMA_VERSION = 89;
+export const PG_SCHEMA_VERSION = 90;
 
 /** Applied when an existing postgres authority DB is already at a prior baseline. */
 export const PG_MIGRATIONS = [
@@ -1033,6 +1033,10 @@ ON CONFLICT DO NOTHING;
     version: 89,
     sql: `ALTER TABLE recipes ADD COLUMN IF NOT EXISTS trigger_monthdays TEXT`,
   },
+  {
+    version: 90,
+    sql: `ALTER TABLE thread_heads ADD COLUMN IF NOT EXISTS display_name TEXT`,
+  },
 ] as const;
 
 export const PG_BASELINE_SQL = `
@@ -1752,6 +1756,7 @@ CREATE TABLE thread_heads (
   face_event_id TEXT NOT NULL REFERENCES events(id),
   face_occurred_at TIMESTAMPTZ NOT NULL,
   has_current_work BOOLEAN NOT NULL,
+  display_name TEXT,
   PRIMARY KEY (org_id, thread_id)
 );
 

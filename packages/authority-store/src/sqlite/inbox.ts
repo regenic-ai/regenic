@@ -23,8 +23,11 @@ import {
   threadExternalIdLike,
   normalizeInboxLimit,
   conversationDirectoryStatement,
+  shouldRememberConversationName,
+  usableConversationName,
   type ConversationDirectoryEntry,
   type ConversationDirectoryQuery,
+  type ConversationNameUpdate,
   TASK_INBOX_REASON,
   WORK_OBSERVE_AGAIN_STATUSES,
   assertConversationPolicyVisibility,
@@ -339,6 +342,9 @@ export function searchConversationDirectory(
     face_occurred_at: string;
     has_current_work: number;
     pref_title: string | null;
+    display_name: string | null;
+    face_event_id: string;
+    face_content_hash: string | null;
     hidden: number;
     pinned: number;
     catalog_label: string | null;
@@ -347,12 +353,68 @@ export function searchConversationDirectory(
     thread_id: row.thread_id,
     source: row.source,
     pref_title: row.pref_title,
+    display_name: row.display_name,
     catalog_label: row.catalog_label,
     hidden: row.hidden === 1,
     pinned: row.pinned === 1,
     has_current_work: row.has_current_work === 1,
     face_occurred_at: row.face_occurred_at,
+    face_event_id: row.face_event_id,
+    face_content_hash: row.face_content_hash,
   }));
+}
+
+export function rememberCatalogConversationNames(
+  db: Database.Database,
+  installationId: string,
+  members: readonly { thread_id?: string | null; label?: string | null }[],
+): void {
+  const installation = db
+    .prepare(`SELECT org_id FROM connector_installations WHERE id = ?`)
+    .get(installationId) as { org_id: string } | undefined;
+  if (!installation) {
+    return;
+  }
+  const names: ConversationNameUpdate[] = [];
+  for (const member of members) {
+    const threadId = member.thread_id?.trim() ?? "";
+    const name = usableConversationName(member.label, threadId);
+    if (!threadId || !name) {
+      continue;
+    }
+    names.push({ thread_id: threadId, display_name: name, kind: "conversation" });
+  }
+  if (names.length > 0) {
+    rememberConversationNames(db, installation.org_id, names);
+  }
+}
+
+export function rememberConversationNames(
+  db: Database.Database,
+  orgId: string,
+  names: readonly ConversationNameUpdate[],
+): void {
+  const read = db.prepare(
+    `SELECT display_name FROM thread_heads WHERE org_id = ? AND thread_id = ?`,
+  );
+  const write = db.prepare(
+    `UPDATE thread_heads SET display_name = ? WHERE org_id = ? AND thread_id = ?`,
+  );
+  const apply = db.transaction(() => {
+    for (const name of names) {
+      const threadId = name.thread_id.trim();
+      const next = usableConversationName(name.display_name, threadId);
+      if (!threadId || !next) {
+        continue;
+      }
+      const current = read.get(orgId, threadId) as { display_name: string | null } | undefined;
+      if (!current || !shouldRememberConversationName(current.display_name, name, threadId)) {
+        continue;
+      }
+      write.run(next, orgId, threadId);
+    }
+  });
+  apply.immediate();
 }
 
 export async function summarizeInbox(db: Database.Database, orgId: string): Promise<InboxSummary> {

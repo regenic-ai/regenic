@@ -557,6 +557,13 @@ export class SqliteSplitAuthorityStore
     return this.reader.call("searchConversationDirectory", [orgId, query]);
   }
 
+  async rememberConversationNames(
+    orgId: string,
+    names: readonly import("@regenic/domain").ConversationNameUpdate[],
+  ): Promise<void> {
+    return this.writer.call("rememberConversationNames", [orgId, names]);
+  }
+
   async summarizeInbox(orgId: string): Promise<InboxSummary> {
     return this.reader.call("summarizeInbox", [orgId]);
   }

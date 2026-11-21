@@ -68,6 +68,7 @@ import {
   parseContextJson,
   toCatalogSnapshot,
 } from "./context-artifacts";
+import { rememberCatalogConversationNames } from "./inbox";
 
 export const INGEST_ATTEMPT_KEEP_PER_INSTALLATION = 64;
 
@@ -1393,7 +1394,7 @@ export async function getSyncCatalogHead(db: PgSql, installationId: string): Pro
   }
 
 export async function applySyncCatalogPage(db: PgSql, input: ApplySyncCatalogPageInput): Promise<SyncCatalogView> {
-    return db.withTx(async (client) => {
+    const saved = await db.withTx(async (client) => {
       const current = await loadSyncCatalog(db, input.installation_id, client);
       const next = applySyncCatalogMembers(current, input);
       await db.execute(
@@ -1454,6 +1455,10 @@ export async function applySyncCatalogPage(db: PgSql, input: ApplySyncCatalogPag
       }
       return next;
     });
+    // Only this page. The saved catalog already has older names, and rewriting
+    // every member on each page repeats the same updates for the whole census.
+    await rememberCatalogConversationNames(db, input.installation_id, input.members);
+    return saved;
   }
 
 export async function noteSyncCatalogStream(db: PgSql, input: NoteSyncCatalogStreamInput): Promise<void> {
