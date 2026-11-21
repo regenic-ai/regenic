@@ -19,6 +19,8 @@ import {
   threadTitle,
   parseRichBlocks,
   heldFollowUpCount,
+  acknowledgmentRecovery,
+  isStaleWorkAcknowledgment,
   workCanAcknowledge,
   workNextStepCopy,
   workStatusLabel,
@@ -592,6 +594,22 @@ describe("thread activity", () => {
       status: "failed",
       run_id: "run-1",
     }, "failed"), true);
+    assert.equal(isStaleWorkAcknowledgment(
+      new Error("Work result acknowledgment rejected: stale_result. Refresh the work item and result."),
+    ), true);
+    assert.equal(isStaleWorkAcknowledgment(new Error("not found")), false);
+    assert.equal(acknowledgmentRecovery({
+      status: "done",
+      run_id: "run-1",
+      acknowledged_run_id: "run-1",
+    }, "run-1"), "clear");
+    assert.equal(acknowledgmentRecovery({
+      status: "done",
+      run_id: "run-1",
+      version: 9,
+      can_write_back: true,
+      delivery: { status: "acked", write_back: "sent" },
+    }, "run-1"), "retry");
     assert.equal(workStatusLabel("open"), null);
     assert.equal(workStatusLabel("waiting_human"), "Waiting");
     assert.equal(workStatusLabel("done"), "Done");

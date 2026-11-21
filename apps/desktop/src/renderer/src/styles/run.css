@@ -379,6 +379,14 @@
   color: var(--risk);
 }
 
+.run-exception {
+  margin: 0;
+  color: var(--risk);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
 .run-action.is-decide {
   color: var(--blue-text);
 }

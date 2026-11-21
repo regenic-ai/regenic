@@ -223,6 +223,18 @@ describe("thread window", () => {
     assert.equal(patched[0].work?.delivery?.status, "dead");
     assert.equal(patched[0].work?.delivery?.attempts, 3);
     assert.equal(patchInboxWork(opened, opened), opened);
+    const acknowledged = patchInboxWork(opened, [
+      {
+        ...opened[0],
+        work: {
+          ...opened[0].work!,
+          version: 9,
+          acknowledged_run_id: "run-1",
+        },
+      },
+    ]);
+    assert.equal(acknowledged[0].work?.version, 9);
+    assert.equal(acknowledged[0].work?.acknowledged_run_id, "run-1");
   });
 
   it("reuses unchanged inbox objects so a later poll does not replace the open thread", () => {

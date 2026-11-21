@@ -178,6 +178,31 @@ export function deliveryNeedsYou(delivery?: {
 }
 
 /** A finished run can be closed. A scheduled run has no triggering message and can still be closed. */
+export function isStaleWorkAcknowledgment(error: unknown): boolean {
+  return error instanceof Error && error.message.includes("stale_result");
+}
+
+/** After a stale confirm, either the screen is already current or one retry can use the fresh version. */
+export function acknowledgmentRecovery(
+  work: {
+    status?: string;
+    run_id?: string;
+    acknowledged_run_id?: string;
+    auto_completed?: boolean;
+    can_write_back?: boolean;
+    needs_operator?: boolean;
+    delivery?: { status?: string; write_back?: string };
+  } | undefined,
+  runId: string,
+): "clear" | "retry" {
+  if (!work?.run_id || work.run_id !== runId || work.acknowledged_run_id === runId) {
+    return "clear";
+  }
+  return workCanAcknowledge(work, work.status === "failed" ? "failed" : "done")
+    ? "retry"
+    : "clear";
+}
+
 export function workCanAcknowledge(work: {
   status?: string;
   run_id?: string;

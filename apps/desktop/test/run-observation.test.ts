@@ -10,6 +10,7 @@ import {
   readTurns,
   runAction,
   runClockCopy,
+  sendException,
   runHealth,
   runHealthLine,
   slowerThanUsual,
@@ -70,6 +71,26 @@ describe("run action", () => {
     assert.equal(runAction(run({ summary: "REPLY ok", delivery: { status: "queued", write_back: "pending" } })), "replying");
     assert.equal(runAction(run({ summary: "REPLY ok", delivery: { status: "dead", write_back: "failed" } })), "send_failed");
     assert.equal(runAction(run({ summary: "REPLY ok", delivery: { status: "uncertain", write_back: "pending" } })), "uncertain");
+    assert.equal(sendException(run({
+      summary: "REPLY ok",
+      delivery: {
+        status: "uncertain",
+        write_back: "pending",
+        last_error: "Lack of necessary permissions, ext=no permission to operate external chats.",
+      },
+    })), "Lack of necessary permissions, ext=no permission to operate external chats.");
+    assert.equal(sendException(run({
+      summary: "REPLY ok",
+      delivery: { status: "dead", write_back: "failed", last_error: "channel rejected the message" },
+    })), "channel rejected the message");
+    assert.equal(sendException(run({
+      summary: "REPLY ok",
+      delivery: { status: "acked", write_back: "sent", last_error: "stale" },
+    })), null);
+    assert.equal(sendException(run({
+      summary: "REPLY ok",
+      delivery: { status: "uncertain", write_back: "pending" },
+    })), null);
     assert.equal(runAction(run({ summary: "NO_REPLY\nNOTE\nfine" })), "quiet");
     assert.equal(runAction(run({ summary: "done" })), "record_only");
     assert.equal(runAction(run({ status: "waiting_human" })), "decide");

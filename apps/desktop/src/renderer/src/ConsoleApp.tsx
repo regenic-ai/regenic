@@ -69,7 +69,11 @@ import { useLocale } from "./LocaleContext";
 import { InboxWorkspace } from "./InboxWorkspace";
 import { connectPersonalEvents } from "./personal-events";
 import { SearchPage, type SearchAskRequest } from "./SearchPage";
-import { threadTitle } from "./message-view";
+import {
+  acknowledgmentRecovery,
+  isStaleWorkAcknowledgment,
+  threadTitle,
+} from "./message-view";
 import { recipeConversationOptions } from "./recipe-conversations";
 import { RecipesPage } from "./RecipesPage";
 import { SettingsPage } from "./SettingsPage";
@@ -1696,23 +1700,42 @@ export function ConsoleApp() {
   );
   const acknowledgeSelectedWork = useCallback(
     async (thread: InboxThread) => {
-      if (!thread.work?.id || !thread.work.run_id) return;
-      try {
-        await acknowledgeWorkResult(
-          thread.work.id,
-          thread.work.run_id,
-          thread.work.version,
-          thread.work.run_version ?? 0,
+      const work = thread.work;
+      if (!work?.id || !work.run_id) return;
+      const submit = (current: NonNullable<InboxThread["work"]>) =>
+        acknowledgeWorkResult(
+          current.id,
+          current.run_id ?? work.run_id!,
+          current.version,
+          current.run_version ?? 0,
           newClientCommandId(),
           new Date().toISOString(),
         );
+      try {
+        await submit(work);
         await refresh();
         setError(null);
       } catch (caught) {
-        setError(caught instanceof Error ? caught.message : translate("error.cannotAcknowledgeWork"));
+        if (!isStaleWorkAcknowledgment(caught)) {
+          setError(t("error.cannotAcknowledgeWork"));
+          return;
+        }
+        await refresh();
+        const fresh = groupedRef.current.find((item) => item.id === thread.id)?.work;
+        if (acknowledgmentRecovery(fresh, work.run_id) !== "retry" || !fresh) {
+          setError(null);
+          return;
+        }
+        try {
+          await submit(fresh);
+          await refresh();
+          setError(null);
+        } catch {
+          setError(t("error.cannotAcknowledgeWork"));
+        }
       }
     },
-    [refresh],
+    [refresh, t],
   );
   const reconcileSelectedDelivery = useCallback(
     async (thread: InboxThread, resolution: "sent" | "not_sent") => {
