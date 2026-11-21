@@ -19,6 +19,7 @@ import {
 import { RecipeParams } from "./RecipeParams";
 import { RecipeRow } from "./RecipeRow";
 import { RecipeRunHistory } from "./RecipeRunHistory";
+import { formatNextRunWhen } from "./format";
 import { ScheduleField } from "./ScheduleField";
 import {
   applySeed,
@@ -745,14 +746,20 @@ export function RecipesPage({
               : editing?.last_run
                 ? [editing.last_run]
                 : [];
-            return runs.length > 0 ? (
+            if (!editing) return null;
+            const next = (editing.trigger?.kind ?? "push") === "pull"
+              ? formatNextRunWhen(editing.next_run_at)
+              : null;
+            return (
               <RecipeRunHistory
                 runs={runs}
+                nextRunWhen={next}
+                currentTask={taskInstructionValue(editing.executor_config)}
+                executorLabel={(type) => executorByType.get(type)?.label}
                 onOpenThread={onOpenThread}
-                t={t}
-                dense
+                onRunNow={tryThreadId ? () => void runTryOnce(false) : undefined}
               />
-            ) : null;
+            );
           })()
         : null}
       {executors.length === 0 ? (

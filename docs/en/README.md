@@ -10,6 +10,7 @@
 - [Technology stack](TECH_STACK.md)
 - [Local model service setup](LOCAL_MODEL_SERVICE.md)
 - [Context Search MCP](CONTEXT_SEARCH_MCP.md)
+- [Run observation](RUN_OBSERVATION.md)
 - [Ingestion architecture](INGESTION_ARCHITECTURE.md)
 - [Context platform integration architecture](CONTEXT_PLATFORM_INTEGRATION.md)
 - [Context management architecture](CONTEXT_MANAGEMENT_ARCHITECTURE.md)

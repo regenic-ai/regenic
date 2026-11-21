@@ -683,7 +683,10 @@ export function runStatusCopy(status: string, t: Translate): string | null {
   if (status === "cancelled") {
     return t("recipes.lastRunSkipped");
   }
-  if (status === "running" || status === "waiting_human") {
+  if (status === "waiting_human") {
+    return t("run.status.waiting_human");
+  }
+  if (status === "running") {
     return t("recipes.lastRunRunning");
   }
   return null;

@@ -32,6 +32,7 @@ import type {
   PersonalHeartbeatView,
   PluginInventoryItem,
   PromptAnswerItem,
+  RecipeLastRun,
   RecipeView,
   ReplyAttachmentInput,
   ReplyView,
@@ -46,6 +47,7 @@ import type {
   ConnectorInstallJob,
   CancellationJobView,
   WorkIdentityDiagnosticView,
+  WorkRunDetail,
 } from "./types";
 import {
   flowConfigFromFields,
@@ -1685,6 +1687,22 @@ export async function fetchWorkRunReads(runId: string): Promise<AgentContextRead
     throw new Error(`work run reads ${response.status}`);
   }
   return ((await response.json()) as { reads?: AgentContextRead[] }).reads ?? [];
+}
+
+export async function fetchWorkItemRuns(workItemId: string): Promise<RecipeLastRun[]> {
+  const response = await fetch(`${origin()}/v1/me/work-items/${encodeURIComponent(workItemId)}/runs`);
+  if (!response.ok) {
+    throw new Error(`work item runs ${response.status}`);
+  }
+  return ((await response.json()) as { runs?: RecipeLastRun[] }).runs ?? [];
+}
+
+export async function fetchWorkRunDetail(runId: string): Promise<WorkRunDetail> {
+  const response = await fetch(`${origin()}/v1/me/work-runs/${encodeURIComponent(runId)}`);
+  if (!response.ok) {
+    throw new Error(`work run ${response.status}`);
+  }
+  return (await response.json()) as WorkRunDetail;
 }
 
 export async function dismissWorkItem(

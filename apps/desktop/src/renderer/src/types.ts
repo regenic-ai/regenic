@@ -372,10 +372,28 @@ export interface RecipeTrigger {
 }
 
 export interface RecipeLastRun {
+  /** Optional for compatibility with older API responses. */
+  run_id?: string;
   status: string;
+  started_at?: string;
   at: string;
   summary?: string;
   thread_id?: string;
+  executor_type?: string;
+  trigger_kind?: "push" | "pull" | "manual";
+  delivery?: {
+    status: WorkDeliveryStatus;
+    write_back: WorkWriteBackState;
+    /** True only when the channel accepted the outbound message. */
+    accepted?: boolean;
+    last_error?: string;
+  };
+}
+
+export interface WorkRunDetail {
+  run: RecipeLastRun;
+  task?: string;
+  trigger_text?: string;
 }
 
 export interface RecipeView {
