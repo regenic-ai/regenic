@@ -17,6 +17,9 @@ export interface ContextRetrievalTrace {
     algorithm_version: "sqlite-vec-authorized-exact-v1";
     authorized_chunks: number;
     candidate_chunks: number;
+    authorization_update?: "rebuilt" | "reused" | "delta";
+    added_events?: number;
+    removed_events?: number;
   };
   routes: Array<{
     event_id: string;

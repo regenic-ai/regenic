@@ -44,6 +44,14 @@ export interface ContextVectorAuthorizationKey extends ContextLexicalKey {
   body_length?: number;
 }
 
+export interface ContextVectorAuthorizationDelta {
+  previous_authorization_hash: string;
+  previous_accumulator: string;
+  accumulator: string;
+  added: ContextVectorAuthorizationKey[];
+  removed: ContextVectorAuthorizationKey[];
+}
+
 export interface ContextVectorCoverageProof {
   authorization_hash: string;
   authorized_count: number;
@@ -56,24 +64,92 @@ export interface ContextVectorAcceleration {
   algorithm_version: "sqlite-vec-authorized-exact-v1";
   authorized_chunks: number;
   candidate_chunks: number;
+  authorization_update?: "rebuilt" | "reused" | "delta";
+  added_events?: number;
+  removed_events?: number;
 }
 
 export function contextVectorAuthorizationHash(
   keys: readonly ContextVectorAuthorizationKey[],
 ): string {
-  const hash = createHash("sha256");
-  hash.update(`${keys.length}\0`);
-  let chunk = "";
+  return contextVectorAuthorizationHashFromAccumulator(
+    keys.length,
+    contextVectorAuthorizationAccumulator(keys),
+  );
+}
+
+export function contextVectorAuthorizationAccumulator(
+  keys: readonly ContextVectorAuthorizationKey[],
+): string {
+  let accumulator = 0n;
   for (const key of keys) {
-    const bodyLength = key.body_length === undefined ? "-" : String(key.body_length);
-    chunk += `${key.event_id.length}:${key.event_id}${key.content_hash}${bodyLength.length}:${bodyLength}`;
-    if (chunk.length >= 64 * 1024) {
-      hash.update(chunk);
-      chunk = "";
-    }
+    accumulator = addAuthorizationAccumulator(accumulator, key);
   }
-  if (chunk) hash.update(chunk);
+  return accumulator.toString(16).padStart(64, "0");
+}
+
+export function updateContextVectorAuthorizationAccumulator(
+  accumulator: string,
+  added: readonly ContextVectorAuthorizationKey[],
+  removed: readonly ContextVectorAuthorizationKey[],
+): string {
+  let value = parseAuthorizationAccumulator(accumulator);
+  for (const key of removed) {
+    value = subtractAuthorizationAccumulator(value, key);
+  }
+  for (const key of added) {
+    value = addAuthorizationAccumulator(value, key);
+  }
+  return value.toString(16).padStart(64, "0");
+}
+
+export function contextVectorAuthorizationHashFromAccumulator(
+  count: number,
+  accumulator: string,
+): string {
+  if (!Number.isSafeInteger(count) || count < 0) {
+    throw new Error("Invalid vector authorization count");
+  }
+  const normalized = parseAuthorizationAccumulator(accumulator)
+    .toString(16)
+    .padStart(64, "0");
+  const hash = createHash("sha256");
+  hash.update(`regenic-vector-authorization-v2\0${count}\0${normalized}`);
   return hash.digest("hex");
+}
+
+const AUTHORIZATION_ACCUMULATOR_MODULUS = 1n << 256n;
+
+function authorizationKeyDigest(key: ContextVectorAuthorizationKey): bigint {
+  const bodyLength = key.body_length === undefined ? "-" : String(key.body_length);
+  return BigInt(`0x${createHash("sha256").update(
+    `${key.event_id.length}:${key.event_id}${key.content_hash}${bodyLength.length}:${bodyLength}`,
+  ).digest("hex")}`);
+}
+
+function addAuthorizationAccumulator(
+  accumulator: bigint,
+  key: ContextVectorAuthorizationKey,
+): bigint {
+  return (accumulator + authorizationKeyDigest(key)) % AUTHORIZATION_ACCUMULATOR_MODULUS;
+}
+
+function subtractAuthorizationAccumulator(
+  accumulator: bigint,
+  key: ContextVectorAuthorizationKey,
+): bigint {
+  return (
+    accumulator
+    - authorizationKeyDigest(key)
+    + AUTHORIZATION_ACCUMULATOR_MODULUS
+  ) % AUTHORIZATION_ACCUMULATOR_MODULUS;
+}
+
+function parseAuthorizationAccumulator(value: string): bigint {
+  if (!/^[a-f0-9]{64}$/.test(value)) {
+    throw new Error("Invalid vector authorization accumulator");
+  }
+  return BigInt(`0x${value}`);
 }
 
 export interface ContextVectorIndex {
@@ -82,6 +158,8 @@ export interface ContextVectorIndex {
     generation: string;
     authorized: ContextVectorAuthorizationKey[];
     authorization_hash?: string;
+    authorization_accumulator?: string;
+    authorization_delta?: ContextVectorAuthorizationDelta;
     query: string;
     limit: number;
     search_kind?: Exclude<import("./context-search").ContextSearchKind, "messages">;
@@ -92,6 +170,8 @@ export interface ContextVectorIndex {
     generation: string;
     authorized: ContextVectorAuthorizationKey[];
     authorization_hash?: string;
+    authorization_accumulator?: string;
+    authorization_delta?: ContextVectorAuthorizationDelta;
     query_vector: number[];
     limit: number;
     query?: string;

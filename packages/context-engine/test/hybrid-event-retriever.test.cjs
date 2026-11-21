@@ -98,17 +98,75 @@ function fixture(options = {}) {
   return { engine, retriever, plan, get calls() { return calls; } };
 }
 
+it("emits exact authorization deltas between successive retrieval plans", async () => {
+  const inputs = [];
+  const provider = {
+    descriptor,
+    async countTokens() { return [1]; },
+    async health() { return { status: "ok" }; },
+    async embed() { return [[1, 0]]; },
+  };
+  const index = {
+    async matchAuthorized(input) {
+      inputs.push(input);
+      return {
+        generation: generation.id,
+        covered: input.authorized.map(({ event_id, content_hash }) => ({
+          event_id,
+          content_hash,
+        })),
+        matched: [],
+      };
+    },
+  };
+  const retriever = new HybridEventRetriever(
+    new DeterministicEventRetriever(),
+    provider,
+    index,
+    generation,
+  );
+  const first = [event("a", "rollback one"), event("b", "rollback two")];
+  const second = [first[1], event("c", "rollback three")];
+  const base = {
+    request,
+    read_epoch: "authorized:1",
+    recorded_at: "2026-10-17T00:00:00.000Z",
+    principal_policy_hash: "b".repeat(64),
+  };
+  await retriever.retrieve({ ...base, events: first });
+  await retriever.retrieve({ ...base, read_epoch: "authorized:2", events: second });
+  assert.equal(inputs[0].authorization_delta, undefined);
+  assert.equal(inputs[0].authorization_accumulator.length, 64);
+  assert.deepEqual(
+    inputs[1].authorization_delta.removed.map((key) => key.event_id),
+    ["a"],
+  );
+  assert.deepEqual(
+    inputs[1].authorization_delta.added.map((key) => key.event_id),
+    ["c"],
+  );
+  assert.equal(
+    inputs[1].authorization_delta.previous_authorization_hash,
+    inputs[0].authorization_hash,
+  );
+  assert.equal(inputs[1].authorization_delta.accumulator, inputs[1].authorization_accumulator);
+});
+
 it("accepts compact vector coverage bound to the exact authorization snapshot", async () => {
   const acceleration = {
     algorithm_version: "sqlite-vec-authorized-exact-v1",
     authorized_chunks: 2,
     candidate_chunks: 2,
+    authorization_update: "delta",
+    added_events: 1,
+    removed_events: 0,
   };
   const f = fixture({ compact: true, acceleration });
   const result = await f.retriever.retrieve(f.plan);
   assert.equal(result.trace.covered_count, 2);
   assert.equal(result.trace.mode, "hybrid");
   assert.deepEqual(result.trace.vector_acceleration, acceleration);
+  assert.equal(ContextRetrievalTraceSchema.safeParse(result.trace).success, true);
 });
 
 it("rejects compact vector coverage for another authorization snapshot", async () => {

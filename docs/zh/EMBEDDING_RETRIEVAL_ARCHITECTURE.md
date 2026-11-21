@@ -902,6 +902,37 @@ coverage/source-head 有效的 chunk 复制到连接内 `sqlite-vec` 临时表�
 投影发布、reconcile、generation 删除、视觉权限变化和组织清理会同步失效授权快照与
 临时向量表。原生扩展无法加载时 sidecar 会发出显式 warning，并保留旧精确扫描路径。
 
+2026-11-21 将“任何授权/投影变化都全量重建”改为可验证的增量维护。检索器只保留一个
+当前授权集合，并用 256 位模加累加器绑定 Event/hash/body-length 多重集；新增和撤回由
+`previous hash + previous accumulator + added/removed + current accumulator` 证明。
+sidecar 先核对旧状态、每个增删键、数量和累加器转换，再在同一事务内更新
+`vector_authorized`、coverage/skipped/uncovered 和 `sqlite-vec` row。证明无效会拒绝，
+状态不匹配或 delta 超过 10000 条会回退全量安全 staging，不返回伪造成功。
+
+embedding worker 完成一个 Event 后不再删除整个授权快照：如果 Event 已在当前授权集合，
+它会直接更新 coverage 并把新 chunk 插入授权 KNN 表；revision/tombstone reconcile 先移除
+旧 row 并标记 uncovered。持久化的 `vector_projection_revisions` 和按 Event 合并的
+`vector_projection_changes` 让 API 与 worker 使用不同 SQLite 连接时也能在下一次查询
+吸收后台变化；TEMP 表仍不跨连接共享，但不会继续使用旧 projection revision。
+
+同一百万 Event、2 维隔离基准的最终结果：
+
+| 路径 | 延迟 | 授权更新 |
+| --- | ---: | --- |
+| 全量 compact/native 冷 staging | 22335.39 ms | rebuilt |
+| 暖查询 P50 / P95 | 335.19 / 339.79 ms | reused |
+| 撤回 1 个授权 Event | 439.47 ms | delta（removed=1） |
+| 恢复 1 个授权 Event | 432.57 ms | delta（added=1） |
+
+单条授权变化相对全量 staging 降低约 98.0%，且暖查询没有回退。跨连接同步必须在
+持久 chunks 已经变化后仍能精确删除旧 TEMP native row，因此每个查询连接保留紧凑的
+Event-to-row 映射；这会增加低频全量重建的工作量，但避免以陈旧授权向量换取冷启动数字。
+首次建立累加证明约
+2251.46 ms，只在没有前一授权状态时支付；同一进程后续先用顺序 SHA-256 检查授权列表
+是否未变，变化时才构造精确 Map/delta。上述仍是索引隔离指标：Authority 枚举和真实
+组织 ACL 尚无可安全共享的 scope-generation 合约，不能把个人策略缓存描述成通用的
+每用户离线权限表。
+
 相同 org、embedding generation 和查询文本的 query vector 以 SHA-256 键在进程内缓存，
 最多 128 项；不保存原始查询，失败不缓存，generation 切换自然失效。这会显著改善刷新和
 重复搜索，但第一次真实模型推理仍取决于本机 CPU/GPU、模型服务排队和冷启动，

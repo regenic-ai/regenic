@@ -6,7 +6,13 @@ const { performance } = require("node:perf_hooks");
 const { createHash } = require("node:crypto");
 const { describe, it } = require("node:test");
 const Database = require("better-sqlite3");
-const { contextVectorAuthorizationHash, embeddingGeneration } = require("@regenic/domain");
+const {
+  contextVectorAuthorizationAccumulator,
+  contextVectorAuthorizationHash,
+  contextVectorAuthorizationHashFromAccumulator,
+  embeddingGeneration,
+  updateContextVectorAuthorizationAccumulator,
+} = require("@regenic/domain");
 const { SqliteContextVectorIndex } = require("../dist");
 
 const model = {
@@ -474,6 +480,7 @@ describe("SQLite vector projection and independent durable jobs", () => {
       algorithm_version: "sqlite-vec-authorized-exact-v1",
       authorized_chunks: 4000,
       candidate_chunks: 4000,
+      authorization_update: "rebuilt",
     });
     assert.equal(result.matched.length, 100);
     assert.deepEqual(
@@ -490,7 +497,10 @@ describe("SQLite vector projection and independent durable jobs", () => {
       limit: 100,
     });
     assert.deepEqual(reused.coverage, result.coverage);
-    assert.deepEqual(reused.acceleration, result.acceleration);
+    assert.deepEqual(reused.acceleration, {
+      ...result.acceleration,
+      authorization_update: "reused",
+    });
     await assert.rejects(
       index.matchAuthorized({
         org_id: "org",
@@ -521,7 +531,7 @@ describe("SQLite vector projection and independent durable jobs", () => {
     );
   });
 
-  it("invalidates compact authorization coverage when vector publication changes", async (t) => {
+  it("incrementally updates compact authorization coverage when vector publication completes", async (t) => {
     const f = await fixture(t);
     await reconcile(f.index, [head("covered"), head("pending")]);
     const jobs = await claim(f.index);
@@ -542,8 +552,16 @@ describe("SQLite vector projection and independent durable jobs", () => {
       complete: false,
       uncovered: [{ event_id: "pending", content_hash: hash }],
     });
+    assert.equal(partial.acceleration.authorized_chunks, 1);
 
-    await f.index.complete({ job: pendingJob, owner: "owner", now: at, chunks: [chunk([0, 1])] });
+    const workerIndex = new SqliteContextVectorIndex(f.path);
+    assert.equal(await workerIndex.complete({
+      job: pendingJob,
+      owner: "owner",
+      now: at,
+      chunks: [chunk([0, 1])],
+    }), true);
+    workerIndex.close();
     const complete = await query(f.index, authorized, { authorization_hash });
     assert.deepEqual(complete.coverage, {
       authorization_hash,
@@ -552,6 +570,7 @@ describe("SQLite vector projection and independent durable jobs", () => {
       complete: true,
       uncovered: [],
     });
+    assert.equal(complete.acceleration.authorized_chunks, 2);
   });
 
   it("searches an authorization set above 10000 and retains the global top-k, not the first k", async (t) => {
@@ -691,6 +710,122 @@ describe("SQLite vector projection and independent durable jobs", () => {
       query_vector: [1.0005, 0],
     })).matched[0].score, 1);
     await assert.rejects(query(index, [{ event_id: "event-a", content_hash: hash }, { event_id: "event-a", content_hash: hash }]));
+  });
+
+  it("applies authorization deltas and prewarms newly completed vectors without rebuilding", async (t) => {
+    const { index, path } = await fixture(t);
+    await reconcile(index, [head("event-a"), head("event-b"), head("event-c")]);
+    const jobs = await claim(index);
+    const pending = jobs.find((job) => job.event_id === "event-c");
+    for (const job of jobs.filter((value) => value !== pending)) {
+      assert.equal(await index.complete({
+        job,
+        owner: "owner",
+        now: at,
+        chunks: [chunk(job.event_id === "event-a" ? [1, 0] : [0.8, 0.6])],
+      }), true);
+    }
+    const initial = [
+      { event_id: "event-a", content_hash: hash },
+      { event_id: "event-b", content_hash: hash },
+    ];
+    const initialAccumulator = contextVectorAuthorizationAccumulator(initial);
+    const initialHash = contextVectorAuthorizationHashFromAccumulator(
+      initial.length,
+      initialAccumulator,
+    );
+    const first = await query(index, initial, {
+      authorization_hash: initialHash,
+      authorization_accumulator: initialAccumulator,
+      limit: 2,
+    });
+    assert.equal(first.acceleration.authorized_chunks, 2);
+
+    const current = [
+      { event_id: "event-b", content_hash: hash },
+      { event_id: "event-c", content_hash: hash },
+    ];
+    const removed = [initial[0]];
+    const added = [current[1]];
+    const accumulator = updateContextVectorAuthorizationAccumulator(
+      initialAccumulator,
+      added,
+      removed,
+    );
+    const authorizationHash = contextVectorAuthorizationHashFromAccumulator(
+      current.length,
+      accumulator,
+    );
+    const delta = {
+      previous_authorization_hash: initialHash,
+      previous_accumulator: initialAccumulator,
+      accumulator,
+      added,
+      removed,
+    };
+    const changed = await query(index, current, {
+      authorization_hash: authorizationHash,
+      authorization_accumulator: accumulator,
+      authorization_delta: delta,
+      limit: 2,
+    });
+    assert.equal(changed.coverage.covered_count, 1);
+    assert.deepEqual(changed.coverage.uncovered, [current[1]]);
+    assert.equal(changed.acceleration.authorized_chunks, 1);
+    assert.equal(changed.acceleration.authorization_update, "delta");
+    assert.equal(changed.acceleration.added_events, 1);
+    assert.equal(changed.acceleration.removed_events, 1);
+    assert.deepEqual(changed.matched.map((match) => match.event_id), ["event-b"]);
+
+    assert.equal(await index.complete({
+      job: pending,
+      owner: "owner",
+      now: at,
+      chunks: [chunk([0, 1])],
+    }), true);
+    const prewarmed = await query(index, current, {
+      authorization_hash: authorizationHash,
+      authorization_accumulator: accumulator,
+      query_vector: [0, 1],
+      limit: 2,
+    });
+    assert.equal(prewarmed.coverage.covered_count, 2);
+    assert.equal(prewarmed.acceleration.authorized_chunks, 2);
+    assert.equal(prewarmed.acceleration.authorization_update, "reused");
+    assert.deepEqual(prewarmed.matched.map((match) => match.event_id), ["event-c", "event-b"]);
+
+    const lifecycleIndex = new SqliteContextVectorIndex(path);
+    await reconcile(lifecycleIndex, [
+      head("event-c-v2", {
+        external_id: "event-c",
+        operation: "revise",
+        lineage: ["event-c", "event-c-v2"],
+      }),
+    ]);
+    lifecycleIndex.close();
+    const fenced = await query(index, current, {
+      authorization_hash: authorizationHash,
+      authorization_accumulator: accumulator,
+      query_vector: [0, 1],
+      limit: 2,
+    });
+    assert.equal(fenced.coverage.covered_count, 1);
+    assert.deepEqual(fenced.coverage.uncovered, [current[1]]);
+    assert.equal(fenced.acceleration.authorized_chunks, 1);
+    assert.deepEqual(fenced.matched.map((match) => match.event_id), ["event-b"]);
+
+    await assert.rejects(query(index, initial, {
+      authorization_hash: initialHash,
+      authorization_accumulator: initialAccumulator,
+      authorization_delta: {
+        ...delta,
+        previous_authorization_hash: authorizationHash,
+        previous_accumulator: accumulator,
+        accumulator: initialAccumulator,
+        added: removed,
+        removed: [],
+      },
+    }), /authorization delta/);
   });
 
   it("recovers expired leases across restart and rejects old owners and partial publications", async (t) => {

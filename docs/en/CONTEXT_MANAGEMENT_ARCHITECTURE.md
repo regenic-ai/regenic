@@ -106,9 +106,36 @@ Authority enumeration, query embedding, and answer generation. This is
 authorization-scoped **exact KNN acceleration**, not ANN: unauthorized vectors
 never enter the temporary table or candidate generation. Message/file-filtered
 searches keep the existing exact filtered path. Projection writes and lifecycle
-reconciliation synchronously invalidate both staged authorization state and the
-temporary native table. If the native extension cannot load, the sidecar emits
-an explicit warning and retains the existing exact scan.
+reconciliation now update an active authorization projection incrementally.
+The retriever binds additions and removals to the previous and current
+authorization states with a 256-bit modular accumulator. The sidecar verifies
+the prior hash/accumulator, every changed key, the count transition, and the
+resulting hash before atomically changing authorization, coverage, and native
+KNN rows. A stale state or a delta above 10,000 keys falls back to safe full
+staging; an invalid proof fails closed.
+
+Embedding publication directly prewarms an Event already present in the active
+authorization snapshot. Revision reconciliation removes stale native rows
+before marking old evidence uncovered. Persistent projection revisions and a
+coalesced per-Event change journal carry those updates across API/worker SQLite
+connections even though native authorization tables remain connection-local.
+A compact connection-local Event-to-native-row map preserves enough identity
+to remove stale native rows after the persistent chunks have already changed;
+this deliberately adds work to the rare full rebuild rather than risking stale
+authorized vectors. In the million-Event, two-dimensional isolation benchmark,
+full staging took 22.34 seconds, ten warm samples measured P50 335.19 ms and
+P95 339.79 ms, one authorization removal took 439.47 ms, and restoring one
+authorization took 432.57 ms. A one-Event delta therefore avoided about 98.0%
+of the full rebuild cost without changing exact ranking.
+
+The first accumulator construction measured 2.25 seconds at one million keys;
+later unchanged requests use a streaming list fingerprint and changed requests
+derive the accumulator from the exact delta. These remain index-isolation
+figures. Authority metadata enumeration is still online because the current
+personal policy has no general organizational scope-generation contract; it
+must not be represented as a reusable per-user ACL projection. If the native
+extension cannot load, the sidecar emits an explicit warning and retains the
+existing exact scan.
 
 ### 2.4 Snapshots are immutable
 
