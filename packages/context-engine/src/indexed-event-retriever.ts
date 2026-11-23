@@ -1,6 +1,7 @@
 import {
   CONTEXT_LEXICAL_ALGORITHM_VERSION,
   canonicalContextJson,
+  timeSearchStage,
   contextLexicalAuthorizationHash,
   type AuthorizedContextRetrievalPlan,
   type ContextLexicalIndex,
@@ -41,6 +42,13 @@ export class IndexedEventRetriever implements ContextRetriever {
     plan: AuthorizedContextRetrievalPlan,
     materialize?: ContextEventMaterializer,
   ): Promise<ContextRetrievalResult> {
+    return timeSearchStage("lexical", () => this.retrieveLexical(plan, materialize));
+  }
+
+  private async retrieveLexical(
+    plan: AuthorizedContextRetrievalPlan,
+    materialize?: ContextEventMaterializer,
+  ): Promise<ContextRetrievalResult> {
     if (plan.request.requested_kinds && !plan.request.requested_kinds.includes("event")) {
       return { candidates: [] };
     }
@@ -51,8 +59,10 @@ export class IndexedEventRetriever implements ContextRetriever {
         : sources;
       return eventCandidatesFor(loaded, plan.request, retrievalTimeFor(plan));
     };
-    // Filename metadata is not part of legacy Event lexical coverage.
-    if (!plan.request.query || plan.request.search_kind) {
+    // No query: the index has nothing to match. Desktop search always sets
+    // search_kind; body, filename, and attachment text are indexed, so this
+    // still uses the index and only loads hits plus events it does not cover.
+    if (!plan.request.query) {
       return { candidates: await candidatesFor(eligible) };
     }
     const authorized = eligible.flatMap((source) => source.event.content_hash

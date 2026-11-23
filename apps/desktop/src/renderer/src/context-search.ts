@@ -437,3 +437,63 @@ export function searchMentionsFiles(query: string): boolean {
 export function searchElapsedSeconds(ms: number): string {
   return (ms / 1000).toFixed(ms < 10_000 ? 2 : 1);
 }
+
+export interface SearchTimingView {
+  total_ms: number;
+  stages: ReadonlyArray<{
+    id: string;
+    elapsed_ms: number;
+    cache?: "hit" | "miss";
+  }>;
+}
+
+export type SearchTimingRowId =
+  | "tokenize"
+  | "semantic"
+  | "rerank"
+  | "materialize"
+  | "lexical"
+  | "authorize"
+  | "expand"
+  | "other"
+  | "network";
+
+export interface SearchTimingRow {
+  id: SearchTimingRowId;
+  elapsed_ms: number;
+  cache?: "hit" | "miss";
+}
+
+/**
+ * Groups embed and vector search as semantic, and keeps tokenization and rerank
+ * separate. `clientMs` is the desktop wait; a large gap becomes the network row.
+ * Stages under 1ms stay hidden unless they carry a cache flag.
+ */
+export function searchTimingRows(timing: SearchTimingView, clientMs?: number): SearchTimingRow[] {
+  const byId = new Map(timing.stages.map((stage) => [stage.id, stage]));
+  const rows: SearchTimingRow[] = [];
+  const push = (id: SearchTimingRowId, elapsedMs: number, cache?: "hit" | "miss") => {
+    if (elapsedMs <= 0 && !cache) return;
+    rows.push({ id, elapsed_ms: Math.max(0, Math.round(elapsedMs)), ...(cache ? { cache } : {}) });
+  };
+  const tokenize = byId.get("tokenize");
+  if (tokenize) push("tokenize", tokenize.elapsed_ms);
+  const embed = byId.get("embed");
+  const vector = byId.get("vector");
+  if (embed || vector) {
+    push("semantic", (embed?.elapsed_ms ?? 0) + (vector?.elapsed_ms ?? 0), embed?.cache);
+  }
+  const rerank = byId.get("rerank");
+  if (rerank) push("rerank", rerank.elapsed_ms);
+  for (const id of ["materialize", "lexical", "authorize", "expand"] as const) {
+    const stage = byId.get(id);
+    if (stage) push(id, stage.elapsed_ms);
+  }
+  const accounted = timing.stages.reduce((sum, stage) => sum + stage.elapsed_ms, 0);
+  const other = timing.total_ms - accounted;
+  if (other >= 50) push("other", other);
+  if (clientMs !== undefined && clientMs - timing.total_ms >= 200) {
+    push("network", clientMs - timing.total_ms);
+  }
+  return rows;
+}

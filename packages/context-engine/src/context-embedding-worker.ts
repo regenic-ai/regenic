@@ -81,10 +81,14 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
     }
   }
 
-  private async read(generation: EmbeddingGeneration): Promise<ContextSourceRead> {
+  private async openAuthorityRead(): Promise<ContextSourceRead> {
     const request = embeddingMaintenanceRequest(this.orgId, this.owner);
     const read = await this.source.openRead(request);
     if (read.lifecycle_complete !== true) throw new Error("Embedding requires a complete authority lifecycle view");
+    return read;
+  }
+
+  private async reconcileRead(read: ContextSourceRead, generation: EmbeddingGeneration): Promise<void> {
     await this.jobs.reconcile({
       org_id: this.orgId,
       generation: generation.id,
@@ -92,6 +96,11 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
       heads: headsFor(read),
       now: new Date().toISOString(),
     });
+  }
+
+  private async read(generation: EmbeddingGeneration): Promise<ContextSourceRead> {
+    const read = await this.openAuthorityRead();
+    await this.reconcileRead(read, generation);
     return read;
   }
 
@@ -113,7 +122,7 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
         const cursor = (this.generationCursor + offset) % manifests.length;
         const generation = manifests[cursor];
         assertEmbeddingDescriptor(this.provider.descriptor, generation.model);
-        const run = await this.run(generation, reads.get(generation.id));
+        const run = await this.run(generation, reads.get(generation.id), options.pause_if);
         reads.set(generation.id, run.read);
         if (run.claimed) {
           found = true;
@@ -154,7 +163,11 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
     return total;
   }
 
-  private async run(generation: EmbeddingGeneration, previous?: ContextSourceRead) {
+  private async run(
+    generation: EmbeddingGeneration,
+    previous?: ContextSourceRead,
+    pause?: () => boolean,
+  ) {
     let read = previous ?? await this.read(generation);
     const claimSequence = this.claimSequences.get(generation.id) ?? 0;
     const claimed = await this.jobs.claim({
@@ -306,7 +319,8 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
           generation.extractor_version === "stored-body-and-attachments-v2";
         if (staged.length > chunks.length) throw new Error("Embedding checkpoint content mismatch");
         if (chunks.length === 0 && !noContent) throw new EmbeddingError("invalid_input", false);
-        read = await this.read(generation);
+        read = await this.openAuthorityRead();
+        if (!pause?.()) await this.reconcileRead(read, generation);
         await heartbeat;
         if (heartbeatFailed) throw new Error("Embedding lease renewal failed");
         if (leaseLost || !isHead(read, job)) {

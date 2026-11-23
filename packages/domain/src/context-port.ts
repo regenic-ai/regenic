@@ -173,6 +173,11 @@ export interface AuthorizedContextSourceEvent extends ContextSourceEvent {
 
 export interface ContextEvidenceSource {
   openRead(request: ContextRequest): Promise<ContextSourceRead>;
+  /**
+   * Epoch of openRead for the same request, without the event bodies.
+   * Absent means the caller reads the epoch from openRead.
+   */
+  openReadEpoch?(request: ContextRequest): Promise<string>;
   materialize?(
     events: AuthorizedContextSourceEvent[],
   ): Promise<AuthorizedContextSourceEvent[]>;
@@ -191,6 +196,11 @@ export interface ContextAuthorityRead {
 
 export interface ContextAuthorityReader {
   openContextRead(orgId: string, query?: ContextAuthorityReadQuery): Promise<ContextAuthorityRead>;
+  /**
+   * Same epoch string as openContextRead, without transferring the events.
+   * Absent means the caller takes the epoch from a full read.
+   */
+  openContextReadEpoch?(orgId: string, query?: ContextAuthorityReadQuery): Promise<string>;
   /** Thread-scoped read for incremental projection without scanning the org. */
   openContextReadForThread(
     orgId: string,

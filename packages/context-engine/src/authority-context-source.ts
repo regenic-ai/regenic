@@ -32,11 +32,22 @@ export class AuthorityContextEvidenceSource implements ContextEvidenceSource {
     private readonly strictText = false,
   ) {}
 
+  async openReadEpoch(request: ContextRequest): Promise<string> {
+    const query = { filters: request.filters, anchors: request.anchors };
+    const epoch = this.authority.openContextReadEpoch
+      ? await this.authority.openContextReadEpoch(request.org_id, query)
+      : (await this.authority.openContextRead(request.org_id, query)).read_epoch;
+    if (typeof epoch !== "string" || !epoch.trim()) {
+      throw new Error("Context authority returned an invalid read boundary");
+    }
+    return epoch;
+  }
+
   async openRead(request: ContextRequest) {
-    const read = structuredClone(await this.authority.openContextRead(request.org_id, {
+    const read = await this.authority.openContextRead(request.org_id, {
       filters: request.filters,
       anchors: request.anchors,
-    }));
+    });
     validateAuthorityRead(request.org_id, read);
     const heads = new Map(
       read.lifecycle_heads.map((head) => [identityKey(head.source, head.external_id), head]),

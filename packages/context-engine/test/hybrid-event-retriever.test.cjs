@@ -2,8 +2,9 @@ const assert = require("node:assert/strict");
 const { createHash } = require("node:crypto");
 const { it } = require("node:test");
 const {
-  embeddingGeneration, EmbeddingError, ContextVectorUnavailableError,
+  embeddingGeneration,   EmbeddingError, ContextVectorUnavailableError,
   contextVectorAuthorizationHash,
+  observeSearch,
   MemoryContextArtifactStore, MemoryContextRetrieverRegistry, validateContextSnapshot,
   ContextRetrievalTraceSchema,
 } = require("@regenic/domain");
@@ -563,6 +564,20 @@ it("keeps a below-0.7 semantic hit in the default profile and drops it from the 
   ).retrieve(plan);
   assert.equal(dropped.trace.profile, HYBRID_RRF_PROFILE.version);
   assert.equal(dropped.candidates.some((entry) => entry.candidate.resource_id === "semantic"), false);
+});
+
+it("records tokenize, embed, vector, and rerank time, and reuses the query vector", async () => {
+  const f = fixture();
+  const first = await observeSearch(() => f.retriever.retrieve(f.plan));
+  const second = await observeSearch(() => f.retriever.retrieve(f.plan));
+  const stage = (timing, id) => timing.stages.find((entry) => entry.id === id);
+  for (const id of ["tokenize", "lexical", "embed", "vector", "authorize", "rerank"]) {
+    assert.ok(stage(first.timing, id), id);
+  }
+  assert.equal(stage(first.timing, "embed").cache, "miss");
+  assert.equal(stage(second.timing, "embed").cache, "hit");
+  assert.equal(f.calls, 1);
+  assert.equal(first.value.trace.mode, "hybrid");
 });
 
 it("does not disguise invalid/oversized query input as a successful lexical fallback", async () => {

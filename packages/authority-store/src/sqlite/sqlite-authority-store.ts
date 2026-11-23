@@ -202,6 +202,7 @@ import {
   listEvents,
   markTombstone,
   openContextRead,
+  openContextReadEpoch,
   openContextReadForThread,
   putOutboundAttempt,
   repointContentHash,
@@ -531,6 +532,10 @@ export class SqliteAuthorityStore
 
   async openContextRead(orgId: string, query?: ContextAuthorityReadQuery): Promise<ContextAuthorityRead> {
     return openContextRead(this.database, orgId, query);
+  }
+
+  async openContextReadEpoch(orgId: string, query?: ContextAuthorityReadQuery): Promise<string> {
+    return openContextReadEpoch(this.database, orgId, query);
   }
 
   async openContextReadForThread(

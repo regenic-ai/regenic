@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { Inject, Injectable, OnModuleDestroy } from "@nestjs/common";
-import type {
-  ContextProjectionJob,
-  ContextProjectionOutboxStore,
-  ContextProjectionRunner,
-  EventRecord,
+import {
+  searchInProgress,
+  type ContextProjectionJob,
+  type ContextProjectionOutboxStore,
+  type ContextProjectionRunner,
+  type EventRecord,
 } from "@regenic/domain";
 import { PersonalRuntimeService } from "./personal-runtime.service";
 import { KernelRuntimeService } from "./kernel-runtime.service";
@@ -66,6 +67,12 @@ export class PersonalContextProjectionService implements OnModuleDestroy {
       return;
     }
     if (!backgroundSyncReleased() || this.kernelRuntime.shouldDeferHistorySync()) {
+      return;
+    }
+    // Search and projection share one authority reader. A tick that starts
+    // during search waits behind the search, then the search waits behind it.
+    // The outbox keeps the jobs; the next tick runs them.
+    if (searchInProgress()) {
       return;
     }
     this.running = true;

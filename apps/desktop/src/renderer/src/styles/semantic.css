@@ -789,6 +789,40 @@
 }
 .search-answer-cite:hover { background: #1680f329; }
 
+.search-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 12px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+}
+.search-status-dot {
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--blue, #1680f3);
+  animation: search-status-pulse 1s ease-in-out infinite;
+}
+@keyframes search-status-pulse {
+  50% { opacity: 0.35; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .search-status-dot { animation: none; }
+}
+.search-timing {
+  display: flex;
+  flex-basis: 100%;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.search-timing-stage { white-space: nowrap; }
+
 .search-skeleton { display: grid; gap: 10px; padding: 16px; border: 1px solid var(--line); border-radius: 10px; }
 .search-skeleton span {
   height: 10px;

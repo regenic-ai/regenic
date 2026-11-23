@@ -397,9 +397,19 @@ describe("SQLite context artifact store", () => {
     assert.deepEqual((await split.openContextRead("example-org", {
       filters: { thread_ids: ["not-thread-1"] },
     })).events, []);
-    assert.equal((await split.openContextRead("example-org", {
+    const scoped = await split.openContextRead("example-org", {
       filters: { thread_ids: ["thread-1"] },
-    })).events.length, 1);
+    });
+    assert.equal(scoped.events.length, 1);
+    assert.equal(await split.openContextReadEpoch("example-org"), (await split.openContextRead("example-org")).read_epoch);
+    assert.equal(
+      await split.openContextReadEpoch("example-org", { filters: { thread_ids: ["thread-1"] } }),
+      scoped.read_epoch,
+    );
+    assert.equal(
+      await split.openContextReadEpoch("example-org", { filters: { thread_ids: ["not-thread-1"] } }),
+      (await split.openContextRead("example-org", { filters: { thread_ids: ["not-thread-1"] } })).read_epoch,
+    );
     await split.close();
   });
 

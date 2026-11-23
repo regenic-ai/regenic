@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, type Hash } from "node:crypto";
 import type { ContextArtifact } from "./context-artifact";
 import type { ContextBundle, ContextBundlePayload, ContextRedaction } from "./context-bundle";
 import type { ContextBudgetLedger } from "./context-budget";
@@ -39,7 +39,51 @@ export function canonicalContextJson(value: unknown): string {
 }
 
 export function hashCanonicalContext(value: unknown): string {
-  return createHash("sha256").update(canonicalContextJson(value)).digest("hex");
+  const hash = createHash("sha256");
+  writeCanonical(hash, value, "$");
+  return hash.digest("hex");
+}
+
+/** Same bytes as canonicalContextJson, written straight into the hash. */
+function writeCanonical(hash: Hash, value: unknown, path: string): void {
+  if (value === null || typeof value === "boolean" || typeof value === "string") {
+    hash.update(JSON.stringify(value));
+    return;
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      throw new TypeError(`Non-finite number at ${path}`);
+    }
+    hash.update(JSON.stringify(Object.is(value, -0) ? 0 : value));
+    return;
+  }
+  if (Array.isArray(value)) {
+    hash.update("[");
+    for (let index = 0; index < value.length; index += 1) {
+      if (index > 0) hash.update(",");
+      writeCanonical(hash, value[index], `${path}[${index}]`);
+    }
+    hash.update("]");
+    return;
+  }
+  if (typeof value === "object") {
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
+      throw new TypeError(`Unsupported object at ${path}`);
+    }
+    const record = value as Record<string, unknown>;
+    const keys = Object.keys(record).filter((key) => record[key] !== undefined).sort();
+    hash.update("{");
+    for (const [index, key] of keys.entries()) {
+      if (index > 0) hash.update(",");
+      hash.update(JSON.stringify(key));
+      hash.update(":");
+      writeCanonical(hash, record[key], `${path}.${key}`);
+    }
+    hash.update("}");
+    return;
+  }
+  throw new TypeError(`Unsupported value at ${path}`);
 }
 
 function sortedStrings(values: readonly string[]): string[] {

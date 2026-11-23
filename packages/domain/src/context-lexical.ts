@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { noteSearchStage, searchObservationActive } from "./search-observation";
 
 export const CONTEXT_LEXICAL_ALGORITHM_VERSION = "segment-bm25-v1";
 export const CONTEXT_LEXICAL_BM25 = { k1: 1.2, b: 0.75 } as const;
@@ -65,6 +66,11 @@ export interface ContextLexicalIndex {
   matchAuthorized(
     input: MatchAuthorizedContextLexicalInput,
   ): Promise<MatchAuthorizedContextLexicalResult>;
+  /**
+   * True when stored documents predate filename and attachment text.
+   * Absent on indexes that do not track that coverage.
+   */
+  needsTextRebuild?(orgId: string): Promise<boolean>;
   clearOrganization(orgId: string): Promise<void>;
 }
 
@@ -158,11 +164,14 @@ export function contextLexicalCorpus(
 
 function segmentedTokens(normalized: string): string[] {
   if (!normalized) return [];
+  const observing = searchObservationActive();
+  const started = observing ? performance.now() : 0;
   const tokens: string[] = [];
   for (const part of WORD_SEGMENTER.segment(normalized)) {
     if (!part.isWordLike || !part.segment) continue;
     tokens.push(part.segment);
   }
+  if (observing) noteSearchStage("tokenize", performance.now() - started);
   return tokens;
 }
 
