@@ -45,6 +45,13 @@ function saveQuestions(entries: StoredQuestion[]) {
   try { localStorage.setItem(QUESTIONS_KEY, JSON.stringify(entries)); } catch { /* storage unavailable */ }
 }
 
+const QUESTIONS_CLEARED = "regenic-search-questions-cleared";
+
+export function clearStoredQuestions(): void {
+  try { localStorage.removeItem(QUESTIONS_KEY); } catch { /* storage unavailable */ }
+  window.dispatchEvent(new Event(QUESTIONS_CLEARED));
+}
+
 function loadExecutor(): string {
   try { return localStorage.getItem(EXECUTOR_KEY) ?? ""; } catch { return ""; }
 }
@@ -249,6 +256,21 @@ export function SearchAsk({ scope, scopeNonce = 0, onClearScope }: {
     setSelectedId(null);
     setError(null);
   }, [scopeNonce]);
+
+  useEffect(() => {
+    const onCleared = () => {
+      loadedQuestion.current = null;
+      setQuestions([]);
+      setSelectedId(null);
+      setDraft("");
+      setError(null);
+      setLive(null);
+      setItems([]);
+      setRailStates({});
+    };
+    window.addEventListener(QUESTIONS_CLEARED, onCleared);
+    return () => window.removeEventListener(QUESTIONS_CLEARED, onCleared);
+  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
