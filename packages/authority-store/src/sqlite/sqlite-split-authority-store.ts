@@ -270,6 +270,10 @@ export class SqliteSplitAuthorityStore
     return this.reader.call("openContextRead", [orgId, query]);
   }
 
+  async openContextReadEpoch(orgId: string, query?: ContextAuthorityReadQuery): Promise<string> {
+    return this.reader.call("openContextReadEpoch", [orgId, query]);
+  }
+
   async openContextReadForThread(
     orgId: string,
     threadId: string,

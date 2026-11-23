@@ -318,6 +318,51 @@ describe("indexed Event retrieval", () => {
     assert.ok(lexical("event-rare") > lexical("event-common-a"));
   });
 
+  it("loads index hits for a desktop search instead of every authorized event", async () => {
+    const loaded = [];
+    const otherHash = "d".repeat(64);
+    const visible = event("event-visible", "message-visible", HASH_A, "scope-visible");
+    const other = event("event-other", "message-other", otherHash, "scope-visible");
+    const sources = [visible, other].map((source) => ({ ...source, status: "current" }));
+    const retriever = new IndexedEventRetriever({
+      async matchAuthorized(input) {
+        return {
+          available: true,
+          algorithm_version: "segment-bm25-v1",
+          generation: "continuous-v1",
+          watermark: "authority:1",
+          covered: [],
+          coverage: {
+            authorization_hash: input.authorization_hash,
+            authorized_count: input.authorized.length,
+            covered_count: input.authorized.length,
+            complete: true,
+            uncovered: [],
+          },
+          matched: [{ event_id: "event-visible", content_hash: HASH_A }],
+        };
+      },
+    });
+
+    const result = await retriever.retrieve({
+      request: { ...request(), search_kind: "all" },
+      read_epoch: "authority:1",
+      recorded_at: "2026-09-02T00:00:00.000Z",
+      principal_policy_hash: POLICY_HASH,
+      events: sources,
+    }, async (ids) => {
+      loaded.push(...ids);
+      return ids.map((id) => {
+        const source = sources.find((value) => value.event.event_id === id);
+        const text = id === "event-visible" ? "发布批准计划" : "无关内容";
+        return { ...source, text, search_body: text };
+      });
+    });
+
+    assert.deepEqual(loaded, ["event-visible"]);
+    assert.deepEqual(result.candidates.map((value) => value.candidate.resource_id), ["event-visible"]);
+  });
+
   it("rejects a materializer that mutates authorized metadata", async () => {
     const { engine } = engineFixture({}, {
       async materialize(events) {

@@ -58,6 +58,9 @@ import {
   parseStoredContentParts,
   storedPartContentHash,
   storedPartBytes,
+  observeSearch,
+  searchObservationActive,
+  timeSearchStage,
 } from "@regenic/domain";
 import {
   ContextEngineError,
@@ -124,6 +127,12 @@ export class PersonalContextService {
   }
 
   async search(input: unknown) {
+    if (searchObservationActive()) return this.searchObserved(input);
+    const { value, timing } = await observeSearch(() => this.searchObserved(input));
+    return { ...value, timing };
+  }
+
+  private async searchObserved(input: unknown) {
     return this.runContext(async () => {
       const { appClass, body } = splitSearchAppClass(input);
       const request = contextSearchRequest(await this.filtersForSearch(body, appClass), {
@@ -134,6 +143,12 @@ export class PersonalContextService {
   }
 
   async searchExpanded(input: unknown) {
+    if (searchObservationActive()) return this.searchExpandedObserved(input);
+    const { value, timing } = await observeSearch(() => this.searchExpandedObserved(input));
+    return { ...value, timing };
+  }
+
+  private async searchExpandedObserved(input: unknown) {
     const body = strictBody(input, new Set(["query", "kind", "limit", "filters", "context", "app_class"]));
     const appClass = requireSearchAppClass(body.app_class);
     const context = body.context === undefined
@@ -168,7 +183,7 @@ export class PersonalContextService {
       return { ...search, conversations: [], expansion: expansionSummary(0, maxMessages) };
     }
 
-    return this.runContext(async () => {
+    return timeSearchStage("expand", () => this.runContext(async () => {
       const authority = this.runtime.requireHost().get("authority");
       const seedsByThread = new Map<string, Array<{
         event_id: string;
@@ -258,7 +273,7 @@ export class PersonalContextService {
         conversations,
         expansion: expansionSummary(returnedMessages, maxMessages),
       };
-    });
+    }));
   }
 
   /**

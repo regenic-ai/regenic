@@ -15,6 +15,7 @@ import {
   validateContextRequest,
   validateContextReplayRequest,
   validateContextSnapshot,
+  timeSearchStage,
   type AuthorizedContextRetrievalPlan,
   type ContextArtifactStore,
   type ContextAssemblyResult,
@@ -134,7 +135,7 @@ export class DeterministicContextEngine implements ContextEngine {
       throw new ContextEngineError("invalid_request", validation.issues.map((issue) => issue.message).join("; "));
     }
     const stableRequest = clone(validation.data);
-    const sourceRead = clone(await this.source.openRead(clone(stableRequest)));
+    const sourceRead = structuredClone(await this.source.openRead(clone(stableRequest)));
     validateSourceRead(stableRequest, sourceRead);
     const policyHash = await this.policy.policyHash(clone(stableRequest));
     if (!SHA256_PATTERN.test(policyHash)) {
@@ -164,7 +165,9 @@ export class DeterministicContextEngine implements ContextEngine {
       }
       const missing = [...new Set(eventIds)].filter((id) => !loading.has(id));
       if (missing.length) {
-        const batch = this.materialize(missing.map((id) => metadataById.get(id)!)).then((events) => {
+        const batch = timeSearchStage("materialize", () =>
+          this.materialize(missing.map((id) => metadataById.get(id)!)),
+        ).then((events) => {
           for (const source of events) {
             materialized.set(source.event.event_id, source);
           }
@@ -196,7 +199,7 @@ export class DeterministicContextEngine implements ContextEngine {
       return {
         active,
         result: normalizeRetrievalResult(await active.retriever.retrieve(
-          clone({ ...plan, events }),
+          structuredClone({ ...plan, events }),
           materialize,
         )),
       };
@@ -204,8 +207,8 @@ export class DeterministicContextEngine implements ContextEngine {
     const lifecycleEvents = lifecycleMetadata.map((source) => materialized.get(source.event.event_id) ?? source);
     const retrievalTrace = retrievalRuns.flatMap((run) => run.result.trace ? [run.result.trace] : []);
     if (retrievalTrace.length) {
-      const latest = await this.source.openRead(clone(stableRequest));
-      if (latest.read_epoch !== sourceRead.read_epoch ||
+      const latestEpoch = await this.readEpoch(stableRequest);
+      if (latestEpoch !== sourceRead.read_epoch ||
         await this.policy.policyHash(clone(stableRequest)) !== policyHash) {
         throw new ContextEngineError("source_boundary", "Authority or policy changed during retrieval; retry the request");
       }
@@ -305,27 +308,35 @@ export class DeterministicContextEngine implements ContextEngine {
     return materialized;
   }
 
+  private async readEpoch(request: ContextRequest): Promise<string> {
+    if (this.source.openReadEpoch) return this.source.openReadEpoch(clone(request));
+    return (await this.source.openRead(clone(request))).read_epoch;
+  }
+
   private async authorizedLifecycleEvents(
     request: ContextRequest,
     events: ContextSourceEvent[],
   ): Promise<ContextSourceEvent[]> {
     const byIdentity = groupByIdentity(events);
     const visible: ContextSourceEvent[] = [];
+    // The request is the same for every event. Freeze one copy so a policy
+    // cannot change what the next event is checked against.
+    const policyRequest = deepFreeze(structuredClone(request));
     for (const lifecycle of byIdentity.values()) {
       let lifecycleVisible = true;
       for (const source of lifecycle) {
-        const canSee = await this.policy.visible(clone({
-          request,
+        const canSee = await this.policy.visible({
+          request: policyRequest,
           resource: {
             kind: "event",
             resource_id: source.event.event_id,
-            required_scope_ids: source.required_scope_ids,
+            required_scope_ids: source.required_scope_ids.slice(),
           },
-        }));
+        });
         lifecycleVisible = lifecycleVisible && canSee;
       }
       if (lifecycleVisible) {
-        visible.push(...lifecycle.map(clone));
+        visible.push(...lifecycle);
       }
     }
     return visible;
@@ -353,7 +364,7 @@ export class DeterministicContextEngine implements ContextEngine {
         "Policy evaluator must explicitly declare protected Event IDs",
       );
     }
-    const declared = clone(await this.policy.protectedEventIds(clone(plan)));
+    const declared = clone(await this.policy.protectedEventIds(structuredClone(plan)));
     if (
       !Array.isArray(declared) ||
       declared.some((eventId) => typeof eventId !== "string" || !eventId.trim()) ||
@@ -976,7 +987,7 @@ function resolveEventLifecycle(
     }
     if (request.temporal.mode !== "history") {
       if (head.event.operation !== "tombstone" && head.event.content_hash) {
-        selected.push({ ...clone(head), status: "current" });
+        selected.push({ ...structuredClone(head), status: "current" });
       }
       continue;
     }
@@ -986,7 +997,7 @@ function resolveEventLifecycle(
     for (const source of contentEvents) {
       const isLastContent = source === contentEvents.at(-1);
       selected.push({
-        ...clone(source),
+        ...structuredClone(source),
         status: isLastContent
           ? head.event.operation === "tombstone" ? "retracted" : "current"
           : "superseded",
@@ -1194,6 +1205,14 @@ function compare(left: string, right: string): number {
 
 function clone<T>(value: T): T {
   return JSON.parse(canonicalContextJson(value)) as T;
+}
+
+function deepFreeze<T>(value: T): T {
+  if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
+  for (const child of Object.values(value as Record<string, unknown>)) {
+    deepFreeze(child);
+  }
+  return Object.freeze(value);
 }
 
 function uniqueSorted(values: readonly string[]): string[] {

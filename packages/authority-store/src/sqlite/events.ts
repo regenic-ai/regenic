@@ -396,6 +396,18 @@ export async function openContextRead(db: Database.Database, orgId: string, quer
     return openContextReadInternal(db, orgId, query);
   }
 
+export async function openContextReadEpoch(
+  db: Database.Database,
+  orgId: string,
+  query?: ContextAuthorityReadQuery,
+): Promise<string> {
+  const read = db.transaction(() => {
+    const boundary = readAuthorityBoundary(db, orgId, query);
+    return authorityReadEpoch(orgId, boundary.events, boundary.lifecycleHeads);
+  });
+  return read.deferred();
+}
+
 export async function openContextReadForThread(db: Database.Database, orgId: string, threadId: string): Promise<ContextAuthorityRead> {
     const scopedThreadId = threadId.trim();
     if (!scopedThreadId) {
@@ -404,52 +416,75 @@ export async function openContextReadForThread(db: Database.Database, orgId: str
     return openContextReadInternal(db, orgId, { filters: { thread_ids: [scopedThreadId] } });
   }
 
-async function openContextReadInternal(db: Database.Database, orgId: string, query?: ContextAuthorityReadQuery): Promise<ContextAuthorityRead> {
-    const scope = contextReadScope(orgId, query, "sqlite");
-    const read = db.transaction(() => {
-      const rows = db
-        .prepare(
-            `${scope.sql}
-                 SELECT e.id, e.org_id, e.source, e.external_id, e.operation,
-                   e.content_hash, e.parent_event_id, e.thread_id, e.actor_id,
-                   e.required_scope_ids_json, e.direction_tags_json, e.weight_hints_json, e.attrs_json,
-                   e.occurred_at, e.ingested_at,
-                   b.media_type AS content_media_type
-                 FROM events e
-                 JOIN selected_identities s
-                   ON s.org_id = e.org_id AND s.source = e.source AND s.external_id = e.external_id
-                 LEFT JOIN blobs b ON b.content_hash = e.content_hash
-                 ORDER BY e.sequence ASC
-          `,
-        )
-        .all(...scope.params) as ContextEventRow[];
-      const lifecycleHeads = db
-            .prepare(
-              `${scope.sql}
+function authorityReadEpoch(
+  orgId: string,
+  events: ContextAuthorityRead["events"],
+  lifecycleHeads: ContextAuthorityRead["lifecycle_heads"],
+): string {
+  return `authority:${hashCanonicalContext({
+    org_id: orgId,
+    events,
+    lifecycle_heads: lifecycleHeads,
+  })}`;
+}
+
+function readAuthorityBoundary(
+  db: Database.Database,
+  orgId: string,
+  query: ContextAuthorityReadQuery | undefined,
+): {
+  recordedAt: string;
+  events: ContextAuthorityRead["events"];
+  lifecycleHeads: ContextAuthorityRead["lifecycle_heads"];
+} {
+  const scope = contextReadScope(orgId, query, "sqlite");
+  const rows = db
+    .prepare(
+      `${scope.sql}
+           SELECT e.id, e.org_id, e.source, e.external_id, e.operation,
+             e.content_hash, e.parent_event_id, e.thread_id, e.actor_id,
+             e.required_scope_ids_json, e.direction_tags_json, e.weight_hints_json, e.attrs_json,
+             e.occurred_at, e.ingested_at,
+             b.media_type AS content_media_type
+           FROM events e
+           JOIN selected_identities s
+             ON s.org_id = e.org_id AND s.source = e.source AND s.external_id = e.external_id
+           LEFT JOIN blobs b ON b.content_hash = e.content_hash
+           ORDER BY e.sequence ASC
+    `,
+    )
+    .all(...scope.params) as ContextEventRow[];
+  const lifecycleHeads = db
+    .prepare(
+      `${scope.sql}
             SELECT sh.source, sh.external_id, sh.current_event_id AS head_event_id
             FROM source_heads sh
             JOIN selected_identities s
               ON s.org_id = sh.org_id AND s.source = sh.source AND s.external_id = sh.external_id
             ORDER BY sh.source ASC, sh.external_id ASC
           `,
-            )
-            .all(...scope.params) as ContextAuthorityRead["lifecycle_heads"];
-      const recordedAt = new Date().toISOString();
-      const events = rows.map((row) => ({
-        ...toEvent(db, row),
-        ...(row.content_media_type
-          ? { content_media_type: row.content_media_type }
-          : {}),
-      }));
+    )
+    .all(...scope.params) as ContextAuthorityRead["lifecycle_heads"];
+  return {
+    recordedAt: new Date().toISOString(),
+    events: rows.map((row) => ({
+      ...toEvent(db, row),
+      ...(row.content_media_type
+        ? { content_media_type: row.content_media_type }
+        : {}),
+    })),
+    lifecycleHeads,
+  };
+}
+
+async function openContextReadInternal(db: Database.Database, orgId: string, query?: ContextAuthorityReadQuery): Promise<ContextAuthorityRead> {
+    const read = db.transaction(() => {
+      const boundary = readAuthorityBoundary(db, orgId, query);
       return {
-        read_epoch: `authority:${hashCanonicalContext({
-          org_id: orgId,
-          events,
-          lifecycle_heads: lifecycleHeads,
-        })}`,
-        recorded_at: recordedAt,
-        events,
-        lifecycle_heads: lifecycleHeads,
+        read_epoch: authorityReadEpoch(orgId, boundary.events, boundary.lifecycleHeads),
+        recorded_at: boundary.recordedAt,
+        events: boundary.events,
+        lifecycle_heads: boundary.lifecycleHeads,
       } satisfies ContextAuthorityRead;
     });
     return read.deferred();

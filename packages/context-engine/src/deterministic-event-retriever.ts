@@ -3,6 +3,7 @@ import {
   contextLexicalDocumentStats,
   matchesSearchAppScope,
   scoreContextLexicalText,
+  timeSearchStage,
 } from "@regenic/domain";
 import type { ContextLexicalCorpus } from "@regenic/domain";
 import { searchMatchesFor } from "./search-matches";
@@ -38,15 +39,17 @@ export class DeterministicEventRetriever implements ContextRetriever {
     plan: AuthorizedContextRetrievalPlan,
     materialize?: ContextEventMaterializer,
   ): Promise<RetrievedContextCandidate[]> {
-    if (plan.request.requested_kinds && !plan.request.requested_kinds.includes("event")) {
-      return [];
-    }
-    const retrievalTime = retrievalTimeFor(plan);
-    const eligible = eligibleEventSources(plan);
-    const sources = materialize
-      ? await materialize(eligible.map((source) => source.event.event_id))
-      : eligible;
-    return eventCandidatesFor(sources, plan.request, retrievalTime);
+    return timeSearchStage("lexical", async () => {
+      if (plan.request.requested_kinds && !plan.request.requested_kinds.includes("event")) {
+        return [];
+      }
+      const retrievalTime = retrievalTimeFor(plan);
+      const eligible = eligibleEventSources(plan);
+      const sources = materialize
+        ? await materialize(eligible.map((source) => source.event.event_id))
+        : eligible;
+      return eventCandidatesFor(sources, plan.request, retrievalTime);
+    });
   }
 }
 

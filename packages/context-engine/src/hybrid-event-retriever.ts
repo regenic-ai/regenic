@@ -10,6 +10,9 @@ import {
   validateEmbeddingVector,
   contextLexicalQueryTerms,
   contextLexicalTerms,
+  noteSearchStageCache,
+  timeSearchStage,
+  timeSearchStageSync,
   type AuthorizedContextRetrievalPlan,
   type AuthorizedContextSourceEvent,
   type ContextRetriever,
@@ -98,6 +101,7 @@ export class HybridEventRetriever implements ContextRetriever {
     const lexicalResult = await this.lexical.retrieve(lexicalPlan, materialize);
     const lexical = Array.isArray(lexicalResult) ? { candidates: lexicalResult } : lexicalResult;
     if (!plan.request.query || (plan.request.requested_kinds && !plan.request.requested_kinds.includes("event"))) return lexical;
+    const query = plan.request.query;
     const eligible = eligibleEventSources(plan).filter((source) => source.event.content_hash);
     const allowed = new Map(eligible.map((source) => [source.event.event_id, source]));
     const rankedLexical = [...lexical.candidates].sort((a, b) =>
@@ -114,17 +118,11 @@ export class HybridEventRetriever implements ContextRetriever {
     });
     if (plan.request.temporal.mode !== "current") return fallback("vector_temporal_unsupported");
     if (!this.index) return fallback("vector_index_absent");
+    const index = this.index;
     if (!allowed.size) return { ...lexical, trace };
-    if (materialize && plan.request.search_kind === "messages") {
-      for (const source of await materialize([...allowed.keys()])) allowed.set(source.event.event_id, source);
-    }
     const authorized: ContextVectorAuthorizationKey[] = eligible.map((source) => ({
       event_id: source.event.event_id,
       content_hash: source.event.content_hash!,
-      ...(plan.request.search_kind === "messages" ? {
-        body_length: (allowed.get(source.event.event_id)!.search_body
-          ?? allowed.get(source.event.event_id)!.text ?? "").length,
-      } : {}),
     }));
     let result: Awaited<ReturnType<ContextVectorIndex["matchAuthorized"]>>;
     let generation = this.generation;
@@ -133,47 +131,50 @@ export class HybridEventRetriever implements ContextRetriever {
     let authorization: PreparedVectorAuthorization | undefined;
     try {
       generation = await this.generations?.activeGeneration(plan.request.org_id) ?? this.generation;
-      authorization = this.prepareAuthorization(
+      const prepared = timeSearchStageSync("authorize", () => this.prepareAuthorization(
         plan.request.org_id,
         generation.id,
         authorized,
-      );
+      ));
+      authorization = prepared;
       assertEmbeddingDescriptor(this.provider.descriptor, generation.model);
-      const queryVector = await this.queryVector(
+      const queryVector = await timeSearchStage("embed", () => this.queryVector(
         plan.request.org_id,
         generation,
-        plan.request.query,
-      );
-      result = await this.index.matchAuthorized({
+        query,
+      ));
+      result = await timeSearchStage("vector", () => index.matchAuthorized({
         org_id: plan.request.org_id, generation: generation.id, query_vector: [...queryVector],
         authorized,
-        authorization_hash: authorization.hash,
-        authorization_accumulator: authorization.accumulator,
-        ...(authorization.delta ? { authorization_delta: authorization.delta } : {}),
+        authorization_hash: prepared.hash,
+        authorization_accumulator: prepared.accumulator,
+        ...(prepared.delta ? { authorization_delta: prepared.delta } : {}),
         limit: vectorLimit,
-        ...(plan.request.search_kind ? { query: plan.request.query, search_kind: plan.request.search_kind } : {}),
-      });
+        ...(plan.request.search_kind ? { query, search_kind: plan.request.search_kind } : {}),
+      }));
     } catch (error) {
       if (error instanceof ContextVectorUnavailableError) return fallback(`vector_index_${error.reason}`);
       if (!(error instanceof EmbeddingError) || error.code === "input_too_large" || error.code === "invalid_input") throw error;
       embeddingDegradation = error.code === "timeout" ? "embedding_timeout" : "embedding_unavailable";
       if (!plan.request.search_kind || plan.request.search_kind === "messages" ||
-        !this.index.matchAuthorizedText) return fallback(embeddingDegradation);
+        !index.matchAuthorizedText) return fallback(embeddingDegradation);
+      const searchKind = plan.request.search_kind;
       try {
-        authorization ??= this.prepareAuthorization(
+        const prepared = authorization ?? timeSearchStageSync("authorize", () => this.prepareAuthorization(
           plan.request.org_id,
           generation.id,
           authorized,
-        );
-        result = await this.index.matchAuthorizedText({
-          org_id: plan.request.org_id, generation: generation.id, query: plan.request.query,
+        ));
+        authorization = prepared;
+        result = await timeSearchStage("vector", () => index.matchAuthorizedText!({
+          org_id: plan.request.org_id, generation: generation.id, query,
           authorized,
-          authorization_hash: authorization.hash,
-          authorization_accumulator: authorization.accumulator,
-          ...(authorization.delta ? { authorization_delta: authorization.delta } : {}),
+          authorization_hash: prepared.hash,
+          authorization_accumulator: prepared.accumulator,
+          ...(prepared.delta ? { authorization_delta: prepared.delta } : {}),
           limit: vectorLimit,
-          search_kind: plan.request.search_kind,
-        });
+          search_kind: searchKind,
+        }));
       } catch (indexError) {
         if (indexError instanceof ContextVectorUnavailableError) return {
           ...fallback(embeddingDegradation),
@@ -372,7 +373,9 @@ export class HybridEventRetriever implements ContextRetriever {
         ...(recency === undefined ? {} : { recency }),
       };
     }
-    rerankThreads(candidates, allowed, ranks, plan.request.query);
+    timeSearchStageSync("rerank", () => {
+      rerankThreads(candidates, allowed, ranks, query);
+    });
     trace.routes = [...ranks.values()].sort((a, b) => compare(a.event_id, b.event_id));
     return {
       candidates: [...candidates.values()].sort((a, b) => compare(a.candidate.candidate_id, b.candidate.candidate_id)),
@@ -396,6 +399,7 @@ export class HybridEventRetriever implements ContextRetriever {
       .update(query)
       .digest("hex");
     const cached = this.queryVectors.get(key);
+    noteSearchStageCache("embed", cached ? "hit" : "miss");
     if (cached) {
       this.queryVectors.delete(key);
       this.queryVectors.set(key, cached);

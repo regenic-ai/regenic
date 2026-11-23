@@ -15,6 +15,9 @@ export class PersonalContextPolicyEvaluator implements ContextPolicyEvaluator {
   readonly metadata_only = true;
   private readonly orgId: string;
   private readonly principal: ActorRef;
+  private readonly principalKey: string;
+  private lastRequest: Pick<ContextRequest, "org_id" | "principal"> | undefined;
+  private lastPrincipalMatch = false;
 
   constructor(options: PersonalContextPolicyOptions) {
     if (!options.org_id.trim() || !options.principal.actor_id.trim()) {
@@ -22,6 +25,7 @@ export class PersonalContextPolicyEvaluator implements ContextPolicyEvaluator {
     }
     this.orgId = options.org_id;
     this.principal = structuredClone(options.principal);
+    this.principalKey = canonicalContextJson(this.principal);
   }
 
   async policyHash(request: ContextRequest): Promise<string> {
@@ -61,8 +65,11 @@ export class PersonalContextPolicyEvaluator implements ContextPolicyEvaluator {
   private matchesPrincipal(
     request: Pick<ContextRequest, "org_id" | "principal">,
   ): boolean {
-    return request.org_id === this.orgId &&
-      canonicalContextJson(request.principal) === canonicalContextJson(this.principal);
+    if (request === this.lastRequest) return this.lastPrincipalMatch;
+    this.lastRequest = request;
+    this.lastPrincipalMatch = request.org_id === this.orgId &&
+      canonicalContextJson(request.principal) === this.principalKey;
+    return this.lastPrincipalMatch;
   }
 }
 

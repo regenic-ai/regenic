@@ -7,6 +7,7 @@ import {
   SEARCH_CARD_MAX_MESSAGES,
   searchElapsedSeconds,
   searchFileType,
+  searchTimingRows,
   searchHighlightRanges,
   searchMentionsFiles,
   searchMessageText,
@@ -18,6 +19,7 @@ import {
 } from "./context-search";
 import { KernelRequestError } from "./kernel-request";
 import { useLocale } from "./LocaleContext";
+import { useNow } from "./use-now";
 import { EmptyState } from "./EmptyState";
 import { SearchIcon } from "./Icons";
 import type {
@@ -27,12 +29,22 @@ import type {
   PersonalSearchMatch,
   PersonalSearchMessage,
 } from "./types";
-import { isMessageKey } from "../../shared/messages";
+import { isMessageKey, type MessageKey } from "../../shared/messages";
 
 const RECENT_KEY = "regenic.search.recent";
 const RECENT_LIMIT = 8;
 const DEFAULT_LIMIT = 10;
 const INFORMATIONAL_FLAGS = new Set(["model_absent", "graph_absent", "rerank_absent"]);
+
+function visibleSearchQuery(value: string): string {
+  const text = value.trim();
+  return text.length > 80 ? `${text.slice(0, 79)}…` : text;
+}
+
+function searchTimingKey(id: string): MessageKey {
+  const key = `search.timing.${id}`;
+  return isMessageKey(key) ? key : "search.timing.other";
+}
 
 function loadRecent(): string[] {
   try {
@@ -99,6 +111,10 @@ export function PreciseSearch({ onSettings, onOpenConversation, onLocate, locked
   const morePending = useRef<AbortController | null>(null);
   const input = useRef<HTMLInputElement | null>(null);
   const [elapsed, setElapsed] = useState<number | null>(null);
+  const [startedAt, setStartedAt] = useState<number | null>(null);
+  const [searchingQuery, setSearchingQuery] = useState("");
+  const now = useNow(busy, 200);
+  const liveElapsed = busy && startedAt !== null ? Math.max(0, now - startedAt) : null;
 
   useEffect(() => {
     const reset = () => {
@@ -106,7 +122,8 @@ export function PreciseSearch({ onSettings, onOpenConversation, onLocate, locked
       openPending.current?.abort(); openPending.current = null;
       morePending.current?.abort(); morePending.current = null;
       setBusy(false); setResult(null); setCards([]); setError(null);
-      setOpening(null); setLoadingMore(null); setElapsed(null);       setSubmittedFilters(null);
+      setOpening(null); setLoadingMore(null); setElapsed(null); setStartedAt(null);
+      setSearchingQuery(""); setSubmittedFilters(null);
       setSubmittedAppClass("app");
     };
     const unsubscribe = window.regenic?.onApiOriginChanged(reset);
@@ -135,6 +152,7 @@ export function PreciseSearch({ onSettings, onOpenConversation, onLocate, locked
     pending.current = controller;
     setResult(null); setCards([]); setError(null); setBusy(true);
     setOpening(null); setLoadingMore(null); setElapsed(null);
+    setStartedAt(Date.now()); setSearchingQuery(text.trim());
     const started = performance.now();
     try {
       const now = new Date();
@@ -408,6 +426,18 @@ export function PreciseSearch({ onSettings, onOpenConversation, onLocate, locked
         ) : null}
       </form>
 
+      {busy ? (
+        <p className="search-status" role="status">
+          <span className="search-status-dot" aria-hidden="true" />
+          <span>{t("search.searching", { query: visibleSearchQuery(searchingQuery) })}</span>
+          {liveElapsed !== null ? (
+            <span className="muted" aria-hidden="true">
+              {t("search.searchingElapsed", { seconds: searchElapsedSeconds(liveElapsed) })}
+            </span>
+          ) : null}
+        </p>
+      ) : null}
+
       <div className="search-body" aria-live="polite" aria-busy={busy}>
         {busy ? (
           <ol className="semantic-results is-loading" aria-label={t("search.loading")}>
@@ -462,12 +492,40 @@ export function PreciseSearch({ onSettings, onOpenConversation, onLocate, locked
                 to: new Date(submittedFilters.occurred_before).toLocaleDateString(locale),
               })}</span> : null}
               {elapsed !== null ? <span className="muted">{t("search.elapsed", { seconds: searchElapsedSeconds(elapsed) })}</span> : null}
+              {result.timing ? (
+                <div className="search-timing" aria-label={t("search.timing")}>
+                  <span>{t("search.timing.server", { seconds: searchElapsedSeconds(result.timing.total_ms) })}</span>
+                  {searchTimingRows(result.timing, elapsed ?? undefined).map((row) => (
+                    <span key={row.id} className="search-timing-stage">
+                      {t(searchTimingKey(row.id))}
+                      {" "}
+                      {t("search.timing.seconds", { seconds: searchElapsedSeconds(row.elapsed_ms) })}
+                      {row.cache === "hit" ? <span className="muted"> · {t("search.timing.cached")}</span> : null}
+                      {row.cache === "miss" ? <span className="muted"> · {t("search.timing.computed")}</span> : null}
+                    </span>
+                  ))}
+                </div>
+              ) : null}
               <details className="search-trace">
                 <summary>{t("search.trace")}</summary>
                 <dl><dt>snapshot</dt><dd>{result.snapshot_id}</dd>
                   <dt>profile</dt><dd>{result.retrieval_profile}</dd>
                   <dt>generation</dt><dd>{result.generation ?? "—"}</dd>
                   <dt>read_epoch</dt><dd>{result.read_epoch}</dd>
+                  {result.timing ? <>
+                    <dt>{t("search.timing")}</dt>
+                    <dd>{result.timing.total_ms} ms</dd>
+                    {result.timing.stages.map((stage) => (
+                      <Fragment key={stage.id}>
+                        <dt>{t(searchTimingKey(stage.id))}</dt>
+                        <dd>
+                          {stage.elapsed_ms} ms
+                          {stage.cache === "hit" ? ` · ${t("search.timing.cached")}` : ""}
+                          {stage.cache === "miss" ? ` · ${t("search.timing.computed")}` : ""}
+                        </dd>
+                      </Fragment>
+                    ))}
+                  </> : null}
                   {submittedFilters ? <><dt>occurred_after</dt><dd>{submittedFilters.occurred_after}</dd>
                     <dt>occurred_before</dt><dd>{submittedFilters.occurred_before}</dd></> : null}
                   {result.degradation_flags.length ? <><dt>flags</dt><dd>{result.degradation_flags.join(", ")}</dd></> : null}</dl>

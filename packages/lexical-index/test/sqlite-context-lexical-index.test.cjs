@@ -41,6 +41,22 @@ function replacement(documents, overrides = {}) {
 }
 
 describe("SQLite Context lexical index", () => {
+  it("asks for a rebuild until documents include filenames", async () => {
+    const dir = await root();
+    const index = new SqliteContextLexicalIndex(join(dir, "text-version.db"));
+    assert.equal(await index.needsTextRebuild("example-org"), false);
+    await index.replaceOrganization(replacement([
+      { event_id: "event-a", content_hash: HASH_A, text: "alpha" },
+    ]));
+    assert.equal(await index.needsTextRebuild("example-org"), false);
+    const Database = require("better-sqlite3");
+    const db = new Database(join(dir, "text-version.db"));
+    db.prepare("UPDATE context_lexical_meta SET text_version = NULL").run();
+    db.close();
+    assert.equal(await index.needsTextRebuild("example-org"), true);
+    index.close();
+  });
+
   it("reuses compact authorization coverage and invalidates it after index writes", async () => {
     const dir = await root();
     const index = new SqliteContextLexicalIndex(join(dir, "authorization.db"));

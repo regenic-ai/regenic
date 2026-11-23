@@ -13,7 +13,7 @@ import { embeddingConfigFromEnv, embeddingVisualEnabledFromEnv } from "@regenic/
 import { SqliteContextVectorIndex } from "@regenic/vector-index";
 import { postgresAuthorityPlugin, sqliteAuthorityPlugin } from "@regenic/authority-store";
 import { fsBlobPlugin } from "@regenic/blob-store";
-import { compactEmbeddedContent } from "@regenic/domain";
+import { compactEmbeddedContent, searchInProgress } from "@regenic/domain";
 import { modelProviderConfigFromEnv, type ModelProviderPluginConfig } from "@regenic/model-provider";
 import type { Host } from "@regenic/plugin-host";
 import {
@@ -112,12 +112,12 @@ export class PersonalRuntimeService implements OnModuleInit, OnModuleDestroy {
     this.scheduleCompact();
     if (!this.embeddingTimer && this.embeddingEnabled && this.host && shouldStartBackgroundWork() && shouldRunInProcessContextJobs()) {
       this.embeddingTimer = setInterval(() => {
-        if (!isHumanIdle() || !this.host) return;
+        if (!isHumanIdle() || searchInProgress() || !this.host) return;
         if (this.host.get("context-vector-status").status !== "ready") return;
         void this.host.get("context-embedding-worker").runOnce({
           max_jobs: 100,
           time_budget_ms: 30_000,
-          pause_if: () => !isHumanIdle(),
+          pause_if: () => !isHumanIdle() || searchInProgress(),
         }).then((result) => {
           if (result.failed) console.warn("embedding jobs failed", result.failed);
         }).catch(() => {

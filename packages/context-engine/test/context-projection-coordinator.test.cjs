@@ -226,6 +226,61 @@ describe("ContextProjectionCoordinator", () => {
     assert.deepEqual(calls[0].documents, []);
   });
 
+  it("indexes attachment filenames with the message body", async () => {
+    const calls = [];
+    const parts = Buffer.from(JSON.stringify([
+      { role: "body", text: "会议纪要" },
+      { role: "attachment", source_filename: "预算.xlsx", media_type: "application/vnd.ms-excel" },
+    ]));
+    const coordinator = new ContextProjectionCoordinator(
+      authority({
+        events: [{
+          ...event,
+          content_media_type: "application/vnd.regenic.content-parts+json",
+        }],
+      }),
+      artifactsWithExistingEventBlob(),
+      new MemoryContextProjectorRegistry(),
+      { async getMany() { return new Map([[HASH, parts]]); } },
+      {
+        async getStatus() {
+          return { available: true, algorithm_version: "segment-bm25-v1" };
+        },
+        async replaceOrganization(input) { calls.push(structuredClone(input)); },
+      },
+    );
+
+    await coordinator.syncLexicalIndex("example-org", "continuous-v1");
+
+    assert.equal(calls[0].documents[0].text, "会议纪要\n预算.xlsx");
+  });
+
+  it("does not reread authority when lexical coverage is current", async () => {
+    let reads = 0;
+    const coordinator = new ContextProjectionCoordinator({
+      async openContextRead() {
+        reads += 1;
+        throw new Error("authority read");
+      },
+    }, artifactsWithExistingEventBlob(), new MemoryContextProjectorRegistry(), undefined, {
+      async getStatus() {
+        return {
+          available: true,
+          algorithm_version: "segment-bm25-v1",
+          generation: "continuous-v1",
+          watermark: "authority:1",
+        };
+      },
+      async needsTextRebuild() { return false; },
+      async replaceOrganization() { throw new Error("replace"); },
+      async upsertDocuments() { throw new Error("upsert"); },
+    });
+
+    await coordinator.syncLexicalIndex("example-org", "continuous-v1");
+
+    assert.equal(reads, 0);
+  });
+
   it("rejects proposals that do not preserve authority evidence scopes", async () => {
     const artifacts = artifactsWithExistingEventBlob();
     const registry = new MemoryContextProjectorRegistry();

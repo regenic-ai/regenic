@@ -566,6 +566,14 @@ export interface PersonalContextSearchResult {
   }>;
   degradation_flags: string[];
   truncated: boolean;
+  timing?: {
+    total_ms: number;
+    stages: Array<{
+      id: "materialize" | "tokenize" | "lexical" | "embed" | "vector" | "authorize" | "rerank" | "expand";
+      elapsed_ms: number;
+      cache?: "hit" | "miss";
+    }>;
+  };
 }
 
 export interface PersonalSearchMatch {

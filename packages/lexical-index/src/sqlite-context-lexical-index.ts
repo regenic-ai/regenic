@@ -18,6 +18,8 @@ import {
 } from "@regenic/domain";
 
 const HASH_PATTERN = /^[a-f0-9]{64}$/;
+/** Documents indexed before this version omit filenames and attachment text. */
+const LEXICAL_TEXT_VERSION = "body-filename-attachment-v1";
 const MAX_DOCUMENT_CHARACTERS = 200_000;
 const MAX_DOCUMENT_TERMS = 50_000;
 const MAX_TERM_CHARACTERS = 128;
@@ -90,18 +92,20 @@ export class SqliteContextLexicalIndex implements ContextLexicalIndex {
       this.database.prepare(
         `
           INSERT INTO context_lexical_meta (
-            org_id, generation, watermark, algorithm_version
-          ) VALUES (?, ?, ?, ?)
+            org_id, generation, watermark, algorithm_version, text_version
+          ) VALUES (?, ?, ?, ?, ?)
           ON CONFLICT(org_id) DO UPDATE SET
             generation = excluded.generation,
             watermark = excluded.watermark,
-            algorithm_version = excluded.algorithm_version
+            algorithm_version = excluded.algorithm_version,
+            text_version = excluded.text_version
         `,
       ).run(
         input.org_id,
         input.generation,
         input.watermark,
         CONTEXT_LEXICAL_ALGORITHM_VERSION,
+        LEXICAL_TEXT_VERSION,
       );
     }).immediate();
   }
@@ -246,6 +250,19 @@ export class SqliteContextLexicalIndex implements ContextLexicalIndex {
     })();
   }
 
+  async needsTextRebuild(orgId: string): Promise<boolean> {
+    assertNonEmpty(orgId, "organization");
+    if (!this.available) return false;
+    const row = this.database.prepare(
+      `
+        SELECT text_version
+        FROM context_lexical_meta
+        WHERE org_id = ? AND algorithm_version = ?
+      `,
+    ).get(orgId, CONTEXT_LEXICAL_ALGORITHM_VERSION) as { text_version: string | null } | undefined;
+    return row !== undefined && row.text_version !== LEXICAL_TEXT_VERSION;
+  }
+
   async clearOrganization(orgId: string): Promise<void> {
     assertNonEmpty(orgId, "organization");
     if (!this.available) {
@@ -305,6 +322,12 @@ export class SqliteContextLexicalIndex implements ContextLexicalIndex {
           )
         );
       `);
+      const columns = this.database.prepare("PRAGMA table_info(context_lexical_meta)").all() as Array<{
+        name: string;
+      }>;
+      if (!columns.some((column) => column.name === "text_version")) {
+        this.database.exec("ALTER TABLE context_lexical_meta ADD COLUMN text_version TEXT");
+      }
       return true;
     } catch (error) {
       if (error instanceof Error && /fts5|no such module/i.test(error.message)) {

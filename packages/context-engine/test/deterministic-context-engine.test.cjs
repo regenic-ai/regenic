@@ -741,6 +741,119 @@ describe("deterministic context engine", () => {
     assert.equal(result.bundle.sections.length, 0);
   });
 
+  it("rechecks the authority epoch without reading the events again", async () => {
+    const events = fixtureEvents();
+    let reads = 0;
+    let epochs = 0;
+    const retrievers = new MemoryContextRetrieverRegistry();
+    retrievers.register({
+      id: "epoch-spy",
+      capabilities: () => ({
+        candidate_kinds: ["event"],
+        lexical: false,
+        vector: false,
+        graph: false,
+        rerank: false,
+        multilingual: false,
+        lazy_materialization: true,
+      }),
+      async retrieve() {
+        return {
+          candidates: [],
+          trace: {
+            retriever_id: "epoch-spy",
+            profile: "test-v1",
+            mode: "lexical",
+            authorized_count: 0,
+            covered_count: 0,
+            routes: [],
+          },
+        };
+      },
+    });
+    const context = new DeterministicContextEngine({
+      source: {
+        async openRead() {
+          reads += 1;
+          return {
+            read_epoch: "authority:stable",
+            recorded_at: "2026-08-30T00:00:00.000Z",
+            lifecycle_complete: true,
+            lifecycle_heads: lifecycleHeads(events),
+            events: structuredClone(events),
+          };
+        },
+        async openReadEpoch() {
+          epochs += 1;
+          return "authority:stable";
+        },
+      },
+      policy: policy(),
+      artifacts: new MemoryContextArtifactStore(),
+      retrievers,
+    });
+
+    await context.assemble(request());
+    assert.equal(reads, 1);
+    assert.equal(epochs, 1);
+  });
+
+  it("fails closed when the authority epoch changes during retrieval", async () => {
+    const events = fixtureEvents();
+    const retrievers = new MemoryContextRetrieverRegistry();
+    retrievers.register({
+      id: "epoch-spy",
+      capabilities: () => ({
+        candidate_kinds: ["event"],
+        lexical: false,
+        vector: false,
+        graph: false,
+        rerank: false,
+        multilingual: false,
+        lazy_materialization: true,
+      }),
+      async retrieve() {
+        return {
+          candidates: [],
+          trace: {
+            retriever_id: "epoch-spy",
+            profile: "test-v1",
+            mode: "lexical",
+            authorized_count: 0,
+            covered_count: 0,
+            routes: [],
+          },
+        };
+      },
+    });
+    const context = new DeterministicContextEngine({
+      source: {
+        async openRead() {
+          return {
+            read_epoch: "authority:stable",
+            recorded_at: "2026-08-30T00:00:00.000Z",
+            lifecycle_complete: true,
+            lifecycle_heads: lifecycleHeads(events),
+            events: structuredClone(events),
+          };
+        },
+        async openReadEpoch() {
+          return "authority:changed";
+        },
+      },
+      policy: policy(),
+      artifacts: new MemoryContextArtifactStore(),
+      retrievers,
+    });
+
+    await assert.rejects(
+      context.assemble(request()),
+      (error) => error instanceof ContextEngineError &&
+        error.code === "source_boundary" &&
+        error.message.includes("changed during retrieval"),
+    );
+  });
+
   it("enforces hard budgets, emits opaque redactions, and degrades without optional capabilities", async () => {
     const result = await engine().assemble(request({
       budget: {

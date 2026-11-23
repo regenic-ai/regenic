@@ -25,6 +25,7 @@ import {
   searchAnswerConversations,
   searchAnswerSegments,
   searchElapsedSeconds,
+  searchTimingRows,
   searchFileType,
   searchHighlightRanges,
   searchMentionsFiles,
@@ -262,6 +263,43 @@ test("search snippet previews flag long excerpts and file intent is only detecte
   assert.equal(searchMentionsFiles("profile update"), false);
   assert.equal(searchElapsedSeconds(583), "0.58");
   assert.equal(searchElapsedSeconds(12_345), "12.3");
+});
+
+test("search timing separates tokenization, semantic search, and rerank", () => {
+  const rows = searchTimingRows({
+    total_ms: 18_400,
+    stages: [
+      { id: "tokenize", elapsed_ms: 12_100 },
+      { id: "lexical", elapsed_ms: 400 },
+      { id: "embed", elapsed_ms: 3_200, cache: "miss" },
+      { id: "vector", elapsed_ms: 900 },
+      { id: "rerank", elapsed_ms: 250 },
+      { id: "materialize", elapsed_ms: 1_100 },
+      { id: "expand", elapsed_ms: 80 },
+    ],
+  }, 18_700);
+  assert.deepEqual(rows.map((row) => [row.id, row.elapsed_ms, row.cache ?? null]), [
+    ["tokenize", 12_100, null],
+    ["semantic", 4_100, "miss"],
+    ["rerank", 250, null],
+    ["materialize", 1_100, null],
+    ["lexical", 400, null],
+    ["expand", 80, null],
+    ["other", 370, null],
+    ["network", 300, null],
+  ]);
+  const cached = searchTimingRows({
+    total_ms: 11_000,
+    stages: [
+      { id: "tokenize", elapsed_ms: 9_000 },
+      { id: "embed", elapsed_ms: 0, cache: "hit" },
+      { id: "vector", elapsed_ms: 1_500 },
+      { id: "rerank", elapsed_ms: 200 },
+    ],
+  });
+  const semantic = cached.find((row) => row.id === "semantic");
+  assert.equal(semantic?.elapsed_ms, 1_500);
+  assert.equal(semantic?.cache, "hit");
 });
 
 test("search cards load windows from their boundaries and close them when exhausted", () => {

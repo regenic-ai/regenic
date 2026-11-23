@@ -1,9 +1,12 @@
 import {
   ContextSearchInputSchema,
+  observeSearch,
+  searchObservationActive,
   type ContextEngine,
   type ContextRequest,
   type EvidenceReference,
   type ContextSearchMatch,
+  type SearchTiming,
 } from "@regenic/domain";
 import { ContextEngineError } from "./deterministic-context-engine";
 
@@ -28,6 +31,7 @@ export interface ContextSearchResult {
   }>;
   degradation_flags: string[];
   truncated: boolean;
+  timing?: SearchTiming;
 }
 
 export function contextSearchRequest(
@@ -59,6 +63,10 @@ export class ContextSearcher {
   constructor(private readonly context: ContextEngine) {}
 
   async search(request: ContextRequest): Promise<ContextSearchResult> {
+    if (!searchObservationActive()) {
+      const { value, timing } = await observeSearch(() => this.search(request));
+      return { ...value, timing };
+    }
     const { snapshot, bundle } = await this.context.assemble(structuredClone(request));
     const trace = snapshot.retrieval_trace?.find((entry) => entry.retriever_id === "event-hybrid");
     const items = bundle.sections.flatMap((section) => section.items).map((item, index) => {

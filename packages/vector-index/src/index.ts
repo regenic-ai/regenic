@@ -433,14 +433,43 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
       );
       let nativeChunkCount = authorizationState?.native_chunk_count ?? 0;
       let projectionRevision = authorizationState?.projection_revision;
+      // Compiling these once matters: reconcile walks every lifecycle head, and
+      // preparing inside the loop held the main thread for about a second.
+      const previousHead = this.db.prepare(
+        "SELECT event_id,fence FROM source_heads WHERE org_id=? AND source=? AND external_id=?",
+      );
+      const upsertHead = this.db.prepare(`INSERT INTO source_heads VALUES (?,?,?,?,?)
+        ON CONFLICT(org_id,source,external_id) DO UPDATE SET event_id=excluded.event_id,fence=excluded.fence`);
+      const deleteCoverage = this.db.prepare(
+        "DELETE FROM coverage WHERE org_id=? AND source=? AND external_id=?",
+      );
+      const authorizedHash = this.db.prepare(
+        "SELECT content_hash FROM vector_authorized WHERE event_id=?",
+      );
+      const insertUncovered = this.db.prepare(
+        "INSERT OR REPLACE INTO vector_uncovered(event_id,content_hash) VALUES (?,?)",
+      );
+      const deleteSkipped = this.db.prepare("DELETE FROM vector_skipped WHERE event_id=?");
+      const supersedeJobs = this.db.prepare(`UPDATE jobs SET status='superseded',owner=NULL,lease_until=NULL,
+        processing_ms=processing_ms+CASE WHEN started_at IS NULL THEN 0
+          ELSE MAX(0,CAST((julianday(?) - julianday(started_at))*86400000 AS INTEGER)) END,
+        started_at=NULL,completed_at=?
+        WHERE org_id=? AND source=? AND external_id=? AND event_id<>?`);
+      const deleteStaged = this.db.prepare(`DELETE FROM staged_chunks WHERE job_id IN (
+        SELECT id FROM jobs WHERE org_id=? AND source=? AND external_id=? AND status='superseded'
+      )`);
+      const insertJob = this.db.prepare(`INSERT OR IGNORE INTO jobs (
+        org_id,generation,source,external_id,event_id,content_hash,operation,lineage_json,fence,status,completed_at
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?)`);
+      const updateEpoch = this.db.prepare(
+        "UPDATE generations SET reconciled_epoch=? WHERE org_id=? AND generation=?",
+      );
       for (const head of input.heads) {
-        const previous = this.db.prepare("SELECT event_id,fence FROM source_heads WHERE org_id=? AND source=? AND external_id=?")
-          .get(input.org_id, head.source, head.external_id) as { event_id: string; fence: number } | undefined;
+        const previous = previousHead.get(input.org_id, head.source, head.external_id) as
+          { event_id: string; fence: number } | undefined;
         if (previous && !head.lineage.includes(previous.event_id)) throw new Error("Stale embedding lifecycle view");
         const fence = previous ? previous.fence + Number(previous.event_id !== head.event_id) : 1;
-        this.db.prepare(`INSERT INTO source_heads VALUES (?,?,?,?,?)
-          ON CONFLICT(org_id,source,external_id) DO UPDATE SET event_id=excluded.event_id,fence=excluded.fence`)
-          .run(input.org_id, head.source, head.external_id, head.event_id, fence);
+        upsertHead.run(input.org_id, head.source, head.external_id, head.event_id, fence);
         if (previous?.event_id !== head.event_id) {
           if (previous) {
             projectionRevision = this.recordProjectionChangesForOrganization(
@@ -455,40 +484,24 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
               previous.event_id,
             );
           }
-          this.db.prepare("DELETE FROM coverage WHERE org_id=? AND source=? AND external_id=?")
-            .run(input.org_id, head.source, head.external_id);
-          if (authorizationState && previous && this.db.prepare(
-            "SELECT 1 FROM vector_authorized WHERE event_id=?",
-          ).get(previous.event_id)) {
-            const authorized = this.db.prepare(
-              "SELECT content_hash FROM vector_authorized WHERE event_id=?",
-            ).get(previous.event_id) as { content_hash: string };
-            this.db.prepare(
-              "INSERT OR REPLACE INTO vector_uncovered(event_id,content_hash) VALUES (?,?)",
-            ).run(previous.event_id, authorized.content_hash);
-            this.db.prepare("DELETE FROM vector_skipped WHERE event_id=?")
-              .run(previous.event_id);
+          deleteCoverage.run(input.org_id, head.source, head.external_id);
+          const authorized = previous
+            ? authorizedHash.get(previous.event_id) as { content_hash: string } | undefined
+            : undefined;
+          if (authorizationState && previous && authorized) {
+            insertUncovered.run(previous.event_id, authorized.content_hash);
+            deleteSkipped.run(previous.event_id);
           }
-          this.db.prepare(`UPDATE jobs SET status='superseded',owner=NULL,lease_until=NULL,
-            processing_ms=processing_ms+CASE WHEN started_at IS NULL THEN 0
-              ELSE MAX(0,CAST((julianday(?) - julianday(started_at))*86400000 AS INTEGER)) END,
-            started_at=NULL,completed_at=?
-            WHERE org_id=? AND source=? AND external_id=? AND event_id<>?`)
-            .run(input.now, input.now, input.org_id, head.source, head.external_id, head.event_id);
-          this.db.prepare(`DELETE FROM staged_chunks WHERE job_id IN (
-            SELECT id FROM jobs WHERE org_id=? AND source=? AND external_id=? AND status='superseded'
-          )`).run(input.org_id, head.source, head.external_id);
+          supersedeJobs.run(input.now, input.now, input.org_id, head.source, head.external_id, head.event_id);
+          deleteStaged.run(input.org_id, head.source, head.external_id);
         }
-        this.db.prepare(`INSERT OR IGNORE INTO jobs (
-          org_id,generation,source,external_id,event_id,content_hash,operation,lineage_json,fence,status,completed_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(
+        insertJob.run(
           input.org_id, input.generation, head.source, head.external_id, head.event_id, head.content_hash ?? null,
           head.operation, canonicalContextJson(head.lineage), fence, head.operation === "tombstone" ? "succeeded" : "pending",
           head.operation === "tombstone" ? input.now : null,
         );
       }
-      this.db.prepare("UPDATE generations SET reconciled_epoch=? WHERE org_id=? AND generation=?")
-        .run(input.read_epoch, input.org_id, input.generation);
+      updateEpoch.run(input.read_epoch, input.org_id, input.generation);
       if (authorizationState) {
         this.updateVectorAuthorizationCounts(nativeChunkCount, projectionRevision);
       }
@@ -1028,7 +1041,8 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
             }
           }
           const eligibleChunk = input.search_kind === "files" ? Boolean(origin)
-            : input.search_kind === "messages" ? !origin && chunk.end! <= (first.body_length ?? 0)
+            : input.search_kind === "messages"
+              ? !origin && (first.body_length === null || chunk.end! <= first.body_length)
             : true;
           if (eligibleChunk && (!best || score > best.score)) {
             best = {

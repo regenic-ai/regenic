@@ -1,10 +1,17 @@
 import {
   canonicalContextJson,
   bodyTextFromStored,
+  CONTENT_PARTS_MEDIA_TYPE,
   hashCanonicalContext,
   hashContextArtifactInputs,
+  isTextFilename,
+  isTextMediaType,
+  parseStoredContentParts,
+  storedPartBytes,
+  storedPartContentHash,
   threadProjectionGeneration,
   type BlobStore,
+  type ContextSearchPart,
   type FencedBlobStore,
   type ContextArtifact,
   type ContextArtifactStore,
@@ -17,6 +24,7 @@ import {
   type ContextProjectionRunner,
   type EvidenceReference,
   type ContextSourceEvent,
+  type StoredContentPart,
 } from "@regenic/domain";
 import { persistContextArtifact } from "./context-artifact-blob-writer";
 
@@ -75,8 +83,13 @@ export class ContextProjectionCoordinator implements ContextProjectionRunner {
     if (!status.available) {
       return;
     }
-    if (threadId && (!status.generation || status.generation !== generation)) {
+    const rebuildText = await this.lexicalIndex.needsTextRebuild?.(orgId) ?? false;
+    const stale = !status.generation || status.generation !== generation || rebuildText;
+    if (threadId && stale) {
       await this.syncLexicalIndex(orgId, generation);
+      return;
+    }
+    if (!stale && eventIds.length === 0) {
       return;
     }
     const read = structuredClone(
@@ -87,6 +100,7 @@ export class ContextProjectionCoordinator implements ContextProjectionRunner {
     validateProjectionRead(read, orgId);
     const sourceEvents = await toSourceEvents(read.events, this.blobs, {
       missingBlobs: "skip",
+      indexFileText: true,
     });
     await synchronizeLexicalIndex(
       this.lexicalIndex,
@@ -94,7 +108,8 @@ export class ContextProjectionCoordinator implements ContextProjectionRunner {
       generation,
       read.read_epoch,
       sourceEvents,
-      eventIds,
+      stale ? [] : eventIds,
+      stale,
     );
   }
 
@@ -233,7 +248,7 @@ function validateProposal(
 async function toSourceEvents(
   events: AuthorityEvent[],
   blobs?: BlobStore,
-  options: { missingBlobs?: "error" | "skip" } = {},
+  options: { missingBlobs?: "error" | "skip"; indexFileText?: boolean } = {},
 ): Promise<ContextSourceEvent[]> {
   const hashes = [...new Set(events.flatMap((event) =>
     event.operation !== "tombstone" && event.content_hash ? [event.content_hash] : [],
@@ -246,11 +261,17 @@ async function toSourceEvents(
   ) {
     throw new Error("Context projection authority Event references a missing Blob");
   }
+  const attachmentBlobs = options.indexFileText && blobs
+    ? await blobs.getMany(textAttachmentHashes(events, bodies))
+    : new Map<string, Uint8Array>();
   return events.map((event) => {
     const bytes = event.content_hash ? bodies.get(event.content_hash) : undefined;
     const text = bytes && event.content_media_type
       ? bodyTextFromStored(bytes, event.content_media_type)
       : undefined;
+    const searchParts = options.indexFileText && bytes && event.content_media_type
+      ? fileSearchParts(bytes, event.content_media_type, attachmentBlobs)
+      : [];
     return {
       event: {
         ...toEvidence(event),
@@ -262,8 +283,67 @@ async function toSourceEvents(
       ...(event.actor_id ? { actor_id: event.actor_id } : {}),
       required_scope_ids: [...(event.required_scope_ids ?? [])],
       ...(text === undefined ? {} : { text }),
+      ...(searchParts.length ? { search_parts: searchParts } : {}),
     };
   });
+}
+
+function textAttachmentHashes(
+  events: readonly AuthorityEvent[],
+  bodies: ReadonlyMap<string, Uint8Array>,
+): string[] {
+  const hashes = new Set<string>();
+  for (const event of events) {
+    const bytes = event.content_hash ? bodies.get(event.content_hash) : undefined;
+    if (!bytes || event.content_media_type !== CONTENT_PARTS_MEDIA_TYPE) continue;
+    for (const part of parseStoredContentParts(bytes) ?? []) {
+      if (part.role !== "attachment" || !isIndexableAttachmentText(part)) continue;
+      const hash = storedPartContentHash(part);
+      if (hash) hashes.add(hash);
+    }
+  }
+  return [...hashes];
+}
+
+function fileSearchParts(
+  bytes: Uint8Array,
+  mediaType: string,
+  attachmentBlobs: ReadonlyMap<string, Uint8Array>,
+): ContextSearchPart[] {
+  if (mediaType !== CONTENT_PARTS_MEDIA_TYPE) return [];
+  const parts: ContextSearchPart[] = [];
+  for (const [partIndex, part] of (parseStoredContentParts(bytes) ?? []).entries()) {
+    if (part.role !== "attachment") continue;
+    const text = attachmentIndexText(part, attachmentBlobs);
+    if (!part.source_filename && text === undefined) continue;
+    parts.push({
+      part_index: partIndex,
+      media_type: part.media_type ?? "application/octet-stream",
+      ...(part.source_filename ? { filename: part.source_filename } : {}),
+      ...(text === undefined ? {} : { text }),
+    });
+  }
+  return parts;
+}
+
+function isIndexableAttachmentText(part: StoredContentPart): boolean {
+  return isTextMediaType(part.media_type ?? "") || isTextFilename(part.source_filename);
+}
+
+function attachmentIndexText(
+  part: StoredContentPart,
+  blobs: ReadonlyMap<string, Uint8Array>,
+): string | undefined {
+  if (typeof part.text === "string" && part.text.trim()) return part.text;
+  if (!isIndexableAttachmentText(part)) return undefined;
+  const hash = storedPartContentHash(part);
+  const bytes = (hash ? blobs.get(hash) : undefined) ?? storedPartBytes(part);
+  if (!bytes?.length) return undefined;
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    return undefined;
+  }
 }
 
 function requireProjectionNamespace(orgId: string, generation: string): void {
@@ -296,6 +376,8 @@ function validateProjectionRead(read: ContextAuthorityRead, orgId: string): void
   }
 }
 
+const LEXICAL_DOCUMENT_CHARACTERS = 200_000;
+
 async function synchronizeLexicalIndex(
   index: ContextLexicalIndex | undefined,
   orgId: string,
@@ -303,6 +385,7 @@ async function synchronizeLexicalIndex(
   watermark: string,
   events: ContextSourceEvent[],
   eventIds: string[],
+  forceReplace = false,
 ): Promise<void> {
   if (!index) {
     return;
@@ -312,7 +395,7 @@ async function synchronizeLexicalIndex(
     return;
   }
   const documents = events.flatMap(toLexicalDocument);
-  if (!status.generation || status.generation !== generation) {
+  if (forceReplace || !status.generation || status.generation !== generation) {
     await index.replaceOrganization({ org_id: orgId, generation, watermark, documents });
     return;
   }
@@ -333,10 +416,11 @@ async function synchronizeLexicalIndex(
 }
 
 function toLexicalDocument(source: ContextSourceEvent): ContextLexicalDocument[] {
+  const text = lexicalDocumentText(source);
   if (
     source.event.operation === "tombstone" ||
     !source.event.content_hash ||
-    source.text === undefined ||
+    !text ||
     !source.thread_id ||
     !source.actor_id ||
     source.required_scope_ids.length === 0
@@ -346,6 +430,21 @@ function toLexicalDocument(source: ContextSourceEvent): ContextLexicalDocument[]
   return [{
     event_id: source.event.event_id,
     content_hash: source.event.content_hash,
-    text: source.text,
+    text,
   }];
+}
+
+function lexicalDocumentText(source: ContextSourceEvent): string {
+  const body = source.text ?? "";
+  const filenames = (source.search_parts ?? [])
+    .flatMap((part) => part.filename ? [part.filename] : [])
+    .join("\n");
+  const attachments = (source.search_parts ?? [])
+    .flatMap((part) => part.text ? [part.text] : [])
+    .join("\n");
+  const full = [body, filenames, attachments].filter((value) => value.trim()).join("\n");
+  if (full.length <= LEXICAL_DOCUMENT_CHARACTERS) return full;
+  const names = [body, filenames].filter((value) => value.trim()).join("\n");
+  if (names.length <= LEXICAL_DOCUMENT_CHARACTERS) return names;
+  return body.slice(0, LEXICAL_DOCUMENT_CHARACTERS);
 }
