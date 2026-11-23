@@ -68,6 +68,7 @@ import { workStartErrorCopy } from "./recipe-draft";
 import { useLocale } from "./LocaleContext";
 import { InboxWorkspace } from "./InboxWorkspace";
 import { connectPersonalEvents } from "./personal-events";
+import { clearStoredQuestions } from "./SearchAsk";
 import { SearchPage, type SearchAskRequest } from "./SearchPage";
 import {
   acknowledgmentRecovery,
@@ -1018,6 +1019,7 @@ export function ConsoleApp() {
   }, [locale, refresh]);
 
   const resetWorkspace = useCallback(async () => {
+    clearStoredQuestions();
     workspaceEpoch.current += 1;
     const openIds = new Set(
       [

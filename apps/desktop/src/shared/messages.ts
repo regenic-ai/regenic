@@ -1239,7 +1239,7 @@ export const en = {
   "settings.storeClear": "Clear local data",
   "settings.storeClearing": "Clearing…",
   "settings.storeConfirmLead":
-    "This cannot be undone. Workbench and imported history will be empty. Apps, Agents and automations stay.",
+    "This cannot be undone. Workbench, imported history and questions will be empty. Apps, Agents and automations stay.",
   "settings.storeConfirm": "Clear now",
   "settings.storeCancel": "Cancel",
   "settings.storeDone":
@@ -2888,7 +2888,7 @@ export const zh: Record<MessageKey, string> = {
   "settings.storeClear": "清理本机数据",
   "settings.storeClearing": "清理中…",
   "settings.storeConfirmLead":
-    "此操作不能撤销。工作台和导入历史都会清空。应用、Agent 和自动化会留下。",
+    "此操作不能撤销。工作台、导入历史和问答记录都会清空。应用、Agent 和自动化会留下。",
   "settings.storeConfirm": "立即清理",
   "settings.storeCancel": "取消",
   "settings.storeDone": "已清理 {conversations} 个会话、{events} 条消息、{work} 条工单。",

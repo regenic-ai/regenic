@@ -41,8 +41,19 @@ function loadQuestions(): StoredQuestion[] {
   }
 }
 
-function saveQuestions(entries: StoredQuestion[]) {
+let questionsEpoch = 0;
+
+function saveQuestions(entries: StoredQuestion[], epoch = questionsEpoch) {
+  if (epoch !== questionsEpoch) return;
   try { localStorage.setItem(QUESTIONS_KEY, JSON.stringify(entries)); } catch { /* storage unavailable */ }
+}
+
+const QUESTIONS_CLEARED = "regenic-search-questions-cleared";
+
+export function clearStoredQuestions(): void {
+  questionsEpoch += 1;
+  try { localStorage.removeItem(QUESTIONS_KEY); } catch { /* storage unavailable */ }
+  window.dispatchEvent(new Event(QUESTIONS_CLEARED));
 }
 
 function loadExecutor(): string {
@@ -251,6 +262,21 @@ export function SearchAsk({ scope, scopeNonce = 0, onClearScope }: {
   }, [scopeNonce]);
 
   useEffect(() => {
+    const onCleared = () => {
+      loadedQuestion.current = null;
+      setQuestions([]);
+      setSelectedId(null);
+      setDraft("");
+      setError(null);
+      setLive(null);
+      setItems([]);
+      setRailStates({});
+    };
+    window.addEventListener(QUESTIONS_CLEARED, onCleared);
+    return () => window.removeEventListener(QUESTIONS_CLEARED, onCleared);
+  }, []);
+
+  useEffect(() => {
     const controller = new AbortController();
     void (async () => {
       try {
@@ -345,6 +371,7 @@ export function SearchAsk({ scope, scopeNonce = 0, onClearScope }: {
 
   async function submit(text = draft.trim()) {
     if (!text || starting) return;
+    const epoch = questionsEpoch;
     setStarting(true);
     setError(null);
     try {
@@ -368,9 +395,10 @@ export function SearchAsk({ scope, scopeNonce = 0, onClearScope }: {
         ...(created.executor_type || agent ? { executorType: created.executor_type || agent } : {}),
         askedAt: askedAt,
       };
+      if (epoch !== questionsEpoch) return;
       const next = [stored, ...questions.filter((entry) => entry.id !== stored.id)];
       setQuestions(next);
-      saveQuestions(next);
+      saveQuestions(next, epoch);
       setDraft("");
       setSelectedId(stored.id);
       setLive(created);

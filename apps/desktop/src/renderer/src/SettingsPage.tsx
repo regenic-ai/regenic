@@ -16,6 +16,7 @@ import { ContextRecordsDialog } from "./ContextRecordsDialog";
 import { SemanticSettings } from "./SemanticSettings";
 import { SyncSettings } from "./SyncSettings";
 import { DatabaseSettings } from "./DatabaseSettings";
+import { clearStoredQuestions } from "./SearchAsk";
 import { InfoTip } from "./InfoTip";
 import { useLocale } from "./LocaleContext";
 import type {
@@ -312,6 +313,7 @@ export function SettingsPage({
       } catch {
         setStore(emptyStore);
       }
+      if (action === "adopt" || action === "empty") clearStoredQuestions();
       await onChanged();
     } catch (caught) {
       setDataError(
