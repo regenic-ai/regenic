@@ -98,14 +98,8 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
     });
   }
 
-  private async read(
-    generation: EmbeddingGeneration,
-    pause?: () => boolean,
-  ): Promise<ContextSourceRead | undefined> {
+  private async read(generation: EmbeddingGeneration): Promise<ContextSourceRead> {
     const read = await this.openAuthorityRead();
-    // openRead yields. Reconcile then walks every head synchronously on this
-    // thread, so a search that started during the read must not wait on it.
-    if (pause?.()) return undefined;
     await this.reconcileRead(read, generation);
     return read;
   }
@@ -129,7 +123,6 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
         const generation = manifests[cursor];
         assertEmbeddingDescriptor(this.provider.descriptor, generation.model);
         const run = await this.run(generation, reads.get(generation.id), options.pause_if);
-        if (!run.read) break work;
         reads.set(generation.id, run.read);
         if (run.claimed) {
           found = true;
@@ -175,16 +168,7 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
     previous?: ContextSourceRead,
     pause?: () => boolean,
   ) {
-    const loaded = previous ?? await this.read(generation, pause);
-    if (!loaded) {
-      return {
-        claimed: false,
-        read: undefined,
-        result: { processed: 0, failed: 0, superseded: 0 },
-        yielded: false,
-      };
-    }
-    let read = loaded;
+    let read = previous ?? await this.read(generation);
     const claimSequence = this.claimSequences.get(generation.id) ?? 0;
     const claimed = await this.jobs.claim({
       org_id: this.orgId, generation: generation.id, owner: this.owner,
