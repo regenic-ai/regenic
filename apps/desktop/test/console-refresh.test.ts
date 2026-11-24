@@ -218,6 +218,37 @@ describe("engineRevision", () => {
     assert.notEqual(before, after);
   });
 
+  it("changes when a connector's last check moves", () => {
+    const installation = {
+      id: "feishu-1",
+      connector_type: "feishu-chat",
+      status: "enabled" as const,
+      label: "All conversations",
+      detail: null,
+      syncable: true,
+      can_reply: true,
+      can_create: false,
+      last_attempt: null,
+      last_checked_at: "2026-11-21T01:45:00.000Z",
+    } as NonNullable<PersonalEngineView["installations"]>[number];
+    const base = engineWithCatalog("Feishu", "Install lark-cli");
+    const before = engineRevision(
+      { ...base, installations: [installation] },
+      false,
+    );
+    const after = engineRevision(
+      {
+        ...base,
+        installations: [{
+          ...installation,
+          last_checked_at: "2026-11-23T02:00:00.000Z",
+        }],
+      },
+      false,
+    );
+    assert.notEqual(before, after);
+  });
+
   it("changes when freshness or ETA changes", () => {
     const base = engineWithCatalog("Feishu", "Install lark-cli");
     const before = engineRevision(

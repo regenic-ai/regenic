@@ -26,6 +26,7 @@ function fixture(overrides = {}) {
     findInstallation: async (id) => current && (!id || id === current.id) ? structuredClone(current) : null,
     listInstallations: async () => current ? [structuredClone(current)] : [],
     latestAttempt: async () => null,
+    latestSyncTouchAt: async () => null,
     listHiddenExecutorThreadIds: async () => [],
     getSyncCatalog: async () => ({ catalog: null, members: [] }),
     listSyncPhaseHeads: async () => [],

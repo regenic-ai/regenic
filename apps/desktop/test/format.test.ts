@@ -18,6 +18,8 @@ import {
 } from "../src/renderer/src/pull-copy.ts";
 import {
   aggregateInstallationSync,
+  connectorCardMode,
+  SYNC_CHECK_STALE_MS,
   syncEtaSummary,
   syncFreshnessSummary,
   syncProgressSummary,
@@ -419,5 +421,119 @@ describe("formatChatTime", () => {
     const formatted = formatChatTime("2025-04-21T18:28:00", now);
     assert.match(formatted, /2025/);
     assert.match(formatted, /4\/21/);
+  });
+});
+
+describe("connector card health", () => {
+  const now = Date.parse("2026-11-23T02:00:00.000Z");
+  const fresh = new Date(now - 60_000).toISOString();
+  const stale = new Date(now - SYNC_CHECK_STALE_MS).toISOString();
+  const succeeded = {
+    status: "succeeded",
+    started_at: "2026-11-21T01:45:00.000Z",
+    finished_at: "2026-11-21T01:45:00.000Z",
+  };
+
+  it("stays quiet when a caught-up connector was checked recently, even if the last attempt accepted nothing", () => {
+    assert.deepEqual(
+      connectorCardMode({
+        status: "enabled",
+        syncable: true,
+        hasConversations: true,
+        lastAttempt: succeeded,
+        lastCheckedAt: fresh,
+        nowMs: now,
+      }),
+      { mode: "quiet", staleChip: false },
+    );
+  });
+
+  it("replaces the caught-up chip once the last check is a quarter hour old", () => {
+    assert.deepEqual(
+      connectorCardMode({
+        status: "enabled",
+        syncable: true,
+        hasConversations: true,
+        lastAttempt: succeeded,
+        lastCheckedAt: stale,
+        nowMs: now,
+      }),
+      { mode: "stale", staleChip: true },
+    );
+  });
+
+  it("keeps a receive failure on the card until a later check moves past it", () => {
+    const failed = {
+      status: "failed",
+      started_at: "2026-11-23T01:00:00.000Z",
+      finished_at: "2026-11-23T01:00:00.000Z",
+    };
+    assert.equal(
+      connectorCardMode({
+        status: "enabled",
+        syncable: true,
+        hasConversations: true,
+        lastAttempt: failed,
+        lastCheckedAt: "2026-11-23T00:30:00.000Z",
+        nowMs: now,
+      }).mode,
+      "attempt",
+    );
+    assert.deepEqual(
+      connectorCardMode({
+        status: "enabled",
+        syncable: true,
+        hasConversations: true,
+        lastAttempt: failed,
+        lastCheckedAt: fresh,
+        nowMs: now,
+      }),
+      { mode: "quiet", staleChip: false },
+    );
+  });
+
+  it("does not call a quiet connector stale while an attempt is still running", () => {
+    assert.equal(
+      connectorCardMode({
+        status: "enabled",
+        syncable: true,
+        hasConversations: true,
+        lastAttempt: {
+          status: "running",
+          started_at: stale,
+        },
+        lastCheckedAt: stale,
+        nowMs: now,
+      }).mode,
+      "attempt",
+    );
+  });
+
+  it("waits for the first update instead of warning when nothing has been stored", () => {
+    assert.equal(
+      connectorCardMode({
+        status: "enabled",
+        syncable: true,
+        hasConversations: false,
+        lastAttempt: null,
+        lastCheckedAt: stale,
+        nowMs: now,
+      }).mode,
+      "waiting",
+    );
+  });
+
+  it("leaves a disabled installation alone", () => {
+    assert.deepEqual(
+      connectorCardMode({
+        status: "disabled",
+        syncable: false,
+        hasConversations: true,
+        lastAttempt: succeeded,
+        lastCheckedAt: stale,
+        nowMs: now,
+      }),
+      { mode: "quiet", staleChip: false },
+    );
   });
 });

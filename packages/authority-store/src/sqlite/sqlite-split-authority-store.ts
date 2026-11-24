@@ -602,6 +602,10 @@ export class SqliteSplitAuthorityStore
     return this.reader.call("latestAttempt", [installationId]);
   }
 
+  async latestSyncTouchAt(installationId: string): Promise<string | null> {
+    return this.reader.call("latestSyncTouchAt", [installationId]);
+  }
+
   async listQuarantines(installationId: string): Promise<IngestQuarantine[]> {
     return this.reader.call("listQuarantines", [installationId]);
   }

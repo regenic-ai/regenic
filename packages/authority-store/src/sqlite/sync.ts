@@ -683,6 +683,19 @@ export async function listAttempts(db: Database.Database, installationId: string
     return rows.map((row) => toAttempt(db, row));
   }
 
+export async function latestSyncTouchAt(db: Database.Database, installationId: string): Promise<string | null> {
+  const row = db
+    .prepare(
+      `
+        SELECT MAX(updated_at) AS updated_at
+        FROM connector_sync_state
+        WHERE installation_id = ?
+      `,
+    )
+    .get(installationId) as { updated_at: string | null } | undefined;
+  return row?.updated_at ?? null;
+}
+
 export async function latestAttempt(db: Database.Database, installationId: string): Promise<IngestAttempt | null> {
     const row = db
       .prepare(

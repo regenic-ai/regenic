@@ -10,6 +10,7 @@ const {
   connectorAllowsMultiple,
   connectorCatalog,
   nextPickedChatNames,
+  installationCheckedAt,
   toInstallationView,
 } = require("../dist/personal-connector-view");
 
@@ -478,5 +479,65 @@ describe("connector catalog hints", () => {
       ),
       null,
     );
+  });
+});
+
+describe("installation check time", () => {
+  it("uses the newest successful touch and ignores a failed attempt", () => {
+    assert.equal(
+      installationCheckedAt({
+        syncTouchAt: "2026-11-23T01:00:00.000Z",
+        lastPushAt: "2026-11-22T01:00:00.000Z",
+        attempt: {
+          status: "succeeded",
+          started_at: "2026-11-21T01:45:00.000Z",
+          finished_at: "2026-11-21T01:45:00.000Z",
+        },
+      }),
+      "2026-11-23T01:00:00.000Z",
+    );
+    assert.equal(
+      installationCheckedAt({
+        syncTouchAt: "2026-11-20T01:00:00.000Z",
+        attempt: {
+          status: "failed",
+          started_at: "2026-11-23T01:00:00.000Z",
+          finished_at: "2026-11-23T01:00:00.000Z",
+        },
+      }),
+      "2026-11-20T01:00:00.000Z",
+    );
+    assert.equal(installationCheckedAt({ attempt: null }), undefined);
+  });
+
+  it("projects that check time onto the installation card", () => {
+    const view = toInstallationView(
+      {
+        id: "feishu-1",
+        org_id: "local-owner",
+        connector_type: "feishu-chat",
+        status: "enabled",
+        config: { selection: "all", kinds: ["group", "p2p"] },
+        created_at: "2026-08-22T00:00:00.000Z",
+        updated_at: "2026-08-22T00:00:00.000Z",
+      },
+      {
+        id: "attempt-1",
+        org_id: "local-owner",
+        connector_installation_id: "feishu-1",
+        stream_key: "feishu:oc_1",
+        started_at: "2026-11-21T01:45:00.000Z",
+        finished_at: "2026-11-21T01:45:00.000Z",
+        status: "succeeded",
+        accepted_count: 0,
+        duplicate_count: 0,
+        quarantined_count: 0,
+        retryable_failure_count: 0,
+      },
+      { get: () => feishuChatDriver },
+      "en",
+      { syncTouchAt: "2026-11-23T02:00:00.000Z" },
+    );
+    assert.equal(view.last_checked_at, "2026-11-23T02:00:00.000Z");
   });
 });

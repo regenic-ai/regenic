@@ -668,6 +668,18 @@ export async function listAttempts(db: PgSql, installationId: string, limit?: nu
     return rows.map((row) => toAttempt(db, row));
   }
 
+export async function latestSyncTouchAt(db: PgSql, installationId: string): Promise<string | null> {
+  const row = await db.queryOne<{ updated_at: string | null }>(
+    `
+      SELECT MAX(updated_at) AS updated_at
+      FROM connector_sync_state
+      WHERE installation_id = $1
+    `,
+    [installationId],
+  );
+  return row?.updated_at ?? null;
+}
+
 export async function latestAttempt(db: PgSql, installationId: string): Promise<IngestAttempt | null> {
     const row = await db.queryOne<AttemptRow>(
       `

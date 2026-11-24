@@ -147,6 +147,8 @@ export interface SyncStore {
   noteSyncCatalogStream(input: NoteSyncCatalogStreamInput): Promise<void>;
   listSyncStates(installationId: string): Promise<SyncStreamState[]>;
   listSyncPhaseHeads(installationId: string): Promise<SyncPhaseHead[]>;
+  /** Newest `connector_sync_state.updated_at` for this installation, if any stream has been touched. */
+  latestSyncTouchAt(installationId: string): Promise<string | null>;
   getSyncState(
     installationId: string,
     streamKey: string,
