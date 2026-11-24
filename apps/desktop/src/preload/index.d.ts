@@ -69,6 +69,7 @@ export interface HostMemoryWatch {
   kernel_bytes: number | null;
   app_bytes: number;
   used_bytes: number;
+  total_bytes?: number;
   kernel_alive: boolean | null;
   hint: string | null;
 }

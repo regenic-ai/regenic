@@ -15,9 +15,13 @@ import {
   diskWatchCopy,
   formatBytes,
   memoryHint,
+  memoryLimits,
+  memoryPressureFromLevel,
   memoryWatchCopy,
+  parseLinuxMeminfo,
   portFromHttpOrigin,
   rememberKernelSample,
+  SYSTEM_MEMORY_CRITICAL_HINT,
   volumeFromStatfs,
 } from "../src/shared/host-watch.ts";
 
@@ -94,6 +98,98 @@ describe("host watch", () => {
       }),
       "critical",
     );
+  });
+
+  it("raises the kernel line with physical RAM", () => {
+    const kernel = Math.round(1.9 * GB);
+    const app = 657 * 1024 * 1024;
+    const sample = {
+      kernel_bytes: kernel,
+      app_bytes: app,
+      kernel_alive: true as const,
+    };
+    assert.equal(
+      classifyMemory({ ...sample, total_bytes: 24 * GB }),
+      "ok",
+    );
+    assert.equal(
+      classifyMemory({ ...sample, total_bytes: 8 * GB }),
+      "attention",
+    );
+    assert.equal(memoryHint({
+      kind: "ok",
+      ...sample,
+      total_bytes: 24 * GB,
+    }), null);
+    assert.equal(memoryHint({
+      kind: "attention",
+      ...sample,
+      total_bytes: 8 * GB,
+    }), KERNEL_ATTENTION_HINT);
+    const eight = memoryLimits(8 * GB);
+    const twentyFour = memoryLimits(24 * GB);
+    assert.ok(eight.kernelCritical < twentyFour.kernelCritical);
+    assert.ok(kernel < twentyFour.kernelAttention);
+    assert.ok(kernel >= eight.kernelAttention);
+    assert.ok(kernel < eight.kernelCritical);
+  });
+
+  it("treats OS memory pressure as the crash signal", () => {
+    const calm = {
+      kernel_bytes: 200 * 1024 * 1024,
+      app_bytes: 180 * 1024 * 1024,
+      kernel_alive: true as const,
+      total_bytes: 24 * GB,
+    };
+    assert.equal(
+      classifyMemory({ ...calm, pressure: "critical" }),
+      "critical",
+    );
+    assert.equal(
+      memoryHint({ kind: "critical", ...calm, pressure: "critical" }),
+      SYSTEM_MEMORY_CRITICAL_HINT,
+    );
+    assert.equal(
+      classifyMemory({ ...calm, pressure: "warn" }),
+      "attention",
+    );
+    assert.equal(
+      classifyMemory({
+        ...calm,
+        total_bytes: 16 * GB,
+        available_bytes: Math.round(0.04 * 16 * GB),
+      }),
+      "critical",
+    );
+    assert.equal(
+      classifyMemory({
+        ...calm,
+        total_bytes: 16 * GB,
+        available_bytes: Math.round(0.08 * 16 * GB),
+      }),
+      "attention",
+    );
+    assert.equal(
+      classifyMemory({
+        ...calm,
+        total_bytes: 16 * GB,
+        available_bytes: Math.round(0.4 * 16 * GB),
+      }),
+      "ok",
+    );
+  });
+
+  it("reads Linux MemAvailable and macOS pressure levels", () => {
+    assert.deepEqual(
+      parseLinuxMeminfo("MemTotal:       16384000 kB\nMemFree: 100 kB\nMemAvailable: 1310720 kB\n"),
+      { total_bytes: 16_384_000 * 1024, available_bytes: 1_310_720 * 1024 },
+    );
+    assert.equal(parseLinuxMeminfo("MemFree: 100 kB\n"), null);
+    assert.equal(memoryPressureFromLevel(1), "normal");
+    assert.equal(memoryPressureFromLevel(2), "warn");
+    assert.equal(memoryPressureFromLevel(4), "warn");
+    assert.equal(memoryPressureFromLevel(8), "critical");
+    assert.equal(memoryPressureFromLevel(Number.NaN), null);
   });
 
   it("formats bytes for the engine card", () => {

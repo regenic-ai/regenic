@@ -1,15 +1,19 @@
 import { execFile } from "node:child_process";
-import { readdir, stat, statfs } from "node:fs/promises";
+import { readFile, readdir, stat, statfs } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { totalmem, freemem, platform } from "node:os";
 import { promisify } from "node:util";
 import {
   classifyDisk,
   classifyMemory,
   diskHint,
   memoryHint,
+  memoryPressureFromLevel,
+  parseLinuxMeminfo,
   rememberKernelSample,
   volumeFromStatfs,
   type HostStats,
+  type SystemMemorySample,
 } from "../shared/host-watch";
 
 const DATA_TTL_MS = 15_000;
@@ -33,6 +37,7 @@ export interface HostStatDeps {
   processRss?: (pid: number) => Promise<number | null>;
   processAlive?: (pid: number) => boolean;
   listenPid?: (port: number) => Promise<number | null>;
+  systemMemory?: () => Promise<SystemMemorySample>;
 }
 
 let dataCache: { at: number; bytes: number } | null = null;
@@ -53,7 +58,14 @@ export async function collectHostStats(
   const dataBytes = skipLocalStore ? 0 : await readDataBytes(paths, now(), deps);
   const diskKind = classifyDisk(fs);
   const sampled = await sampleAppMemory(deps);
-  const memoryKind = classifyMemory(sampled);
+  const system = await (deps.systemMemory ?? readSystemMemory)();
+  const memoryInput = {
+    ...sampled,
+    total_bytes: system.total_bytes,
+    available_bytes: system.available_bytes,
+    pressure: system.pressure,
+  };
+  const memoryKind = classifyMemory(memoryInput);
   return {
     disk: {
       kind: diskKind,
@@ -69,8 +81,9 @@ export async function collectHostStats(
       kernel_bytes: sampled.kernel_bytes,
       app_bytes: sampled.app_bytes,
       used_bytes: (sampled.kernel_bytes ?? 0) + sampled.app_bytes,
+      total_bytes: system.total_bytes,
       kernel_alive: sampled.kernel_alive,
-      hint: memoryHint({ ...sampled, kind: memoryKind }),
+      hint: memoryHint({ ...memoryInput, kind: memoryKind }),
     },
   };
 }
@@ -79,6 +92,45 @@ export function resetHostStatCache(): void {
   dataCache = null;
   lastKernel = null;
   lastSeenPid = null;
+}
+
+export async function readSystemMemory(): Promise<SystemMemorySample> {
+  const host = platform();
+  let total = Math.max(0, Math.round(totalmem()));
+  let available: number | null = null;
+  let pressure: SystemMemorySample["pressure"] = null;
+  if (host === "linux") {
+    const parsed = parseLinuxMeminfo(await readText("/proc/meminfo"));
+    if (parsed) {
+      total = parsed.total_bytes || total;
+      available = parsed.available_bytes;
+    }
+  } else if (host === "darwin") {
+    const raw = await sysctlValue("kern.memorystatus_vm_pressure_level");
+    pressure = raw == null ? null : memoryPressureFromLevel(Number(raw));
+  } else if (host === "win32") {
+    const free = freemem();
+    available = Number.isFinite(free) && free >= 0 ? Math.round(free) : null;
+  }
+  return { total_bytes: total, available_bytes: available, pressure };
+}
+
+async function readText(path: string): Promise<string> {
+  try {
+    return await readFile(path, "utf8");
+  } catch {
+    return "";
+  }
+}
+
+async function sysctlValue(name: string): Promise<string | null> {
+  try {
+    const { stdout } = await execFileAsync("sysctl", ["-n", name]);
+    const text = stdout.trim();
+    return text.length > 0 ? text : null;
+  } catch {
+    return null;
+  }
 }
 
 export function processAlive(pid: number): boolean {
