@@ -1027,7 +1027,7 @@ export class PersonalInboxService {
           latestAttempt(id: string): Promise<IngestAttempt | null>;
         };
         const driver = this.drivers.get(installation.connector_type);
-        const [liveSync, attempt, pushWatermarks] = await Promise.all([
+        const [liveSync, attempt, pushWatermarks, syncTouchAt] = await Promise.all([
           tier.sync_progress === "live"
             ? loadSyncProgress(store, installation.id, { hiddenThreadIds })
             : Promise.resolve(null),
@@ -1037,6 +1037,7 @@ export class PersonalInboxService {
           driver
             ? authority.summarizePushWatermarks(installation.id)
             : Promise.resolve(null),
+          store.latestSyncTouchAt(installation.id),
         ]);
         const sync = tier.sync_progress === "snapshot"
           ? this.kernelRuntime.syncSnapshots.peekProgress(installation.id)
@@ -1054,6 +1055,7 @@ export class PersonalInboxService {
             ...(pushWatermarks?.last_updated_at
               ? { lastPushAt: pushWatermarks.last_updated_at }
               : {}),
+            syncTouchAt,
           },
         );
       }),

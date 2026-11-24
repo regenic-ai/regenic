@@ -212,6 +212,7 @@ import {
   getSyncState,
   hasUnassignedSyncWork,
   latestAttempt,
+  latestSyncTouchAt,
   listAttempts,
   listCursors,
   listInstallations,
@@ -1760,6 +1761,10 @@ export class PostgresAuthorityStore
 
   async latestAttempt(installationId: string): Promise<IngestAttempt | null> {
     return latestAttempt(this.sql, installationId);
+  }
+
+  async latestSyncTouchAt(installationId: string): Promise<string | null> {
+    return latestSyncTouchAt(this.sql, installationId);
   }
 
   async pruneIngestAttempts(

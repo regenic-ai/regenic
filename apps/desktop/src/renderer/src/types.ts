@@ -828,6 +828,7 @@ export interface EngineInstallationView {
   channel_label?: string;
   source_mode?: "poll" | "webhook" | "hybrid";
   last_push_at?: string;
+  last_checked_at?: string;
   last_attempt: IngestAttempt | null;
   pairing_code?: string;
   sync?: SyncProgressView;

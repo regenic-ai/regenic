@@ -5,6 +5,76 @@ import type {
   SyncReadinessView,
 } from "./types.ts";
 
+/**
+ * A live tail is checked about every couple of minutes. The card stays quiet
+ * until a check is this late, so a healthy connector does not grow a clock.
+ */
+export const SYNC_CHECK_STALE_MS = 15 * 60 * 1000;
+
+export type ConnectorCardMode = "attempt" | "waiting" | "stale" | "quiet";
+
+export function syncCheckIsStale(
+  checkedAt: string | null | undefined,
+  nowMs: number,
+  staleMs = SYNC_CHECK_STALE_MS,
+): boolean {
+  if (!checkedAt) {
+    return false;
+  }
+  const at = Date.parse(checkedAt);
+  if (!Number.isFinite(at)) {
+    return false;
+  }
+  return nowMs - at >= staleMs;
+}
+
+function checkMovedPast(
+  checkedAt: string | null | undefined,
+  attempt: { started_at: string; finished_at?: string },
+): boolean {
+  const checked = checkedAt ? Date.parse(checkedAt) : Number.NaN;
+  const at = Date.parse(attempt.finished_at ?? attempt.started_at);
+  return Number.isFinite(checked) && Number.isFinite(at) && checked > at;
+}
+
+/**
+ * What the installation card should say about sync health.
+ * A fresh caught-up connector stays quiet. Time shows up for a failed receive
+ * or a check that has gone stale.
+ */
+export function connectorCardMode(input: {
+  status: "enabled" | "disabled" | "needs_attention";
+  syncable: boolean;
+  hasConversations: boolean;
+  lastAttempt: { status: string; started_at: string; finished_at?: string } | null;
+  lastCheckedAt?: string | null;
+  nowMs?: number;
+}): { mode: ConnectorCardMode; staleChip: boolean } {
+  const now = input.nowMs ?? Date.now();
+  const attempt = input.lastAttempt;
+  if (attempt?.status === "running") {
+    return { mode: "attempt", staleChip: false };
+  }
+  if (attempt?.status === "failed" && !checkMovedPast(input.lastCheckedAt, attempt)) {
+    return { mode: "attempt", staleChip: false };
+  }
+  if (input.status === "enabled" && !attempt && !input.hasConversations) {
+    return { mode: "waiting", staleChip: false };
+  }
+  const stale =
+    input.status === "enabled" &&
+    input.syncable &&
+    input.hasConversations &&
+    syncCheckIsStale(input.lastCheckedAt, now);
+  if (stale && input.lastCheckedAt) {
+    return { mode: "stale", staleChip: true };
+  }
+  if (!attempt && !input.hasConversations) {
+    return { mode: "attempt", staleChip: false };
+  }
+  return { mode: "quiet", staleChip: false };
+}
+
 /** Known conversations are on the live tail, and no attachment work is still pending. */
 export function syncWorkSettled(sync?: SyncProgressView | null): boolean {
   return Boolean(

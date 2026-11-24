@@ -375,6 +375,19 @@ export class MemorySyncStore implements SyncStore {
       }));
   }
 
+  async latestSyncTouchAt(installationId: string): Promise<string | null> {
+    let latest: string | null = null;
+    for (const state of this.states.values()) {
+      if (state.installation_id !== installationId) {
+        continue;
+      }
+      if (latest == null || state.updated_at > latest) {
+        latest = state.updated_at;
+      }
+    }
+    return latest;
+  }
+
   async getSyncState(
     installationId: string,
     streamKey: string,

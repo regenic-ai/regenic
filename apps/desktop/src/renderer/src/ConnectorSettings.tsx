@@ -30,6 +30,7 @@ import {
   syncProgressSummary,
   syncWorkSettled,
 } from "./format";
+import { connectorCardMode } from "./sync-copy";
 import { openExternal } from "./CatalogDocs";
 import { useLocale } from "./LocaleContext";
 import type {
@@ -693,6 +694,11 @@ function ConnectorRow({
   onPairingCode?: (id: string, code: string) => void;
 }) {
   const { t } = useLocale();
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNowMs(Date.now()), 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
   const statusChip =
     installation.status === "enabled"
       ? "running"
@@ -708,30 +714,27 @@ function ConnectorRow({
   const attemptSourceMode = installation.last_attempt
     ? installation.source_mode
     : activeSourceMode;
-  const pushIsLatest = Boolean(
-    receivesPush &&
-      installation.last_push_at &&
-      (!installation.last_attempt ||
-        Date.parse(installation.last_push_at) >=
-          Date.parse(
-            installation.last_attempt.finished_at ??
-              installation.last_attempt.started_at,
-          )),
-  );
   const hasConversations = installationHasStoredConversations(installation.sync);
   const settled = syncWorkSettled(installation.sync);
-  const activity = pushIsLatest && installation.last_push_at
-    ? t("connector.push.lastUpdateWhen", {
-        when: formatTime(installation.last_push_at),
-      })
-    : !installation.last_attempt &&
-        receivesPush &&
-        activeSourceMode === "poll" &&
-        !hasConversations
-      ? t("connector.push.waiting")
-      : hasConversations && !installation.last_attempt
-        ? null
-        : attemptSummary(installation.last_attempt, attemptSourceMode ?? "poll");
+  const card = connectorCardMode({
+    status: installation.status,
+    syncable: installation.syncable,
+    hasConversations,
+    lastAttempt: installation.last_attempt,
+    lastCheckedAt: installation.last_checked_at,
+    nowMs,
+  });
+  const sourceMode = attemptSourceMode ?? "poll";
+  const activity =
+    card.mode === "stale" && installation.last_checked_at
+      ? t("sync.lastChecked", { when: formatTime(installation.last_checked_at) })
+      : card.mode === "attempt"
+        ? attemptSummary(installation.last_attempt, sourceMode)
+        : card.mode === "waiting"
+          ? sourceMode === "poll"
+            ? t("connector.push.waiting")
+            : attemptSummary(null, sourceMode)
+          : null;
   return (
     <div id={id} className="install-block">
       <div className="install install-instance">
@@ -749,9 +752,15 @@ function ConnectorRow({
               </span>
             ) : null}
             {hasConversations ? (
-              <span className={`chip ${settled ? "running" : "syncing"}`}>
+              <span
+                className={`chip ${card.staleChip ? "stopped" : settled ? "running" : "syncing"}`}
+              >
                 <span className="dot" />
-                {settled ? t("sync.caughtUp") : t("sync.catching")}
+                {card.staleChip
+                  ? t("sync.checkStale")
+                  : settled
+                    ? t("sync.caughtUp")
+                    : t("sync.catching")}
               </span>
             ) : null}
             {installation.detail ? (

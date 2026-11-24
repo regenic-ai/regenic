@@ -53,6 +53,7 @@ export const AUTHORITY_READ_METHODS = [
   "listInstallations",
   "listAttempts",
   "latestAttempt",
+  "latestSyncTouchAt",
   "listQuarantines",
   "getCursor",
   "listCursors",

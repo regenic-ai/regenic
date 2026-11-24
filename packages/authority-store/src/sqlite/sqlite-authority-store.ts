@@ -377,6 +377,7 @@ import {
   getSyncState,
   hasUnassignedSyncWork,
   latestAttempt,
+  latestSyncTouchAt,
   listAttempts,
   listCursors,
   listInstallations,
@@ -1696,6 +1697,10 @@ export class SqliteAuthorityStore
 
   async latestAttempt(installationId: string): Promise<IngestAttempt | null> {
     return latestAttempt(this.database, installationId);
+  }
+
+  async latestSyncTouchAt(installationId: string): Promise<string | null> {
+    return latestSyncTouchAt(this.database, installationId);
   }
 
   async pruneIngestAttempts(

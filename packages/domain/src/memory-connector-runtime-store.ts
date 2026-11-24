@@ -909,6 +909,10 @@ export class MemoryConnectorRuntimeStore implements ConnectorRuntimeStore {
     return this.sync.listSyncPhaseHeads(installationId);
   }
 
+  latestSyncTouchAt(installationId: string): Promise<string | null> {
+    return this.sync.latestSyncTouchAt(installationId);
+  }
+
   getSyncState(
     installationId: string,
     streamKey: string,

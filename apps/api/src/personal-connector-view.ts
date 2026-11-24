@@ -332,9 +332,40 @@ export interface EngineInstallationView {
   channel_label: string;
   source_mode: "poll" | "webhook" | "hybrid";
   last_push_at?: string;
+  /** Newest successful check: sync-state touch, push watermark, or a succeeded attempt. */
+  last_checked_at?: string;
   last_attempt: IngestAttempt | null;
   pairing_code?: string;
   sync?: SyncProgressView;
+}
+
+/** Latest moment we know a check succeeded. Failed attempts do not move this clock. */
+export function installationCheckedAt(input: {
+  syncTouchAt?: string | null;
+  lastPushAt?: string | null;
+  attempt?: { status: string; started_at: string; finished_at?: string } | null;
+}): string | undefined {
+  const stamps: string[] = [];
+  if (input.syncTouchAt) {
+    stamps.push(input.syncTouchAt);
+  }
+  if (input.lastPushAt) {
+    stamps.push(input.lastPushAt);
+  }
+  if (input.attempt?.status === "succeeded") {
+    stamps.push(input.attempt.finished_at ?? input.attempt.started_at);
+  }
+  let best: string | undefined;
+  let bestMs = Number.NEGATIVE_INFINITY;
+  for (const stamp of stamps) {
+    const ms = Date.parse(stamp);
+    if (!Number.isFinite(ms) || ms < bestMs) {
+      continue;
+    }
+    bestMs = ms;
+    best = stamp;
+  }
+  return best;
 }
 
 export function toInstallationView(
@@ -342,7 +373,11 @@ export function toInstallationView(
   lastAttempt: IngestAttempt | null,
   drivers: { get(connectorType: string): ChannelDriver | undefined },
   locale: CopyLocale = DEFAULT_COPY_LOCALE,
-  extras?: { sync?: SyncProgressView | null; lastPushAt?: string },
+  extras?: {
+    sync?: SyncProgressView | null;
+    lastPushAt?: string;
+    syncTouchAt?: string | null;
+  },
 ): EngineInstallationView {
   const driver = drivers.get(installation.connector_type);
   const { label, detail } = connectorPresentation(
@@ -358,6 +393,11 @@ export function toInstallationView(
   };
   const enabled = installation.status === "enabled";
   const channel = driver?.source ?? installation.connector_type;
+  const lastCheckedAt = installationCheckedAt({
+    syncTouchAt: extras?.syncTouchAt,
+    lastPushAt: extras?.lastPushAt,
+    attempt: lastAttempt,
+  });
   return {
     id: installation.id,
     connector_type: installation.connector_type,
@@ -382,6 +422,7 @@ export function toInstallationView(
     ),
     source_mode: driver?.source_mode ?? "poll",
     ...(extras?.lastPushAt ? { last_push_at: extras.lastPushAt } : {}),
+    ...(lastCheckedAt ? { last_checked_at: lastCheckedAt } : {}),
     last_attempt: lastAttempt,
     ...(extras?.sync ? { sync: extras.sync } : {}),
   };
