@@ -117,6 +117,13 @@ describe("recipe match preview", () => {
       ),
       false,
     );
+    assert.equal(
+      recipeMatches(
+        { record_class: "task", thread_facet: "ticket" },
+        subjectFromConversation({ ...task, thread_facet: "chat" })!,
+      ),
+      true,
+    );
   });
 
   it("previews both filters against message bodies, not conversation names", () => {

@@ -136,6 +136,15 @@ describe("recipe match", () => {
     assert.equal(recipeMatches({ thread_id: "crm:order-1", record_class: "task" }, message), true);
     assert.equal(recipeMatches({ record_class: "task", unit_kind: "crm.delivery" }, message), false);
     assert.equal(recipeMatches({ record_class: "task" }, message), false);
+    assert.equal(recipeMatches(
+      { record_class: "task", thread_facet: "ticket", unit_kind: "crm.delivery" },
+      { ...message, record_class: "task", thread_facet: "chat" },
+    ), true);
+    assert.equal(recipeMatches({ record_class: "utterance", thread_facet: "chat" }, message), false);
+    assert.equal(
+      recipeSpecificity({ record_class: "task", thread_facet: "ticket" }),
+      recipeSpecificity({ record_class: "task" }),
+    );
   });
 
   it("requires both literal body filters and preserves legacy scope-only behavior", () => {

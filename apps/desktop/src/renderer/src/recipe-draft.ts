@@ -754,14 +754,6 @@ function matchWhenCopy(
   const kindLabel = shown.unit_kind
     ? (unitKindLabel(sources, shown.unit_kind) ?? shown.unit_kind)
     : null;
-  const facet =
-    shown.thread_facet === "ticket"
-      ? t("recipes.facetTickets")
-      : shown.thread_facet === "agent"
-        ? t("recipes.facetAgents")
-        : shown.thread_facet === "chat"
-          ? t("recipes.facetChats")
-          : null;
   if (kindLabel && sourceLabel) {
     return t("recipes.whenSourceUnitKind", { source: sourceLabel, kind: kindLabel });
   }
@@ -771,14 +763,10 @@ function matchWhenCopy(
   if (sourceLabel) {
     return t("recipes.whenSource", { source: sourceLabel });
   }
-  if (shown.record_class === "task" && facet) {
-    return t("recipes.whenFacet", { facet });
-  }
   if (shown.record_class === "task") {
     return t("recipes.whenAll");
   }
-  const bits = [sourceLabel, shown.record_class, shown.thread_facet].filter(Boolean);
-  return bits.length > 0 ? bits.join(" · ") : t("recipes.whenNone");
+  return t("recipes.whenNone");
 }
 
 function shortThread(threadId: string): string {

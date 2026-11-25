@@ -39,9 +39,10 @@ export const RECIPE_MATCH_WEIGHTS = {
 
 /**
  * Fields the automation form actually offers.
- * One app is the app and optional task type. One chat is that chat.
- * All tasks is the task class, plus a task type when one was chosen.
- * A stored record class on an app or chat rule is not a form control.
+ * One app is the app, an optional task type, and that app's name filters.
+ * One chat is that chat. All tasks is the task class, plus a task type when
+ * one was chosen. A stored facet, or a record class other than all tasks,
+ * is not a form control.
  */
 export function visibleScopeMatch(match: RecipeMatch): RecipeMatch {
   const text = {
@@ -63,9 +64,8 @@ export function visibleScopeMatch(match: RecipeMatch): RecipeMatch {
   }
   const unitKind = match.unit_kind?.trim();
   return {
-    ...(match.record_class ? { record_class: match.record_class } : {}),
+    ...(match.record_class === "task" ? { record_class: "task" as const } : {}),
     ...(unitKind ? { unit_kind: unitKind } : {}),
-    ...(match.thread_facet ? { thread_facet: match.thread_facet } : {}),
     ...text,
   };
 }

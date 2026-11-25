@@ -9,6 +9,7 @@ import {
   recipeMatchIsSpecific,
   recipeSpecificity,
   shouldKeepPullSchedule,
+  visibleScopeMatch,
   type JsonValue,
   type Recipe,
   type RecipeMatch,
@@ -146,7 +147,7 @@ function normalizeMatch(match: RecipeMatch): RecipeMatch {
     );
   }
   const unit_kind = normalizeUnitKind(match.unit_kind);
-  return {
+  return visibleScopeMatch({
     ...(record_class ? { record_class } : {}),
     ...(thread_facet ? { thread_facet } : {}),
     ...(match.source?.trim() ? { source: match.source.trim() } : {}),
@@ -156,5 +157,5 @@ function normalizeMatch(match: RecipeMatch): RecipeMatch {
     ...(match.text_excludes !== undefined ? { text_excludes: match.text_excludes } : {}),
     ...(match.title_contains !== undefined ? { title_contains: match.title_contains } : {}),
     ...(match.title_excludes !== undefined ? { title_excludes: match.title_excludes } : {}),
-  };
+  });
 }
