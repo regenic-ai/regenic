@@ -54,7 +54,7 @@ export function normalizeRecipe(
   if (recipeSpecificity(match) === 0 || !recipeMatchIsSpecific(match)) {
     throw new PersonalConnectorError(
       "invalid_config",
-      "Recipe match needs a thread, a unit kind, a task class, or source plus a non-utterance class",
+      "Recipe match needs a chat, an app, a task type, or all tasks",
       400,
     );
   }

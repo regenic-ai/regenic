@@ -1,4 +1,5 @@
 import { recipeCoversConversation } from "../../../../../packages/domain/src/recipe-audience.ts";
+import { visibleScopeMatch } from "../../../../../packages/domain/src/recipe-match.ts";
 import type {
   RecipeConversationOption,
   RecipeMatch,
@@ -36,13 +37,14 @@ export interface RecipeMatchPreview {
 }
 
 export function recipeSpecificity(match: RecipeMatch): number {
+  const visible = visibleScopeMatch(match);
   let score = 0;
-  if (match.thread_id) score += WEIGHTS.thread_id;
-  if (match.unit_kind) score += WEIGHTS.unit_kind;
-  if (match.source) score += WEIGHTS.source;
-  if (match.record_class) score += WEIGHTS.record_class;
-  if (match.thread_facet) score += WEIGHTS.thread_facet;
-  if (match.title_contains || match.title_excludes) score += WEIGHTS.conversation_name;
+  if (visible.thread_id) score += WEIGHTS.thread_id;
+  if (visible.unit_kind) score += WEIGHTS.unit_kind;
+  if (visible.source) score += WEIGHTS.source;
+  if (visible.record_class) score += WEIGHTS.record_class;
+  if (visible.thread_facet) score += WEIGHTS.thread_facet;
+  if (visible.title_contains || visible.title_excludes) score += WEIGHTS.conversation_name;
   return score;
 }
 
@@ -51,6 +53,7 @@ export function recipeMatches(
   subject: RecipePreviewSubject,
   triggerKind: TriggerKind = "push",
 ): boolean {
+  match = visibleScopeMatch(match);
   if (recipeSpecificity(match) === 0) {
     return false;
   }
@@ -183,6 +186,8 @@ export function recipesCanShareSubject(
   leftKind: TriggerKind = "push",
   rightKind: TriggerKind = "push",
 ): boolean {
+  left = visibleScopeMatch(left);
+  right = visibleScopeMatch(right);
   if (
     leftKind === "push" &&
     rightKind === "push" &&

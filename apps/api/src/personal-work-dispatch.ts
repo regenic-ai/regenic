@@ -25,6 +25,7 @@ import {
   recipeConversationTitle,
   recipeCoversConversation,
   recipeMatches,
+  visibleScopeMatch,
   recipeTextMatches,
   recipeTitleMatches,
   recipeTriggerOf,
@@ -314,7 +315,7 @@ export class PersonalWorkDispatch {
         return [];
       }
       const subject = workSubjectFromEvent({
-        type: recipe.match.record_class === "task" ? "task" : "message",
+        type: visibleScopeMatch(recipe.match).record_class === "task" ? "task" : "message",
         source: recipe.match.source ?? threadId.split(":")[0] ?? "",
         thread_id: threadId,
         unit_kind: recipe.match.unit_kind,
