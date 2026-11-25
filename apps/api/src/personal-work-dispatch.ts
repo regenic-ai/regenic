@@ -298,9 +298,10 @@ export class PersonalWorkDispatch {
   }
 
   /**
-   * Conversations this tick should open. A saved thread stays one target.
-   * A wider match uses inbox heads plus the current job. Inclusion is
-   * recipeCoversConversation, the same rule the editor preview calls.
+   * Conversations this tick should open. A saved chat is that conversation's
+   * current head. A wider match uses inbox heads plus the current job.
+   * Inclusion is recipeCoversConversation, the same rule the editor preview
+   * calls. A saved chat is not dropped because an earlier job already settled.
    */
   private async pullTargets(recipe: Recipe): Promise<Array<{
     threadId: string;
@@ -313,14 +314,7 @@ export class PersonalWorkDispatch {
       } catch {
         return [];
       }
-      const subject = workSubjectFromEvent({
-        type: recipe.match.record_class === "task" ? "task" : "message",
-        source: recipe.match.source ?? threadId.split(":")[0] ?? "",
-        thread_id: threadId,
-        unit_kind: recipe.match.unit_kind,
-        hint: recipe.match.thread_facet,
-      });
-      return subject ? [{ threadId, subject }] : [];
+      return this.pullThreadTarget(recipe, threadId);
     }
     const host = this.runtime.requireHost();
     const orgId = this.runtime.orgId();
@@ -415,6 +409,56 @@ export class PersonalWorkDispatch {
     }
     targets.sort((left, right) => (left.threadId < right.threadId ? -1 : 1));
     return targets;
+  }
+
+  /**
+   * The chat named on the form. When it already has a head, class and task
+   * type come from that head. Fields stored beside the chat id are not used.
+   */
+  private async pullThreadTarget(
+    recipe: Recipe,
+    threadId: string,
+  ): Promise<Array<{
+    threadId: string;
+    subject: NonNullable<ReturnType<typeof workSubjectFromEvent>>;
+  }>> {
+    const host = this.runtime.requireHost();
+    const orgId = this.runtime.orgId();
+    const authority = host.get("authority");
+    const [shown, hidden, pref] = await Promise.all([
+      authority.listInbox(orgId, { heads: true, list: "shown", thread_ids: [threadId] }),
+      authority.listInbox(orgId, { heads: true, list: "hidden", thread_ids: [threadId] }),
+      authority.getConversationPref(orgId, threadId),
+    ]);
+    const item = [...shown, ...hidden].find((row) => row.event.thread_id?.trim() === threadId);
+    const bodies = item?.event.content_hash
+      ? await resolveInboxBodies(
+        authority,
+        host.get("blobs"),
+        [item.event.content_hash],
+        "meta",
+      )
+      : undefined;
+    const surface = item?.event.content_hash
+      ? bodies?.get(item.event.content_hash)?.surface
+      : undefined;
+    // No head yet: the form still named this chat. Do not copy a stored
+    // task type or facet onto it.
+    const subject = workSubjectFromEvent({
+      type: item ? surface?.type : "message",
+      source: item?.event.source ?? threadId.split(":")[0] ?? "",
+      thread_id: threadId,
+      unit_kind: surface?.unit_kind,
+      title: recipeConversationTitle({
+        customTitle: pref?.title,
+        conversationLabel: surface?.conversation_label,
+      }),
+      hint: surface?.thread_facet,
+    });
+    if (!subject || !recipeMatches(recipe.match, subject, "pull")) {
+      return [];
+    }
+    return [{ threadId, subject }];
   }
 
   async retryOrResume(

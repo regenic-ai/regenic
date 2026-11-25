@@ -120,6 +120,33 @@ describe("recipe match", () => {
     thread_id: "chat-src:t1",
   };
 
+  it("follows the form scope and ignores a stored record class on an app or chat", () => {
+    const message = {
+      ...subject,
+      source: "crm",
+      unit_kind: "crm.delivery",
+      thread_id: "crm:order-1",
+    };
+    const app = { source: "crm", record_class: "task", unit_kind: "crm.delivery" };
+    assert.equal(recipeMatches(app, message), true);
+    assert.equal(recipeMatches(app, { ...message, record_class: "task", thread_facet: "ticket" }), true);
+    assert.equal(recipeMatches(app, { ...message, unit_kind: "crm.other" }), false);
+    assert.equal(recipeMatches({ source: "crm", record_class: "task" }, message), true);
+    assert.equal(recipeMatches({ source: "crm", record_class: "task" }, { ...message, source: "other" }), false);
+    assert.equal(recipeMatches({ thread_id: "crm:order-1", record_class: "task" }, message), true);
+    assert.equal(recipeMatches({ record_class: "task", unit_kind: "crm.delivery" }, message), false);
+    assert.equal(recipeMatches({ record_class: "task" }, message), false);
+    assert.equal(recipeMatches(
+      { record_class: "task", thread_facet: "ticket", unit_kind: "crm.delivery" },
+      { ...message, record_class: "task", thread_facet: "chat" },
+    ), true);
+    assert.equal(recipeMatches({ record_class: "utterance", thread_facet: "chat" }, message), false);
+    assert.equal(
+      recipeSpecificity({ record_class: "task", thread_facet: "ticket" }),
+      recipeSpecificity({ record_class: "task" }),
+    );
+  });
+
   it("requires both literal body filters and preserves legacy scope-only behavior", () => {
     const match = { thread_id: subject.thread_id, text_contains: "approve", text_excludes: "draft" };
     assert.equal(recipeMatches(match, { ...subject, body_text: "approve release" }), true);
@@ -261,7 +288,7 @@ describe("recipe match", () => {
 describe("recipe auto-start specification", () => {
   it("rejects broadcast triggers", () => {
     assert.equal(recipeAllowsAutoStart({}), false);
-    assert.equal(recipeAllowsAutoStart({ source: "chat-src" }), false);
+    assert.equal(recipeAllowsAutoStart({ source: "chat-src" }), true);
     assert.equal(recipeAllowsAutoStart({ record_class: "utterance" }), false);
     assert.equal(recipeAllowsAutoStart({ thread_facet: "agent" }), false);
     assert.equal(recipeAllowsAutoStart({ record_class: "task" }), true);
@@ -293,10 +320,10 @@ describe("recipe auto-start specification", () => {
       kind: "pull",
       interval_ms: 60 * 60 * 1000,
     })), true);
-    assert.equal(recipeAllowsPullDispatch(makeRecipe("vague", { source: "chat-src" }, {
+    assert.equal(recipeAllowsPullDispatch(makeRecipe("app", { source: "chat-src" }, {
       kind: "pull",
       interval_ms: 60 * 60 * 1000,
-    })), false);
+    })), true);
     for (const status of WORK_ITEM_STATUSES) {
       assert.equal(
         recipeCoversConversation({ trigger: "pull", workStatus: status, matched: true }),
@@ -727,8 +754,8 @@ describe("work policy", () => {
     );
     assert.equal(selectRecipeForSubject([recipe], subject).id, "r1");
     assert.equal(
-      selectRecipeForSubject([makeRecipe("broad", { source: "chat-src" })], subject),
-      undefined,
+      selectRecipeForSubject([makeRecipe("broad", { source: "chat-src" })], subject)?.id,
+      "broad",
     );
     assert.equal(
       workSubjectFromEvent({

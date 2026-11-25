@@ -56,11 +56,11 @@ describe("recipe draft", () => {
     });
     assert.equal(canAutoStart(draftMatch(draft), draft), true);
     const channel = starterDraft("channel", emptyDraft(), [{ id: "chat", label: "Chat" }], conversations);
-    assert.deepEqual(draftMatch(channel), { source: "chat", record_class: "task" });
+    assert.deepEqual(draftMatch(channel), { source: "chat" });
     const sweep = starterDraft("sweep", emptyDraft(), [{ id: "chat", label: "Chat" }], conversations);
     assert.equal(sweep.trigger_kind, "pull");
     assert.equal(sweep.scope, "source");
-    assert.deepEqual(draftMatch(sweep), { source: "chat", record_class: "task" });
+    assert.deepEqual(draftMatch(sweep), { source: "chat" });
     assert.equal(canAutoStart(draftMatch(sweep), sweep), true);
     const scheduled = applyTriggerKind(channel, "pull");
     assert.equal(scheduled.scope, "source");
@@ -71,7 +71,11 @@ describe("recipe draft", () => {
   it("preserves filters through editing and scope changes, and clears blank fields", () => {
     const saved = { ...rule, match: { ...rule.match, text_contains: " approve ", text_excludes: "draft" } };
     const draft = draftFromRecipe(saved);
-    assert.deepEqual(draftMatch(draft), saved.match);
+    assert.deepEqual(draftMatch(draft), {
+      thread_id: saved.match.thread_id,
+      text_contains: " approve ",
+      text_excludes: "draft",
+    });
     assert.equal(draftMatch({ ...draft, scope: "tasks" }).text_contains, " approve ");
     assert.equal(draftMatch({ ...draft, trigger_kind: "pull" }).text_excludes, "draft");
     const cleared = draftMatch({ ...draft, text_contains: "", text_excludes: "   " });
@@ -83,7 +87,6 @@ describe("recipe draft", () => {
     });
     assert.equal(titled.scope, "source");
     assert.deepEqual(draftMatch(titled), {
-      record_class: "task",
       source: "feishu",
       title_contains: " 周报 ",
       title_excludes: "草稿",
@@ -134,11 +137,11 @@ describe("recipe draft", () => {
     }
   });
 
-  it("keeps match fields the form does not show when editing", () => {
+  it("saves only the conversation shown on the form", () => {
     const draft = draftFromRecipe(rule, undefined, [
       { id: "feishu:chat-1", label: "Design review" },
     ]);
-    assert.deepEqual(draftMatch(draft), rule.match);
+    assert.deepEqual(draftMatch(draft), { thread_id: rule.match.thread_id });
     assert.equal(draft.thread_title, "Design review");
   });
 
@@ -182,13 +185,13 @@ describe("recipe draft", () => {
     );
   });
 
-  it("keeps a saved source rule's record class", () => {
+  it("drops a stored record class when the form scope is one app", () => {
     const sourceRule: RecipeView = {
       ...rule,
       match: { source: "feishu", record_class: "approval" as never },
     };
     const draft = draftFromRecipe(sourceRule);
-    assert.deepEqual(draftMatch(draft), sourceRule.match);
+    assert.deepEqual(draftMatch(draft), { source: "feishu" });
   });
 
   it("only offers positively sendable destinations without replacing an unavailable saved target", () => {

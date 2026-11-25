@@ -37,24 +37,58 @@ export const RECIPE_MATCH_WEIGHTS = {
   conversation_name: 1,
 } as const;
 
+/**
+ * Fields the automation form actually offers.
+ * One app is the app, an optional task type, and that app's name filters.
+ * One chat is that chat. All tasks is the task class, plus a task type when
+ * one was chosen. A stored facet, or a record class other than all tasks,
+ * is not a form control.
+ */
+export function visibleScopeMatch(match: RecipeMatch): RecipeMatch {
+  const text = {
+    ...(match.text_contains ? { text_contains: match.text_contains } : {}),
+    ...(match.text_excludes ? { text_excludes: match.text_excludes } : {}),
+  };
+  if (match.thread_id?.trim()) {
+    return { thread_id: match.thread_id.trim(), ...text };
+  }
+  if (match.source?.trim()) {
+    const unitKind = match.unit_kind?.trim();
+    return {
+      source: match.source.trim(),
+      ...(unitKind ? { unit_kind: unitKind } : {}),
+      ...text,
+      ...(match.title_contains ? { title_contains: match.title_contains } : {}),
+      ...(match.title_excludes ? { title_excludes: match.title_excludes } : {}),
+    };
+  }
+  const unitKind = match.unit_kind?.trim();
+  return {
+    ...(match.record_class === "task" ? { record_class: "task" as const } : {}),
+    ...(unitKind ? { unit_kind: unitKind } : {}),
+    ...text,
+  };
+}
+
 export function recipeSpecificity(match: RecipeMatch): number {
+  const visible = visibleScopeMatch(match);
   let score = 0;
-  if (match.thread_id) {
+  if (visible.thread_id) {
     score += RECIPE_MATCH_WEIGHTS.thread_id;
   }
-  if (match.unit_kind) {
+  if (visible.unit_kind) {
     score += RECIPE_MATCH_WEIGHTS.unit_kind;
   }
-  if (match.source) {
+  if (visible.source) {
     score += RECIPE_MATCH_WEIGHTS.source;
   }
-  if (match.record_class) {
+  if (visible.record_class) {
     score += RECIPE_MATCH_WEIGHTS.record_class;
   }
-  if (match.thread_facet) {
+  if (visible.thread_facet) {
     score += RECIPE_MATCH_WEIGHTS.thread_facet;
   }
-  if (match.title_contains || match.title_excludes) {
+  if (visible.title_contains || visible.title_excludes) {
     score += RECIPE_MATCH_WEIGHTS.conversation_name;
   }
   return score;
@@ -65,6 +99,7 @@ export function recipeMatches(
   subject: RecipeSubject,
   triggerKind: RecipeTriggerKind = "push",
 ): boolean {
+  match = visibleScopeMatch(match);
   if (recipeSpecificity(match) === 0) {
     return false;
   }
@@ -138,6 +173,8 @@ export function recipesCanShareSubject(
   leftKind: RecipeTriggerKind = "push",
   rightKind: RecipeTriggerKind = "push",
 ): boolean {
+  left = visibleScopeMatch(left);
+  right = visibleScopeMatch(right);
   if (
     leftKind === "push" &&
     rightKind === "push" &&

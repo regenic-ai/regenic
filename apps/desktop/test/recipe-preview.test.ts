@@ -92,6 +92,40 @@ describe("recipe match preview", () => {
     ), false);
   });
 
+  it("counts chat messages of a chosen task type as in range", () => {
+    const match = {
+      record_class: "task" as const,
+      source: "crm",
+      unit_kind: "crm.delivery",
+    };
+    const message = {
+      ...chat,
+      id: "crm:order-1",
+      source: "crm",
+      unit_kind: "crm.delivery",
+      record_class: "utterance" as const,
+    };
+    assert.equal(recipeMatches(match, subjectFromConversation(message)!), true);
+    assert.equal(
+      recipeMatches({ record_class: "task", source: "crm" }, subjectFromConversation(message)!),
+      true,
+    );
+    assert.equal(
+      recipeMatches(
+        { record_class: "task", unit_kind: "crm.delivery" },
+        subjectFromConversation(message)!,
+      ),
+      false,
+    );
+    assert.equal(
+      recipeMatches(
+        { record_class: "task", thread_facet: "ticket" },
+        subjectFromConversation({ ...task, thread_facet: "chat" })!,
+      ),
+      true,
+    );
+  });
+
   it("previews both filters against message bodies, not conversation names", () => {
     const match = { record_class: "task" as const, text_contains: "approve", text_excludes: "draft" };
     const preview = previewRecipeMatch({
@@ -173,8 +207,8 @@ describe("recipe match preview", () => {
       conversations: [chat, task, otherChannel],
       recipes: [specific],
     });
-    assert.equal(preview.count, 1);
-    assert.equal(preview.samples[0], "Invoice approval");
+    assert.equal(preview.count, 2);
+    assert.deepEqual(preview.samples, ["Design review", "Invoice approval"]);
     assert.equal(preview.preempted_by, "Approvals only");
   });
 

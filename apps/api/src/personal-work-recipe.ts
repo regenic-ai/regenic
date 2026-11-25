@@ -9,6 +9,7 @@ import {
   recipeMatchIsSpecific,
   recipeSpecificity,
   shouldKeepPullSchedule,
+  visibleScopeMatch,
   type JsonValue,
   type Recipe,
   type RecipeMatch,
@@ -54,7 +55,7 @@ export function normalizeRecipe(
   if (recipeSpecificity(match) === 0 || !recipeMatchIsSpecific(match)) {
     throw new PersonalConnectorError(
       "invalid_config",
-      "Recipe match needs a thread, a unit kind, a task class, or source plus a non-utterance class",
+      "Recipe match needs a chat, an app, a task type, or all tasks",
       400,
     );
   }
@@ -146,7 +147,7 @@ function normalizeMatch(match: RecipeMatch): RecipeMatch {
     );
   }
   const unit_kind = normalizeUnitKind(match.unit_kind);
-  return {
+  return visibleScopeMatch({
     ...(record_class ? { record_class } : {}),
     ...(thread_facet ? { thread_facet } : {}),
     ...(match.source?.trim() ? { source: match.source.trim() } : {}),
@@ -156,5 +157,5 @@ function normalizeMatch(match: RecipeMatch): RecipeMatch {
     ...(match.text_excludes !== undefined ? { text_excludes: match.text_excludes } : {}),
     ...(match.title_contains !== undefined ? { title_contains: match.title_contains } : {}),
     ...(match.title_excludes !== undefined ? { title_excludes: match.title_excludes } : {}),
-  };
+  });
 }

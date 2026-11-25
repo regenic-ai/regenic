@@ -129,9 +129,30 @@ describe("recipe text filters", () => {
       { record_class: "task" });
     const titled = {
       ...input,
-      match: { ...input.match, title_contains: " 周报 ", title_excludes: "草稿" },
+      match: { ...input.match, title_contains: " 周报 ", title_excludes: "草稿", thread_facet: "ticket" },
     };
-    assert.deepEqual(normalizeRecipe(titled, ORG, "now").match, titled.match);
+    assert.deepEqual(normalizeRecipe(titled, ORG, "now").match, input.match);
+    const app = {
+      name: "App", executor_type: "test",
+      match: {
+        source: "feishu", record_class: "task", thread_facet: "ticket",
+        unit_kind: "feishu.approval", title_contains: " 周报 ", title_excludes: "草稿",
+      },
+    };
+    assert.deepEqual(normalizeRecipe(app, ORG, "now").match, {
+      source: "feishu", unit_kind: "feishu.approval",
+      title_contains: " 周报 ", title_excludes: "草稿",
+    });
+    const chat = {
+      name: "Chat", executor_type: "test",
+      match: {
+        thread_id: "feishu:oc", source: "feishu", record_class: "task",
+        unit_kind: "feishu.approval", thread_facet: "ticket", text_contains: "approve",
+      },
+    };
+    assert.deepEqual(normalizeRecipe(chat, ORG, "now").match, {
+      thread_id: "feishu:oc", text_contains: "approve",
+    });
     for (const key of ["text_contains", "text_excludes", "title_contains", "title_excludes"]) {
       for (const value of [null, 42, true, [], {}, "", "   "]) {
         assert.throws(() => normalizeRecipe({

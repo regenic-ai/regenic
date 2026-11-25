@@ -24,25 +24,21 @@ export {
 } from "./pull-clock";
 
 /**
- * Match must name a subject. Facet and source-only matches are device
- * capabilities, not On=.
+ * Match must name a subject the form can show: one chat, one app,
+ * a task type, or all tasks. Facet-only and utterance-only matches are not On=.
  */
 export class RecipeMatchSpec implements Specification<RecipeMatch> {
   isSatisfiedBy(match: RecipeMatch): boolean {
     if (match.thread_id?.trim()) {
       return true;
     }
+    if (match.source?.trim()) {
+      return true;
+    }
     if (match.unit_kind?.trim()) {
       return true;
     }
     if (match.record_class === "task") {
-      return true;
-    }
-    if (
-      match.source?.trim() &&
-      match.record_class &&
-      match.record_class !== "utterance"
-    ) {
       return true;
     }
     return false;

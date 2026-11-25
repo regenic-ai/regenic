@@ -1,3 +1,4 @@
+import { visibleScopeMatch } from "../../../../../packages/domain/src/recipe-match.ts";
 import { formatNextRunWhen, formatTime } from "./format.ts";
 import { KernelRequestError } from "./kernel-request.ts";
 import { configForRecipeEdit, configFromCatalog } from "./recipe-params.ts";
@@ -160,9 +161,6 @@ export interface RecipeDraft {
   include_context: boolean;
   max_concurrent: string;
   enabled: boolean;
-  /** Saved match when editing, so fields the form does not show survive a save. */
-  base_match?: RecipeMatch;
-  base_scope?: RecipeScope;
 }
 
 export type StarterKind = "chat" | "channel" | "schedule" | "sweep";
@@ -364,25 +362,7 @@ export function draftFromRecipe(
         ? String(recipe.max_concurrent)
         : "",
     enabled: recipe.enabled,
-    base_match: { ...recipe.match },
-    base_scope: scope,
   };
-}
-
-/** Saved match fields the form does not edit, kept while the scope stays put. */
-function hiddenMatch(draft: RecipeDraft): RecipeMatch | null {
-  const base = draft.base_match;
-  if (!base || draft.scope !== draft.base_scope) {
-    return null;
-  }
-  if (draft.scope === "thread") {
-    return {
-      ...(base.source ? { source: base.source } : {}),
-      ...(base.record_class ? { record_class: base.record_class } : {}),
-      ...(base.unit_kind ? { unit_kind: base.unit_kind } : {}),
-    };
-  }
-  return base.record_class ? { record_class: base.record_class } : {};
 }
 
 export function draftMatch(draft: RecipeDraft): RecipeMatch {
@@ -400,27 +380,23 @@ export function draftMatch(draft: RecipeDraft): RecipeMatch {
 }
 
 function draftScopeMatch(draft: RecipeDraft): RecipeMatch {
-  const hidden = hiddenMatch(draft);
-  if (draft.scope === "source" && !draft.source.trim()) {
-    return {};
-  }
   if (draft.scope === "thread") {
-    return {
-      ...hidden,
-      thread_id: draft.thread_id.trim(),
-      ...(draft.thread_facet ? { thread_facet: draft.thread_facet } : {}),
-    };
+    const threadId = draft.thread_id.trim();
+    return threadId ? { thread_id: threadId } : {};
   }
   const unitKind = draft.unit_kind.trim();
-  const recordClass = hidden
-    ? (hidden.record_class ?? (unitKind ? undefined : "task"))
-    : "task";
+  if (draft.scope === "source") {
+    const source = draft.source.trim();
+    if (!source) {
+      return {};
+    }
+    return {
+      source,
+      ...(unitKind ? { unit_kind: unitKind } : {}),
+    };
+  }
   return {
-    ...(recordClass ? { record_class: recordClass } : {}),
-    ...(draft.scope === "source" && draft.source.trim()
-      ? { source: draft.source.trim() }
-      : {}),
-    ...(draft.thread_facet ? { thread_facet: draft.thread_facet } : {}),
+    record_class: "task",
     ...(unitKind ? { unit_kind: unitKind } : {}),
   };
 }
@@ -436,11 +412,12 @@ export function draftTrigger(draft: RecipeDraft): RecipeView["trigger"] {
 }
 
 function matchIsSpecific(match: RecipeMatch): boolean {
+  const visible = visibleScopeMatch(match);
   return Boolean(
-    match.thread_id ||
-      match.unit_kind ||
-      match.record_class === "task" ||
-      (match.source && match.record_class && match.record_class !== "utterance"),
+    visible.thread_id ||
+      visible.source ||
+      visible.unit_kind ||
+      visible.record_class === "task",
   );
 }
 
@@ -764,51 +741,32 @@ function matchWhenCopy(
   conversations: RecipeConversationOption[],
   t: Translate,
 ): string {
-  if (recipe.match.thread_id) {
+  const shown = visibleScopeMatch(recipe.match);
+  if (shown.thread_id) {
     const title =
       conversations.find((item) => item.id === recipe.match.thread_id)?.label ??
-      shortThread(recipe.match.thread_id);
+      shortThread(shown.thread_id);
     return t("recipes.whenOnly", { thread: title });
   }
-  const sourceLabel = recipe.match.source
-    ? (sources.find((item) => item.id === recipe.match.source)?.label ??
-      recipe.match.source)
+  const sourceLabel = shown.source
+    ? (sources.find((item) => item.id === shown.source)?.label ?? shown.source)
     : null;
-  const kindLabel = recipe.match.unit_kind
-    ? (unitKindLabel(sources, recipe.match.unit_kind) ?? recipe.match.unit_kind)
+  const kindLabel = shown.unit_kind
+    ? (unitKindLabel(sources, shown.unit_kind) ?? shown.unit_kind)
     : null;
-  const facet =
-    recipe.match.thread_facet === "ticket"
-      ? t("recipes.facetTickets")
-      : recipe.match.thread_facet === "agent"
-        ? t("recipes.facetAgents")
-        : recipe.match.thread_facet === "chat"
-          ? t("recipes.facetChats")
-          : null;
   if (kindLabel && sourceLabel) {
     return t("recipes.whenSourceUnitKind", { source: sourceLabel, kind: kindLabel });
   }
   if (kindLabel) {
     return t("recipes.whenUnitKind", { kind: kindLabel });
   }
-  if (recipe.match.record_class === "task" && sourceLabel && facet) {
-    return t("recipes.whenSourceFacet", { source: sourceLabel, facet });
-  }
-  if (recipe.match.record_class === "task" && sourceLabel) {
+  if (sourceLabel) {
     return t("recipes.whenSource", { source: sourceLabel });
   }
-  if (recipe.match.record_class === "task" && facet) {
-    return t("recipes.whenFacet", { facet });
-  }
-  if (recipe.match.record_class === "task") {
+  if (shown.record_class === "task") {
     return t("recipes.whenAll");
   }
-  const bits = [
-    sourceLabel,
-    recipe.match.record_class,
-    recipe.match.thread_facet,
-  ].filter(Boolean);
-  return bits.length > 0 ? bits.join(" · ") : t("recipes.whenNone");
+  return t("recipes.whenNone");
 }
 
 function shortThread(threadId: string): string {
