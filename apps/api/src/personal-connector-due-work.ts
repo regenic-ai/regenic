@@ -1,5 +1,6 @@
 import {
   DeadlineExceededError,
+  isBlobReservationConflict,
   asConnectorHost,
   connectorSyncTimeoutMs,
   driverPolls,
@@ -69,6 +70,7 @@ import {
   dueWorkConcurrency,
   recordClaimedWorkLag,
   deferWrongPlaneDueAt,
+  nextDueAfterBlobContention,
   nextDueAfterFailure,
   installationConcurrency,
   streamPaceKey,
@@ -802,10 +804,15 @@ async function pollClaimedDueWorkStreams(
           { pages: [], error },
         );
         const now = new Date().toISOString();
+        const blobContention = isBlobReservationConflict(error);
         await settleDueWork(state, store, item, {
           now,
-          nextDueAt: nextDueAfterFailure(item.attempts, now),
-          errorCode: safeErrorCode(error),
+          nextDueAt: blobContention
+            ? nextDueAfterBlobContention(now)
+            : nextDueAfterFailure(item.attempts, now),
+          // Shared body writes are not a failure streak. A later real error
+          // starts its backoff from the next claim, not from dozens of pages.
+          errorCode: blobContention ? undefined : safeErrorCode(error),
         });
       } finally {
         state.streamPulling.delete(key);

@@ -89,6 +89,8 @@ export function dueWorkBatchTimeoutMs(
   const waves = Math.max(1, liveHistoryWaves + mediaWaves);
   // Each list already stops at the poll timeout. The batch clock has to
   // cover every wave of this claim; a flat 30s cuts the later waves.
+  // The extra 5s is the only room for ingest after the source call, including
+  // the shared-body wait. That wait must stay shorter than this slack.
   return Math.max(connectorSyncTimeoutMs(), waves * pollMs + 5_000);
 }
 
@@ -144,6 +146,11 @@ export function deferWrongPlaneDueAt(nowMs = Date.now()): string {
 export function nextDueAfterFailure(attempts: number, now: string): string {
   const delay = Math.min(300_000, 5_000 * 2 ** Math.min(Math.max(attempts, 1), 6));
   return new Date(Date.parse(now) + delay).toISOString();
+}
+
+/** Identical content is already being stored. Retry as soon as that write can finish. */
+export function nextDueAfterBlobContention(now: string): string {
+  return new Date(Date.parse(now) + 1_000).toISOString();
 }
 
 export function installationConcurrency(): number {

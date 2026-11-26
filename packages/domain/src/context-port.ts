@@ -194,6 +194,17 @@ export interface ContextAuthorityRead {
   lifecycle_heads: ContextLifecycleHead[];
 }
 
+export interface ContextEventPageQuery {
+  after_event_id?: string;
+  limit: number;
+}
+
+export interface ContextEventPage {
+  events: ContextAuthorityRead["events"];
+  /** True when this page reached the end of the authority sequence. */
+  done: boolean;
+}
+
 export interface ContextAuthorityReader {
   openContextRead(orgId: string, query?: ContextAuthorityReadQuery): Promise<ContextAuthorityRead>;
   /**
@@ -206,6 +217,14 @@ export interface ContextAuthorityReader {
     orgId: string,
     threadId: string,
   ): Promise<ContextAuthorityRead>;
+  /**
+   * One sequence-ordered page of authority events, without blob bytes.
+   * Absent means lexical rebuild falls back to a full authority read.
+   */
+  openContextEventPage?(
+    orgId: string,
+    query: ContextEventPageQuery,
+  ): Promise<ContextEventPage>;
 }
 
 export interface ContextAuthorityReadQuery {
@@ -302,6 +321,11 @@ export interface ContextProjectionRunner {
     eventIds?: string[],
     threadId?: string,
   ): Promise<void>;
+  /**
+   * False while a generation or text-version walk still has pages left.
+   * Absent means one syncLexicalIndex call already finished the walk.
+   */
+  lexicalMaintenanceIdle?(orgId: string, generation: string): Promise<boolean>;
 }
 
 export interface ContextRetrieverRegistry {

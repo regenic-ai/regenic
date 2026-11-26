@@ -61,6 +61,7 @@ export function buildShellStatus(
   chip: EngineChipState,
   alerts: ConnectorAlert[],
   translate: Translate = t,
+  titles: ReadonlyArray<{ id: string; title: string }> = [],
 ): ShellStatus {
   const rows: ShellStatusRow[] = [];
   const meta: ShellStatusRow[] = [];
@@ -73,7 +74,7 @@ export function buildShellStatus(
       {
         label: translate("engine.livePull"),
         value: [
-          pullStatusLabel(pull),
+          pullStatusLabel(pull, titles),
           pull?.last_tick_at ? formatChatTime(pull.last_tick_at) : "",
           pull?.last_accepted_count ? `+${pull.last_accepted_count}` : "",
         ]

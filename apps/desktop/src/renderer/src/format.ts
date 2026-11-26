@@ -1,5 +1,6 @@
 import { activeLocale, t, type Translate } from "../../shared/i18n.ts";
 import { localeTag } from "../../shared/locale.ts";
+import { softSyncTone } from "./connector-alerts.ts";
 import { firstLine } from "./message-view.ts";
 import type { EngineChipState } from "./types.ts";
 
@@ -173,6 +174,13 @@ export function attemptSummary(
     return t("sync.syncingWhen", { when });
   }
   if (attempt.status === "failed") {
+    const tone = sourceMode === "webhook" ? null : softSyncTone(attempt.error_code);
+    if (tone === "catchup") {
+      return t("sync.syncingWhen", { when });
+    }
+    if (tone === "retry") {
+      return t("sync.retryingWhen", { when });
+    }
     if (sourceMode === "webhook") {
       return t("connector.push.failedWhen", {
         code: attempt.error_code ? ` · ${attempt.error_code}` : "",

@@ -287,6 +287,8 @@ export type BlobReservation = {
 );
 
 export class BlobReservationConflictError extends Error {
+  readonly code = "blob_reservation_conflict";
+
   constructor(contentHash: string) {
     super(`Blob reservation is busy or unavailable: ${contentHash}`);
     this.name = "BlobReservationConflictError";

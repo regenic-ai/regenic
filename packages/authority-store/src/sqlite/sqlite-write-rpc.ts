@@ -15,6 +15,7 @@ export const AUTHORITY_READ_METHODS = [
   "openContextRead",
   "openContextReadEpoch",
   "openContextReadForThread",
+  "openContextEventPage",
   "getArtifact",
   "getArtifactState",
   "listArtifacts",

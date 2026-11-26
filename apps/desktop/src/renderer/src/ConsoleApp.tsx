@@ -1355,7 +1355,16 @@ export function ConsoleApp() {
   const chip = engineChip(engine, reachability);
   const alerts = connectorAlerts(engine);
   const alert = alerts[0];
-  const shellStatus = buildShellStatus(engine, host, chip, alerts, t);
+  const shellStatus = buildShellStatus(
+    engine,
+    host,
+    chip,
+    alerts,
+    t,
+    catalogThreads.flatMap((thread) =>
+      thread.title ? [{ id: thread.id, title: thread.title }] : [],
+    ),
+  );
   const workCount =
     engine?.inbox_count ?? (listView === "shown" ? listThreads.length : 0);
   const toggleSidebar = useCallback(() => {

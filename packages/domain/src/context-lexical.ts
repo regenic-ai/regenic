@@ -71,6 +71,26 @@ export interface ContextLexicalIndex {
    * Absent on indexes that do not track that coverage.
    */
   needsTextRebuild?(orgId: string): Promise<boolean>;
+  /**
+   * Point the org at this generation without deleting documents.
+   * A generation change clears the text version so the walk can refill it.
+   */
+  ensureGeneration?(input: {
+    org_id: string;
+    generation: string;
+    watermark: string;
+  }): Promise<void>;
+  /** Event id already written by the current text or generation walk. */
+  rebuildCursor?(orgId: string): Promise<string | null>;
+  /**
+   * Record the last event written by the walk.
+   * complete publishes the current text version and drops other generations.
+   */
+  noteRebuildCursor?(
+    orgId: string,
+    afterEventId: string | null,
+    complete: boolean,
+  ): Promise<void>;
   clearOrganization(orgId: string): Promise<void>;
 }
 

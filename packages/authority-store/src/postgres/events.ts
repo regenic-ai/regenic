@@ -11,6 +11,8 @@ import type {
   EventListQuery,
   ContextAuthorityRead,
   ContextAuthorityReadQuery,
+  ContextEventPage,
+  ContextEventPageQuery,
   BlobReservation,
   BlobRecord,
   BlobInventoryRecord,
@@ -448,6 +450,50 @@ export async function openContextReadForThread(db: PgSql, orgId: string, threadI
     }
     return openContextReadInternal(db, orgId, { filters: { thread_ids: [scopedThreadId] } });
   }
+
+export async function openContextEventPage(
+  db: PgSql,
+  orgId: string,
+  query: ContextEventPageQuery,
+): Promise<ContextEventPage> {
+  if (!orgId.trim()) {
+    throw new Error("Context event page organization is required");
+  }
+  if (!Number.isInteger(query?.limit) || query.limit < 1 || query.limit > 1_000) {
+    throw new Error("Context event page limit is invalid");
+  }
+  const after = query.after_event_id?.trim() || null;
+  const afterRow = after
+    ? await db.queryOne<{ sequence: string | number }>(
+      `SELECT sequence FROM events WHERE org_id = $1 AND id = $2`,
+      [orgId, after],
+    )
+    : undefined;
+  const afterSequence = afterRow ? Number(afterRow.sequence) : -1;
+  const rows = await db.query<ContextEventRow>(
+    `
+      SELECT e.id, e.org_id, e.source, e.external_id, e.operation,
+             e.content_hash, e.parent_event_id, e.thread_id, e.actor_id,
+             e.required_scope_ids, e.direction_tags, e.weight_hints, e.attrs,
+             e.occurred_at, e.ingested_at,
+             b.media_type AS content_media_type
+      FROM events e
+      LEFT JOIN blobs b ON b.content_hash = e.content_hash
+      WHERE e.org_id = $1 AND e.sequence > $2
+      ORDER BY e.sequence ASC, e.id ASC
+      LIMIT $3
+    `,
+    [orgId, afterSequence, query.limit + 1],
+  );
+  const done = rows.length <= query.limit;
+  return {
+    events: rows.slice(0, query.limit).map((row) => ({
+      ...toEvent(db, row),
+      ...(row.content_media_type ? { content_media_type: row.content_media_type } : {}),
+    })),
+    done,
+  };
+}
 
 async function openContextReadInternal(db: PgSql, orgId: string, query?: ContextAuthorityReadQuery): Promise<ContextAuthorityRead> {
     const scope = contextReadScope(orgId, query, "postgres");

@@ -75,6 +75,25 @@ describe("connector alerts", () => {
     assert.equal(hasConnectorFailure(view), false);
   });
 
+  it("does not sticky-banner a shared blob write", () => {
+    const view = engine({
+      pull: pull({
+        streams: [
+          {
+            stream_key: "inst-1:chat:oc_1",
+            thread_id: null,
+            label: "李必琪",
+            phase: "error",
+            last_error:
+              "Blob reservation is busy or unavailable: d0f13ecbb7b4cba8612ce7978a7cc1e9df33ac5fef335b5304006d8878260eff",
+          },
+        ],
+      }),
+    });
+    assert.equal(connectorAlerts(view).length, 0);
+    assert.equal(hasConnectorFailure(view), false);
+  });
+
   it("does not sticky-banner a poll deadline soft miss", () => {
     const view = engine({
       pull: pull({
@@ -114,6 +133,27 @@ describe("connector alerts", () => {
     assert.equal(alerts[0].installationId, "inst-1");
     assert.equal(alerts[0].message, "陈静: token expired");
     assert.equal(hasConnectorFailure(view), true);
+  });
+
+  it("does not treat a shared body write as a failed installation", () => {
+    const view = engine({
+      installations: [
+        installation({
+          last_attempt: {
+            id: "a1",
+            status: "failed",
+            accepted_count: 0,
+            duplicate_count: 0,
+            quarantined_count: 0,
+            retryable_failure_count: 1,
+            started_at: "2026-09-10T00:00:00Z",
+            error_code: "blob_reservation_conflict",
+          },
+        }),
+      ],
+    });
+    assert.equal(connectorAlerts(view).length, 0);
+    assert.equal(hasConnectorFailure(view), false);
   });
 
   it("flags a failed last attempt", () => {

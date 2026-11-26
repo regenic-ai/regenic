@@ -41,12 +41,13 @@ function fixture(
   projectThread,
   getEvent = async () => null,
   syncLexicalIndex = async () => undefined,
+  lexicalMaintenanceIdle,
 ) {
   const calls = { claims: [], projects: [], indexSyncs: [], completes: [], failures: [] };
   const outbox = {
     async claimContextProjectionJobs(input) {
       calls.claims.push(input);
-      return claimed;
+      return typeof claimed === "function" ? claimed() : claimed;
     },
     async completeContextProjectionJob(input) {
       calls.completes.push(input);
@@ -69,6 +70,7 @@ function fixture(
       calls.indexSyncs.push({ orgId, generation, eventIds, threadId });
       return syncLexicalIndex(orgId, generation, eventIds, threadId);
     },
+    ...(typeof lexicalMaintenanceIdle === "function" ? { lexicalMaintenanceIdle } : {}),
   };
   const authority = {
     async getEvent(orgId, eventId) {
@@ -111,7 +113,11 @@ function fixture(
     shouldDeferHistorySync: () => false,
   };
   noteInteractiveReadFinished();
-  return { service: new PersonalContextProjectionService(runtime, kernelRuntime), calls };
+  return {
+    service: new PersonalContextProjectionService(runtime, kernelRuntime),
+    calls,
+    kernelRuntime,
+  };
 }
 
 function eventRecord(orgId, eventId, threadId) {
@@ -227,7 +233,7 @@ describe("PersonalContextProjectionService", () => {
     await service.runOnce(new Date("2026-08-30T00:01:00.000Z"));
 
     assert.equal(calls.claims.length, 1);
-    assert.equal(calls.claims[0].limit, 5);
+    assert.equal(calls.claims[0].limit, 100);
     assert.deepEqual(calls.projects, [
       { orgId: "example-org", generation: "continuous-v2", threadId: "thread-1" },
       { orgId: "other-org", generation: "continuous-v2", threadId: "thread-other" },
@@ -448,6 +454,76 @@ describe("PersonalContextProjectionService", () => {
       eventIds: undefined,
       threadId: undefined,
     }]);
+    await service.onModuleDestroy();
+  });
+
+  it("keeps writing the lexical index until the rebuild walk is idle", async () => {
+    let checks = 0;
+    const { service, calls } = fixture(
+      [],
+      async () => [],
+      async () => null,
+      async () => undefined,
+      async () => {
+        checks += 1;
+        return checks >= 2;
+      },
+    );
+
+    await service.runOnce(new Date("2026-08-30T00:01:00.000Z"));
+    await service.runOnce(new Date("2026-08-30T00:01:01.000Z"));
+    await service.runOnce(new Date("2026-08-30T00:01:02.000Z"));
+
+    assert.equal(calls.indexSyncs.length, 2);
+    await service.onModuleDestroy();
+  });
+
+  it("drains the outbox until it is caught up and summarizes each thread once", async () => {
+    const full = Array.from({ length: 100 }, (_, index) => job({
+      id: `job-${index}`,
+      event_id: `event-${index}`,
+    }));
+    const tail = [job({ id: "job-tail", event_id: "event-tail" })];
+    const batches = [full, tail];
+    let index = 0;
+    const { service, calls } = fixture(
+      () => batches[index++] ?? [],
+      async () => [],
+      async (orgId, eventId) => eventRecord(orgId, eventId, "thread-1"),
+    );
+
+    await service.runOnce(new Date("2026-08-30T00:01:00.000Z"));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    assert.equal(calls.claims.length, 2);
+    assert.equal(calls.projects.length, 1);
+    assert.equal(calls.projects[0].threadId, "thread-1");
+    assert.equal(calls.completes.length, 101);
+    await service.onModuleDestroy();
+  });
+
+  it("stops a full queue when history sync should yield", async () => {
+    const full = Array.from({ length: 100 }, (_, index) => job({
+      id: `job-${index}`,
+      event_id: `event-${index}`,
+    }));
+    let defer = false;
+    const { service, calls, kernelRuntime } = fixture(
+      () => {
+        defer = true;
+        return full;
+      },
+      async () => [],
+      async (orgId, eventId) => eventRecord(orgId, eventId, "thread-1"),
+    );
+    kernelRuntime.shouldDeferHistorySync = () => defer;
+
+    await service.runOnce(new Date("2026-08-30T00:01:00.000Z"));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    assert.equal(calls.claims.length, 1);
+    assert.equal(calls.projects.length, 1);
+    assert.equal(calls.completes.length, 100);
     await service.onModuleDestroy();
   });
 });

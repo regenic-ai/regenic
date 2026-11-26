@@ -730,6 +730,9 @@ export class MemoryConnectorRuntimeStore implements ConnectorRuntimeStore {
     work.lease_owner = undefined;
     work.lease_expires_at = undefined;
     work.updated_at = input.now;
+    if (input.outcome === "retry" && !input.error_code) {
+      work.attempts = 0;
+    }
     if (work.run_id && terminal) {
       const run = this.syncRuns.get(work.run_id);
       if (run && run.status !== "cancelled") {

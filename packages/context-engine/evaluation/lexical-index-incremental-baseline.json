@@ -1,0 +1,94 @@
+{
+  "role": "Acceptance bar for the incremental lexical index. This change writes postings per message and must leave these search scores where they are.",
+  "k": 10,
+  "recorded_from": [
+    "packages/context-engine/test/semantic-search-zh.test.cjs",
+    "packages/context-engine/test/semantic-search-memory.test.cjs"
+  ],
+  "chinese": {
+    "dataset_id": "semantic-search-zh-v1",
+    "safety_passed": false,
+    "stale_selections": 8,
+    "mean_recall_at_k": 0.442156862745,
+    "mean_ndcg_at_k": 0.404008098321,
+    "mean_reciprocal_rank_at_k": 0.584716386555,
+    "by_task": {
+      "lookup": {
+        "positive_case_count": 12,
+        "mean_recall_at_k": 0.506944444444,
+        "mean_reciprocal_rank_at_k": 0.44246031746,
+        "mean_ndcg_at_k": 0.374496554642
+      },
+      "anaphora": {
+        "positive_case_count": 12,
+        "mean_recall_at_k": 0.319444444444,
+        "mean_reciprocal_rank_at_k": 0.381944444444,
+        "mean_ndcg_at_k": 0.259579204491
+      },
+      "aggregate": {
+        "positive_case_count": 12,
+        "mean_recall_at_k": 0.426388888889,
+        "mean_reciprocal_rank_at_k": 0.595238095238,
+        "mean_ndcg_at_k": 0.42247477397
+      },
+      "temporal": {
+        "positive_case_count": 12,
+        "mean_recall_at_k": 0.447222222222,
+        "mean_reciprocal_rank_at_k": 0.75625,
+        "mean_ndcg_at_k": 0.463780864757
+      },
+      "update": {
+        "positive_case_count": 12,
+        "mean_recall_at_k": 0.4375,
+        "mean_reciprocal_rank_at_k": 0.676388888889,
+        "mean_ndcg_at_k": 0.411755165291
+      },
+      "boundary": {
+        "positive_case_count": 8,
+        "mean_recall_at_k": 0.552083333333,
+        "mean_reciprocal_rank_at_k": 0.691666666667,
+        "mean_ndcg_at_k": 0.535938991004
+      }
+    }
+  },
+  "english": {
+    "dataset_id": "semantic-search-memory-v1",
+    "safety_passed": true,
+    "stale_selections": 0,
+    "mean_recall_at_k": 0.747023809524,
+    "mean_ndcg_at_k": 0.605643506761,
+    "mean_reciprocal_rank_at_k": 0.586011904762,
+    "by_task": {
+      "lookup": {
+        "positive_case_count": 12,
+        "mean_recall_at_k": 0.916666666667,
+        "mean_reciprocal_rank_at_k": 0.763888888889,
+        "mean_ndcg_at_k": 0.801505557854
+      },
+      "anaphora": {
+        "positive_case_count": 12,
+        "mean_recall_at_k": 0.666666666667,
+        "mean_reciprocal_rank_at_k": 0.527777777778,
+        "mean_ndcg_at_k": 0.563488292262
+      },
+      "aggregate": {
+        "positive_case_count": 12,
+        "mean_recall_at_k": 0.666666666667,
+        "mean_reciprocal_rank_at_k": 0.468055555556,
+        "mean_ndcg_at_k": 0.48585078737
+      },
+      "temporal": {
+        "positive_case_count": 12,
+        "mean_recall_at_k": 0.611111111111,
+        "mean_reciprocal_rank_at_k": 0.520833333333,
+        "mean_ndcg_at_k": 0.486901659157
+      },
+      "update": {
+        "positive_case_count": 8,
+        "mean_recall_at_k": 0.9375,
+        "mean_reciprocal_rank_at_k": 0.68125,
+        "mean_ndcg_at_k": 0.732885102363
+      }
+    }
+  }
+}

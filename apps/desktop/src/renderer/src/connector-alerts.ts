@@ -12,10 +12,34 @@ export type ConnectorAlert = {
   hint: string | null;
 };
 
+/**
+ * A later successful page replaces these attempts, so they stay off the banner.
+ * Shared-body contention is still catch-up. A timeout or lost lease is a retry.
+ */
+export function softSyncTone(
+  errorCode: string | null | undefined,
+): "catchup" | "retry" | null {
+  const code = errorCode?.trim();
+  if (code === "blob_reservation_conflict") {
+    return "catchup";
+  }
+  if (code === "deadline_exceeded" || code === "lease_unavailable") {
+    return "retry";
+  }
+  return null;
+}
+
+export function isSoftSyncFailure(errorCode: string | null | undefined): boolean {
+  return softSyncTone(errorCode) != null;
+}
+
 /** Soft poll miss — keep in sync with domain `looksLikeSyncSoftMissMessage`. */
 function looksLikeSyncSoftMissMessage(message: string): boolean {
   const text = message.trim();
   if (/\btimed out after \d+ms\b/i.test(text)) {
+    return true;
+  }
+  if (text.startsWith("Blob reservation is busy or unavailable")) {
     return true;
   }
   const lower = text.toLowerCase();
@@ -70,7 +94,10 @@ export function connectorAlerts(
         hint: installation.detail,
       });
     }
-    if (installation.last_attempt?.status === "failed") {
+    if (
+      installation.last_attempt?.status === "failed" &&
+      !isSoftSyncFailure(installation.last_attempt.error_code)
+    ) {
       push({
         installationId: installation.id,
         name: connectorDisplayName(installation),

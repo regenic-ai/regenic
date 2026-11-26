@@ -11,6 +11,8 @@ import type {
   EventListQuery,
   ContextAuthorityRead,
   ContextAuthorityReadQuery,
+  ContextEventPage,
+  ContextEventPageQuery,
   BlobReservation,
   BlobRecord,
   BlobInventoryRecord,
@@ -415,6 +417,54 @@ export async function openContextReadForThread(db: Database.Database, orgId: str
     }
     return openContextReadInternal(db, orgId, { filters: { thread_ids: [scopedThreadId] } });
   }
+
+export async function openContextEventPage(
+  db: Database.Database,
+  orgId: string,
+  query: ContextEventPageQuery,
+): Promise<ContextEventPage> {
+  assertEventPage(orgId, query);
+  const after = query.after_event_id?.trim() || null;
+  const read = db.transaction(() => {
+    const afterSequence = after
+      ? (db.prepare(
+        `SELECT sequence FROM events WHERE org_id = ? AND id = ?`,
+      ).get(orgId, after) as { sequence: number } | undefined)?.sequence
+      : undefined;
+    const rows = db.prepare(
+      `
+        SELECT e.id, e.org_id, e.source, e.external_id, e.operation,
+          e.content_hash, e.parent_event_id, e.thread_id, e.actor_id,
+          e.required_scope_ids_json, e.direction_tags_json, e.weight_hints_json, e.attrs_json,
+          e.occurred_at, e.ingested_at,
+          b.media_type AS content_media_type
+        FROM events e
+        LEFT JOIN blobs b ON b.content_hash = e.content_hash
+        WHERE e.org_id = ? AND e.sequence > ?
+        ORDER BY e.sequence ASC, e.id ASC
+        LIMIT ?
+      `,
+    ).all(orgId, afterSequence ?? -1, query.limit + 1) as ContextEventRow[];
+    const done = rows.length <= query.limit;
+    return {
+      events: rows.slice(0, query.limit).map((row) => ({
+        ...toEvent(db, row),
+        ...(row.content_media_type ? { content_media_type: row.content_media_type } : {}),
+      })),
+      done,
+    };
+  });
+  return read.deferred();
+}
+
+function assertEventPage(orgId: string, query: ContextEventPageQuery): void {
+  if (!orgId.trim()) {
+    throw new Error("Context event page organization is required");
+  }
+  if (!Number.isInteger(query?.limit) || query.limit < 1 || query.limit > 1_000) {
+    throw new Error("Context event page limit is invalid");
+  }
+}
 
 function authorityReadEpoch(
   orgId: string,

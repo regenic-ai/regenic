@@ -38,9 +38,31 @@ export function isLeaseUnavailable(error: unknown): boolean {
   return false;
 }
 
-/** Transient sync contention (deadline or lease) — never a durable user-facing failure. */
+/** Same content hash is already being written — retry later; do not sticky-alert. */
+export function isBlobReservationConflict(error: unknown): boolean {
+  if (error instanceof Error) {
+    if (
+      error.name === "BlobReservationConflictError" ||
+      error.message.startsWith("Blob reservation is busy or unavailable")
+    ) {
+      return true;
+    }
+  }
+  return (
+    error != null &&
+    typeof error === "object" &&
+    "code" in error &&
+    (error as { code?: unknown }).code === "blob_reservation_conflict"
+  );
+}
+
+export function looksLikeBlobReservationConflictMessage(message: string): boolean {
+  return message.trim().startsWith("Blob reservation is busy or unavailable");
+}
+
+/** Transient sync contention (deadline, lease, or blob write) — never a durable user-facing failure. */
 export function isSyncSoftMiss(error: unknown): boolean {
-  return isDeadlineExceeded(error) || isLeaseUnavailable(error);
+  return isDeadlineExceeded(error) || isLeaseUnavailable(error) || isBlobReservationConflict(error);
 }
 
 /** UI defense when only the message survived across the wire. */
@@ -60,7 +82,8 @@ export function looksLikeLeaseUnavailableMessage(message: string): boolean {
 export function looksLikeSyncSoftMissMessage(message: string): boolean {
   return (
     looksLikeDeadlineExceededMessage(message) ||
-    looksLikeLeaseUnavailableMessage(message)
+    looksLikeLeaseUnavailableMessage(message) ||
+    looksLikeBlobReservationConflictMessage(message)
   );
 }
 

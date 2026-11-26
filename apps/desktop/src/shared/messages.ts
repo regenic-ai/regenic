@@ -1523,6 +1523,7 @@ export const en = {
   "sync.catchingNamed": "Catching up · {label}",
   "sync.catching": "Catching up",
   "sync.retry": "Connection dropped · retrying",
+  "sync.retryingWhen": "Connection dropped · retrying · {when}",
   "sync.workPending":
     "The app has not completed this refresh yet. Background sync will keep retrying.",
   "sync.idle": "Idle",
@@ -3190,6 +3191,7 @@ export const zh: Record<MessageKey, string> = {
   "sync.catchingNamed": "正在追上 · {label}",
   "sync.catching": "正在追上",
   "sync.retry": "连接中断，正在重试",
+  "sync.retryingWhen": "连接中断，正在重试 · {when}",
   "sync.workPending": "应用尚未完成本次刷新，后台同步将继续自动重试。",
   "sync.idle": "空闲",
   "sync.every": "每 {seconds} 秒",
