@@ -112,15 +112,27 @@ export function sniffMediaType(bytes: Uint8Array, fallback: string): string {
   ) {
     return "application/pdf";
   }
+  if (
+    bytes.length >= 12 &&
+    bytes[4] === 0x66 &&
+    bytes[5] === 0x74 &&
+    bytes[6] === 0x79 &&
+    bytes[7] === 0x70
+  ) {
+    const brand = Buffer.from(bytes.subarray(8, 12)).toString("ascii");
+    if (brand === "avif" || brand === "avis") return "image/avif";
+    if (brand === "heic" || brand === "heix" || brand === "hevc") return "image/heic";
+    if (brand === "heif" || brand === "mif1") return "image/heif";
+  }
   if (bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04) {
     const sample = Buffer.from(bytes).toString("latin1");
-    if (sample.includes("word/")) {
+    if (sample.includes("word/document.xml")) {
       return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
     }
-    if (sample.includes("xl/")) {
+    if (sample.includes("xl/workbook.xml")) {
       return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
     }
-    if (sample.includes("ppt/")) {
+    if (sample.includes("ppt/presentation.xml")) {
       return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
     }
     return fallback === "application/octet-stream" || !fallback.includes("/")
@@ -153,6 +165,9 @@ const MEDIA_EXTENSION: Record<string, string> = {
   "image/jpeg": ".jpg",
   "image/gif": ".gif",
   "image/webp": ".webp",
+  "image/avif": ".avif",
+  "image/heic": ".heic",
+  "image/heif": ".heif",
   "application/pdf": ".pdf",
   "application/msword": ".doc",
   "application/vnd.ms-excel": ".xls",
@@ -165,9 +180,15 @@ const MEDIA_EXTENSION: Record<string, string> = {
 
 /** Keep a real suffix. Add one when the stored name cannot tell the OS what to open. */
 export function filenameForMedia(filename: string, mediaType: string): string {
-  const ext = MEDIA_EXTENSION[mediaType];
-  if (!ext || hasFilenameSuffix(filename)) return filename;
-  return `${filename}${ext}`;
+  const ext = MEDIA_EXTENSION[mediaType === "image/jpg" ? "image/jpeg" : mediaType];
+  if (!ext) return filename;
+  if (!hasFilenameSuffix(filename)) return `${filename}${ext}`;
+  if (!mediaType.startsWith("image/") || !/\.(png|jpe?g|gif|webp|avif|hei[cf])$/iu.test(filename)) {
+    return filename;
+  }
+  const current = filename.slice(filename.lastIndexOf(".")).toLowerCase();
+  if (current === ext || (ext === ".jpg" && current === ".jpeg")) return filename;
+  return `${filename.slice(0, filename.lastIndexOf("."))}${ext}`;
 }
 
 function hasFilenameSuffix(filename: string): boolean {

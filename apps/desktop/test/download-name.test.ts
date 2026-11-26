@@ -21,5 +21,7 @@ describe("download names", () => {
     assert.equal(openDownloadName(null, "attachment", pdf), "attachment.pdf");
     const docx = Buffer.concat([Buffer.from("PK\u0003\u0004"), Buffer.from("word/document.xml")]);
     assert.equal(openDownloadName(null, "attachment", docx), "attachment.docx");
+    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0]);
+    assert.equal(openDownloadName(null, "image.png", jpeg), "image.jpg");
   });
 });

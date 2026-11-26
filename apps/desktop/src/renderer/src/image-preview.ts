@@ -15,11 +15,18 @@ export function previewImageId(eventId: string, index: number): string {
   return `${eventId}:${index}`;
 }
 
+const PREVIEWABLE_IMAGE = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+  "image/avif",
+]);
+
 export function imagePreviewSrc(file: InboxAttachment): string | undefined {
   if (!file.data_base64) return undefined;
-  const media = file.media_type.startsWith("image/")
-    ? file.media_type
-    : imageMediaFromName(file.filename);
+  const declared = file.media_type === "image/jpg" ? "image/jpeg" : file.media_type;
+  const media = PREVIEWABLE_IMAGE.has(declared) ? declared : imageMediaFromName(file.filename);
   if (!media) return undefined;
   return `data:${media};base64,${file.data_base64}`;
 }
@@ -30,6 +37,7 @@ function imageMediaFromName(filename: string): string | undefined {
   if (ext === "jpg" || ext === "jpeg") return "image/jpeg";
   if (ext === "gif") return "image/gif";
   if (ext === "webp") return "image/webp";
+  if (ext === "avif") return "image/avif";
   return undefined;
 }
 

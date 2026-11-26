@@ -39,6 +39,14 @@ describe("image preview", () => {
       }),
       "data:image/png;base64,abc",
     );
+    assert.equal(
+      imagePreviewSrc({
+        filename: "image.heic",
+        media_type: "image/heic",
+        data_base64: "abc",
+      }),
+      undefined,
+    );
   });
 
   it("collects previewable images in thread order", () => {

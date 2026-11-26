@@ -35,11 +35,22 @@ export function agentContextFileUrl(
   return `${root}/files/${encodeURIComponent(eventId)}/${partIndex}`;
 }
 
+const PREVIEWABLE_IMAGE = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+  "image/avif",
+]);
+
 const EXTENSION_BY_MEDIA: Record<string, string> = {
   "image/png": ".png",
   "image/jpeg": ".jpg",
   "image/gif": ".gif",
   "image/webp": ".webp",
+  "image/avif": ".avif",
+  "image/heic": ".heic",
+  "image/heif": ".heif",
   "application/pdf": ".pdf",
   "application/msword": ".doc",
   "application/vnd.ms-excel": ".xls",
@@ -78,23 +89,47 @@ export function hasFilenameExtension(filename: string): boolean {
 }
 
 function isImageFilename(filename: string): boolean {
-  return /\.(png|jpe?g|gif|webp)$/iu.test(filename);
+  return /\.(png|jpe?g|gif|webp|avif|hei[cf])$/iu.test(filename);
 }
 
 function chooseMediaType(declared: string, bytes?: Uint8Array): string {
-  const fallback = declared.includes("/") ? declared : "application/octet-stream";
+  const fallback = normalizeMediaType(declared);
   if (!bytes) return fallback;
   const sniffed = sniffMagic(bytes);
   if (!sniffed) return fallback;
-  if (fallback === "application/octet-stream") return sniffed;
-  if (sniffed.startsWith("image/") && !fallback.startsWith("image/")) return sniffed;
+  if (
+    fallback === "application/octet-stream"
+    || sniffed.startsWith("image/")
+    || fallback.startsWith("image/")
+  ) {
+    return sniffed;
+  }
   return fallback;
+}
+
+/** Browser-decodable type confirmed by the file header. A declared image type is not enough. */
+export function previewImageType(bytes: Uint8Array): string | undefined {
+  const sniffed = sniffMagic(bytes);
+  return sniffed && PREVIEWABLE_IMAGE.has(sniffed) ? sniffed : undefined;
+}
+
+function normalizeMediaType(declared: string): string {
+  const value = declared.includes("/") ? declared : "application/octet-stream";
+  return value === "image/jpg" ? "image/jpeg" : value;
 }
 
 function filenameWithExtension(filename: string, mediaType: string): string {
   const ext = EXTENSION_BY_MEDIA[mediaType];
-  if (!ext || hasFilenameExtension(filename)) return filename;
-  return `${filename}${ext}`;
+  if (!ext) return filename;
+  if (!hasFilenameExtension(filename)) return `${filename}${ext}`;
+  if (!mediaType.startsWith("image/") || !isImageFilename(filename)) return filename;
+  return filenameWithImageExtension(filename, ext);
+}
+
+function filenameWithImageExtension(filename: string, ext: string): string {
+  const current = filename.slice(filename.lastIndexOf(".")).toLowerCase();
+  if (current === ext || (ext === ".jpg" && current === ".jpeg")) return filename;
+  return `${filename.slice(0, filename.lastIndexOf("."))}${ext}`;
 }
 
 function sniffMagic(bytes: Uint8Array): string | undefined {
@@ -141,18 +176,10 @@ function sniffMagic(bytes: Uint8Array): string | undefined {
   ) {
     return "application/pdf";
   }
+  const isoBrand = isoBrandMedia(bytes);
+  if (isoBrand) return isoBrand;
   if (bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04) {
-    const sample = Buffer.from(bytes).toString("latin1");
-    if (sample.includes("word/")) {
-      return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-    }
-    if (sample.includes("xl/")) {
-      return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-    }
-    if (sample.includes("ppt/")) {
-      return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
-    }
-    return "application/zip";
+    return officePackageMedia(bytes);
   }
   if (
     bytes.length >= 8
@@ -175,6 +202,37 @@ function sniffMagic(bytes: Uint8Array): string | undefined {
   return undefined;
 }
 
+function isoBrandMedia(bytes: Uint8Array): string | undefined {
+  if (
+    bytes.length < 12
+    || bytes[4] !== 0x66
+    || bytes[5] !== 0x74
+    || bytes[6] !== 0x79
+    || bytes[7] !== 0x70
+  ) {
+    return undefined;
+  }
+  const brand = Buffer.from(bytes.subarray(8, 12)).toString("ascii");
+  if (brand === "avif" || brand === "avis") return "image/avif";
+  if (brand === "heic" || brand === "heix" || brand === "hevc") return "image/heic";
+  if (brand === "heif" || brand === "mif1") return "image/heif";
+  return undefined;
+}
+
+function officePackageMedia(bytes: Uint8Array): string {
+  const sample = Buffer.from(bytes).toString("latin1");
+  if (sample.includes("word/document.xml")) {
+    return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  }
+  if (sample.includes("xl/workbook.xml")) {
+    return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+  }
+  if (sample.includes("ppt/presentation.xml")) {
+    return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+  }
+  return "application/zip";
+}
+
 function includesUtf16(sample: string, text: string): boolean {
   let encoded = "";
   for (const char of text) encoded += `${char}\u0000`;
@@ -185,10 +243,20 @@ export function attachmentContentDisposition(filename: string): string {
   const safe = filename
     .replace(/[\r\n"]/g, "")
     .replace(/[/\\]/g, "")
-    .trim()
-    .slice(0, 120) || "attachment";
-  const ascii = safe.replace(/[^\x20-\x7e]/g, "_");
-  return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(safe)}`;
+    .trim();
+  const bounded = keepFilenameSuffix(safe, 120) || "attachment";
+  const ascii = bounded.replace(/[^\x20-\x7e]/g, "_");
+  return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(bounded)}`;
+}
+
+function keepFilenameSuffix(filename: string, max: number): string {
+  if (filename.length <= max) return filename;
+  const dot = filename.lastIndexOf(".");
+  const suffix = dot > 0 ? filename.slice(dot) : "";
+  if (!/^\.[A-Za-z0-9]{1,8}$/u.test(suffix) || suffix.length >= max) {
+    return filename.slice(0, max);
+  }
+  return `${filename.slice(0, max - suffix.length)}${suffix}`;
 }
 
 /**

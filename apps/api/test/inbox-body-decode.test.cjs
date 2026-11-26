@@ -80,6 +80,48 @@ describe("inbox body decode", () => {
     );
     assert.equal(preview.attachments[0].media_type, "image/png");
     assert.equal(preview.attachments[0].data_base64, png.toString("base64"));
+    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]);
+    const mislabeled = Buffer.from(
+      JSON.stringify([
+        {
+          role: "attachment",
+          media_type: "image/png",
+          source_filename: "image.png",
+          bytes_base64: jpeg.toString("base64"),
+        },
+      ]),
+      "utf8",
+    );
+    const jpegPreview = decodeInboxBody(
+      mislabeled,
+      "application/vnd.regenic.content-parts+json",
+      "preview",
+    );
+    assert.equal(jpegPreview.attachments[0].media_type, "image/jpeg");
+    assert.equal(jpegPreview.attachments[0].filename, "image.jpg");
+    assert.equal(jpegPreview.attachments[0].data_base64, jpeg.toString("base64"));
+    const heic = Buffer.alloc(12);
+    heic.write("ftyp", 4, "ascii");
+    heic.write("heic", 8, "ascii");
+    const phone = Buffer.from(
+      JSON.stringify([
+        {
+          role: "attachment",
+          media_type: "image/png",
+          source_filename: "image.png",
+          bytes_base64: heic.toString("base64"),
+        },
+      ]),
+      "utf8",
+    );
+    const phonePreview = decodeInboxBody(
+      phone,
+      "application/vnd.regenic.content-parts+json",
+      "preview",
+    );
+    assert.equal(phonePreview.attachments[0].media_type, "image/heic");
+    assert.equal(phonePreview.attachments[0].filename, "image.heic");
+    assert.equal(phonePreview.attachments[0].data_base64, undefined);
     const surface = decodeInboxBody(
       Buffer.from(
         JSON.stringify({

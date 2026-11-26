@@ -17,6 +17,7 @@ import {
   attachmentNeedsPreviewBytes,
   base64DecodedSize,
   describeStoredFile,
+  previewImageType,
 } from "./attachment-file";
 
 export { CONTENT_PARTS_MEDIA_TYPE };
@@ -260,15 +261,14 @@ function decodeAttachments(
     if (attachmentMode === "meta" || !bytes) {
       return [listed];
     }
+    const displayable = previewImageType(bytes);
     const raw = Buffer.from(bytes).toString("base64");
     const size = bytes.byteLength;
-    const preview =
-      described.media_type.startsWith("image/")
-      && size > 0
-      && size <= IMAGE_PREVIEW_BYTES;
+    const preview = Boolean(displayable) && size > 0 && size <= IMAGE_PREVIEW_BYTES;
     return [
       {
         ...listed,
+        ...(displayable ? { media_type: displayable } : {}),
         ...(size ? { byte_size: size } : {}),
         data_base64: preview ? raw : undefined,
       },

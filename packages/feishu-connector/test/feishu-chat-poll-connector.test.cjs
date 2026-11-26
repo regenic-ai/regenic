@@ -1784,5 +1784,15 @@ describe("attachment names", () => {
       "attachment.docx",
     );
     assert.equal(filenameForMedia("notes.pdf", "application/pdf"), "notes.pdf");
+    assert.equal(filenameForMedia("image.png", "image/jpeg"), "image.jpg");
+    const sheet = Buffer.concat([
+      Buffer.from("PK\u0003\u0004"),
+      Buffer.from("xl/workbook.xml"),
+      Buffer.from("word/"),
+    ]);
+    assert.equal(
+      sniffMediaType(sheet, "application/octet-stream"),
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    );
   });
 });
