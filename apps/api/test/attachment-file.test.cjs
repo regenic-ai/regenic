@@ -144,6 +144,21 @@ describe("attachment files", () => {
       filename: "attachment.heic",
       media_type: "image/heic",
     });
+    const mp4 = Buffer.alloc(16);
+    mp4.write("ftyp", 4);
+    mp4.write("isom", 8);
+    assert.deepEqual(describeStoredFile("attachment", "application/octet-stream", mp4), {
+      filename: "attachment.mp4",
+      media_type: "video/mp4",
+    });
+    assert.deepEqual(describeStoredFile("image.png", "image/png", mp4), {
+      filename: "image.mp4",
+      media_type: "video/mp4",
+    });
+    assert.deepEqual(describeStoredFile("attachment", "application/octet-stream", Buffer.from("ID3test")), {
+      filename: "attachment.mp3",
+      media_type: "audio/mpeg",
+    });
     const longName = `${"a".repeat(130)}.pdf`;
     assert.match(attachmentContentDisposition(longName), /filename\*=UTF-8''a+\.pdf$/);
   });

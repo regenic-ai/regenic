@@ -31,6 +31,11 @@ import { FeishuChatPollConnector } from "./feishu-chat-poll-connector";
 import { feishuLocaleTables } from "./locales";
 import { feishuChatPlugin } from "./plugin";
 import { feishuChatIdFromStreamKey, feishuStreamKey } from "./feishu-streams";
+import {
+  feishuPullingAttachmentLocators,
+  feishuQueuedAttachmentLocators,
+  retryFeishuAttachment,
+} from "./feishu-attachment-queue";
 
 export {
   FEISHU_STREAM_PACE,
@@ -69,6 +74,18 @@ export const feishuChatDriver: ChannelDriver = {
 
   onStoreClear() {
     clearAllFeishuMediaJobs();
+  },
+
+  queuedAttachmentLocators(installation, threadIds) {
+    return feishuQueuedAttachmentLocators(installation.id, threadIds);
+  },
+
+  pullingAttachmentLocators(installation, threadIds) {
+    return feishuPullingAttachmentLocators(installation.id, threadIds);
+  },
+
+  retryAttachment(installation, input) {
+    return retryFeishuAttachment(installation.id, input);
   },
 
   install(input): NewConnectorInstallation {

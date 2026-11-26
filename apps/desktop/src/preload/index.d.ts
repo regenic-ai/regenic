@@ -113,6 +113,10 @@ export interface RegenicDesktop {
   quitApp: () => Promise<void>;
   openExternal: (url: string) => Promise<void>;
   openAttachment: (input: { eventId: string; partIndex: number; filename: string }) => Promise<void>;
+  readAttachment: (input: { eventId: string; partIndex: number; filename: string }) => Promise<{
+    mediaType: string;
+    dataBase64: string;
+  }>;
   getHostStats: () => Promise<HostStats>;
   reportOpenConversation: (input: { threadId: string | null; nav: string }) => void;
   reportPageVisibility: (state: string) => void;

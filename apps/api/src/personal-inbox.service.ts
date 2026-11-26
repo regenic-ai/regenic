@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { Inject, Injectable, forwardRef } from "@nestjs/common";
 import { connectorOptionsPage, loadConnectorOptions } from "./personal-connector-options";
 import {
@@ -9,6 +10,7 @@ import {
   arrangeMessage,
   collectLatestInbound,
   conversationDirectoryLabel,
+  CONTENT_PARTS_MEDIA_TYPE,
   conversationId,
   inboxDigest,
   isExecutorSysoutBody,
@@ -45,7 +47,9 @@ import {
   personalReadTierFromDetail,
   personalReadTierSpec,
   personalInboxReadTier,
+  parseStoredContentParts,
   personalInboxReadTierSpec,
+  storedPartText,
   shouldQueryInboxChannelOverlays,
   classifyKernelReachability,
   type KernelPressureView,
@@ -422,6 +426,137 @@ export class PersonalInboxService {
       eventId,
       partIndex,
     );
+  }
+
+  /** Ask the channel that owns this pointer to download it again. */
+  async retryAttachment(
+    eventId: string,
+    partIndex: number,
+  ): Promise<{ thread_id: string }> {
+    if (!eventId.trim() || !Number.isInteger(partIndex) || partIndex < 0) {
+      throw new PersonalConnectorError(
+        "invalid_request",
+        "Attachment address is invalid",
+        400,
+      );
+    }
+    const host = this.runtime.requireHost();
+    const authority = host.get("authority");
+    const blobs = host.get("blobs");
+    const orgId = this.runtime.orgId();
+    const event = await authority.getEvent(orgId, eventId);
+    if (!event?.content_hash) {
+      throw new PersonalConnectorError("not_found", "Attachment was not found", 404);
+    }
+    const threadId = conversationId(event.source, event.external_id, event.id);
+    let thread: ConversationThread;
+    try {
+      thread = parseConversationThread(threadId);
+    } catch {
+      throw new PersonalConnectorError(
+        "invalid_request",
+        "This attachment cannot be downloaded again",
+        409,
+      );
+    }
+    const envelopeMeta = await authority.findBlob(event.content_hash);
+    const envelope = await blobs.get(event.content_hash).catch(() => undefined);
+    if (
+      !envelopeMeta
+      || !envelope
+      || createHash("sha256").update(envelope).digest("hex") !== event.content_hash
+      || envelopeMeta.media_type !== CONTENT_PARTS_MEDIA_TYPE
+    ) {
+      throw new PersonalConnectorError("not_found", "Attachment was not found", 404);
+    }
+    const parts = parseStoredContentParts(envelope);
+    const part = parts?.[partIndex];
+    if (!part || part.role !== "attachment" || !part.external_locator) {
+      throw new PersonalConnectorError(
+        "invalid_request",
+        "This attachment cannot be downloaded again",
+        409,
+      );
+    }
+    if (part.content_hash) {
+      throw new PersonalConnectorError(
+        "invalid_request",
+        "This attachment is already downloaded",
+        409,
+      );
+    }
+    const text = parts
+      ?.map((item) => (item.role === "text" || item.role === "body" ? storedPartText(item) : undefined))
+      .filter((item): item is string => Boolean(item))
+      .join("\n");
+    const installations = await authority.listInstallations(orgId);
+    const accepted = this.drivers.retryAttachment(installations, thread, {
+      thread_id: threadId,
+      external_id: event.external_id,
+      external_locator: part.external_locator,
+      filename: part.source_filename || undefined,
+      media_type: part.media_type,
+      occurred_at: event.occurred_at,
+      actor_id: event.actor_id,
+      direction: event.direction_tags?.includes("outbound") ? "outbound" : "inbound",
+      text: text || undefined,
+    });
+    if (!accepted) {
+      throw new PersonalConnectorError(
+        "invalid_request",
+        "This attachment cannot be downloaded again",
+        409,
+      );
+    }
+    return { thread_id: threadId };
+  }
+
+  /**
+   * Pointers become "syncing" only while a driver is downloading them,
+   * and "available" while they are still queued. Threads no driver claims
+   * are left unset.
+   */
+  private attachmentFetchQueues(
+    items: readonly {
+      event: Pick<EventRecord, "content_hash" | "source" | "external_id" | "id">;
+    }[],
+    installations: readonly ConnectorInstallation[],
+  ): {
+    queued: Map<string, ReadonlySet<string>>;
+    pulling: Map<string, ReadonlySet<string>>;
+  } | undefined {
+    const threads = new Map<string, string[]>();
+    for (const item of items) {
+      const hash = item.event.content_hash;
+      if (!hash) continue;
+      const threadId = conversationId(
+        item.event.source,
+        item.event.external_id,
+        item.event.id,
+      );
+      const hashes = threads.get(threadId);
+      if (hashes) hashes.push(hash);
+      else threads.set(threadId, [hash]);
+    }
+    if (threads.size === 0) return undefined;
+    const threadIds = [...threads.keys()];
+    const queued = this.drivers.queuedAttachmentLocators(installations, threadIds);
+    if (queued.size === 0) return undefined;
+    const pulling = this.drivers.pullingAttachmentLocators(installations, threadIds);
+    const queuedByHash = new Map<string, ReadonlySet<string>>();
+    const pullingByHash = new Map<string, ReadonlySet<string>>();
+    for (const [threadId, hashes] of threads) {
+      const locators = queued.get(threadId);
+      if (!locators) continue;
+      const active = pulling.get(threadId) ?? new Set<string>();
+      for (const hash of hashes) {
+        queuedByHash.set(hash, locators);
+        pullingByHash.set(hash, active);
+      }
+    }
+    return queuedByHash.size > 0
+      ? { queued: queuedByHash, pulling: pullingByHash }
+      : undefined;
   }
 
   startAfterListen(): void {
@@ -818,7 +953,17 @@ export class PersonalInboxService {
       authority.listInstallations(orgId),
       authority.getConversationPref(orgId, threadId),
     ]);
-    const body = await resolveInboxBody(authority, blobs, event.content_hash);
+    const fetchQueues = this.attachmentFetchQueues([{ event }], installations);
+    const body = event.content_hash
+      ? (await resolveInboxBodies(
+          authority,
+          blobs,
+          [event.content_hash],
+          "preview",
+          fetchQueues?.queued,
+          fetchQueues?.pulling,
+        )).get(event.content_hash) ?? {}
+      : {};
     const item = { decision, event };
     const labels = await conversationLabelsFor(
       [{ item, body }],
@@ -1416,11 +1561,16 @@ export class PersonalInboxService {
     const pinnedIds = pinnedSelected.map(inboxItemThreadId);
     const workIds = workSelected.map(inboxItemThreadId);
     const attachments = query.heads ? "meta" : "preview";
+    const fetchQueues = attachments === "preview"
+      ? this.attachmentFetchQueues(selected, installations)
+      : undefined;
     const bodies = await resolveInboxBodies(
       authority,
       blobs,
       selected.map((item) => item.event.content_hash),
       attachments,
+      fetchQueues?.queued,
+      fetchQueues?.pulling,
     );
     const resolved = selected.map((item) => {
       const threadId = conversationId(

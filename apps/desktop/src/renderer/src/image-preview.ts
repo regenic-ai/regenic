@@ -1,4 +1,5 @@
 import type { InboxAttachment } from "./types";
+import { pairedCoverIndexes } from "./video-message.ts";
 
 export interface PreviewImage {
   id: string;
@@ -46,7 +47,9 @@ export function collectPreviewImages(
 ): PreviewImage[] {
   const images: PreviewImage[] = [];
   for (const item of items) {
+    const covers = pairedCoverIndexes(item.attachments ?? []);
     for (const [index, file] of (item.attachments ?? []).entries()) {
+      if (covers.has(index)) continue;
       const src = imagePreviewSrc(file);
       if (!src) {
         continue;

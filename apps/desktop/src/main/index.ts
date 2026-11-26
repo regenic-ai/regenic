@@ -1391,6 +1391,33 @@ app.whenReady().then(async () => {
     const opened = await shell.openPath(filePath);
     if (opened) throw new Error(opened);
   });
+  ipcMain.handle("regenic:read-attachment", async (event, input: unknown) => {
+    if (event.sender !== mainWindow?.webContents) {
+      throw new Error("attachment.localOnly");
+    }
+    const body = input && typeof input === "object"
+      ? input as { eventId?: unknown; partIndex?: unknown }
+      : {};
+    const eventId = typeof body.eventId === "string" ? body.eventId.trim() : "";
+    const partIndex = body.partIndex;
+    if (!eventId || typeof partIndex !== "number" || !Number.isInteger(partIndex) || partIndex < 0) {
+      throw new Error("attachment.invalid");
+    }
+    const response = await fetch(
+      `${apiOrigin}/v1/me/events/${encodeURIComponent(eventId)}/files/${partIndex}`,
+    );
+    if (!response.ok) {
+      throw new Error("attachment.openFailed");
+    }
+    const bytes = Buffer.from(await response.arrayBuffer());
+    if (bytes.byteLength > 8 * 1024 * 1024) {
+      throw new Error("attachment.tooLarge");
+    }
+    return {
+      mediaType: response.headers.get("content-type")?.split(";")[0]?.trim() || "application/octet-stream",
+      dataBase64: bytes.toString("base64"),
+    };
+  });
   ipcMain.handle("regenic:get-host-stats", async () =>
     collectHostStats(currentDataPaths(), {
       sidecarPid: sidecar?.pid ?? lastOwnedSidecarPid,

@@ -299,7 +299,7 @@ export class PersonalController {
         historyPending = pulled.history_pending;
       }
       if (shouldDrainMediaFocus(input)) {
-        void this.connectors.drainMediaForThread(threadId);
+        void this.connectors.drainMediaForThread(threadId, input.before);
       }
       return {
         accepted: true as const,
@@ -307,6 +307,18 @@ export class PersonalController {
         ...(historyPending !== undefined ? { history_pending: historyPending } : {}),
       };
     });
+  }
+
+  @Post("events/:eventId/files/:partIndex/retry")
+  @HttpCode(HttpStatus.ACCEPTED)
+  async retryEventFile(
+    @Param("eventId") eventId: string,
+    @Param("partIndex") partIndexRaw: string,
+  ) {
+    const partIndex = Number(partIndexRaw);
+    const result = await this.guard(() => this.inbox.retryAttachment(eventId, partIndex));
+    void this.connectors.drainMediaForThread(result.thread_id);
+    return { accepted: true as const };
   }
 
   @Get("events/:eventId/files/:partIndex")

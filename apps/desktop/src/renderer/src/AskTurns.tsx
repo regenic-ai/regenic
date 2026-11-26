@@ -1,6 +1,9 @@
 import { useEffect, useId, useMemo, useState } from "react";
 import { fetchWorkRunReads } from "./api";
+import { openAttachmentFile } from "./attachment-actions";
 import { ChevronIcon, SparkleIcon } from "./Icons";
+import { collectPreviewImages, previewImageId } from "./image-preview";
+import { ImageLightbox } from "./ImageLightbox";
 import { useLocale } from "./LocaleContext";
 import { MessageBody } from "./MessageBody";
 import { RunReadList } from "./RunCard";
@@ -129,6 +132,15 @@ export function AskTurns({
     const owners = readTurns(reads, turns.map((turn) => turn.start));
     return turns.map((_, index) => reads.filter((_, readIndex) => owners[readIndex] === index));
   }, [reads, turns]);
+  const previewImages = useMemo(
+    () => collectPreviewImages(turns.flatMap((turn) => [
+      ...(turn.question ? [turn.question] : []),
+      ...turn.answers,
+    ])),
+    [turns],
+  );
+  const [previewId, setPreviewId] = useState<string | null>(null);
+  const previewIndex = previewImages.findIndex((image) => image.id === previewId);
 
   const lastIndex = turns.length - 1;
   return (
@@ -140,14 +152,26 @@ export function AskTurns({
           <div key={turn.question?.event.id ?? `turn-${index}`} className="ask-turn">
             {turn.question ? (
               <article className="ask-message is-user">
-                <MessageBody text={turn.question.body_text ?? ""} attachments={turn.question.attachments} />
+                <MessageBody
+                  text={turn.question.body_text ?? ""}
+                  attachments={turn.question.attachments}
+                  eventId={turn.question.event.id}
+                  onOpenFile={(file) => openAttachmentFile(turn.question!.event.id, file)}
+                  onPreviewImage={(fileIndex) => setPreviewId(previewImageId(turn.question!.event.id, fileIndex))}
+                />
               </article>
             ) : null}
             {turn.answers.map((item) => (
               <article key={item.event.id} className="ask-message is-assistant">
                 <span className="ask-avatar" aria-hidden="true"><SparkleIcon /></span>
                 <div className="ask-message-body">
-                  <MessageBody text={item.body_text ?? ""} attachments={item.attachments} />
+                  <MessageBody
+                    text={item.body_text ?? ""}
+                    attachments={item.attachments}
+                    eventId={item.event.id}
+                    onOpenFile={(file) => openAttachmentFile(item.event.id, file)}
+                    onPreviewImage={(fileIndex) => setPreviewId(previewImageId(item.event.id, fileIndex))}
+                  />
                 </div>
               </article>
             ))}
@@ -175,6 +199,14 @@ export function AskTurns({
           </div>
         );
       })}
+      {previewIndex >= 0 ? (
+        <ImageLightbox
+          images={previewImages}
+          index={previewIndex}
+          onClose={() => setPreviewId(null)}
+          onIndex={(next) => setPreviewId(previewImages[next]?.id ?? null)}
+        />
+      ) : null}
     </>
   );
 }

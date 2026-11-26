@@ -110,7 +110,9 @@ import {
   patchInboxWork,
   shouldFetchInboxDelta,
   unfinishedOpenAction,
+  attachmentDrainBefore,
   threadHasPendingImagePreviews,
+  threadNeedsAttachmentDrain,
   LIST_HEADS_PAGE_SIZE,
   THREAD_OPEN_PAGE_SIZE,
   THREAD_PAGE_SIZE,
@@ -307,14 +309,22 @@ export function ConsoleApp() {
     return true;
   };
 
+  const mediaDrainInflight = useRef(new Set<string>());
   const scheduleMediaDrainIfNeeded = (
     threadId: string,
     items: InboxViewItem[] | undefined,
   ) => {
-    if (!items || !threadHasPendingImagePreviews(items)) {
+    if (!items || !threadNeedsAttachmentDrain(items)) {
       return;
     }
-    void focusConversation(mediaDrainFocusRequest(threadId)).catch(() => undefined);
+    if (mediaDrainInflight.current.has(threadId)) return;
+    mediaDrainInflight.current.add(threadId);
+    const before = attachmentDrainBefore(items);
+    void focusConversation(mediaDrainFocusRequest(threadId, before))
+      .catch(() => undefined)
+      .finally(() => {
+        mediaDrainInflight.current.delete(threadId);
+      });
   };
 
   const ensureThread = async (threadId: string, mode: "open" | "poll") => {
@@ -936,7 +946,8 @@ export function ConsoleApp() {
             const skipOpenPoll =
               sseConnectedRef.current &&
               loadedThreadsRef.current.has(openId) &&
-              !threadHasPendingImagePreviews(openMessages);
+              !threadHasPendingImagePreviews(openMessages) &&
+              !threadNeedsAttachmentDrain(openMessages);
             if (openBusy) {
               // A cold open is already reading this thread. Starting another
               // would bump the generation and discard the page in flight.
@@ -961,11 +972,16 @@ export function ConsoleApp() {
           if (workspaceEpoch.current !== epoch) {
             continue;
           }
-          delayRef.current = sseConnectedRef.current
-            ? SSE_FALLBACK_POLL_MS
-            : decision.mode === "skip"
-              ? IDLE_POLL_MS
-              : POLL_MS;
+          const openNeedsMedia = Boolean(
+            openId && threadNeedsAttachmentDrain(messagesRef.current[openId] ?? []),
+          );
+          delayRef.current = openNeedsMedia
+            ? POLL_MS
+            : sseConnectedRef.current
+              ? SSE_FALLBACK_POLL_MS
+              : decision.mode === "skip"
+                ? IDLE_POLL_MS
+                : POLL_MS;
           setEngine((current) => {
             const merged =
               current?.catalog?.length && !nextEngine.catalog?.length

@@ -24,6 +24,8 @@ export { CONTENT_PARTS_MEDIA_TYPE };
 
 const IMAGE_PREVIEW_BYTES = 8_000_000;
 
+export type AttachmentFetch = "syncing" | "available" | "failed";
+
 export interface InboxAttachment {
   filename: string;
   media_type: string;
@@ -31,6 +33,10 @@ export interface InboxAttachment {
   byte_size?: number;
   content_hash?: string;
   data_base64?: string;
+  /** Present only while the bytes are not stored yet. */
+  fetch?: AttachmentFetch;
+  /** Server-only. Stripped before the inbox response is sent. */
+  locator?: string;
 }
 
 export interface InboxBody {
@@ -47,6 +53,8 @@ export async function resolveInboxBodies(
   blobs: BlobStore,
   hashes: readonly (string | undefined)[],
   attachments: AttachmentMode = "preview",
+  queued?: ReadonlyMap<string, ReadonlySet<string>>,
+  pulling?: ReadonlyMap<string, ReadonlySet<string>>,
 ): Promise<Map<string, InboxBody>> {
   const unique = [
     ...new Set(hashes.filter((hash): hash is string => Boolean(hash))),
@@ -89,7 +97,7 @@ export async function resolveInboxBodies(
     resolved.set(hash, decodeInboxBody(data, meta.media_type, attachments, sizes));
   }
   if (attachments !== "preview" || sidecarHashes.length === 0) {
-    return resolved;
+    return presentInboxBodies(resolved, queued, pulling);
   }
   const previewHashes = previewAttachmentHashes(unique, envelopes, sizes);
   const sidecars = previewHashes.length > 0
@@ -105,7 +113,38 @@ export async function resolveInboxBodies(
       attachments: decodeAttachments(parts, "preview", sidecars, sizes),
     });
   }
-  return resolved;
+  return presentInboxBodies(resolved, queued, pulling);
+}
+
+const NO_LOCATORS: ReadonlySet<string> = new Set();
+
+function presentInboxBodies(
+  resolved: Map<string, InboxBody>,
+  queued?: ReadonlyMap<string, ReadonlySet<string>>,
+  pulling?: ReadonlyMap<string, ReadonlySet<string>>,
+): Map<string, InboxBody> {
+  const next = new Map<string, InboxBody>();
+  for (const [hash, body] of resolved) {
+    next.set(
+      hash,
+      queued
+        ? applyAttachmentFetch(
+            body,
+            queued.get(hash) ?? NO_LOCATORS,
+            pulling?.get(hash) ?? NO_LOCATORS,
+          )
+        : stripAttachmentLocators(body),
+    );
+  }
+  return next;
+}
+
+function stripAttachmentLocators(body: InboxBody): InboxBody {
+  if (!body.attachments?.some((file) => file.locator)) return body;
+  return {
+    ...body,
+    attachments: body.attachments.map(({ locator: _locator, ...file }) => file),
+  };
 }
 
 export async function resolveInboxBody(
@@ -257,6 +296,9 @@ function decodeAttachments(
       part_index: partIndex,
       ...(hash ? { content_hash: hash } : {}),
       ...attachmentSize(part, sizes),
+      ...(part.external_locator && !hash && !bytes
+        ? { locator: part.external_locator }
+        : {}),
     };
     if (attachmentMode === "meta" || !bytes) {
       return [listed];
@@ -274,6 +316,37 @@ function decodeAttachments(
       },
     ];
   });
+}
+
+/**
+ * A pointer being downloaded is "syncing". One still queued is "available".
+ * A pointer the channel has dropped is "failed".
+ */
+export function applyAttachmentFetch(
+  body: InboxBody,
+  queued: ReadonlySet<string>,
+  pulling: ReadonlySet<string> = NO_LOCATORS,
+): InboxBody {
+  if (!body.attachments?.length) return body;
+  return {
+    ...body,
+    attachments: body.attachments.map((file) => {
+      const { locator, ...rest } = file;
+      if (attachmentHasBytes(rest)) return rest;
+      const fetch = !locator
+        ? "failed"
+        : pulling.has(locator)
+          ? "syncing"
+          : queued.has(locator)
+            ? "available"
+            : "failed";
+      return { ...rest, fetch };
+    }),
+  };
+}
+
+function attachmentHasBytes(file: InboxAttachment): boolean {
+  return Boolean(file.content_hash || file.data_base64 || (file.byte_size !== undefined && file.byte_size > 0));
 }
 
 function attachmentSize(

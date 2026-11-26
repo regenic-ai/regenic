@@ -744,7 +744,9 @@ function pollOptions(
   if (input.latest === true) {
     options.latest = true;
   }
-  if (input.media === false) {
+  if (input.media === true) {
+    options.media = true;
+  } else if (input.media === false) {
     options.media = false;
   }
   const before = input.before?.trim();
@@ -760,7 +762,7 @@ function pollOptions(
   }
   return options.older ||
     options.latest ||
-    options.media === false ||
+    options.media !== undefined ||
     options.signal ||
     options.before ||
     options.page_size !== undefined ||

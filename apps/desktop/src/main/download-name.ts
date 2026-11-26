@@ -9,7 +9,7 @@ export function openDownloadName(
   const base = sanitizeDownloadName(header || fallback || "attachment");
   const sniffed = sniffDownloadType(bytes);
   const ext = extensionFor(sniffed);
-  if (ext && sniffed?.startsWith("image/") && isImageName(base) && !sameImageSuffix(base, ext)) {
+  if (ext && isImageName(base) && !sameImageSuffix(base, ext)) {
     return sanitizeDownloadName(`${base.slice(0, base.lastIndexOf("."))}${ext}`);
   }
   if (hasExtension(base)) return base;
@@ -83,6 +83,26 @@ function extensionFor(mediaType: string | undefined): string {
       return ".heic";
     case "image/heif":
       return ".heif";
+    case "video/mp4":
+      return ".mp4";
+    case "video/webm":
+      return ".webm";
+    case "video/quicktime":
+      return ".mov";
+    case "video/x-matroska":
+      return ".mkv";
+    case "video/x-msvideo":
+      return ".avi";
+    case "audio/mpeg":
+      return ".mp3";
+    case "audio/mp4":
+      return ".m4a";
+    case "audio/wav":
+      return ".wav";
+    case "audio/ogg":
+      return ".ogg";
+    case "audio/aac":
+      return ".aac";
     case "application/pdf":
       return ".pdf";
     case "application/msword":
@@ -114,12 +134,27 @@ function sniffDownloadType(bytes: Uint8Array): string | undefined {
   if (bytes.length >= 4 && bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x38) {
     return "image/gif";
   }
-  if (
-    bytes.length >= 12
-    && bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46
-    && bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50
-  ) {
-    return "image/webp";
+  if (bytes.length >= 12 && bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46) {
+    const kind = Buffer.from(bytes.subarray(8, 12)).toString("ascii");
+    if (kind === "WEBP") return "image/webp";
+    if (kind === "WAVE") return "audio/wav";
+    if (kind === "AVI ") return "video/x-msvideo";
+  }
+  if (bytes.length >= 4 && bytes[0] === 0x1a && bytes[1] === 0x45 && bytes[2] === 0xdf && bytes[3] === 0xa3) {
+    const sample = Buffer.from(bytes.subarray(0, Math.min(bytes.length, 64))).toString("latin1");
+    return sample.includes("webm") ? "video/webm" : "video/x-matroska";
+  }
+  if (bytes.length >= 4 && bytes[0] === 0x4f && bytes[1] === 0x67 && bytes[2] === 0x67 && bytes[3] === 0x53) {
+    return "audio/ogg";
+  }
+  if (bytes.length >= 3 && bytes[0] === 0x49 && bytes[1] === 0x44 && bytes[2] === 0x33) {
+    return "audio/mpeg";
+  }
+  if (bytes.length >= 2 && bytes[0] === 0xff && (bytes[1] === 0xf1 || bytes[1] === 0xf9)) {
+    return "audio/aac";
+  }
+  if (bytes.length >= 2 && bytes[0] === 0xff && (bytes[1] & 0xe0) === 0xe0) {
+    return "audio/mpeg";
   }
   if (bytes.length >= 4 && bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46) {
     return "application/pdf";
@@ -156,6 +191,16 @@ function isoBrand(bytes: Uint8Array): string | undefined {
   if (brand === "avif" || brand === "avis") return "image/avif";
   if (brand === "heic" || brand === "heix" || brand === "hevc") return "image/heic";
   if (brand === "heif" || brand === "mif1") return "image/heif";
+  const compact = brand.replace(/\s+/g, "");
+  if (compact === "qt") return "video/quicktime";
+  if (compact === "M4A" || compact === "M4B" || compact === "M4P") return "audio/mp4";
+  if (
+    compact === "isom" || compact === "iso2" || compact === "iso5" || compact === "iso6"
+    || compact === "mp41" || compact === "mp42" || compact === "avc1" || compact === "dash"
+    || compact === "MSNV" || compact === "M4V" || compact === "M4VH" || compact === "F4V"
+  ) {
+    return "video/mp4";
+  }
   return undefined;
 }
 

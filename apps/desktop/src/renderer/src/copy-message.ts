@@ -7,11 +7,27 @@ export function stripAttachmentLines(text: string): string {
     .trim();
 }
 
+/** Feishu sometimes stores the bubble as HTML. People should see the words, not the tags. */
+export function plainMessageText(text: string): string {
+  return text
+    .replace(/<br\s*\/?>/giu, "\n")
+    .replace(/<\/p>/giu, "\n")
+    .replace(/<p\b[^>]*>/giu, "")
+    .replace(/<\/?(?:div|span|b|strong|em|i|u|font|a)\b[^>]*>/giu, "")
+    .replace(/&nbsp;/giu, " ")
+    .replace(/&amp;/giu, "&")
+    .replace(/&lt;/giu, "<")
+    .replace(/&gt;/giu, ">")
+    .replace(/[ \t]+\n/gu, "\n")
+    .replace(/\n{3,}/gu, "\n\n")
+    .trim();
+}
+
 export function formatMessageCopy(item: {
   body_text?: string;
   attachments?: Array<{ filename?: string }>;
 }): string {
-  const body = stripAttachmentLines(item.body_text ?? "");
+  const body = plainMessageText(stripAttachmentLines(item.body_text ?? ""));
   const attached = (item.attachments ?? [])
     .map((file) => file.filename?.trim())
     .filter((name): name is string => Boolean(name))

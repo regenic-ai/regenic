@@ -51,6 +51,16 @@ const EXTENSION_BY_MEDIA: Record<string, string> = {
   "image/avif": ".avif",
   "image/heic": ".heic",
   "image/heif": ".heif",
+  "video/mp4": ".mp4",
+  "video/webm": ".webm",
+  "video/quicktime": ".mov",
+  "video/x-matroska": ".mkv",
+  "video/x-msvideo": ".avi",
+  "audio/mpeg": ".mp3",
+  "audio/mp4": ".m4a",
+  "audio/wav": ".wav",
+  "audio/ogg": ".ogg",
+  "audio/aac": ".aac",
   "application/pdf": ".pdf",
   "application/msword": ".doc",
   "application/vnd.ms-excel": ".xls",
@@ -122,7 +132,7 @@ function filenameWithExtension(filename: string, mediaType: string): string {
   const ext = EXTENSION_BY_MEDIA[mediaType];
   if (!ext) return filename;
   if (!hasFilenameExtension(filename)) return `${filename}${ext}`;
-  if (!mediaType.startsWith("image/") || !isImageFilename(filename)) return filename;
+  if (!isImageFilename(filename)) return filename;
   return filenameWithImageExtension(filename, ext);
 }
 
@@ -154,19 +164,8 @@ function sniffMagic(bytes: Uint8Array): string | undefined {
   ) {
     return "image/gif";
   }
-  if (
-    bytes.length >= 12
-    && bytes[0] === 0x52
-    && bytes[1] === 0x49
-    && bytes[2] === 0x46
-    && bytes[3] === 0x46
-    && bytes[8] === 0x57
-    && bytes[9] === 0x45
-    && bytes[10] === 0x42
-    && bytes[11] === 0x50
-  ) {
-    return "image/webp";
-  }
+  const packaged = packagedMedia(bytes);
+  if (packaged) return packaged;
   if (
     bytes.length >= 4
     && bytes[0] === 0x25
@@ -216,6 +215,48 @@ function isoBrandMedia(bytes: Uint8Array): string | undefined {
   if (brand === "avif" || brand === "avis") return "image/avif";
   if (brand === "heic" || brand === "heix" || brand === "hevc") return "image/heic";
   if (brand === "heif" || brand === "mif1") return "image/heif";
+  const compact = brand.replace(/\s+/g, "");
+  if (compact === "qt") return "video/quicktime";
+  if (compact === "M4A" || compact === "M4B" || compact === "M4P") return "audio/mp4";
+  if (
+    compact === "isom" || compact === "iso2" || compact === "iso5" || compact === "iso6"
+    || compact === "mp41" || compact === "mp42" || compact === "avc1" || compact === "dash"
+    || compact === "MSNV" || compact === "M4V" || compact === "M4VH" || compact === "F4V"
+  ) {
+    return "video/mp4";
+  }
+  return undefined;
+}
+
+function packagedMedia(bytes: Uint8Array): string | undefined {
+  if (
+    bytes.length >= 12
+    && bytes[0] === 0x52
+    && bytes[1] === 0x49
+    && bytes[2] === 0x46
+    && bytes[3] === 0x46
+  ) {
+    const kind = Buffer.from(bytes.subarray(8, 12)).toString("ascii");
+    if (kind === "WEBP") return "image/webp";
+    if (kind === "WAVE") return "audio/wav";
+    if (kind === "AVI ") return "video/x-msvideo";
+  }
+  if (bytes.length >= 4 && bytes[0] === 0x1a && bytes[1] === 0x45 && bytes[2] === 0xdf && bytes[3] === 0xa3) {
+    const sample = Buffer.from(bytes.subarray(0, Math.min(bytes.length, 64))).toString("latin1");
+    return sample.includes("webm") ? "video/webm" : "video/x-matroska";
+  }
+  if (bytes.length >= 4 && bytes[0] === 0x4f && bytes[1] === 0x67 && bytes[2] === 0x67 && bytes[3] === 0x53) {
+    return "audio/ogg";
+  }
+  if (bytes.length >= 3 && bytes[0] === 0x49 && bytes[1] === 0x44 && bytes[2] === 0x33) {
+    return "audio/mpeg";
+  }
+  if (bytes.length >= 2 && bytes[0] === 0xff && (bytes[1] === 0xf1 || bytes[1] === 0xf9)) {
+    return "audio/aac";
+  }
+  if (bytes.length >= 2 && bytes[0] === 0xff && (bytes[1] & 0xe0) === 0xe0) {
+    return "audio/mpeg";
+  }
   return undefined;
 }
 

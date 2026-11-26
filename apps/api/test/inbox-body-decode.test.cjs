@@ -1,6 +1,6 @@
 const assert = require("node:assert/strict");
 const { describe, it } = require("node:test");
-const { decodeBodyText, decodeInboxBody } = require("../dist/inbox-body");
+const { applyAttachmentFetch, decodeBodyText, decodeInboxBody } = require("../dist/inbox-body");
 
 describe("inbox body decode", () => {
   it("reads a single-part text blob and a content-parts envelope", () => {
@@ -144,5 +144,42 @@ describe("inbox body decode", () => {
       event_ids: ["ev-1"],
       source: "dsh",
     });
+  });
+
+  it("marks a pointer failed unless its locator is still queued", () => {
+    const envelope = Buffer.from(
+      JSON.stringify([
+        {
+          role: "attachment",
+          media_type: "application/msword",
+          source_filename: "notes.doc",
+          external_locator: "feishu:file:file_key",
+        },
+        {
+          role: "attachment",
+          media_type: "image/png",
+          source_filename: "image.png",
+          external_locator: "feishu:image:img_key",
+        },
+      ]),
+      "utf8",
+    );
+    const body = decodeInboxBody(
+      envelope,
+      "application/vnd.regenic.content-parts+json",
+      "meta",
+    );
+    const marked = applyAttachmentFetch(
+      body,
+      new Set(["feishu:image:img_key", "feishu:file:file_key"]),
+      new Set(["feishu:image:img_key"]),
+    );
+    assert.equal(marked.attachments[0].fetch, "available");
+    assert.equal(marked.attachments[0].locator, undefined);
+    assert.equal(marked.attachments[1].fetch, "syncing");
+    assert.equal(marked.attachments[1].filename, "image.png");
+    const dropped = applyAttachmentFetch(body, new Set());
+    assert.equal(dropped.attachments[0].fetch, "failed");
+    assert.equal(dropped.attachments[1].fetch, "failed");
   });
 });

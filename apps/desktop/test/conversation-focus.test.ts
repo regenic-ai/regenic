@@ -42,5 +42,13 @@ describe("conversation focus requests", () => {
       thread_id: "feishu:oc_1",
       media: true,
     });
+    assert.deepEqual(
+      mediaDrainFocusRequest("feishu:oc_1", "2026-11-26T03:33:00.000Z"),
+      {
+        thread_id: "feishu:oc_1",
+        media: true,
+        before: "2026-11-26T03:33:00.000Z",
+      },
+    );
   });
 });
