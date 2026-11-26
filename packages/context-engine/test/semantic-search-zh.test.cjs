@@ -48,11 +48,11 @@ describe("Semantic search Chinese baseline", () => {
     assert.equal(report.metrics.unauthorized_selections, 0);
     assert.equal(report.metrics.citation_coverage, 1);
     assert.equal(report.metrics.negative_selection_rate, 0);
-    assert.equal(report.metrics.stale_selections, 14);
+    assert.equal(report.metrics.stale_selections, 12);
     assert.equal(report.metrics.safety_passed, false);
-    assert.equal(report.metrics.mean_recall_at_k, 0.394852941176);
-    assert.equal(report.metrics.mean_ndcg_at_k, 0.36226119657);
-    assert.equal(report.metrics.mean_reciprocal_rank_at_k, 0.554446778711);
+    assert.equal(report.metrics.mean_recall_at_k, 0.405882352941);
+    assert.equal(report.metrics.mean_ndcg_at_k, 0.3699521057);
+    assert.equal(report.metrics.mean_reciprocal_rank_at_k, 0.56130952381);
     assert.deepEqual(report.metrics.by_task, {
       lookup: {
         positive_case_count: 12,
@@ -62,27 +62,27 @@ describe("Semantic search Chinese baseline", () => {
       },
       anaphora: {
         positive_case_count: 12,
-        mean_recall_at_k: 0.277777777778,
-        mean_reciprocal_rank_at_k: 0.368055555556,
-        mean_ndcg_at_k: 0.237119221111,
+        mean_recall_at_k: 0.319444444444,
+        mean_reciprocal_rank_at_k: 0.381944444444,
+        mean_ndcg_at_k: 0.259579204491,
       },
       aggregate: {
         positive_case_count: 12,
         mean_recall_at_k: 0.426388888889,
-        mean_reciprocal_rank_at_k: 0.588293650794,
-        mean_ndcg_at_k: 0.418857380396,
+        mean_reciprocal_rank_at_k: 0.595238095238,
+        mean_ndcg_at_k: 0.42247477397,
       },
       temporal: {
         positive_case_count: 12,
         mean_recall_at_k: 0.283333333333,
-        mean_reciprocal_rank_at_k: 0.633333333333,
-        mean_ndcg_at_k: 0.310095573878,
+        mean_reciprocal_rank_at_k: 0.6375,
+        mean_ndcg_at_k: 0.311334179906,
       },
       update: {
         positive_case_count: 12,
-        mean_recall_at_k: 0.375,
-        mean_reciprocal_rank_at_k: 0.6625,
-        mean_ndcg_at_k: 0.366638526273,
+        mean_recall_at_k: 0.395833333333,
+        mean_reciprocal_rank_at_k: 0.676388888889,
+        mean_ndcg_at_k: 0.382904361689,
       },
       boundary: {
         positive_case_count: 8,
