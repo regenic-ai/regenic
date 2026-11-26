@@ -83,33 +83,127 @@ export class ContextProjectionCoordinator implements ContextProjectionRunner {
     if (!status.available) {
       return;
     }
+    const generationReady = status.generation === generation;
+    if (eventIds.length > 0 && generationReady) {
+      await this.upsertLexicalEvents(orgId, generation, eventIds);
+      return;
+    }
+    if (eventIds.length > 0 && this.lexicalIndex.ensureGeneration) {
+      await this.lexicalIndex.ensureGeneration({
+        org_id: orgId,
+        generation,
+        watermark: "lexical:pending",
+      });
+      await this.upsertLexicalEvents(orgId, generation, eventIds);
+      return;
+    }
+    if (eventIds.length > 0) {
+      await this.rebuildLexicalIndex(orgId, generation);
+      return;
+    }
     const rebuildText = await this.lexicalIndex.needsTextRebuild?.(orgId) ?? false;
-    const stale = !status.generation || status.generation !== generation || rebuildText;
-    if (threadId && stale) {
-      await this.syncLexicalIndex(orgId, generation);
+    if (generationReady && !rebuildText) {
       return;
     }
-    if (!stale && eventIds.length === 0) {
-      return;
+    await this.rebuildLexicalIndex(orgId, generation);
+  }
+
+  async lexicalMaintenanceIdle(orgId: string, generation: string): Promise<boolean> {
+    requireProjectionNamespace(orgId, generation);
+    if (!this.lexicalIndex) {
+      return true;
     }
-    const read = structuredClone(
-      threadId
-        ? await this.authority.openContextReadForThread(orgId, threadId)
-        : await this.authority.openContextRead(orgId),
-    );
+    const status = await this.lexicalIndex.getStatus(orgId);
+    if (!status.available || status.generation === generation) {
+      return status.available
+        ? !(await this.lexicalIndex.needsTextRebuild?.(orgId) ?? false)
+        : true;
+    }
+    return false;
+  }
+
+  private async upsertLexicalEvents(
+    orgId: string,
+    generation: string,
+    eventIds: string[],
+  ): Promise<void> {
+    const read = structuredClone(await this.authority.openContextRead(orgId, {
+      anchors: eventIds.map((id) => ({ kind: "event", id })),
+    }));
     validateProjectionRead(read, orgId);
-    const sourceEvents = await toSourceEvents(read.events, this.blobs, {
-      missingBlobs: "skip",
-      indexFileText: true,
-    });
+    const requested = new Set(eventIds);
+    const sourceEvents = await toSourceEvents(
+      read.events.filter((event) => requested.has(event.id)),
+      this.blobs,
+      { missingBlobs: "skip", indexFileText: true },
+    );
     await synchronizeLexicalIndex(
       this.lexicalIndex,
       orgId,
       generation,
       read.read_epoch,
       sourceEvents,
-      stale ? [] : eventIds,
-      stale,
+      eventIds,
+      false,
+    );
+  }
+
+  private async rebuildLexicalIndex(orgId: string, generation: string): Promise<void> {
+    const index = this.lexicalIndex;
+    if (
+      index?.ensureGeneration &&
+      index.rebuildCursor &&
+      index.noteRebuildCursor &&
+      this.authority.openContextEventPage
+    ) {
+      await index.ensureGeneration({
+        org_id: orgId,
+        generation,
+        watermark: "lexical:rebuild",
+      });
+      const after = await index.rebuildCursor(orgId);
+      const page = await this.authority.openContextEventPage(orgId, {
+        ...(after ? { after_event_id: after } : {}),
+        limit: LEXICAL_REBUILD_PAGE,
+      });
+      if (page.events.some((event) => event.org_id !== orgId)) {
+        throw new Error("Context projection authority read contains an Event from another organization");
+      }
+      const sourceEvents = await toSourceEvents(page.events, this.blobs, {
+        missingBlobs: "skip",
+        indexFileText: true,
+      });
+      const done = page.done || page.events.length === 0;
+      const lastId = page.events.at(-1)?.id;
+      if (!done && !lastId) {
+        throw new Error("Context lexical rebuild page has no Event");
+      }
+      const watermark = done
+        ? await lexicalReadEpoch(this.authority, orgId)
+        : `lexical:${lastId}`;
+      await index.upsertDocuments({
+        org_id: orgId,
+        generation,
+        watermark,
+        documents: sourceEvents.flatMap(toLexicalDocument),
+      });
+      await index.noteRebuildCursor(orgId, done ? null : lastId ?? null, done);
+      return;
+    }
+    const read = structuredClone(await this.authority.openContextRead(orgId));
+    validateProjectionRead(read, orgId);
+    const sourceEvents = await toSourceEvents(read.events, this.blobs, {
+      missingBlobs: "skip",
+      indexFileText: true,
+    });
+    await synchronizeLexicalIndex(
+      index,
+      orgId,
+      generation,
+      read.read_epoch,
+      sourceEvents,
+      [],
+      true,
     );
   }
 
@@ -377,6 +471,17 @@ function validateProjectionRead(read: ContextAuthorityRead, orgId: string): void
 }
 
 const LEXICAL_DOCUMENT_CHARACTERS = 200_000;
+const LEXICAL_REBUILD_PAGE = 200;
+
+async function lexicalReadEpoch(
+  authority: ContextAuthorityReader,
+  orgId: string,
+): Promise<string> {
+  if (authority.openContextReadEpoch) {
+    return authority.openContextReadEpoch(orgId);
+  }
+  return (await authority.openContextRead(orgId)).read_epoch;
+}
 
 async function synchronizeLexicalIndex(
   index: ContextLexicalIndex | undefined,

@@ -425,4 +425,178 @@ describe("ContextProjectionCoordinator", () => {
       1,
     );
   });
+
+  it("indexes one new message without reading the rest of the thread", async () => {
+    const hashes = {
+      "event-1": "a".repeat(64),
+      "event-2": "b".repeat(64),
+      "event-3": "c".repeat(64),
+    };
+    const events = Object.entries(hashes).map(([id, content_hash]) => ({
+      ...event,
+      id,
+      external_id: id,
+      content_hash,
+      content_media_type: "text/plain",
+    }));
+    const reads = [];
+    const blobReads = [];
+    const upserts = [];
+    const coordinator = new ContextProjectionCoordinator({
+      async openContextRead(_orgId, query) {
+        reads.push(query ?? null);
+        const ids = new Set((query?.anchors ?? []).map((anchor) => anchor.id));
+        return {
+          read_epoch: "authority:events",
+          recorded_at: event.ingested_at,
+          events: events.filter((item) => ids.has(item.id)),
+          lifecycle_heads: [],
+        };
+      },
+      async openContextReadForThread() {
+        throw new Error("thread read");
+      },
+      async openContextEventPage() {
+        throw new Error("rebuild page");
+      },
+    }, artifactsWithExistingEventBlob(), new MemoryContextProjectorRegistry(), {
+      async getMany(requested) {
+        blobReads.push([...requested]);
+        return new Map([...requested].map((hash) => [hash, Buffer.from(`body ${hash[0]}`)]));
+      },
+    }, {
+      async getStatus() {
+        return {
+          available: true,
+          algorithm_version: "segment-bm25-v1",
+          generation: "continuous-v1",
+          watermark: "authority:1",
+        };
+      },
+      async needsTextRebuild() { return true; },
+      async replaceOrganization() { throw new Error("replace"); },
+      async upsertDocuments(input) { upserts.push(structuredClone(input)); },
+    });
+
+    await coordinator.syncLexicalIndex(
+      "example-org",
+      "continuous-v1",
+      ["event-2"],
+      "thread-1",
+    );
+
+    assert.deepEqual(reads, [{ anchors: [{ kind: "event", id: "event-2" }] }]);
+    assert.deepEqual(blobReads.flat(), [hashes["event-2"]]);
+    assert.deepEqual(upserts[0].documents, [{
+      event_id: "event-2",
+      content_hash: hashes["event-2"],
+      text: "body b",
+    }]);
+  });
+
+  it("writes a new message before the generation walk has started", async () => {
+    let generation;
+    const upserts = [];
+    const coordinator = new ContextProjectionCoordinator({
+      async openContextRead(_orgId, query) {
+        assert.deepEqual(query, { anchors: [{ kind: "event", id: "event-1" }] });
+        return {
+          read_epoch: "authority:events",
+          recorded_at: event.ingested_at,
+          events: [{ ...event, content_media_type: "text/plain" }],
+          lifecycle_heads: [],
+        };
+      },
+      async openContextReadForThread() {
+        throw new Error("thread read");
+      },
+      async openContextEventPage() {
+        throw new Error("rebuild page");
+      },
+    }, artifactsWithExistingEventBlob(), new MemoryContextProjectorRegistry(), {
+      async getMany() { return new Map([[HASH, Buffer.from("Indexed body")]]); },
+    }, {
+      async getStatus() {
+        return {
+          available: true,
+          algorithm_version: "segment-bm25-v1",
+          ...(generation ? { generation, watermark: "lexical:pending" } : {}),
+        };
+      },
+      async ensureGeneration(input) { generation = input.generation; },
+      async replaceOrganization() { throw new Error("replace"); },
+      async upsertDocuments(input) { upserts.push(structuredClone(input)); },
+    });
+
+    await coordinator.syncLexicalIndex("example-org", "continuous-v1", ["event-1"], "thread-1");
+
+    assert.equal(generation, "continuous-v1");
+    assert.deepEqual(upserts[0].documents, [{
+      event_id: "event-1",
+      content_hash: HASH,
+      text: "Indexed body",
+    }]);
+  });
+
+  it("commits a lexical rebuild one page at a time", async () => {
+    const events = ["event-1", "event-2"].map((id) => ({
+      ...event,
+      id,
+      external_id: id,
+      content_media_type: "text/plain",
+    }));
+    let cursor = null;
+    let generation;
+    let complete = false;
+    const notes = [];
+    const upserts = [];
+    const coordinator = new ContextProjectionCoordinator({
+      async openContextRead() {
+        throw new Error("full read");
+      },
+      async openContextReadEpoch() {
+        return "authority:full";
+      },
+      async openContextEventPage(_orgId, query) {
+        if (!query.after_event_id) return { events: [events[0]], done: false };
+        assert.equal(query.after_event_id, "event-1");
+        return { events: [events[1]], done: true };
+      },
+    }, artifactsWithExistingEventBlob(), new MemoryContextProjectorRegistry(), {
+      async getMany() { return new Map([[HASH, Buffer.from("Indexed body")]]); },
+    }, {
+      async getStatus() {
+        return {
+          available: true,
+          algorithm_version: "segment-bm25-v1",
+          ...(generation ? { generation, watermark: "lexical:rebuild" } : {}),
+        };
+      },
+      async needsTextRebuild() { return !complete; },
+      async ensureGeneration(input) { generation = input.generation; },
+      async rebuildCursor() { return cursor; },
+      async noteRebuildCursor(_orgId, after, done) {
+        notes.push({ after, done });
+        cursor = done ? null : after;
+        complete = done;
+      },
+      async upsertDocuments(input) { upserts.push(structuredClone(input)); },
+      async replaceOrganization() { throw new Error("replace"); },
+    });
+
+    assert.equal(await coordinator.lexicalMaintenanceIdle("example-org", "continuous-v1"), false);
+    await coordinator.syncLexicalIndex("example-org", "continuous-v1");
+    assert.equal(await coordinator.lexicalMaintenanceIdle("example-org", "continuous-v1"), false);
+    await coordinator.syncLexicalIndex("example-org", "continuous-v1");
+    assert.equal(await coordinator.lexicalMaintenanceIdle("example-org", "continuous-v1"), true);
+    assert.deepEqual(notes, [
+      { after: "event-1", done: false },
+      { after: null, done: true },
+    ]);
+    assert.deepEqual(upserts.map((input) => input.watermark), ["lexical:event-1", "authority:full"]);
+    assert.deepEqual(upserts.map((input) => input.documents.map((document) => document.event_id)), [
+      ["event-1"],
+      ["event-2"],
+    ]);
+  });
 });

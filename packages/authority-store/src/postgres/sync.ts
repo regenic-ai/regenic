@@ -1210,7 +1210,8 @@ export async function settleSyncWork(db: PgSql, input: SettleSyncWork): Promise<
         `
           UPDATE connector_sync_work
           SET status = $1, next_due_at = $2, lease_owner = NULL,
-              lease_expires_at = NULL, last_error = $3, updated_at = $4
+              lease_expires_at = NULL, last_error = $3, updated_at = $4,
+              attempts = CASE WHEN $7 = 1 THEN 0 ELSE attempts END
           WHERE id = $5 AND status = 'running' AND lease_owner = $6
           RETURNING *
         `,
@@ -1221,6 +1222,7 @@ export async function settleSyncWork(db: PgSql, input: SettleSyncWork): Promise<
           input.now,
           input.id,
           input.owner,
+          input.outcome === "retry" && !input.error_code ? 1 : 0,
         ],
         client,
       );

@@ -98,7 +98,8 @@ export class SqliteContextLexicalIndex implements ContextLexicalIndex {
             generation = excluded.generation,
             watermark = excluded.watermark,
             algorithm_version = excluded.algorithm_version,
-            text_version = excluded.text_version
+            text_version = excluded.text_version,
+            rebuild_after_id = NULL
         `,
       ).run(
         input.org_id,
@@ -250,6 +251,106 @@ export class SqliteContextLexicalIndex implements ContextLexicalIndex {
     })();
   }
 
+  async ensureGeneration(input: {
+    org_id: string;
+    generation: string;
+    watermark: string;
+  }): Promise<void> {
+    assertNonEmpty(input?.org_id, "organization");
+    assertNonEmpty(input?.generation, "generation");
+    assertNonEmpty(input?.watermark, "watermark");
+    if (!this.available) {
+      return;
+    }
+    const row = this.database.prepare(
+      `
+        SELECT generation, algorithm_version
+        FROM context_lexical_meta
+        WHERE org_id = ?
+      `,
+    ).get(input.org_id) as { generation: string; algorithm_version: string } | undefined;
+    if (
+      row?.generation === input.generation &&
+      row.algorithm_version === CONTEXT_LEXICAL_ALGORITHM_VERSION
+    ) {
+      return;
+    }
+    this.database.transaction(() => {
+      this.invalidateAuthorizationCache();
+      this.database.prepare(
+        `
+          INSERT INTO context_lexical_meta (
+            org_id, generation, watermark, algorithm_version, text_version, rebuild_after_id
+          ) VALUES (?, ?, ?, ?, NULL, NULL)
+          ON CONFLICT(org_id) DO UPDATE SET
+            generation = excluded.generation,
+            watermark = excluded.watermark,
+            algorithm_version = excluded.algorithm_version,
+            text_version = NULL,
+            rebuild_after_id = NULL
+        `,
+      ).run(
+        input.org_id,
+        input.generation,
+        input.watermark,
+        CONTEXT_LEXICAL_ALGORITHM_VERSION,
+      );
+    }).immediate();
+  }
+
+  async rebuildCursor(orgId: string): Promise<string | null> {
+    assertNonEmpty(orgId, "organization");
+    if (!this.available) {
+      return null;
+    }
+    const row = this.database.prepare(
+      `
+        SELECT rebuild_after_id
+        FROM context_lexical_meta
+        WHERE org_id = ? AND algorithm_version = ?
+      `,
+    ).get(orgId, CONTEXT_LEXICAL_ALGORITHM_VERSION) as { rebuild_after_id: string | null } | undefined;
+    return row?.rebuild_after_id ?? null;
+  }
+
+  async noteRebuildCursor(
+    orgId: string,
+    afterEventId: string | null,
+    complete: boolean,
+  ): Promise<void> {
+    assertNonEmpty(orgId, "organization");
+    if (!complete && !afterEventId?.trim()) {
+      throw new Error("Context lexical rebuild cursor is required");
+    }
+    if (!this.available) {
+      return;
+    }
+    this.database.transaction(() => {
+      this.invalidateAuthorizationCache();
+      if (complete) {
+        const generation = this.meta(orgId)?.generation;
+        if (generation) {
+          this.deleteOtherGenerations(orgId, generation);
+        }
+        this.database.prepare(
+          `
+            UPDATE context_lexical_meta
+            SET text_version = ?, rebuild_after_id = NULL
+            WHERE org_id = ? AND algorithm_version = ?
+          `,
+        ).run(LEXICAL_TEXT_VERSION, orgId, CONTEXT_LEXICAL_ALGORITHM_VERSION);
+        return;
+      }
+      this.database.prepare(
+        `
+          UPDATE context_lexical_meta
+          SET rebuild_after_id = ?
+          WHERE org_id = ? AND algorithm_version = ?
+        `,
+      ).run(afterEventId, orgId, CONTEXT_LEXICAL_ALGORITHM_VERSION);
+    }).immediate();
+  }
+
   async needsTextRebuild(orgId: string): Promise<boolean> {
     assertNonEmpty(orgId, "organization");
     if (!this.available) return false;
@@ -328,6 +429,9 @@ export class SqliteContextLexicalIndex implements ContextLexicalIndex {
       if (!columns.some((column) => column.name === "text_version")) {
         this.database.exec("ALTER TABLE context_lexical_meta ADD COLUMN text_version TEXT");
       }
+      if (!columns.some((column) => column.name === "rebuild_after_id")) {
+        this.database.exec("ALTER TABLE context_lexical_meta ADD COLUMN rebuild_after_id TEXT");
+      }
       return true;
     } catch (error) {
       if (error instanceof Error && /fts5|no such module/i.test(error.message)) {
@@ -368,6 +472,23 @@ export class SqliteContextLexicalIndex implements ContextLexicalIndex {
     this.database.prepare(
       `INSERT INTO context_lexical_documents_fts (rowid, terms) VALUES (?, ?)`,
     ).run(Number(result.lastInsertRowid), preparedTerms.join(" "));
+  }
+
+  private deleteOtherGenerations(orgId: string, generation: string): void {
+    const rows = this.database.prepare(
+      `
+        SELECT rowid FROM context_lexical_documents
+        WHERE org_id = ? AND generation != ?
+      `,
+    ).all(orgId, generation) as Array<{ rowid: number }>;
+    for (const row of rows) {
+      this.database.prepare(
+        `DELETE FROM context_lexical_documents_fts WHERE rowid = ?`,
+      ).run(row.rowid);
+    }
+    this.database.prepare(
+      `DELETE FROM context_lexical_documents WHERE org_id = ? AND generation != ?`,
+    ).run(orgId, generation);
   }
 
   private deleteOrganization(orgId: string): void {

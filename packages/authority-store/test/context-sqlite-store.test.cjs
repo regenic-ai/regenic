@@ -413,7 +413,56 @@ describe("SQLite context artifact store", () => {
     await split.close();
   });
 
+  it("reads authority events one sequence page at a time", async () => {
+    const root = await createRoot();
+    const path = join(root, "authority.db");
+    const store = new SqliteAuthorityStore(path);
+    const ids = [];
+    for (const [index, hash] of [
+      ["0", HASH_A],
+      ["1", HASH_B],
+      ["2", "c".repeat(64)],
+    ]) {
+      const event = await store.append({
+        org_id: "example-org",
+        source: "synthetic",
+        external_id: `page-${index}`,
+        content_hash: hash,
+        content_media_type: "text/plain",
+        content_byte_size: 1,
+        thread_id: "thread-1",
+        actor_id: "actor-1",
+        required_scope_ids: ["scope-1"],
+        occurred_at: "2026-08-30T00:00:00.000Z",
+        expected_head_id: null,
+      });
+      ids.push(event.id);
+    }
+    const first = await store.openContextEventPage("example-org", { limit: 2 });
+    assert.equal(first.done, false);
+    assert.deepEqual(first.events.map((event) => event.id), ids.slice(0, 2));
+    assert.equal(first.events[0].content_media_type, "text/plain");
+    const second = await store.openContextEventPage("example-org", {
+      after_event_id: first.events.at(-1).id,
+      limit: 2,
+    });
+    assert.equal(second.done, true);
+    assert.deepEqual(second.events.map((event) => event.id), [ids[2]]);
+    const missing = await store.openContextEventPage("example-org", {
+      after_event_id: "missing-event",
+      limit: 2,
+    });
+    assert.equal(missing.done, false);
+    assert.deepEqual(missing.events.map((event) => event.id), ids.slice(0, 2));
+    store.close();
 
+    const split = await SqliteSplitAuthorityStore.open(path);
+    assert.deepEqual(
+      (await split.openContextEventPage("example-org", { limit: 1 })).events.map((event) => event.id),
+      [ids[0]],
+    );
+    await split.close();
+  });
 
   it("excludes agent sessions from an ordinary app context read", async () => {
     const root = await createRoot();

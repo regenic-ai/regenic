@@ -3,6 +3,7 @@ import {
   ChannelDriverRegistry,
   DueWorkClaimLimiter,
   type CopyLocale,
+  isBlobReservationConflict,
   isSyncSoftMiss,
   asConnectorHost,
   bindConnectorPush,
@@ -1147,17 +1148,20 @@ export class PersonalConnectorService implements OnModuleDestroy, OnApplicationB
     error?: unknown;
   }): void {
     const softMiss = input.error != null && isSyncSoftMiss(input.error);
+    const blobContention = isBlobReservationConflict(input.error);
     if (input.error && !softMiss) {
       this.streamErrors.set(input.key, errorMessage(input.error));
     } else {
-      // Success or poll deadline: never sticky-alert a soft miss.
+      // Success or poll contention: never sticky-alert a soft miss.
       this.streamErrors.delete(input.key);
     }
     if (input.pages.length === 0 && !input.error) {
       return;
     }
     this.streamSeeded.add(input.key);
-    if (softMiss && input.pages.length === 0) {
+    // A shared message body stays in catch-up and retries in about a second.
+    // Deadline misses still back off instead of leaving a sticky chip.
+    if (softMiss && !blobContention && input.pages.length === 0) {
       // Empty deadline: back off instead of sticky catch-up + error banner.
       this.state.streamCatchingUp.delete(input.key);
       if (input.idleMs !== undefined) {
@@ -1174,7 +1178,7 @@ export class PersonalConnectorService implements OnModuleDestroy, OnApplicationB
         pagesBudget: input.pagesBudget,
         acceptedCount: summary.accepted_count,
         quarantinedCount: summary.quarantined_count,
-        error: softMiss ? undefined : input.error,
+        error: softMiss && !blobContention ? undefined : input.error,
       })
     ) {
       this.state.streamCatchingUp.add(input.key);

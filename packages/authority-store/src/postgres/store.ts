@@ -26,6 +26,8 @@ import type {
   EventListQuery,
   ContextAuthorityRead,
   ContextAuthorityReadQuery,
+  ContextEventPage,
+  ContextEventPageQuery,
   BlobReservation,
   BlobInventoryRecord,
   BlobInventoryPage,
@@ -256,6 +258,7 @@ import {
   markTombstone,
   openContextRead,
   openContextReadForThread,
+  openContextEventPage,
   putOutboundAttempt,
   repointContentHash,
 } from "./events";
@@ -547,6 +550,13 @@ export class PostgresAuthorityStore
     threadId: string,
   ): Promise<ContextAuthorityRead> {
     return openContextReadForThread(this.sql, orgId, threadId);
+  }
+
+  async openContextEventPage(
+    orgId: string,
+    query: ContextEventPageQuery,
+  ): Promise<ContextEventPage> {
+    return openContextEventPage(this.sql, orgId, query);
   }
 
   async putArtifact(

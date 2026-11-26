@@ -146,6 +146,11 @@ export function nextDueAfterFailure(attempts: number, now: string): string {
   return new Date(Date.parse(now) + delay).toISOString();
 }
 
+/** Identical content is already being stored. Retry as soon as that write can finish. */
+export function nextDueAfterBlobContention(now: string): string {
+  return new Date(Date.parse(now) + 1_000).toISOString();
+}
+
 export function installationConcurrency(): number {
   const raw = Number(process.env.REGENIC_INSTALLATION_SYNC_CONCURRENCY ?? 4);
   if (!Number.isFinite(raw)) {

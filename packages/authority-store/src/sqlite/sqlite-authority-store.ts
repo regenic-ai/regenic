@@ -17,6 +17,8 @@ import type {
   EventListQuery,
   ContextAuthorityRead,
   ContextAuthorityReadQuery,
+  ContextEventPage,
+  ContextEventPageQuery,
   BlobReservation,
   BlobInventoryRecord,
   BlobInventoryPage,
@@ -204,6 +206,7 @@ import {
   openContextRead,
   openContextReadEpoch,
   openContextReadForThread,
+  openContextEventPage,
   putOutboundAttempt,
   repointContentHash,
 } from "./events";
@@ -544,6 +547,13 @@ export class SqliteAuthorityStore
     threadId: string,
   ): Promise<ContextAuthorityRead> {
     return openContextReadForThread(this.database, orgId, threadId);
+  }
+
+  async openContextEventPage(
+    orgId: string,
+    query: ContextEventPageQuery,
+  ): Promise<ContextEventPage> {
+    return openContextEventPage(this.database, orgId, query);
   }
 
   async putArtifact(

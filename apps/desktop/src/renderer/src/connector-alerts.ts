@@ -18,6 +18,9 @@ function looksLikeSyncSoftMissMessage(message: string): boolean {
   if (/\btimed out after \d+ms\b/i.test(text)) {
     return true;
   }
+  if (text.startsWith("Blob reservation is busy or unavailable")) {
+    return true;
+  }
   const lower = text.toLowerCase();
   return (
     lower.includes("already leased") ||

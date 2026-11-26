@@ -57,6 +57,60 @@ describe("SQLite Context lexical index", () => {
     index.close();
   });
 
+  it("walks a rebuild cursor without deleting documents already written", async () => {
+    const dir = await root();
+    const path = join(dir, "rebuild.db");
+    const index = new SqliteContextLexicalIndex(path);
+    await index.ensureGeneration({
+      org_id: "example-org",
+      generation: "continuous-v1",
+      watermark: "lexical:rebuild",
+    });
+    assert.equal(await index.needsTextRebuild("example-org"), true);
+    assert.equal(await index.rebuildCursor("example-org"), null);
+    await index.upsertDocuments(replacement([
+      { event_id: "event-a", content_hash: HASH_A, text: "alpha" },
+    ], { watermark: "lexical:event-a" }));
+    await index.noteRebuildCursor("example-org", "event-a", false);
+    assert.equal(await index.rebuildCursor("example-org"), "event-a");
+    await index.ensureGeneration({
+      org_id: "example-org",
+      generation: "continuous-v1",
+      watermark: "lexical:rebuild",
+    });
+    assert.equal(await index.rebuildCursor("example-org"), "event-a");
+    assert.equal((await index.getStatus("example-org")).watermark, "lexical:event-a");
+    await index.upsertDocuments(replacement([
+      { event_id: "event-b", content_hash: HASH_B, text: "beta" },
+    ], { watermark: "authority:full" }));
+    await index.noteRebuildCursor("example-org", null, true);
+    assert.equal(await index.rebuildCursor("example-org"), null);
+    assert.equal(await index.needsTextRebuild("example-org"), false);
+    const matched = await index.matchAuthorized({
+      org_id: "example-org",
+      query: "beta",
+      authorized: [key("event-a", HASH_A), key("event-b", HASH_B)],
+    });
+    assert.deepEqual(matched.matched, [key("event-b", HASH_B)]);
+
+    await index.ensureGeneration({
+      org_id: "example-org",
+      generation: "continuous-v2",
+      watermark: "lexical:rebuild",
+    });
+    const Database = require("better-sqlite3");
+    const db = new Database(path);
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM context_lexical_documents").get().n, 2);
+    db.close();
+    await index.noteRebuildCursor("example-org", null, true);
+    const after = new Database(path);
+    assert.equal(after.prepare(
+      "SELECT COUNT(*) AS n FROM context_lexical_documents WHERE generation = ?",
+    ).get("continuous-v1").n, 0);
+    after.close();
+    index.close();
+  });
+
   it("reuses compact authorization coverage and invalidates it after index writes", async () => {
     const dir = await root();
     const index = new SqliteContextLexicalIndex(join(dir, "authorization.db"));

@@ -233,6 +233,46 @@ describe("SQLite durable sync work", () => {
     store.close();
   });
 
+  it("clears the claim streak after a clean retry", async () => {
+    const root = await createRoot();
+    const store = new SqliteAuthorityStore(join(root, "authority.db"));
+    await seedInstallation(store);
+    await seedRun(store);
+    await seedWork(store, { stream_key: "s-history", lane: "history" });
+    const [claimed] = await store.claimSyncWork({
+      owner: "worker-a",
+      now: "2026-09-21T00:00:01.000Z",
+      lease_ms: 30_000,
+      limit: 1,
+    });
+    assert.equal(claimed.attempts, 1);
+    const clean = await store.settleSyncWork({
+      id: claimed.id,
+      owner: "worker-a",
+      now: "2026-09-21T00:00:02.000Z",
+      outcome: "retry",
+      next_due_at: "2026-09-21T00:00:02.000Z",
+    });
+    assert.equal(clean.attempts, 0);
+    const [again] = await store.claimSyncWork({
+      owner: "worker-a",
+      now: "2026-09-21T00:00:03.000Z",
+      lease_ms: 30_000,
+      limit: 1,
+    });
+    assert.equal(again.attempts, 1);
+    const failed = await store.settleSyncWork({
+      id: again.id,
+      owner: "worker-a",
+      now: "2026-09-21T00:00:04.000Z",
+      outcome: "retry",
+      next_due_at: "2026-09-21T00:00:14.000Z",
+      error_code: "sync_failed",
+    });
+    assert.equal(failed.attempts, 1);
+    store.close();
+  });
+
   it("deletes only terminal sync runs and detaches retained work rows", async () => {
     const root = await createRoot();
     const store = new SqliteAuthorityStore(join(root, "authority.db"));

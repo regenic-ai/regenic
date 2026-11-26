@@ -20,7 +20,7 @@ import {
   ingestAttemptSummary,
 } from "./ingestion";
 import type { IngestSubmissionResult } from "./ingestion-service";
-import { withDeadline } from "./deadline";
+import { isBlobReservationConflict, withDeadline } from "./deadline";
 import {
   connectorAcceptsWebhook,
   connectorPolls,
@@ -436,7 +436,9 @@ export class ConnectorRunner {
             finished_at: failedAt,
             ...partialSummary,
             retryable_failure_count: partialSummary.retryable_failure_count + 1,
-            error_code: "internal_error",
+            error_code: isBlobReservationConflict(reportedError)
+              ? "blob_reservation_conflict"
+              : "internal_error",
             quarantines: ingestAttemptQuarantines(
               partialRecords,
               failedAt,

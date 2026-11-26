@@ -408,4 +408,40 @@ describe("durable sync work", () => {
     assert.equal(head.member_count, 2);
     assert.equal(head.complete, true);
   });
+
+  it("clears the claim streak after a clean retry", async () => {
+    const store = await createStore();
+    await store.createSyncRun({
+      id: "run-1",
+      org_id: "org-1",
+      installation_id: "install-1",
+      mode: "quick_start",
+      now: "2026-09-21T00:00:00.000Z",
+    });
+    await store.enqueueSyncWork({
+      id: "work-history",
+      run_id: "run-1",
+      installation_id: "install-1",
+      stream_key: "chat:1",
+      lane: "history",
+      next_due_at: "2026-09-21T00:00:00.000Z",
+      generation: 1,
+      now: "2026-09-21T00:00:00.000Z",
+    });
+    const [claimed] = await store.claimSyncWork({
+      owner: "history",
+      now: "2026-09-21T00:00:01.000Z",
+      lease_ms: 30_000,
+      limit: 1,
+    });
+    assert.equal(claimed.attempts, 1);
+    const clean = await store.settleSyncWork({
+      id: claimed.id,
+      owner: "history",
+      now: "2026-09-21T00:00:02.000Z",
+      outcome: "retry",
+      next_due_at: "2026-09-21T00:00:02.000Z",
+    });
+    assert.equal(clean.attempts, 0);
+  });
 });

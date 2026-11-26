@@ -10,7 +10,10 @@ import { WorkerRuntimeService } from "./worker-runtime.service";
 
 const PROJECTION_TICK_MS = 2_000;
 const PROJECTION_LEASE_MS = 30_000;
-const PROJECTION_BATCH_SIZE = 5;
+/** Store claim cap. A full claim means the queue still has more. */
+const PROJECTION_CLAIM_LIMIT = 100;
+/** Stay under a typical event-loop yield. Idle waits PROJECTION_TICK_MS once caught up. */
+const PROJECTION_SLICE_MS = 80;
 const PROJECTION_HEARTBEAT_MS = 10_000;
 const PROJECTION_GENERATION = "continuous-v2";
 const MAX_RETRY_MS = 5 * 60_000;
@@ -23,6 +26,7 @@ export class ContextProjectionService implements OnModuleDestroy {
   private running = false;
   private stopping = false;
   private bootstrapped = false;
+  private resumeTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(
     @Inject(WorkerRuntimeService)
@@ -44,6 +48,10 @@ export class ContextProjectionService implements OnModuleDestroy {
       clearInterval(this.timer);
       this.timer = undefined;
     }
+    if (this.resumeTimer) {
+      clearTimeout(this.resumeTimer);
+      this.resumeTimer = undefined;
+    }
   }
 
   async runOnce(now = new Date()): Promise<void> {
@@ -57,61 +65,65 @@ export class ContextProjectionService implements OnModuleDestroy {
       const outbox = host.get("context-projection-outbox") as ContextProjectionOutboxStore;
       const runner = host.get("context-projections") as ContextProjectionRunner;
       if (!this.bootstrapped) {
-        await runner.syncLexicalIndex(this.runtime.orgId(), PROJECTION_GENERATION);
-        this.bootstrapped = true;
+        await this.advanceLexicalMaintenance(runner);
       }
-      const claimed = await outbox.claimContextProjectionJobs({
-        owner: this.owner,
-        now: now.toISOString(),
-        lease_ms: PROJECTION_LEASE_MS,
-        limit: PROJECTION_BATCH_SIZE,
-      });
-      const groups = await groupProjectionJobs(claimed, (orgId, eventId) =>
-        authority.getEvent(orgId, eventId),
-      );
-      for (const group of groups) {
-        try {
-          if (group.thread_id) {
-            await withProjectionLease(outbox, group.jobs, this.owner, async () => {
-              await runner.syncLexicalIndex(
-                group.org_id,
-                PROJECTION_GENERATION,
-                group.jobs.map((job) => job.event_id),
-                group.thread_id!,
-              );
-              await runner.projectThread(
-                group.org_id,
-                PROJECTION_GENERATION,
-                group.thread_id!,
-              );
-            });
-          }
-          const completedAt = new Date().toISOString();
-          for (const job of group.jobs) {
-            const completed = await outbox.completeContextProjectionJob({
-              id: job.id,
-              owner: this.owner,
-              completed_at: completedAt,
-            });
-            if (!completed) {
-              throw new ProjectionLeaseLostError();
+      const held: ContextProjectionJobGroup[] = [];
+      const deadline = Date.now() + PROJECTION_SLICE_MS;
+      let more = !this.bootstrapped;
+      while (!this.stopping && Date.now() < deadline) {
+        const claimed = await outbox.claimContextProjectionJobs({
+          owner: this.owner,
+          now: now.toISOString(),
+          lease_ms: PROJECTION_LEASE_MS,
+          limit: PROJECTION_CLAIM_LIMIT,
+        });
+        if (claimed.length === 0) {
+          if (!this.bootstrapped && Date.now() < deadline) {
+            await this.advanceLexicalMaintenance(runner);
+            if (!this.bootstrapped) {
+              more = true;
+              continue;
             }
           }
-        } catch (error) {
-          if (error instanceof ProjectionLeaseLostError) {
+          more = false;
+          break;
+        }
+        const groups = await groupProjectionJobs(claimed, (orgId, eventId) =>
+          authority.getEvent(orgId, eventId),
+        );
+        for (const group of groups) {
+          if (!group.thread_id) {
+            held.push(group);
             continue;
           }
-          const failedAt = new Date();
-          for (const job of group.jobs) {
-            await outbox.failContextProjectionJob({
-              id: job.id,
-              owner: this.owner,
-              failed_at: failedAt.toISOString(),
-              next_retry_at: new Date(failedAt.getTime() + retryDelay(job.attempts)).toISOString(),
-              error_code: "projection_failed",
-            });
+          try {
+            await runner.syncLexicalIndex(
+              group.org_id,
+              PROJECTION_GENERATION,
+              group.jobs.map((job) => job.event_id),
+              group.thread_id,
+            );
+            held.push(group);
+          } catch {
+            await failProjectionJobs(outbox, group.jobs, this.owner);
           }
         }
+        if (claimed.length < PROJECTION_CLAIM_LIMIT) {
+          if (!this.bootstrapped) {
+            more = true;
+            continue;
+          }
+          more = false;
+          break;
+        }
+        more = true;
+      }
+      if (!this.bootstrapped) {
+        more = true;
+      }
+      await this.settleThreads(outbox, runner, held);
+      if (more && !this.stopping) {
+        this.continueSoon();
       }
     } catch (error) {
       if (!this.stopping) {
@@ -119,6 +131,62 @@ export class ContextProjectionService implements OnModuleDestroy {
       }
     } finally {
       this.running = false;
+    }
+  }
+
+  private continueSoon(): void {
+    if (this.stopping || this.resumeTimer) {
+      return;
+    }
+    this.resumeTimer = setTimeout(() => {
+      this.resumeTimer = undefined;
+      void this.runOnce();
+    }, 0);
+  }
+
+  private async advanceLexicalMaintenance(runner: ContextProjectionRunner): Promise<void> {
+    await runner.syncLexicalIndex(this.runtime.orgId(), PROJECTION_GENERATION);
+    this.bootstrapped = runner.lexicalMaintenanceIdle
+      ? await runner.lexicalMaintenanceIdle(this.runtime.orgId(), PROJECTION_GENERATION)
+      : true;
+  }
+
+  private async settleThreads(
+    outbox: ContextProjectionOutboxStore,
+    runner: ContextProjectionRunner,
+    held: ContextProjectionJobGroup[],
+  ): Promise<void> {
+    for (const group of coalesceProjectionGroups(held)) {
+      if (this.stopping) {
+        return;
+      }
+      try {
+        if (group.thread_id) {
+          await withProjectionLease(outbox, group.jobs, this.owner, async () => {
+            await runner.projectThread(
+              group.org_id,
+              PROJECTION_GENERATION,
+              group.thread_id!,
+            );
+          });
+        }
+        const completedAt = new Date().toISOString();
+        for (const job of group.jobs) {
+          const completed = await outbox.completeContextProjectionJob({
+            id: job.id,
+            owner: this.owner,
+            completed_at: completedAt,
+          });
+          if (!completed) {
+            throw new ProjectionLeaseLostError();
+          }
+        }
+      } catch (error) {
+        if (error instanceof ProjectionLeaseLostError) {
+          continue;
+        }
+        await failProjectionJobs(outbox, group.jobs, this.owner);
+      }
     }
   }
 }
@@ -162,6 +230,45 @@ async function withProjectionLease<T>(
     return value;
   } finally {
     clearInterval(timer);
+  }
+}
+
+function coalesceProjectionGroups(
+  groups: ContextProjectionJobGroup[],
+): ContextProjectionJobGroup[] {
+  const merged = new Map<string, ContextProjectionJobGroup>();
+  for (const group of groups) {
+    const key = group.thread_id
+      ? `${group.org_id}\u0000${group.thread_id}`
+      : `${group.org_id}\u0000${group.jobs.map((job) => job.id).join("\u0000")}`;
+    const current = merged.get(key);
+    if (current) {
+      current.jobs.push(...group.jobs);
+      continue;
+    }
+    merged.set(key, {
+      org_id: group.org_id,
+      thread_id: group.thread_id,
+      jobs: [...group.jobs],
+    });
+  }
+  return [...merged.values()];
+}
+
+async function failProjectionJobs(
+  outbox: ContextProjectionOutboxStore,
+  jobs: ContextProjectionJob[],
+  owner: string,
+): Promise<void> {
+  const failedAt = new Date();
+  for (const job of jobs) {
+    await outbox.failContextProjectionJob({
+      id: job.id,
+      owner,
+      failed_at: failedAt.toISOString(),
+      next_retry_at: new Date(failedAt.getTime() + retryDelay(job.attempts)).toISOString(),
+      error_code: "projection_failed",
+    });
   }
 }
 

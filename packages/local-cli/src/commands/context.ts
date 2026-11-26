@@ -322,7 +322,18 @@ async function bootstrapLocalContextSearch(
   host: import("@regenic/plugin-host").Host,
   orgId: string,
 ): Promise<void> {
-  await host.get("context-projections").syncLexicalIndex(orgId, "continuous-v1");
+  const runner = host.get("context-projections") as {
+    syncLexicalIndex(orgId: string, generation: string): Promise<void>;
+    lexicalMaintenanceIdle?(orgId: string, generation: string): Promise<boolean>;
+  };
+  const generation = "continuous-v1";
+  await runner.syncLexicalIndex(orgId, generation);
+  while (
+    runner.lexicalMaintenanceIdle &&
+    !await runner.lexicalMaintenanceIdle(orgId, generation)
+  ) {
+    await runner.syncLexicalIndex(orgId, generation);
+  }
 }
 
 function assertPersonalEvaluationDataset(

@@ -24,6 +24,8 @@ import type {
   ContextArtifactSupersession,
   ContextAuthorityRead,
   ContextAuthorityReadQuery,
+  ContextEventPage,
+  ContextEventPageQuery,
   ContextAuthorityReader,
   ContextBundle,
   ContextBundleLookup,
@@ -279,6 +281,13 @@ export class SqliteSplitAuthorityStore
     threadId: string,
   ): Promise<ContextAuthorityRead> {
     return this.reader.call("openContextReadForThread", [orgId, threadId]);
+  }
+
+  async openContextEventPage(
+    orgId: string,
+    query: ContextEventPageQuery,
+  ): Promise<ContextEventPage> {
+    return this.reader.call("openContextEventPage", [orgId, query]);
   }
 
   async putArtifact(

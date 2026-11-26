@@ -1291,7 +1291,8 @@ export async function settleSyncWork(db: Database.Database, input: SettleSyncWor
           `
             UPDATE connector_sync_work
             SET status = ?, next_due_at = ?, lease_owner = NULL,
-                lease_expires_at = NULL, last_error = ?, updated_at = ?
+                lease_expires_at = NULL, last_error = ?, updated_at = ?,
+                attempts = CASE WHEN ? = 1 THEN 0 ELSE attempts END
             WHERE id = ? AND status = 'running' AND lease_owner = ?
           `,
         )
@@ -1300,6 +1301,7 @@ export async function settleSyncWork(db: Database.Database, input: SettleSyncWor
           input.next_due_at ?? current.next_due_at,
           input.error_code ?? null,
           input.now,
+          input.outcome === "retry" && !input.error_code ? 1 : 0,
           input.id,
           input.owner,
         );

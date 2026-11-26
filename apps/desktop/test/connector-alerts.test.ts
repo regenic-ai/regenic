@@ -75,6 +75,25 @@ describe("connector alerts", () => {
     assert.equal(hasConnectorFailure(view), false);
   });
 
+  it("does not sticky-banner a shared blob write", () => {
+    const view = engine({
+      pull: pull({
+        streams: [
+          {
+            stream_key: "inst-1:chat:oc_1",
+            thread_id: null,
+            label: "李必琪",
+            phase: "error",
+            last_error:
+              "Blob reservation is busy or unavailable: d0f13ecbb7b4cba8612ce7978a7cc1e9df33ac5fef335b5304006d8878260eff",
+          },
+        ],
+      }),
+    });
+    assert.equal(connectorAlerts(view).length, 0);
+    assert.equal(hasConnectorFailure(view), false);
+  });
+
   it("does not sticky-banner a poll deadline soft miss", () => {
     const view = engine({
       pull: pull({

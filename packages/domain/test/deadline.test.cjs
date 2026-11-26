@@ -76,6 +76,12 @@ describe("deadline", () => {
       true,
     );
     assert.equal(looksLikeSyncSoftMissMessage("token expired"), false);
+    assert.equal(
+      looksLikeSyncSoftMissMessage(
+        "Blob reservation is busy or unavailable: abc",
+      ),
+      true,
+    );
   });
 
   it("lets a fast install finish while another hangs", async () => {
@@ -157,5 +163,12 @@ describe("deadline", () => {
       connectorPollTimeoutMs({ REGENIC_CONNECTOR_POLL_TIMEOUT_MS: "999999" }),
       120_000,
     );
+  });
+
+  it("waits out a shared blob write for one page commit", () => {
+    const { blobReserveRetryDelayMs } = require("../dist/ingestion-service");
+    assert.equal(blobReserveRetryDelayMs(0), 200);
+    assert.equal(blobReserveRetryDelayMs(7_900), 100);
+    assert.equal(blobReserveRetryDelayMs(8_000), null);
   });
 });

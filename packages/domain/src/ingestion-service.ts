@@ -29,6 +29,7 @@ import type {
 } from "./ingestion";
 import {
   AuthorityConflictError,
+  BlobReservationConflictError,
   DispositionRepairConflictError,
   collectAvailableBlobs,
   IngestPageProcessingError,
@@ -175,6 +176,39 @@ type PlannedEvent =
   | PlannedCreateAfterTombstone
   | PlannedTombstone;
 type PlannedConversationEffect = PlannedEvent | PlannedReplay;
+
+const BLOB_RESERVE_WAIT_MS = 200;
+/** A sibling page can hold the same content-addressed body until its commit finishes. */
+const BLOB_RESERVE_BUDGET_MS = 8_000;
+
+/** How long to wait before another reserve, or null once the budget is spent. */
+export function blobReserveRetryDelayMs(elapsedMs: number): number | null {
+  if (elapsedMs >= BLOB_RESERVE_BUDGET_MS) {
+    return null;
+  }
+  return Math.min(BLOB_RESERVE_WAIT_MS, BLOB_RESERVE_BUDGET_MS - elapsedMs);
+}
+
+async function reserveBlobWritesRetrying(
+  authority: Pick<AuthorityStore, "reserveBlobWrites">,
+  input: ReserveBlobWritesInput,
+): Promise<BlobReservation[]> {
+  const started = Date.now();
+  for (;;) {
+    try {
+      return await authority.reserveBlobWrites(input);
+    } catch (error) {
+      if (!(error instanceof BlobReservationConflictError)) {
+        throw error;
+      }
+      const waitMs = blobReserveRetryDelayMs(Date.now() - started);
+      if (waitMs == null) {
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
+    }
+  }
+}
 
 export class IngestionService {
   private static readonly BLOB_WRITE_LEASE_MS = 120_000;
@@ -756,7 +790,10 @@ export class IngestionService {
         byte_size: blob.bytes.byteLength,
       })),
     };
-    const reservations = await this.authorityStore.reserveBlobWrites(reserveInput);
+    const reservations = await reserveBlobWritesRetrying(
+      this.authorityStore,
+      reserveInput,
+    );
     const byHash = new Map(items.map((blob) => [blob.hash, blob]));
     const completed = new Map(reservations.map((reservation) => [
       reservation.content_hash,
@@ -784,7 +821,7 @@ export class IngestionService {
           continue;
         }
 
-        const [repair] = await this.authorityStore.reserveBlobWrites({
+        const [repair] = await reserveBlobWritesRetrying(this.authorityStore, {
           ...reserveInput,
           blobs: reserveInput.blobs.filter((item) => item.content_hash === blob.hash),
           force_write_hashes: [blob.hash],
