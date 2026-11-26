@@ -135,6 +135,27 @@ describe("connector alerts", () => {
     assert.equal(hasConnectorFailure(view), true);
   });
 
+  it("does not treat a shared body write as a failed installation", () => {
+    const view = engine({
+      installations: [
+        installation({
+          last_attempt: {
+            id: "a1",
+            status: "failed",
+            accepted_count: 0,
+            duplicate_count: 0,
+            quarantined_count: 0,
+            retryable_failure_count: 1,
+            started_at: "2026-09-10T00:00:00Z",
+            error_code: "blob_reservation_conflict",
+          },
+        }),
+      ],
+    });
+    assert.equal(connectorAlerts(view).length, 0);
+    assert.equal(hasConnectorFailure(view), false);
+  });
+
   it("flags a failed last attempt", () => {
     const view = engine({
       installations: [

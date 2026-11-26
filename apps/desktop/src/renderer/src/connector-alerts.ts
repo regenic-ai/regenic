@@ -12,6 +12,18 @@ export type ConnectorAlert = {
   hint: string | null;
 };
 
+/** Contention codes. A later successful page replaces the attempt; these are not failures. */
+const SOFT_ATTEMPT_CODES = new Set([
+  "blob_reservation_conflict",
+  "deadline_exceeded",
+  "lease_unavailable",
+]);
+
+export function isSoftSyncFailure(errorCode: string | null | undefined): boolean {
+  const code = errorCode?.trim();
+  return code != null && SOFT_ATTEMPT_CODES.has(code);
+}
+
 /** Soft poll miss — keep in sync with domain `looksLikeSyncSoftMissMessage`. */
 function looksLikeSyncSoftMissMessage(message: string): boolean {
   const text = message.trim();
@@ -73,7 +85,10 @@ export function connectorAlerts(
         hint: installation.detail,
       });
     }
-    if (installation.last_attempt?.status === "failed") {
+    if (
+      installation.last_attempt?.status === "failed" &&
+      !isSoftSyncFailure(installation.last_attempt.error_code)
+    ) {
       push({
         installationId: installation.id,
         name: connectorDisplayName(installation),

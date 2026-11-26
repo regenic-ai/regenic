@@ -21,25 +21,32 @@ export function engineChip(
   return "running";
 }
 
-export function pullStatusLabel(pull?: PullStatusView | null): string {
+export function pullStatusLabel(
+  pull?: PullStatusView | null,
+  titles: ReadonlyArray<{ id: string; title: string }> = [],
+): string {
   if (!pull) {
     return t("sync.off");
   }
   if (pull.phase === "pulling") {
-    const historyCount = pull.streams.filter(isHistoryWork).length;
-    if (historyCount > 1) {
-      return t("sync.historyCount", { count: historyCount });
+    const historyStreams = pull.streams.filter(isHistoryWork);
+    // Several chats at once is the current wave, not how many remain.
+    // The coverage row owns that count.
+    if (historyStreams.length > 1) {
+      return t("sync.history");
     }
-    const history = pull.streams.find(isHistoryWork);
-    if (history?.label) {
-      return t("sync.historyNamed", { label: history.label });
+    const history = historyStreams[0];
+    const historyName = history ? titleForStream(history, titles) : null;
+    if (historyName) {
+      return t("sync.historyNamed", { label: historyName });
     }
     if (history) {
       return t("sync.history");
     }
     const media = pullingMediaStream(pull);
-    if (media?.label) {
-      return t("sync.attachmentsNamed", { label: media.label });
+    const mediaName = media ? titleForStream(media, titles) : null;
+    if (mediaName) {
+      return t("sync.attachmentsNamed", { label: mediaName });
     }
     if (media) {
       return t("sync.attachments");
@@ -47,15 +54,14 @@ export function pullStatusLabel(pull?: PullStatusView | null): string {
     return t("sync.pulling");
   }
   if (pull.catching_up_count > 1) {
-    return t("sync.historyLeft", { count: pull.catching_up_count });
+    return t("sync.history");
   }
   if (pull.catching_up_count === 1) {
     const active = pull.streams.find(
       (stream) => stream.phase === "catching_up" || stream.phase === "error",
     );
-    return active?.label
-      ? t("sync.historyNamed", { label: active.label })
-      : t("sync.history");
+    const name = active ? titleForStream(active, titles) : null;
+    return name ? t("sync.historyNamed", { label: name }) : t("sync.history");
   }
   if (pull.last_error) {
     return t("sync.retry");
