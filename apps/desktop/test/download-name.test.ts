@@ -1,0 +1,25 @@
+import assert from "node:assert/strict";
+import { describe, it } from "node:test";
+import { filenameFromContentDisposition, openDownloadName } from "../src/main/download-name.ts";
+
+describe("download names", () => {
+  it("keeps a suffixed name from the response", () => {
+    const name = openDownloadName(
+      "attachment; filename=\"attachment\"; filename*=UTF-8''%E9%A2%84%E7%AE%97.xlsx",
+      "attachment",
+      Buffer.from("not a spreadsheet"),
+    );
+    assert.equal(name, "预算.xlsx");
+    assert.equal(
+      filenameFromContentDisposition("attachment; filename=\"notes.pdf\""),
+      "notes.pdf",
+    );
+  });
+
+  it("adds a suffix from the bytes when the stored name has none", () => {
+    const pdf = Buffer.from("%PDF-1.4");
+    assert.equal(openDownloadName(null, "attachment", pdf), "attachment.pdf");
+    const docx = Buffer.concat([Buffer.from("PK\u0003\u0004"), Buffer.from("word/document.xml")]);
+    assert.equal(openDownloadName(null, "attachment", docx), "attachment.docx");
+  });
+});

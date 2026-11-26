@@ -31,6 +31,14 @@ describe("image preview", () => {
       }),
       undefined,
     );
+    assert.equal(
+      imagePreviewSrc({
+        filename: "image.png",
+        media_type: "application/octet-stream",
+        data_base64: "abc",
+      }),
+      "data:image/png;base64,abc",
+    );
   });
 
   it("collects previewable images in thread order", () => {

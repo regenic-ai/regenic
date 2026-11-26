@@ -54,6 +54,7 @@ import {
   type SyncReadinessView,
   withDeadline,
 } from "@regenic/domain";
+import { openEventAttachment } from "./attachment-file";
 import {
   resolveInboxBodies,
   resolveInboxBody,
@@ -411,6 +412,17 @@ export class PersonalInboxService {
     @Inject(KernelRuntimeService)
     private readonly kernelRuntime: KernelRuntimeService,
   ) {}
+
+  openAttachment(eventId: string, partIndex: number) {
+    const host = this.runtime.requireHost();
+    return openEventAttachment(
+      host.get("authority"),
+      host.get("blobs"),
+      this.runtime.orgId(),
+      eventId,
+      partIndex,
+    );
+  }
 
   startAfterListen(): void {
     this.catalogProbes.schedule(this.drivers);

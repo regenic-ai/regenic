@@ -13,15 +13,22 @@ import {
   type MessageSurface,
   type StoredContentPart,
 } from "@regenic/domain";
+import {
+  attachmentNeedsPreviewBytes,
+  base64DecodedSize,
+  describeStoredFile,
+} from "./attachment-file";
 
 export { CONTENT_PARTS_MEDIA_TYPE };
 
 const IMAGE_PREVIEW_BYTES = 8_000_000;
-const THREAD_PREVIEW_IMAGES = 6;
 
 export interface InboxAttachment {
   filename: string;
   media_type: string;
+  part_index: number;
+  byte_size?: number;
+  content_hash?: string;
   data_base64?: string;
 }
 
@@ -73,18 +80,20 @@ export async function resolveInboxBodies(
     }
     resolved.set(hash, decodeInboxBody(data, meta.media_type, attachments));
   }
-  if (attachments !== "preview") {
+  const sizes = await attachmentByteSizes(authority, sidecarHashes);
+  for (const hash of envelopes.keys()) {
+    const data = bytes.get(hash);
+    const meta = metas.get(hash);
+    if (!data || !meta) continue;
+    resolved.set(hash, decodeInboxBody(data, meta.media_type, attachments, sizes));
+  }
+  if (attachments !== "preview" || sidecarHashes.length === 0) {
     return resolved;
   }
-  if (sidecarHashes.length === 0) {
-    return limitPreviewBodies(resolved, unique);
-  }
-  const previewHashes = previewAttachmentHashes(unique, envelopes);
-  const sidecars = await blobs.getMany(
-    previewHashes.length > 0
-      ? previewHashes
-      : sidecarHashes.slice(-THREAD_PREVIEW_IMAGES),
-  );
+  const previewHashes = previewAttachmentHashes(unique, envelopes, sizes);
+  const sidecars = previewHashes.length > 0
+    ? await blobs.getMany(previewHashes)
+    : new Map<string, Uint8Array>();
   for (const [hash, parts] of envelopes) {
     const body = resolved.get(hash);
     if (!body?.attachments) {
@@ -92,10 +101,10 @@ export async function resolveInboxBodies(
     }
     resolved.set(hash, {
       ...body,
-      attachments: decodeAttachments(parts, "preview", sidecars),
+      attachments: decodeAttachments(parts, "preview", sidecars, sizes),
     });
   }
-  return limitPreviewBodies(resolved, unique);
+  return resolved;
 }
 
 export async function resolveInboxBody(
@@ -120,9 +129,10 @@ export function decodeInboxBody(
   bytes: Uint8Array,
   mediaType: string,
   attachments: AttachmentMode = "preview",
+  sizes?: ReadonlyMap<string, number>,
 ): InboxBody {
   if (mediaType === CONTENT_PARTS_MEDIA_TYPE) {
-    return decodeContentParts(bytes, attachments);
+    return decodeContentParts(bytes, attachments, sizes);
   }
   if (mediaType === SURFACE_MEDIA_TYPE) {
     return {
@@ -155,6 +165,7 @@ export function decodeBodyText(
 function decodeContentParts(
   bytes: Uint8Array,
   attachmentMode: AttachmentMode,
+  sizes?: ReadonlyMap<string, number>,
 ): InboxBody {
   const parts = parseStoredContentParts(bytes);
   if (!parts) {
@@ -166,7 +177,7 @@ function decodeContentParts(
     parts[0];
   const bodyText =
     body?.role !== "metadata" ? storedPartText(body) : undefined;
-  const attachments = decodeAttachments(parts, attachmentMode);
+  const attachments = decodeAttachments(parts, attachmentMode, undefined, sizes);
   return {
     media_type: CONTENT_PARTS_MEDIA_TYPE,
     body_text: bodyText,
@@ -175,45 +186,12 @@ function decodeContentParts(
   };
 }
 
-function limitPreviewBodies(
-  resolved: Map<string, InboxBody>,
-  hashes: readonly string[],
-): Map<string, InboxBody> {
-  const images: string[] = [];
-  for (const hash of hashes) {
-    const attachments = resolved.get(hash)?.attachments ?? [];
-    attachments.forEach((file, index) => {
-      if (file.data_base64 && file.media_type.startsWith("image/")) {
-        images.push(`${hash}:${index}`);
-      }
-    });
-  }
-  const drop = new Set(images.slice(0, Math.max(0, images.length - THREAD_PREVIEW_IMAGES)));
-  if (drop.size === 0) {
-    return resolved;
-  }
-  for (const hash of hashes) {
-    const body = resolved.get(hash);
-    if (!body?.attachments) {
-      continue;
-    }
-    resolved.set(hash, {
-      ...body,
-      attachments: body.attachments.map((file, index) =>
-        drop.has(`${hash}:${index}`)
-          ? { filename: file.filename, media_type: file.media_type }
-          : file,
-      ),
-    });
-  }
-  return resolved;
-}
-
 function previewAttachmentHashes(
   hashes: readonly string[],
   envelopes: Map<string, StoredContentPart[]>,
+  sizes: ReadonlyMap<string, number>,
 ): string[] {
-  const images: string[] = [];
+  const wanted: string[] = [];
   for (const hash of hashes) {
     const parts = envelopes.get(hash);
     if (!parts) {
@@ -227,20 +205,38 @@ function previewAttachmentHashes(
       if (!sidecar) {
         continue;
       }
-      if (!part.media_type || part.media_type.startsWith("image/")) {
-        images.push(sidecar);
+      const size = sizes.get(sidecar);
+      if (size !== undefined && size > IMAGE_PREVIEW_BYTES) {
+        continue;
+      }
+      const filename = typeof part.source_filename === "string" ? part.source_filename : "";
+      if (attachmentNeedsPreviewBytes(filename, part.media_type ?? "")) {
+        wanted.push(sidecar);
       }
     }
   }
-  return images.slice(-THREAD_PREVIEW_IMAGES);
+  return [...new Set(wanted)];
+}
+
+async function attachmentByteSizes(
+  authority: AuthorityStore,
+  hashes: readonly string[],
+): Promise<Map<string, number>> {
+  const unique = [...new Set(hashes)];
+  const sizes = new Map<string, number>();
+  if (unique.length === 0) return sizes;
+  const metas = await authority.findBlobs(unique);
+  for (const [hash, meta] of metas) sizes.set(hash, meta.byte_size);
+  return sizes;
 }
 
 function decodeAttachments(
   parts: StoredContentPart[],
   attachmentMode: AttachmentMode,
   sidecars?: Map<string, Uint8Array>,
+  sizes?: ReadonlyMap<string, number>,
 ): InboxAttachment[] {
-  return parts.flatMap((part) => {
+  return parts.flatMap((part, partIndex) => {
     if (part.role !== "attachment" || !part.media_type) {
       return [];
     }
@@ -248,74 +244,48 @@ function decodeAttachments(
       typeof part.source_filename === "string" && part.source_filename.trim().length > 0
         ? part.source_filename
         : "attachment";
-    if (attachmentMode === "meta") {
-      return [
-        {
-          filename,
-          media_type: part.media_type,
-        },
-      ];
-    }
     const hash = storedPartContentHash(part);
     const inline = storedPartBytes(part);
-    const bytes = hash ? sidecars?.get(hash) : inline;
-    const raw = bytes ? Buffer.from(bytes).toString("base64") : undefined;
-    const size = bytes?.byteLength ?? 0;
-    const mediaType = bytes
-      ? sniffImageMediaType(bytes, part.media_type)
-      : part.media_type;
+    const bytes = attachmentMode === "preview"
+      ? (hash ? sidecars?.get(hash) : inline)
+      : undefined;
+    const described = describeStoredFile(filename, part.media_type, bytes);
+    const listed = {
+      filename: described.filename,
+      media_type: described.media_type,
+      part_index: partIndex,
+      ...(hash ? { content_hash: hash } : {}),
+      ...attachmentSize(part, sizes),
+    };
+    if (attachmentMode === "meta" || !bytes) {
+      return [listed];
+    }
+    const raw = Buffer.from(bytes).toString("base64");
+    const size = bytes.byteLength;
     const preview =
-      Boolean(raw) &&
-      mediaType.startsWith("image/") &&
-      size > 0 &&
-      size <= IMAGE_PREVIEW_BYTES;
+      described.media_type.startsWith("image/")
+      && size > 0
+      && size <= IMAGE_PREVIEW_BYTES;
     return [
       {
-        filename,
-        media_type: mediaType,
+        ...listed,
+        ...(size ? { byte_size: size } : {}),
         data_base64: preview ? raw : undefined,
       },
     ];
   });
 }
 
-function sniffImageMediaType(bytes: Uint8Array, declared: string): string {
-  if (declared.startsWith("image/")) {
-    return declared;
+function attachmentSize(
+  part: StoredContentPart,
+  sizes?: ReadonlyMap<string, number>,
+): { byte_size?: number } {
+  const hash = storedPartContentHash(part);
+  const listed = hash ? sizes?.get(hash) : undefined;
+  if (listed !== undefined) return { byte_size: listed };
+  if (typeof part.bytes_base64 === "string") {
+    return { byte_size: base64DecodedSize(part.bytes_base64) };
   }
-  if (
-    bytes.length >= 8 &&
-    bytes[0] === 0x89 &&
-    bytes[1] === 0x50 &&
-    bytes[2] === 0x4e &&
-    bytes[3] === 0x47
-  ) {
-    return "image/png";
-  }
-  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
-    return "image/jpeg";
-  }
-  if (
-    bytes.length >= 4 &&
-    bytes[0] === 0x47 &&
-    bytes[1] === 0x49 &&
-    bytes[2] === 0x46 &&
-    bytes[3] === 0x38
-  ) {
-    return "image/gif";
-  }
-  if (
-    bytes.length >= 12 &&
-    bytes[0] === 0x52 &&
-    bytes[1] === 0x49 &&
-    bytes[2] === 0x46 &&
-    bytes[3] === 0x46 &&
-    bytes[8] === 0x57 &&
-    bytes[9] === 0x45 &&
-    bytes[10] === 0x42 &&
-    bytes[11] === 0x50
-  ) {
-    return "image/webp";
-  }
-  return declared;
+  return {};
 }
+

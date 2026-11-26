@@ -18,11 +18,13 @@ import {
   Req,
   Res,
   Sse,
+  StreamableFile,
   UseGuards,
   forwardRef,
 } from "@nestjs/common";
 import type { Request, Response } from "express";
 import { Observable } from "rxjs";
+import { attachmentContentDisposition } from "./attachment-file";
 import { PersonalApiGuard } from "./personal-api.guard";
 import { requestLocale } from "./request-locale";
 import { syncMetricsView } from "./sync-metrics-view";
@@ -304,6 +306,20 @@ export class PersonalController {
         thread_id: threadId,
         ...(historyPending !== undefined ? { history_pending: historyPending } : {}),
       };
+    });
+  }
+
+  @Get("events/:eventId/files/:partIndex")
+  async openEventFile(
+    @Param("eventId") eventId: string,
+    @Param("partIndex") partIndexRaw: string,
+  ) {
+    const partIndex = Number(partIndexRaw);
+    const opened = await this.guard(() => this.inbox.openAttachment(eventId, partIndex));
+    return new StreamableFile(Buffer.from(opened.bytes), {
+      type: opened.media_type,
+      disposition: attachmentContentDisposition(opened.filename),
+      length: opened.bytes.byteLength,
     });
   }
 

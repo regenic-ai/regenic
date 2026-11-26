@@ -112,7 +112,74 @@ export function sniffMediaType(bytes: Uint8Array, fallback: string): string {
   ) {
     return "application/pdf";
   }
+  if (bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04) {
+    const sample = Buffer.from(bytes).toString("latin1");
+    if (sample.includes("word/")) {
+      return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+    }
+    if (sample.includes("xl/")) {
+      return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+    }
+    if (sample.includes("ppt/")) {
+      return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+    }
+    return fallback === "application/octet-stream" || !fallback.includes("/")
+      ? "application/zip"
+      : fallback;
+  }
+  if (
+    bytes.length >= 8 &&
+    bytes[0] === 0xd0 &&
+    bytes[1] === 0xcf &&
+    bytes[2] === 0x11 &&
+    bytes[3] === 0xe0
+  ) {
+    const sample = Buffer.from(bytes).toString("latin1");
+    if (sample.includes("WordDocument") || includesUtf16(sample, "WordDocument")) {
+      return "application/msword";
+    }
+    if (sample.includes("Workbook") || includesUtf16(sample, "Workbook")) {
+      return "application/vnd.ms-excel";
+    }
+    if (sample.includes("PowerPoint") || includesUtf16(sample, "PowerPoint")) {
+      return "application/vnd.ms-powerpoint";
+    }
+  }
   return fallback.includes("/") ? fallback : "application/octet-stream";
+}
+
+const MEDIA_EXTENSION: Record<string, string> = {
+  "image/png": ".png",
+  "image/jpeg": ".jpg",
+  "image/gif": ".gif",
+  "image/webp": ".webp",
+  "application/pdf": ".pdf",
+  "application/msword": ".doc",
+  "application/vnd.ms-excel": ".xls",
+  "application/vnd.ms-powerpoint": ".ppt",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
+  "application/zip": ".zip",
+};
+
+/** Keep a real suffix. Add one when the stored name cannot tell the OS what to open. */
+export function filenameForMedia(filename: string, mediaType: string): string {
+  const ext = MEDIA_EXTENSION[mediaType];
+  if (!ext || hasFilenameSuffix(filename)) return filename;
+  return `${filename}${ext}`;
+}
+
+function hasFilenameSuffix(filename: string): boolean {
+  const base = filename.split(/[/\\]/u).pop() ?? filename;
+  const dot = base.lastIndexOf(".");
+  return dot > 0 && /^[A-Za-z0-9]{1,8}$/u.test(base.slice(dot + 1));
+}
+
+function includesUtf16(sample: string, text: string): boolean {
+  let encoded = "";
+  for (const char of text) encoded += `${char}\u0000`;
+  return sample.includes(encoded);
 }
 
 export function collectFeishuUserIds(input: {
@@ -293,9 +360,18 @@ function walkPostNodes(
   if (tag === "at") {
     return mentionLabel(value, names);
   }
-  if (tag === "text" || tag === "a") {
+  if (tag === "text") {
     const text = typeof value.text === "string" ? value.text : "";
     return projectFeishuStyles(text, value.style);
+  }
+  if (tag === "a") {
+    const text = typeof value.text === "string" ? value.text : "";
+    const href = typeof value.href === "string" ? value.href.trim() : "";
+    const styled = projectFeishuStyles(text, value.style);
+    if (href && href !== text.trim()) {
+      return styled ? `${styled} (${href})` : href;
+    }
+    return styled || href;
   }
   if (Array.isArray(value.content)) {
     return walkPostNodes(value.content, names);
@@ -986,6 +1062,18 @@ function mediaTypeFromFilename(filename: string): string {
   }
   if (ext === "pdf") {
     return "application/pdf";
+  }
+  if (ext === "doc") return "application/msword";
+  if (ext === "docx") {
+    return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  }
+  if (ext === "xls") return "application/vnd.ms-excel";
+  if (ext === "xlsx") {
+    return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+  }
+  if (ext === "ppt") return "application/vnd.ms-powerpoint";
+  if (ext === "pptx") {
+    return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
   }
   if (ext === "mp4") {
     return "video/mp4";

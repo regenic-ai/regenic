@@ -19,7 +19,7 @@ import { IdentityAvatar } from "./IdentityAvatar";
 import { ImageLightbox } from "./ImageLightbox";
 import { useLocale } from "./LocaleContext";
 import { MessageBody } from "./MessageBody";
-import type { InboxViewItem } from "./types";
+import type { InboxAttachment, InboxViewItem } from "./types";
 import {
   messageRole,
   messageSpeakerLabel,
@@ -29,6 +29,17 @@ import {
   threadPaneEmptyCopy,
   type MessageRole,
 } from "./message-view";
+
+function openAttachmentFile(eventId: string, file: InboxAttachment): Promise<void> {
+  if (file.part_index === undefined || !window.regenic?.openAttachment) {
+    return Promise.reject(new Error("attachment.openFailed"));
+  }
+  return window.regenic.openAttachment({
+    eventId,
+    partIndex: file.part_index,
+    filename: file.filename,
+  });
+}
 import {
   computeWindow,
   endScrollTop,
@@ -463,6 +474,7 @@ export const ThreadMessageList = memo(
                       attachments={item.attachments}
                       findQuery={findQuery}
                       findCurrent={findCurrent}
+                      onOpenFile={(file) => openAttachmentFile(item.event.id, file)}
                       onPreviewImage={(fileIndex) =>
                         openPreview(previewImageId(item.event.id, fileIndex))
                       }
@@ -483,7 +495,13 @@ export const ThreadMessageList = memo(
                       <ChatCopyButton item={item} />
                     </span>
                   </div>
-                  <MessageBody text={item.body_text ?? ""} attachments={item.attachments} findQuery={findQuery} findCurrent={findCurrent} />
+                  <MessageBody
+                    text={item.body_text ?? ""}
+                    attachments={item.attachments}
+                    findQuery={findQuery}
+                    findCurrent={findCurrent}
+                    onOpenFile={(file) => openAttachmentFile(item.event.id, file)}
+                  />
                 </div>
               ) : (
                 <ChatRow
@@ -736,6 +754,7 @@ const ChatRow = memo(function ChatRow({
           attachments={item.attachments}
           findQuery={findQuery}
           findCurrent={findCurrent}
+          onOpenFile={(file) => openAttachmentFile(item.event.id, file)}
           onPreviewImage={(fileIndex) =>
             onPreviewImage(previewImageId(item.event.id, fileIndex))
           }

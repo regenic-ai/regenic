@@ -16,10 +16,21 @@ export function previewImageId(eventId: string, index: number): string {
 }
 
 export function imagePreviewSrc(file: InboxAttachment): string | undefined {
-  if (!file.data_base64 || !file.media_type.startsWith("image/")) {
-    return undefined;
-  }
-  return `data:${file.media_type};base64,${file.data_base64}`;
+  if (!file.data_base64) return undefined;
+  const media = file.media_type.startsWith("image/")
+    ? file.media_type
+    : imageMediaFromName(file.filename);
+  if (!media) return undefined;
+  return `data:${media};base64,${file.data_base64}`;
+}
+
+function imageMediaFromName(filename: string): string | undefined {
+  const ext = filename.slice(filename.lastIndexOf(".") + 1).toLowerCase();
+  if (ext === "png") return "image/png";
+  if (ext === "jpg" || ext === "jpeg") return "image/jpeg";
+  if (ext === "gif") return "image/gif";
+  if (ext === "webp") return "image/webp";
+  return undefined;
 }
 
 export function collectPreviewImages(

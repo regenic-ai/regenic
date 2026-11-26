@@ -35,6 +35,7 @@ import {
   feishuCreateTimeToStartSeconds,
   feishuMentionNames,
   isFeishuSelfSender,
+  filenameForMedia,
   senderKind,
   sniffMediaType,
   type FeishuMediaRef,
@@ -604,7 +605,7 @@ export class FeishuChatPollConnector {
       return {
         role: "attachment",
         media_type: mediaType,
-        source_filename: filename,
+        source_filename: filenameForMedia(filename, mediaType),
         external_locator: feishuMediaLocator(job.kind, job.key),
         bytes: file.bytes,
       };

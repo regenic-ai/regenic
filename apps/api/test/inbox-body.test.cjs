@@ -149,7 +149,7 @@ describe("resolveInboxBodies", () => {
     assert.equal(attachment.data_base64, undefined);
   });
 
-  it("only inlines the latest few image previews on a thread page", async () => {
+  it("inlines every image preview on a thread page", async () => {
     const authority = new MemoryAuthorityStore();
     const blobs = new MemoryBlobStore();
     const service = new IngestionService(blobs, authority);
@@ -190,13 +190,55 @@ describe("resolveInboxBodies", () => {
     const inlined = hashes.filter(
       (hash) => preview.get(hash).attachments[0].data_base64,
     );
-    assert.equal(inlined.length, 6);
-    assert.equal(preview.get(hashes[0]).attachments[0].data_base64, undefined);
-    assert.equal(preview.get(hashes[1]).attachments[0].data_base64, undefined);
+    assert.equal(inlined.length, 8);
+    assert.equal(
+      preview.get(hashes[0]).attachments[0].data_base64,
+      png.toString("base64"),
+    );
     assert.equal(
       preview.get(hashes[7]).attachments[0].data_base64,
       png.toString("base64"),
     );
+  });
+
+  it("previews an image stored without a suffix and names it so the OS can open it", async () => {
+    const authority = new MemoryAuthorityStore();
+    const blobs = new MemoryBlobStore();
+    const service = new IngestionService(blobs, authority);
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 3]);
+    const ingested = await service.ingest({
+      schema_version: INGEST_SCHEMA_VERSION,
+      connector_id: "feishu-chat",
+      org_id: "local-owner",
+      delivery_id: "attach-bare",
+      received_at: "2026-08-27T00:00:00.000Z",
+      records: [
+        channelRecord({
+          channel: "feishu",
+          kind: "user",
+          direction: "inbound",
+          external_id: "oc_1:om_bare",
+          occurred_at: "2026-08-27T00:00:01.000Z",
+          actor_id: "ou_1",
+          scope_id: "oc_1",
+          text: "bare",
+          content: [
+            {
+              role: "attachment",
+              media_type: "application/octet-stream",
+              source_filename: "attachment",
+              bytes: png,
+            },
+          ],
+        }),
+      ],
+    });
+    const event = await authority.getEvent("local-owner", ingested.records[0].event_id);
+    const preview = await resolveInboxBodies(authority, blobs, [event.content_hash]);
+    const file = preview.get(event.content_hash).attachments[0];
+    assert.equal(file.filename, "attachment.png");
+    assert.equal(file.media_type, "image/png");
+    assert.equal(file.data_base64, png.toString("base64"));
   });
 
   it("keeps legacy inline previews when another message on the page uses sidecars", async () => {

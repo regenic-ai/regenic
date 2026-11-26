@@ -1,9 +1,10 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { Inject, Injectable, OnModuleInit } from "@nestjs/common";
+import { HttpException, HttpStatus, Inject, Injectable, OnModuleInit } from "@nestjs/common";
 import { isPersonalApiEnabled, loadEnv, resolveAuthorityBackend } from "@regenic/config";
 import type { WorkContextAccess, WorkItem, WorkRun } from "@regenic/domain";
+import { agentContextFileUrl } from "./attachment-file";
 import { PersonalRuntimeService } from "./personal-runtime.service";
 
 const SECRET_FILE = ".regenic-agent-context-secret";
@@ -12,6 +13,8 @@ const AGENT_KEY_PREFIX = "rgk1";
 /** A run older than this cannot read context even if it is still open. */
 export const AGENT_CONTEXT_RUN_TTL_MS = 24 * 60 * 60 * 1000;
 export const AGENT_CONTEXT_READS_LIMIT = 50;
+/** Separate from conversation reads, so opening files cannot exhaust that budget. */
+export const AGENT_CONTEXT_FILE_OPENS_LIMIT = 32;
 export const AGENT_CONTEXT_PATH = "/v1/agent/context/mcp";
 
 export type AgentContextCredential =
@@ -87,6 +90,10 @@ export class PersonalAgentContextAccessService implements OnModuleInit {
     return `http://127.0.0.1:${loadEnv().PORT}${AGENT_CONTEXT_PATH}`;
   }
 
+  fileUrl(eventId: string, partIndex: number): string {
+    return agentContextFileUrl(this.url(), eventId, partIndex);
+  }
+
   runToken(runId: string): string {
     return `${RUN_TOKEN_PREFIX}.${runId}.${this.sign(`run:${runId}`)}`;
   }
@@ -147,6 +154,22 @@ export class PersonalAgentContextAccessService implements OnModuleInit {
     return open || searchFollowUp ? { run, item } : undefined;
   }
 
+  async consumeFileOpen(runId: string, now = new Date().toISOString()): Promise<void> {
+    const authority = this.runtime.requireHost().get("authority");
+    const orgId = this.runtime.orgId();
+    const key = fileOpensKey(runId);
+    const raw = await authority.getUiPref(orgId, key);
+    const current = Number(raw);
+    const count = Number.isInteger(current) && current > 0 ? current : 0;
+    if (count >= AGENT_CONTEXT_FILE_OPENS_LIMIT) {
+      throw new HttpException(
+        { error: { code: "file_open_limit", message: "This run has opened enough files" } },
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+    await authority.putUiPref(orgId, key, String(count + 1), now);
+  }
+
   async recordRead(runId: string, read: AgentContextRead): Promise<void> {
     const authority = this.runtime.requireHost().get("authority");
     const orgId = this.runtime.orgId();
@@ -181,6 +204,10 @@ export class PersonalAgentContextAccessService implements OnModuleInit {
 
 function readsKey(runId: string): string {
   return `work-run-reads:${runId}`;
+}
+
+function fileOpensKey(runId: string): string {
+  return `work-run-file-opens:${runId}`;
 }
 
 function same(left: string, right: string): boolean {

@@ -1,7 +1,8 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
-import { homedir } from "node:os";
+import { mkdir, writeFile } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import {
   app,
@@ -30,6 +31,7 @@ import {
   type DataDirectoryAction,
   type ResolvedDataPaths,
 } from "./data-directory";
+import { openDownloadName } from "./download-name";
 import {
   applyStoreRelocation,
   inspectSourceRetention,
@@ -1357,6 +1359,37 @@ app.whenReady().then(async () => {
     if (isHttpUrl(url)) {
       await shell.openExternal(url);
     }
+  });
+  ipcMain.handle("regenic:open-attachment", async (event, input: unknown) => {
+    if (event.sender !== mainWindow?.webContents) {
+      throw new Error("attachment.localOnly");
+    }
+    const body = input && typeof input === "object"
+      ? input as { eventId?: unknown; partIndex?: unknown; filename?: unknown }
+      : {};
+    const eventId = typeof body.eventId === "string" ? body.eventId.trim() : "";
+    const partIndex = body.partIndex;
+    if (!eventId || typeof partIndex !== "number" || !Number.isInteger(partIndex) || partIndex < 0) {
+      throw new Error("attachment.invalid");
+    }
+    const response = await fetch(
+      `${apiOrigin}/v1/me/events/${encodeURIComponent(eventId)}/files/${partIndex}`,
+    );
+    if (!response.ok) {
+      throw new Error("attachment.openFailed");
+    }
+    const bytes = Buffer.from(await response.arrayBuffer());
+    const filename = openDownloadName(
+      response.headers.get("content-disposition"),
+      typeof body.filename === "string" ? body.filename : "attachment",
+      bytes,
+    );
+    const dir = join(tmpdir(), "regenic-files");
+    await mkdir(dir, { recursive: true });
+    const filePath = join(dir, `${randomBytes(4).toString("hex")}-${filename}`);
+    await writeFile(filePath, bytes);
+    const opened = await shell.openPath(filePath);
+    if (opened) throw new Error(opened);
   });
   ipcMain.handle("regenic:get-host-stats", async () =>
     collectHostStats(currentDataPaths(), {

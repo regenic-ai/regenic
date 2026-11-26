@@ -26,6 +26,8 @@ const {
   setFeishuMediaJobsRootForTests,
   loadFeishuMediaJobs,
   saveFeishuMediaJobs,
+  filenameForMedia,
+  sniffMediaType,
 } = require("../dist");
 
 const { beforeEach, afterEach } = require("node:test");
@@ -802,6 +804,21 @@ describe("FeishuChatPollConnector", () => {
         }),
       ),
       "Hello link",
+    );
+    assert.equal(
+      extractFeishuText(
+        "post",
+        JSON.stringify({
+          zh_cn: {
+            content: [[{
+              tag: "a",
+              text: "需求文档",
+              href: "https://example.feishu.cn/docx/abc",
+            }]],
+          },
+        }),
+      ),
+      "需求文档 (https://example.feishu.cn/docx/abc)",
     );
     assert.equal(extractFeishuText("image", "{}"), undefined);
     assert.deepEqual(
@@ -1754,3 +1771,18 @@ function recordingClient(uploads, messages, texts = []) {
     },
   };
 }
+
+describe("attachment names", () => {
+  it("adds a suffix when Feishu did not send one", () => {
+    const docx = Buffer.concat([Buffer.from("PK\u0003\u0004"), Buffer.from("word/document.xml")]);
+    assert.equal(
+      sniffMediaType(docx, "application/octet-stream"),
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    );
+    assert.equal(
+      filenameForMedia("attachment", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+      "attachment.docx",
+    );
+    assert.equal(filenameForMedia("notes.pdf", "application/pdf"), "notes.pdf");
+  });
+});

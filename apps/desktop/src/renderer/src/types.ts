@@ -112,6 +112,9 @@ export interface EventRecord {
 export interface InboxAttachment {
   filename: string;
   media_type: string;
+  part_index?: number;
+  byte_size?: number;
+  content_hash?: string;
   data_base64?: string;
 }
 

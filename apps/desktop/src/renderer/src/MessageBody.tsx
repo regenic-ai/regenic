@@ -1,6 +1,8 @@
-import { memo, type ReactNode } from "react";
+import { memo, useState, type ReactNode } from "react";
+import { openExternal } from "./CatalogDocs";
 import { stripAttachmentLines } from "./copy-message";
 import { findMarkRanges } from "./context-search";
+import { cloudDocLinks, fileTypeLabel, formatFileSize } from "./doc-links";
 import { imagePreviewSrc } from "./image-preview";
 import { useLocale } from "./LocaleContext";
 import { parseRichBlocks } from "./message-view";
@@ -10,17 +12,21 @@ export const MessageBody = memo(function MessageBody({
   text,
   attachments,
   onPreviewImage,
+  onOpenFile,
   findQuery = "",
   findCurrent = false,
 }: {
   text: string;
   attachments?: InboxAttachment[];
   onPreviewImage?: (index: number) => void;
+  onOpenFile?: (file: InboxAttachment) => Promise<void> | void;
   findQuery?: string;
   findCurrent?: boolean;
 }) {
   const { t } = useLocale();
+  const [fileError, setFileError] = useState<string | null>(null);
   const visible = stripAttachmentLines(text);
+  const docs = cloudDocLinks(visible);
   const mark = (value: string) => markFind(value, findQuery, findCurrent);
   return (
     <div className="rich-body">
@@ -94,10 +100,40 @@ export const MessageBody = memo(function MessageBody({
           {attachments.map((file, index) => {
             const src = imagePreviewSrc(file);
             if (!src) {
+              const size = formatFileSize(file.byte_size);
+              const type = fileTypeLabel(file.filename, file.media_type);
+              const label = t("file.open", { name: file.filename });
+              const body = (
+                <>
+                  <span className="file-card-type">{type}</span>
+                  <span className="file-card-copy">
+                    <strong>{file.filename}</strong>
+                    {size ? <span>{size}</span> : null}
+                  </span>
+                </>
+              );
+              if (!onOpenFile || file.part_index === undefined) {
+                return (
+                  <span key={`${file.filename}-${index}`} className="file-card">
+                    {body}
+                  </span>
+                );
+              }
               return (
-                <span key={`${file.filename}-${index}`} className="file-chip">
-                  {file.filename}
-                </span>
+                <button
+                  key={`${file.filename}-${index}`}
+                  type="button"
+                  className="file-card"
+                  aria-label={label}
+                  onClick={() => {
+                    setFileError(null);
+                    Promise.resolve(onOpenFile(file)).catch(() => {
+                      setFileError(t("file.openFailed"));
+                    });
+                  }}
+                >
+                  {body}
+                </button>
               );
             }
             const image = (
@@ -119,6 +155,25 @@ export const MessageBody = memo(function MessageBody({
               </button>
             );
           })}
+        </div>
+      ) : null}
+      {fileError ? <p className="muted file-card-error">{fileError}</p> : null}
+      {docs.length > 0 ? (
+        <div className="msg-files">
+          {docs.map((doc) => (
+            <button
+              key={doc.url}
+              type="button"
+              className="file-card"
+              aria-label={t("file.docOpen", { name: doc.title })}
+              onClick={() => openExternal(doc.url)}
+            >
+              <span className="file-card-type">DOC</span>
+              <span className="file-card-copy">
+                <strong>{doc.title}</strong>
+              </span>
+            </button>
+          ))}
         </div>
       ) : null}
     </div>

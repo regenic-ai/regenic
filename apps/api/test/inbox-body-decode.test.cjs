@@ -59,6 +59,8 @@ describe("inbox body decode", () => {
     );
     assert.equal(meta.attachments[0].data_base64, undefined);
     assert.equal(meta.attachments[0].filename, "shot.png");
+    assert.equal(meta.attachments[0].part_index, 1);
+    assert.equal(meta.attachments[0].byte_size, Buffer.from("fakepng", "utf8").byteLength);
     const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, ...Buffer.alloc(2_000_000, 1)]);
     const large = Buffer.from(
       JSON.stringify([
