@@ -161,7 +161,38 @@ describe("engine chip and pull copy", () => {
         },
       ],
     });
+    assert.equal(pullStatusLabel(status), "Earlier messages · 甲");
+    assert.equal(pullStatusLabel(status).includes("4"), false);
+  });
+
+  it("names one known chat when several history streams are moving", () => {
+    const status = pull({
+      phase: "pulling",
+      catching_up_count: 4,
+      streams: [
+        {
+          stream_key: "feishu-1:chat:oc_1",
+          thread_id: "feishu:oc_1",
+          label: null,
+          phase: "pulling",
+          work: "history",
+          last_error: null,
+        },
+        {
+          stream_key: "feishu-1:chat:oc_2",
+          thread_id: "feishu:oc_2",
+          label: "oc_2",
+          phase: "pulling",
+          work: "history",
+          last_error: null,
+        },
+      ],
+    });
     assert.equal(pullStatusLabel(status), "Earlier messages");
+    assert.equal(
+      pullStatusLabel(status, [{ id: "feishu:oc_2", title: "乙" }]),
+      "Earlier messages · 乙",
+    );
   });
 
   it("names the titlebar chip from the inbox thread when the stream label is blank", () => {
@@ -431,6 +462,30 @@ describe("connector attempt summaries", () => {
         error_code: "blob_reservation_conflict",
       }),
       /^正在补旧消息 · /,
+    );
+    setActiveLocale("en");
+  });
+
+  it("describes a timed-out page as a retry, not older-message catch-up", () => {
+    setActiveLocale("en");
+    assert.match(
+      attemptSummary({
+        status: "failed",
+        accepted_count: 0,
+        started_at: "2026-09-02T12:00:00.000Z",
+        error_code: "deadline_exceeded",
+      }),
+      /^Connection dropped · retrying · /,
+    );
+    setActiveLocale("zh");
+    assert.match(
+      attemptSummary({
+        status: "failed",
+        accepted_count: 0,
+        started_at: "2026-09-02T12:00:00.000Z",
+        error_code: "lease_unavailable",
+      }),
+      /^连接中断，正在重试 · /,
     );
     setActiveLocale("en");
   });

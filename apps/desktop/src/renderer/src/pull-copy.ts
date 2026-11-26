@@ -30,18 +30,10 @@ export function pullStatusLabel(
   }
   if (pull.phase === "pulling") {
     const historyStreams = pull.streams.filter(isHistoryWork);
-    // Several chats at once is the current wave, not how many remain.
-    // The coverage row owns that count.
-    if (historyStreams.length > 1) {
-      return t("sync.history");
-    }
-    const history = historyStreams[0];
-    const historyName = history ? titleForStream(history, titles) : null;
-    if (historyName) {
-      return t("sync.historyNamed", { label: historyName });
-    }
-    if (history) {
-      return t("sync.history");
+    // The wave is not how many conversations remain. Name one chat that is
+    // moving; the coverage row owns the remainder.
+    if (historyStreams.length > 0) {
+      return historyActivityLabel(historyStreams, titles);
     }
     const media = pullingMediaStream(pull);
     const mediaName = media ? titleForStream(media, titles) : null;
@@ -53,15 +45,11 @@ export function pullStatusLabel(
     }
     return t("sync.pulling");
   }
-  if (pull.catching_up_count > 1) {
-    return t("sync.history");
-  }
-  if (pull.catching_up_count === 1) {
-    const active = pull.streams.find(
+  if (pull.catching_up_count > 0) {
+    const active = pull.streams.filter(
       (stream) => stream.phase === "catching_up" || stream.phase === "error",
     );
-    const name = active ? titleForStream(active, titles) : null;
-    return name ? t("sync.historyNamed", { label: name }) : t("sync.history");
+    return historyActivityLabel(active, titles);
   }
   if (pull.last_error) {
     return t("sync.retry");
@@ -101,6 +89,19 @@ function pullingHistoryStream(pull: PullStatusView) {
   return pull.streams.find(
     (stream) => isHistoryWork(stream) || stream.phase === "catching_up",
   );
+}
+
+function historyActivityLabel(
+  streams: ReadonlyArray<{ thread_id: string | null; label: string | null }>,
+  titles: ReadonlyArray<{ id: string; title: string }>,
+): string {
+  for (const stream of streams) {
+    const name = titleForStream(stream, titles);
+    if (name) {
+      return t("sync.historyNamed", { label: name });
+    }
+  }
+  return t("sync.history");
 }
 
 function titleForStream(

@@ -12,16 +12,25 @@ export type ConnectorAlert = {
   hint: string | null;
 };
 
-/** Contention codes. A later successful page replaces the attempt; these are not failures. */
-const SOFT_ATTEMPT_CODES = new Set([
-  "blob_reservation_conflict",
-  "deadline_exceeded",
-  "lease_unavailable",
-]);
+/**
+ * A later successful page replaces these attempts, so they stay off the banner.
+ * Shared-body contention is still catch-up. A timeout or lost lease is a retry.
+ */
+export function softSyncTone(
+  errorCode: string | null | undefined,
+): "catchup" | "retry" | null {
+  const code = errorCode?.trim();
+  if (code === "blob_reservation_conflict") {
+    return "catchup";
+  }
+  if (code === "deadline_exceeded" || code === "lease_unavailable") {
+    return "retry";
+  }
+  return null;
+}
 
 export function isSoftSyncFailure(errorCode: string | null | undefined): boolean {
-  const code = errorCode?.trim();
-  return code != null && SOFT_ATTEMPT_CODES.has(code);
+  return softSyncTone(errorCode) != null;
 }
 
 /** Soft poll miss — keep in sync with domain `looksLikeSyncSoftMissMessage`. */
