@@ -2,6 +2,7 @@ export * from "./deterministic-event-retriever";
 export * from "./indexed-event-retriever";
 export * from "./accepted-thread-summary-retriever";
 export * from "./deterministic-context-engine";
+export * from "./temporal-dominance";
 export * from "./authority-context-source";
 export * from "./personal-context-policy";
 export * from "./context-question-answerer";

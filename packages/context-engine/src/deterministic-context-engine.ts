@@ -1,3 +1,4 @@
+import { preferEvidenceNearQueryDate, suppressSupersededEvidence } from "./temporal-dominance";
 import {
   CONTEXT_BUNDLE_SCHEMA_VERSION,
   CONTEXT_SECTION_KINDS,
@@ -220,8 +221,10 @@ export class DeterministicContextEngine implements ContextEngine {
     const retrieved = retrievalRuns.flatMap(({ active, result }) =>
       result.candidates.map((value) => ({ active, value })),
     );
-    const candidates = await this.fuse(retrieved, stableRequest, lifecycleEvents, protectedEventIds);
-    assertProtectedCandidates(protectedEventIds, candidates);
+    const ranked = await this.fuse(retrieved, stableRequest, lifecycleEvents, protectedEventIds);
+    assertProtectedCandidates(protectedEventIds, ranked);
+    const dominated = suppressSupersededEvidence(stableRequest.query, ranked, protectedEventIds);
+    const candidates = preferEvidenceNearQueryDate(stableRequest.query, dominated, protectedEventIds);
     const assembled = this.assembleBudget(stableRequest, candidates, protectedEventIds);
     const degradationFlags = degradationFlagsFor(
       retrievers,
