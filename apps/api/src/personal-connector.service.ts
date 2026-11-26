@@ -583,8 +583,8 @@ export class PersonalConnectorService implements OnModuleDestroy, OnApplicationB
     return connectorLive.noteInteractiveFocus(this.connectorState(), threadId);
   }
 
-  async drainMediaForThread(threadId: string): Promise<void> {
-    return connectorLive.drainMediaForThread(this.connectorState(), threadId);
+  async drainMediaForThread(threadId: string, before?: string): Promise<void> {
+    return connectorLive.drainMediaForThread(this.connectorState(), threadId, before);
   }
 
   async pullOlderForThread(

@@ -4,6 +4,7 @@ const { verifyPollConnectorConformance } = require("@regenic/connector-test-util
 const {
   FeishuApiError,
   FeishuChatEgress,
+  feishuChatDriver,
   FeishuChatPollConnector,
   extractFeishuMedia,
   extractFeishuText,
@@ -25,7 +26,14 @@ const {
   peekFeishuMediaJobsForTests,
   setFeishuMediaJobsRootForTests,
   loadFeishuMediaJobs,
+  pullingFeishuLocators,
+  queuedFeishuLocators,
+  requeueFeishuMediaJob,
+  selectFeishuMediaPull,
+  retainRequeuedMediaJobs,
   saveFeishuMediaJobs,
+  filenameForMedia,
+  sniffMediaType,
 } = require("../dist");
 
 const { beforeEach, afterEach } = require("node:test");
@@ -803,6 +811,21 @@ describe("FeishuChatPollConnector", () => {
       ),
       "Hello link",
     );
+    assert.equal(
+      extractFeishuText(
+        "post",
+        JSON.stringify({
+          zh_cn: {
+            content: [[{
+              tag: "a",
+              text: "需求文档",
+              href: "https://example.feishu.cn/docx/abc",
+            }]],
+          },
+        }),
+      ),
+      "需求文档 (https://example.feishu.cn/docx/abc)",
+    );
     assert.equal(extractFeishuText("image", "{}"), undefined);
     assert.deepEqual(
       extractFeishuMedia("image", JSON.stringify({ image_key: "img_1" })),
@@ -1043,24 +1066,29 @@ describe("FeishuChatPollConnector", () => {
       }),
     });
     assert.equal(result.batch.records.length, 6);
-    assert.equal(result.batch.records[0].operation, "create");
-    assert.equal(result.batch.records[3].operation, "revise");
-    assert.deepEqual(downloads, [
-      { message_id: "om_img", file_key: "img_shot", type: "image" },
-      { message_id: "om_file", file_key: "file_notes", type: "file" },
-      { message_id: "om_post", file_key: "img_inline", type: "image" },
-    ]);
+    assert.equal(result.batch.records.filter((record) => record.operation === "create").length, 3);
+    assert.deepEqual(
+      downloads.map((item) => `${item.message_id}:${item.file_key}:${item.type}`).sort(),
+      [
+        "om_file:file_notes:file",
+        "om_img:img_shot:image",
+        "om_post:img_inline:image",
+      ],
+    );
     const pointer = result.batch.records[0].content.find((part) => part.role === "attachment");
     assert.equal(pointer.external_locator, "feishu:image:img_shot");
     assert.equal(pointer.bytes, undefined);
-    const image = result.batch.records[3].content.find((part) => part.role === "attachment");
+    const revise = (messageId) => result.batch.records.find(
+      (record) => record.operation === "revise" && record.external_id === `oc_1:${messageId}`,
+    );
+    const image = revise("om_img").content.find((part) => part.role === "attachment");
     assert.equal(image.media_type, "image/png");
     assert.equal(image.source_filename, "shot.png");
     assert.deepEqual(Array.from(image.bytes), Array.from(png));
-    const file = result.batch.records[4].content.find((part) => part.role === "attachment");
+    const file = revise("om_file").content.find((part) => part.role === "attachment");
     assert.equal(file.media_type, "application/pdf");
     assert.equal(file.source_filename, "notes.pdf");
-    const post = result.batch.records[5];
+    const post = revise("om_post");
     assert.equal(
       post.content.find((part) => part.role === "body").text,
       "see this",
@@ -1754,3 +1782,203 @@ function recordingClient(uploads, messages, texts = []) {
     },
   };
 }
+
+describe("media job retry", () => {
+  const job = {
+    message_id: "om_1",
+    key: "file_key",
+    kind: "file",
+    filename: "attachment",
+    attempts: 4,
+    occurred_at: "2026-11-26T03:33:00.000Z",
+    actor_id: "ou_1",
+    sender_kind: "user",
+    direction: "inbound",
+    refs: [{ kind: "file", key: "file_key", filename: "attachment" }],
+  };
+
+  it("puts a dropped download back in the queue and keeps it across a poll that started earlier", () => {
+    saveFeishuMediaJobs("inst", "oc_chat", []);
+    const started = Date.now();
+    requeueFeishuMediaJob("inst", "oc_chat", job);
+    const queued = queuedFeishuLocators("inst", ["oc_chat"]).get("oc_chat");
+    assert.equal(queued.has("feishu:file:file_key"), true);
+    const kept = retainRequeuedMediaJobs("inst", "oc_chat", [], started);
+    assert.equal(kept.length, 1);
+    assert.equal(kept[0].attempts, 0);
+    assert.equal(retainRequeuedMediaJobs("inst", "oc_chat", kept, started).length, 0);
+    const installation = {
+      id: "inst",
+      org_id: "local-owner",
+      connector_type: "feishu-chat",
+      status: "enabled",
+      config: {},
+      created_at: "2026-01-01T00:00:00.000Z",
+      updated_at: "2026-01-01T00:00:00.000Z",
+    };
+    const throughDriver = feishuChatDriver.queuedAttachmentLocators?.(
+      installation,
+      ["feishu:oc_chat", "dsh:nope"],
+    );
+    assert.equal(throughDriver?.get("feishu:oc_chat")?.has("feishu:file:file_key"), true);
+    assert.equal(throughDriver?.has("dsh:nope"), false);
+    assert.equal(feishuChatDriver.retryAttachment?.(installation, {
+      thread_id: "feishu:oc_chat",
+      external_id: "oc_chat:om_again",
+      external_locator: "feishu:file:other",
+      occurred_at: "2026-11-26T03:33:00.000Z",
+      direction: "inbound",
+    }), true);
+    assert.equal(
+      loadFeishuMediaJobs("inst", "oc_chat").some((item) => item.message_id === "om_again"),
+      true,
+    );
+    assert.equal(feishuChatDriver.retryAttachment?.(installation, {
+      thread_id: "feishu:oc_chat",
+      external_id: "oc_chat:om_1",
+      external_locator: "dsh:file:nope",
+      occurred_at: "2026-11-26T03:33:00.000Z",
+    }), false);
+  });
+});
+
+describe("open-thread media pull", () => {
+  function storedJob(key, occurredAt) {
+    return {
+      message_id: `om_${key}`,
+      key,
+      kind: "file",
+      filename: "attachment",
+      attempts: 0,
+      occurred_at: occurredAt,
+      actor_id: "ou_1",
+      sender_kind: "user",
+      direction: "inbound",
+      refs: [{ kind: "file", key, filename: "attachment" }],
+    };
+  }
+
+  const jobs = [
+    storedJob("old", "2026-08-01T00:00:00.000Z"),
+    storedJob("mid", "2026-11-01T00:00:00.000Z"),
+    storedJob("new", "2026-11-26T03:37:00.000Z"),
+    storedJob("newer", "2026-11-26T03:40:00.000Z"),
+  ];
+
+  it("downloads the three newest files inside the open window", async () => {
+    const seen = [];
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const connector = createConnector({
+      async listMessages() {
+        throw new Error("media pull must not list messages");
+      },
+      async downloadResource(input) {
+        seen.push(input.file_key);
+        if (seen.length === 1) {
+          const pulling = pullingFeishuLocators("feishu-chat", ["oc_1"]).get("oc_1");
+          assert.equal(pulling.has("feishu:file:newer"), true);
+          assert.equal(pulling.has("feishu:file:old"), false);
+        }
+        return { bytes: png, media_type: "application/octet-stream" };
+      },
+    });
+    saveFeishuMediaJobs("feishu-chat", "oc_1", jobs);
+    const floor = Date.parse("2026-11-01T00:00:00.000Z");
+    assert.deepEqual(
+      selectFeishuMediaPull(jobs, floor, floor).map((job) => job.key),
+      ["newer", "new", "mid"],
+    );
+    const result = await connector.poll(
+      { value: "{}" },
+      { media: true, before: "2026-11-01T00:00:00.000Z" },
+    );
+    assert.deepEqual(seen, ["newer", "new", "mid"]);
+    assert.equal(result.media_pending, true);
+    assert.equal(
+      loadFeishuMediaJobs("feishu-chat", "oc_1").some((job) => job.key === "old"),
+      true,
+    );
+  });
+
+  it("a click downloads that file and leaves the rest waiting", async () => {
+    const seen = [];
+    const png = new Uint8Array([1, 2, 3, 4]);
+    const connector = createConnector({
+      async listMessages() {
+        throw new Error("media pull must not list messages");
+      },
+      async downloadResource(input) {
+        seen.push(input.file_key);
+        return { bytes: png, media_type: "application/octet-stream" };
+      },
+    });
+    saveFeishuMediaJobs("feishu-chat", "oc_1", jobs);
+    requeueFeishuMediaJob("feishu-chat", "oc_1", storedJob("old", "2026-08-01T00:00:00.000Z"));
+    const result = await connector.poll({ value: "{}" }, { media: true });
+    assert.deepEqual(seen, ["old"]);
+    assert.equal(result.media_pending, true);
+  });
+
+  it("keeps a newer file when older jobs already fill the queue", async () => {
+    const older = Array.from({ length: 40 }, (_, index) =>
+      storedJob(`old${index}`, "2026-08-01T00:00:00.000Z"),
+    );
+    saveFeishuMediaJobs("feishu-chat", "oc_1", older);
+    const connector = createConnector({
+      async listMessages() {
+        return {
+          items: [
+            {
+              message_id: "om_new",
+              msg_type: "file",
+              create_time: String(Date.parse("2026-11-26T03:37:00.000Z")),
+              sender: { id: "ou_1", sender_type: "user", name: "Ada" },
+              body: {
+                content: JSON.stringify({ file_key: "file_new", file_name: "notes.doc" }),
+              },
+            },
+          ],
+          has_more: false,
+        };
+      },
+    });
+    await connector.poll(
+      { value: JSON.stringify({ start_time: "1", recent_seeded: true }) },
+      { media: false },
+    );
+    const left = loadFeishuMediaJobs("feishu-chat", "oc_1");
+    assert.equal(left.length, 40);
+    assert.equal(left.some((job) => job.key === "file_new"), true);
+  });
+});
+
+describe("attachment names", () => {
+  it("adds a suffix when Feishu did not send one", () => {
+    const docx = Buffer.concat([Buffer.from("PK\u0003\u0004"), Buffer.from("word/document.xml")]);
+    assert.equal(
+      sniffMediaType(docx, "application/octet-stream"),
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    );
+    assert.equal(
+      filenameForMedia("attachment", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+      "attachment.docx",
+    );
+    assert.equal(filenameForMedia("notes.pdf", "application/pdf"), "notes.pdf");
+    assert.equal(filenameForMedia("image.png", "image/jpeg"), "image.jpg");
+    assert.equal(filenameForMedia("image.png", "video/mp4"), "image.mp4");
+    const mp4 = Buffer.alloc(16);
+    mp4.write("ftyp", 4);
+    mp4.write("isom", 8);
+    assert.equal(sniffMediaType(mp4, "application/octet-stream"), "video/mp4");
+    assert.equal(sniffMediaType(Buffer.from("ID3test"), "application/octet-stream"), "audio/mpeg");
+    const sheet = Buffer.concat([
+      Buffer.from("PK\u0003\u0004"),
+      Buffer.from("xl/workbook.xml"),
+      Buffer.from("word/"),
+    ]);
+    assert.equal(
+      sniffMediaType(sheet, "application/octet-stream"),
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    );
+  });
+});

@@ -182,7 +182,11 @@ export function noteInteractiveFocus(state: ConnectorState, threadId: string): v
   }
 }
 
-export async function drainMediaForThread(state: ConnectorState, threadId: string): Promise<void> {
+export async function drainMediaForThread(
+  state: ConnectorState,
+  threadId: string,
+  before?: string,
+): Promise<void> {
   if (state.maintenanceHold) {
     return;
   }
@@ -194,7 +198,7 @@ export async function drainMediaForThread(state: ConnectorState, threadId: strin
   preferThread(id);
   try {
     await takeFocus(state, id, "media", (signal, generation) =>
-      runDrainMediaThread(state, id, signal, generation),
+      runDrainMediaThread(state, id, signal, generation, before),
     );
   } catch {
     return;
@@ -580,6 +584,7 @@ async function runDrainMediaThread(
   threadId: string,
   signal: AbortSignal,
   generation: number,
+  before?: string,
 ): Promise<void> {
   if (state.maintenanceHold || !focusAlive(state, generation, signal)) {
     return;
@@ -632,7 +637,15 @@ async function runDrainMediaThread(
             return Promise.resolve([]);
           }
           return runInSyncLane("interactive", () =>
-            pollStream(host, store, installation, stream, 3, { media: true }, state.quota),
+            pollStream(
+              host,
+              store,
+              installation,
+              stream,
+              3,
+              { media: true, ...(before?.trim() ? { before: before.trim() } : {}) },
+              state.quota,
+            ),
           );
         },
         { skipIfBusy: false },

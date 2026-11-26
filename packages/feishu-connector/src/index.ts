@@ -24,6 +24,10 @@ export {
   clearFeishuMediaJobsForTests,
   loadFeishuMediaJobs,
   peekFeishuMediaJobsForTests,
+  pullingFeishuLocators,
+  queuedFeishuLocators,
+  requeueFeishuMediaJob,
+  retainRequeuedMediaJobs,
   saveFeishuMediaJobs,
   setFeishuMediaJobsRootForTests,
 } from "./feishu-media-job-store";

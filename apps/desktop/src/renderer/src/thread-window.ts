@@ -394,12 +394,43 @@ export function sameInboxProps(
 export function threadHasPendingImagePreviews(items: InboxViewItem[]): boolean {
   for (const item of items) {
     for (const file of item.attachments ?? []) {
-      if (file.media_type.startsWith("image/") && !file.data_base64) {
-        return true;
+      if (
+        file.fetch === "failed" ||
+        file.fetch === "available" ||
+        !file.media_type.startsWith("image/")
+      ) {
+        continue;
       }
+      if (file.data_base64 || file.content_hash || (file.byte_size ?? 0) > 0) {
+        continue;
+      }
+      return true;
     }
   }
   return false;
+}
+
+/** Loaded messages still have a file the open thread should download. */
+export function threadNeedsAttachmentDrain(items: InboxViewItem[]): boolean {
+  for (const item of items) {
+    for (const file of item.attachments ?? []) {
+      if (file.fetch === "failed") continue;
+      if (file.data_base64 || file.content_hash || (file.byte_size ?? 0) > 0) continue;
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Oldest loaded message. Interactive download stays inside this window. */
+export function attachmentDrainBefore(items: InboxViewItem[]): string | undefined {
+  let oldest: string | undefined;
+  for (const item of items) {
+    const at = item.event?.occurred_at;
+    if (!at) continue;
+    if (!oldest || at < oldest) oldest = at;
+  }
+  return oldest;
 }
 
 /** Keep the newest ingest per source identity so media revise rows replace placeholders. */
@@ -444,7 +475,7 @@ function attachmentPreviewRevision(
   return (attachments ?? [])
     .map(
       (file) =>
-        `${file.filename}\t${file.media_type}\t${file.data_base64 ? file.data_base64.length : 0}`,
+        `${file.filename}\t${file.media_type}\t${file.fetch ?? ""}\t${file.data_base64 ? file.data_base64.length : 0}`,
     )
     .join("|");
 }

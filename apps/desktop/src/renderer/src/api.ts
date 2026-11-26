@@ -2116,6 +2116,19 @@ export async function fetchPendingInbox(): Promise<InboxViewItem[]> {
   return items.map(normalizeInboxItem);
 }
 
+export async function retryInboxAttachment(
+  eventId: string,
+  partIndex: number,
+): Promise<void> {
+  const response = await fetch(
+    `${origin()}/v1/me/events/${encodeURIComponent(eventId)}/files/${partIndex}/retry`,
+    { method: "POST" },
+  );
+  if (!response.ok) {
+    throw new Error(`attachment retry ${response.status}`);
+  }
+}
+
 export async function triagePendingInbox(
   eventId: string,
   disposition: MessageDisposition,

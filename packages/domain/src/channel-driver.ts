@@ -2,6 +2,7 @@ import {
   ChannelDriverError,
   SendNotAcceptedError,
   parseConversationThread,
+  type AttachmentRetry,
   type ChannelCapabilities,
   type ChannelDriver,
   type ChannelSinkPort,
@@ -25,6 +26,7 @@ export {
   parseConversationThread,
 };
 export type {
+  AttachmentRetry,
   ChannelCapabilities,
   ChannelDriver,
   ChannelDriverCore,
@@ -390,6 +392,71 @@ export class ChannelDriverRegistry {
 
   has(connectorType: string): boolean {
     return !this.retired.has(connectorType) && this.drivers.has(connectorType);
+  }
+
+  /** Locators still queued, keyed by thread id. Threads no driver owns are absent. */
+  queuedAttachmentLocators(
+    installations: readonly ConnectorInstallation[],
+    threadIds: readonly string[],
+  ): Map<string, ReadonlySet<string>> {
+    const found = new Map<string, Set<string>>();
+    for (const installation of installations) {
+      if (installation.status !== "enabled") continue;
+      const driver = this.get(installation.connector_type);
+      if (!driver?.queuedAttachmentLocators) continue;
+      let part: ReadonlyMap<string, ReadonlySet<string>> | undefined;
+      try {
+        part = driver.queuedAttachmentLocators(installation, threadIds);
+      } catch (error) {
+        console.error("attachment queue lookup failed", driver.connector_type, error);
+        continue;
+      }
+      if (!part) continue;
+      for (const [threadId, locators] of part) {
+        const set = found.get(threadId) ?? new Set<string>();
+        for (const locator of locators) set.add(locator);
+        found.set(threadId, set);
+      }
+    }
+    return found;
+  }
+
+  /** Locators whose bytes are being downloaded now, keyed by thread id. */
+  pullingAttachmentLocators(
+    installations: readonly ConnectorInstallation[],
+    threadIds: readonly string[],
+  ): Map<string, ReadonlySet<string>> {
+    const found = new Map<string, Set<string>>();
+    for (const installation of installations) {
+      if (installation.status !== "enabled") continue;
+      const driver = this.get(installation.connector_type);
+      if (!driver?.pullingAttachmentLocators) continue;
+      let part: ReadonlyMap<string, ReadonlySet<string>> | undefined;
+      try {
+        part = driver.pullingAttachmentLocators(installation, threadIds);
+      } catch (error) {
+        console.error("attachment pull lookup failed", driver.connector_type, error);
+        continue;
+      }
+      if (!part) continue;
+      for (const [threadId, locators] of part) {
+        const set = found.get(threadId) ?? new Set<string>();
+        for (const locator of locators) set.add(locator);
+        found.set(threadId, set);
+      }
+    }
+    return found;
+  }
+
+  /** Asks the driver that owns the thread to queue the pointer again. */
+  retryAttachment(
+    installations: readonly ConnectorInstallation[],
+    thread: ConversationThread,
+    input: AttachmentRetry,
+  ): boolean {
+    const found = this.findForThread([...installations], thread);
+    if (!found?.driver.retryAttachment) return false;
+    return found.driver.retryAttachment(found.installation, input) === true;
   }
 
   findForThread(

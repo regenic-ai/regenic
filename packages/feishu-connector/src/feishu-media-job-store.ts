@@ -73,21 +73,137 @@ export function loadFeishuMediaJobs(
   chatId: string,
 ): FeishuMediaJob[] {
   const key = mediaJobStoreKey(connectorId, chatId);
-  const cached = memory.get(key);
-  if (cached) {
-    return cached;
-  }
   try {
-    const raw = readFileSync(filePath(connectorId, chatId), "utf8");
-    const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) {
-      return [];
-    }
-    const jobs = parsed.filter(isFeishuMediaJob);
+    const jobs = readJobFile(filePath(connectorId, chatId));
     if (jobs.length > 0) {
       memory.set(key, jobs);
+    } else {
+      memory.delete(key);
     }
     return jobs;
+  } catch {
+    return memory.get(key) ?? [];
+  }
+}
+
+/** Put one attachment back in the download queue. A poll already in flight keeps it. */
+export function requeueFeishuMediaJob(
+  connectorId: string,
+  chatId: string,
+  job: FeishuMediaJob,
+): void {
+  const jobs = loadFeishuMediaJobs(connectorId, chatId).filter(
+    (item) => `${item.message_id}:${item.key}` !== `${job.message_id}:${job.key}`,
+  );
+  jobs.push({ ...job, attempts: 0, retry_after: undefined, requeued_at: Date.now() });
+  saveFeishuMediaJobs(connectorId, chatId, jobs);
+}
+
+/**
+ * Jobs a person requeued after this poll started. The poll's own list does not
+ * know about them yet, so saving that list must not erase them.
+ */
+export function retainRequeuedMediaJobs(
+  connectorId: string,
+  chatId: string,
+  jobs: readonly FeishuMediaJob[],
+  startedAt: number,
+): FeishuMediaJob[] {
+  const local = new Set(jobs.map((job) => `${job.message_id}:${job.key}`));
+  return loadFeishuMediaJobs(connectorId, chatId).filter((job) => {
+    const at = job.requeued_at ?? 0;
+    return at >= startedAt && !local.has(`${job.message_id}:${job.key}`);
+  });
+}
+
+const FEISHU_MEDIA_PULLING_TTL_MS = 90_000;
+
+function jobIdentity(job: { message_id: string; key: string }): string {
+  return `${job.message_id}:${job.key}`;
+}
+
+/** Mark the jobs this pass is downloading so the inbox can say "syncing". */
+export function markFeishuMediaPulling(
+  connectorId: string,
+  chatId: string,
+  keys: ReadonlySet<string>,
+  now: number,
+): void {
+  if (keys.size === 0) return;
+  const jobs = loadFeishuMediaJobs(connectorId, chatId).map((job) =>
+    keys.has(jobIdentity(job)) ? { ...job, pulling_at: now } : job,
+  );
+  saveFeishuMediaJobs(connectorId, chatId, jobs);
+}
+
+/** Keep a fresh in-flight mark when another poll saves the queue mid-download. */
+export function preserveFeishuPullingMarks(
+  connectorId: string,
+  chatId: string,
+  jobs: readonly FeishuMediaJob[],
+  now = Date.now(),
+): FeishuMediaJob[] {
+  const marks = new Map<string, number>();
+  for (const job of loadFeishuMediaJobs(connectorId, chatId)) {
+    if (
+      typeof job.pulling_at === "number" &&
+      now - job.pulling_at < FEISHU_MEDIA_PULLING_TTL_MS
+    ) {
+      marks.set(jobIdentity(job), job.pulling_at);
+    }
+  }
+  return jobs.map((job) => {
+    if (job.pulling_at) return job;
+    const at = marks.get(jobIdentity(job));
+    return at === undefined ? job : { ...job, pulling_at: at };
+  });
+}
+
+/** Locators (`feishu:image:…` / `feishu:file:…`) still queued for this install. */
+export function queuedFeishuLocators(
+  connectorId: string,
+  chatIds: readonly string[],
+): Map<string, Set<string>> {
+  const found = new Map<string, Set<string>>();
+  for (const chatId of chatIds) {
+    if (!chatId.trim() || found.has(chatId)) continue;
+    const set = new Set<string>();
+    for (const job of loadFeishuMediaJobs(connectorId, chatId)) {
+      set.add(`feishu:${job.kind}:${job.key}`);
+    }
+    found.set(chatId, set);
+  }
+  return found;
+}
+
+/** Locators whose download is in flight. A stale mark is treated as waiting. */
+export function pullingFeishuLocators(
+  connectorId: string,
+  chatIds: readonly string[],
+  now = Date.now(),
+): Map<string, Set<string>> {
+  const found = new Map<string, Set<string>>();
+  for (const chatId of chatIds) {
+    if (!chatId.trim() || found.has(chatId)) continue;
+    const set = new Set<string>();
+    for (const job of loadFeishuMediaJobs(connectorId, chatId)) {
+      if (
+        typeof job.pulling_at !== "number" ||
+        now - job.pulling_at >= FEISHU_MEDIA_PULLING_TTL_MS
+      ) {
+        continue;
+      }
+      set.add(`feishu:${job.kind}:${job.key}`);
+    }
+    found.set(chatId, set);
+  }
+  return found;
+}
+
+function readJobFile(path: string): FeishuMediaJob[] {
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
+    return Array.isArray(parsed) ? parsed.filter(isFeishuMediaJob) : [];
   } catch {
     return [];
   }

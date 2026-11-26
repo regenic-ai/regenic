@@ -5,9 +5,12 @@ import {
   HttpException,
   HttpStatus,
   Inject,
+  Param,
   Post,
+  Query,
   Req,
   Res,
+  StreamableFile,
 } from "@nestjs/common";
 import type { Request, Response } from "express";
 import { isPersonalApiEnabled } from "@regenic/config";
@@ -19,6 +22,7 @@ import {
 } from "./personal-agent-context-access.service";
 import { PersonalContextService } from "./personal-context.service";
 import { PersonalConversationLabelsService } from "./personal-conversation-labels.service";
+import { attachmentContentDisposition } from "./attachment-file";
 import { requestLocale } from "./request-locale";
 
 type JsonRpcId = string | number | null;
@@ -113,6 +117,41 @@ export class PersonalAgentContextController {
     @Inject(PersonalConversationLabelsService)
     private readonly labels: PersonalConversationLabelsService,
   ) {}
+
+  @Get("files/:eventId/:partIndex")
+  async openFile(
+    @Req() request: Request,
+    @Param("eventId") eventId: string,
+    @Param("partIndex") partIndexRaw: string,
+    @Query("run_id") runIdQuery?: string,
+  ) {
+    const credential = this.authenticate(request);
+    const runId = credential.kind === "run" ? credential.run_id : runIdQuery?.trim() ?? "";
+    if (!runId) {
+      throw new HttpException(
+        { error: { code: "invalid_request", message: "run_id is required" } },
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+    const scope = await this.access.scope(runId);
+    if (!scope) {
+      throw new HttpException(
+        { error: { code: "forbidden", message: "This run is finished or unknown; context is no longer available" } },
+        HttpStatus.FORBIDDEN,
+      );
+    }
+    const partIndex = Number(partIndexRaw);
+    const locked = lockedSearchThread(scope.run);
+    const opened = await this.context.openAttachment(eventId, partIndex, {
+      ...(locked ? { lockedThread: locked } : {}),
+      beforeRead: () => this.access.consumeFileOpen(runId),
+    });
+    return new StreamableFile(Buffer.from(opened.bytes), {
+      type: opened.media_type,
+      disposition: attachmentContentDisposition(opened.filename),
+      length: opened.bytes.byteLength,
+    });
+  }
 
   @Get("mcp")
   stream(@Res() response: Response) {
@@ -287,10 +326,10 @@ export class PersonalAgentContextController {
       ...result,
       title: thread?.title ?? null,
       channel_label: thread?.channel_label ?? null,
-      messages: result.messages.map((message) => ({
+      messages: withFileUrls(result.messages.map((message) => ({
         ...message,
         actor_label: labels.actors.get(message.event_id) ?? null,
-      })),
+      })), (eventId, partIndex) => this.access.fileUrl(eventId, partIndex)),
     };
   }
 
@@ -303,10 +342,10 @@ export class PersonalAgentContextController {
     return {
       ...window,
       title: labels.threads.get(window.thread_id)?.title ?? null,
-      messages: window.messages.map((message) => ({
+      messages: withFileUrls(window.messages.map((message) => ({
         ...message,
         actor_label: labels.actors.get(message.event_id) ?? null,
-      })),
+      })), (eventId, partIndex) => this.access.fileUrl(eventId, partIndex)),
     };
   }
 
@@ -320,13 +359,33 @@ export class PersonalAgentContextController {
         ...conversation,
         title: labels.threads.get(conversation.thread_id)?.title ?? null,
         channel_label: labels.threads.get(conversation.thread_id)?.channel_label ?? null,
-        messages: conversation.messages.map((message) => ({
+        messages: withFileUrls(conversation.messages.map((message) => ({
           ...message,
           actor_label: labels.actors.get(message.event_id) ?? null,
-        })),
+        })), (eventId, partIndex) => this.access.fileUrl(eventId, partIndex)),
       })),
     };
   }
+}
+
+function withFileUrls<T extends {
+  event_id: string;
+  attachments?: Array<{ part_index?: number }>;
+}>(
+  messages: T[],
+  fileUrl: (eventId: string, partIndex: number) => string,
+): T[] {
+  return messages.map((message) => {
+    if (!message.attachments?.length) return message;
+    return {
+      ...message,
+      attachments: message.attachments.map((attachment) => (
+        attachment.part_index === undefined
+          ? attachment
+          : { ...attachment, file_url: fileUrl(message.event_id, attachment.part_index) }
+      )),
+    };
+  });
 }
 
 function lockedSearchThread(run: { executor_config?: Record<string, unknown> }): string | undefined {

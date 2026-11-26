@@ -112,7 +112,12 @@ export interface EventRecord {
 export interface InboxAttachment {
   filename: string;
   media_type: string;
+  part_index?: number;
+  byte_size?: number;
+  content_hash?: string;
   data_base64?: string;
+  /** Set only while the bytes are not stored yet. */
+  fetch?: "syncing" | "available" | "failed";
 }
 
 export type MessageKind = "user" | "assistant" | "system";

@@ -22,6 +22,9 @@ import {
 import { rememberFeishuInbound } from "./feishu-attention";
 import {
   loadFeishuMediaJobs,
+  markFeishuMediaPulling,
+  preserveFeishuPullingMarks,
+  retainRequeuedMediaJobs,
   saveFeishuMediaJobs,
 } from "./feishu-media-job-store";
 import {
@@ -35,6 +38,7 @@ import {
   feishuCreateTimeToStartSeconds,
   feishuMentionNames,
   isFeishuSelfSender,
+  filenameForMedia,
   senderKind,
   sniffMediaType,
   type FeishuMediaRef,
@@ -43,7 +47,9 @@ import {
 export const MAX_FEISHU_ATTACHMENT_BYTES = 8 * 1024 * 1024;
 export const MAX_FEISHU_MEDIA_JOBS = 40;
 export const MAX_FEISHU_MEDIA_ATTEMPTS = 5;
-export const MAX_FEISHU_MEDIA_JOBS_PER_POLL = 8;
+/** How many files one pass downloads. Only these show as syncing. */
+export const MAX_FEISHU_MEDIA_JOBS_PER_POLL = 3;
+export const FEISHU_MEDIA_PULLING_TTL_MS = 90_000;
 /** How many end_time pages one scroll may follow to pass the boundary row. */
 /** One older page. A second request only steps past the anchor row itself. */
 const ANCHORED_HISTORY_HOPS = 2;
@@ -66,6 +72,10 @@ export interface FeishuMediaJob {
   thread_id?: string;
   parent_external_id?: string;
   refs: FeishuMediaRef[];
+  /** Set when a person asks to download again. Kept across a poll that started earlier. */
+  requeued_at?: number;
+  /** Set while this job's bytes are the ones being downloaded. */
+  pulling_at?: number;
 }
 
 export interface FeishuCursorState {
@@ -98,6 +108,7 @@ export class FeishuChatPollConnector {
   private readonly now: () => string;
   private chatName: string | undefined;
   private chatMode: FeishuChatMode | undefined;
+  private mediaPollStarted = 0;
 
   constructor(
     private readonly client: FeishuImClient,
@@ -161,13 +172,14 @@ export class FeishuChatPollConnector {
     cursor: ConnectorCursor | null,
     options?: ConnectorPollOptions,
   ): Promise<PollResult> {
+    this.mediaPollStarted = Date.now();
     const state = decodeFeishuCursor(cursor);
     const mediaJobs = this.hydrateMediaJobs(state);
     const mediaOnly = options?.media === true;
     const wantMedia = options?.media !== false;
     const nowMs = this.clockMs();
     if (mediaOnly) {
-      return this.pollMediaOnly(state, mediaJobs, cursor, nowMs);
+      return this.pollMediaOnly(state, mediaJobs, cursor, nowMs, options);
     }
     const anchor = feishuHistoryAnchor(options);
     const historyBound = anchor ? null : feishuStoredHistoryBound(state);
@@ -247,10 +259,10 @@ export class FeishuChatPollConnector {
     }
     const jobs = this.enqueueFromItems(mediaJobs, page.items, names, selfId);
     const drained = wantMedia
-      ? await this.drainMediaJobs(jobs, nowMs)
+      ? await this.drainMediaJobs(jobs, nowMs, mediaFloorMs(options?.before))
       : { records: [], jobs };
     records.push(...drained.records);
-    this.persistMediaJobs(drained.jobs);
+    this.persistMediaJobs(drained.jobs, wantMedia);
     const sort = request?.sort_type ?? "ByCreateTimeAsc";
     // History moves only when this call continued a desc page token.
     // A newest-page refresh must not replace that token with its own.
@@ -336,6 +348,7 @@ export class FeishuChatPollConnector {
     mediaJobs: FeishuMediaJob[],
     cursor: ConnectorCursor | null,
     nowMs: number,
+    options?: ConnectorPollOptions,
   ): Promise<PollResult> {
     if (!hasDueMediaJobs(mediaJobs, nowMs)) {
       this.persistMediaJobs(mediaJobs);
@@ -356,8 +369,12 @@ export class FeishuChatPollConnector {
         poll_hint: feishuPollHint(state),
       };
     }
-    const drained = await this.drainMediaJobs(mediaJobs, nowMs);
-    this.persistMediaJobs(drained.jobs);
+    const drained = await this.drainMediaJobs(
+      mediaJobs,
+      nowMs,
+      mediaFloorMs(options?.before),
+    );
+    this.persistMediaJobs(drained.jobs, true);
     const nextCursor = encodeFeishuCursor(state);
     return {
       batch: {
@@ -395,11 +412,24 @@ export class FeishuChatPollConnector {
     return [...byId.values()];
   }
 
-  private persistMediaJobs(jobs: FeishuMediaJob[]): void {
-    saveFeishuMediaJobs(
+  private persistMediaJobs(jobs: FeishuMediaJob[], releasePulling = false): void {
+    const extras = retainRequeuedMediaJobs(
       this.options.connector_id,
       this.options.chat_id,
       jobs,
+      this.mediaPollStarted,
+    );
+    const merged = releasePulling
+      ? jobs.map(clearPulling)
+      : preserveFeishuPullingMarks(
+          this.options.connector_id,
+          this.options.chat_id,
+          jobs,
+        );
+    saveFeishuMediaJobs(
+      this.options.connector_id,
+      this.options.chat_id,
+      [...merged.map(clearRequeued), ...extras],
     );
   }
 
@@ -536,25 +566,25 @@ export class FeishuChatPollConnector {
   private async drainMediaJobs(
     jobs: FeishuMediaJob[],
     nowMs: number,
+    floorMs?: number,
   ): Promise<{ records: IngestBatch["records"]; jobs: FeishuMediaJob[] }> {
     if (typeof this.client.downloadResource !== "function") {
       return { records: [], jobs };
     }
-    const due = jobs.filter((job) => isDueMediaJob(job, nowMs)).slice(
-      0,
-      MAX_FEISHU_MEDIA_JOBS_PER_POLL,
-    );
+    const due = selectFeishuMediaPull(jobs, nowMs, floorMs);
     if (due.length === 0) {
       return { records: [], jobs };
     }
+    markFeishuMediaPulling(
+      this.options.connector_id,
+      this.options.chat_id,
+      new Set(due.map(mediaJobKey)),
+      nowMs,
+    );
     const downloaded = new Map<string, ContentPart>();
-    const nextJobs: FeishuMediaJob[] = [];
     const dueKeys = new Set(due.map(mediaJobKey));
-    for (const job of jobs) {
-      if (!dueKeys.has(mediaJobKey(job))) {
-        nextJobs.push(job);
-        continue;
-      }
+    const nextJobs = jobs.filter((job) => !dueKeys.has(mediaJobKey(job)));
+    for (const job of due) {
       const part = await this.downloadMediaJob(job);
       if (part) {
         downloaded.set(mediaJobKey(job), part);
@@ -604,7 +634,7 @@ export class FeishuChatPollConnector {
       return {
         role: "attachment",
         media_type: mediaType,
-        source_filename: filename,
+        source_filename: filenameForMedia(filename, mediaType),
         external_locator: feishuMediaLocator(job.kind, job.key),
         bytes: file.bytes,
       };
@@ -674,7 +704,11 @@ export class FeishuChatPollConnector {
         });
       }
     }
-    return jobs.slice(-MAX_FEISHU_MEDIA_JOBS);
+    const pinned = jobs.filter((job) => job.requeued_at || job.pulling_at);
+    const rest = jobs.filter((job) => !job.requeued_at && !job.pulling_at);
+    rest.sort((left, right) => Date.parse(left.occurred_at) - Date.parse(right.occurred_at));
+    const room = Math.max(0, MAX_FEISHU_MEDIA_JOBS - pinned.length);
+    return [...rest.slice(-room), ...pinned].slice(-MAX_FEISHU_MEDIA_JOBS);
   }
 
   private actorLabel(
@@ -1248,6 +1282,53 @@ function hasDueMediaJobs(jobs: FeishuMediaJob[] | undefined, nowMs: number): boo
 
 function isDueMediaJob(job: FeishuMediaJob, nowMs: number): boolean {
   return job.attempts < MAX_FEISHU_MEDIA_ATTEMPTS && (job.retry_after ?? 0) <= nowMs;
+}
+
+function mediaFloorMs(before: string | undefined): number | undefined {
+  if (!before) return undefined;
+  const parsed = Date.parse(before);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+/**
+ * A person asking again goes first, and alone, so one click does not wake the backlog.
+ * Otherwise the newest due jobs at or after the open window. Background passes no floor.
+ */
+export function selectFeishuMediaPull(
+  jobs: readonly FeishuMediaJob[],
+  nowMs: number,
+  floorMs?: number,
+): FeishuMediaJob[] {
+  const due = jobs.filter((job) => isDueMediaJob(job, nowMs));
+  const promoted = due
+    .filter((job) => job.requeued_at)
+    .sort((left, right) => (right.requeued_at ?? 0) - (left.requeued_at ?? 0));
+  if (promoted.length > 0) {
+    return promoted.slice(0, MAX_FEISHU_MEDIA_JOBS_PER_POLL);
+  }
+  const inWindow = floorMs === undefined
+    ? due
+    : due.filter((job) => {
+        const at = Date.parse(job.occurred_at);
+        return Number.isFinite(at) && at >= floorMs;
+      });
+  return inWindow
+    .sort((left, right) => Date.parse(right.occurred_at) - Date.parse(left.occurred_at))
+    .slice(0, MAX_FEISHU_MEDIA_JOBS_PER_POLL);
+}
+
+function clearRequeued(job: FeishuMediaJob): FeishuMediaJob {
+  if (!job.requeued_at) return job;
+  const next = { ...job };
+  delete next.requeued_at;
+  return next;
+}
+
+function clearPulling(job: FeishuMediaJob): FeishuMediaJob {
+  if (!job.pulling_at) return job;
+  const next = { ...job };
+  delete next.pulling_at;
+  return next;
 }
 
 function mediaJobKey(job: { message_id: string; key: string }): string {

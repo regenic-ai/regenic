@@ -78,6 +78,7 @@ import {
   type ContextRecordSummary,
 } from "./context-record-view";
 import { PersonalRuntimeService } from "./personal-runtime.service";
+import { openEventAttachment } from "./attachment-file";
 import { PersonalContextError } from "./personal-context-error";
 import { PersonalConversationContextService } from "./personal-conversation-context.service";
 import {
@@ -120,6 +121,22 @@ export class PersonalContextService {
     @Inject(ChannelDriverRegistry)
     private readonly drivers: ChannelDriverRegistry,
   ) {}
+
+  openAttachment(
+    eventId: string,
+    partIndex: number,
+    options?: { lockedThread?: string; beforeRead?: () => Promise<void> },
+  ) {
+    const host = this.runtime.requireHost();
+    return openEventAttachment(
+      host.get("authority"),
+      host.get("blobs"),
+      this.runtime.orgId(),
+      eventId,
+      partIndex,
+      options,
+    );
+  }
 
   async assemble(input: unknown) {
     const request = this.contextRequest(input);

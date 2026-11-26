@@ -45,9 +45,13 @@ export function pullOlderFocusRequest(
   };
 }
 
-export function mediaDrainFocusRequest(threadId: string): ThreadFocusRequest {
+export function mediaDrainFocusRequest(
+  threadId: string,
+  before?: string,
+): ThreadFocusRequest {
   return {
     thread_id: threadId,
     media: true,
+    ...(before ? { before } : {}),
   };
 }

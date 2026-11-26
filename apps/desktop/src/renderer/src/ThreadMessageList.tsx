@@ -8,6 +8,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { openAttachmentFile } from "./attachment-actions";
 import { formatMessageCopy, writeClipboard } from "./copy-message";
 import { canForwardItem } from "./forward-preview";
 import { formatChatTime } from "./format";
@@ -29,6 +30,7 @@ import {
   threadPaneEmptyCopy,
   type MessageRole,
 } from "./message-view";
+
 import {
   computeWindow,
   endScrollTop,
@@ -463,6 +465,8 @@ export const ThreadMessageList = memo(
                       attachments={item.attachments}
                       findQuery={findQuery}
                       findCurrent={findCurrent}
+                      eventId={item.event.id}
+                      onOpenFile={(file) => openAttachmentFile(item.event.id, file)}
                       onPreviewImage={(fileIndex) =>
                         openPreview(previewImageId(item.event.id, fileIndex))
                       }
@@ -483,7 +487,17 @@ export const ThreadMessageList = memo(
                       <ChatCopyButton item={item} />
                     </span>
                   </div>
-                  <MessageBody text={item.body_text ?? ""} attachments={item.attachments} findQuery={findQuery} findCurrent={findCurrent} />
+                  <MessageBody
+                    text={item.body_text ?? ""}
+                    attachments={item.attachments}
+                    findQuery={findQuery}
+                    findCurrent={findCurrent}
+                    eventId={item.event.id}
+                    onOpenFile={(file) => openAttachmentFile(item.event.id, file)}
+                    onPreviewImage={(fileIndex) =>
+                      openPreview(previewImageId(item.event.id, fileIndex))
+                    }
+                  />
                 </div>
               ) : (
                 <ChatRow
@@ -736,6 +750,8 @@ const ChatRow = memo(function ChatRow({
           attachments={item.attachments}
           findQuery={findQuery}
           findCurrent={findCurrent}
+          eventId={item.event.id}
+          onOpenFile={(file) => openAttachmentFile(item.event.id, file)}
           onPreviewImage={(fileIndex) =>
             onPreviewImage(previewImageId(item.event.id, fileIndex))
           }

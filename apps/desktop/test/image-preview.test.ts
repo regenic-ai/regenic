@@ -31,6 +31,22 @@ describe("image preview", () => {
       }),
       undefined,
     );
+    assert.equal(
+      imagePreviewSrc({
+        filename: "image.png",
+        media_type: "application/octet-stream",
+        data_base64: "abc",
+      }),
+      "data:image/png;base64,abc",
+    );
+    assert.equal(
+      imagePreviewSrc({
+        filename: "image.heic",
+        media_type: "image/heic",
+        data_base64: "abc",
+      }),
+      undefined,
+    );
   });
 
   it("collects previewable images in thread order", () => {

@@ -75,6 +75,10 @@ contextBridge.exposeInMainWorld("regenic", {
   showConsole: () => ipcRenderer.invoke("regenic:show-console"),
   quitApp: () => ipcRenderer.invoke("regenic:quit"),
   openExternal: (url: string) => ipcRenderer.invoke("regenic:open-external", url),
+  openAttachment: (input: { eventId: string; partIndex: number; filename: string }) =>
+    ipcRenderer.invoke("regenic:open-attachment", input),
+  readAttachment: (input: { eventId: string; partIndex: number; filename: string }) =>
+    ipcRenderer.invoke("regenic:read-attachment", input) as Promise<{ mediaType: string; dataBase64: string }>,
   getHostStats: () => ipcRenderer.invoke("regenic:get-host-stats"),
   reportOpenConversation: (input: { threadId: string | null; nav: string }) => {
     ipcRenderer.send("regenic:report-open-conversation", input);

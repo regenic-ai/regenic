@@ -1,4 +1,5 @@
 import type { InboxAttachment } from "./types";
+import { pairedCoverIndexes } from "./video-message.ts";
 
 export interface PreviewImage {
   id: string;
@@ -15,11 +16,30 @@ export function previewImageId(eventId: string, index: number): string {
   return `${eventId}:${index}`;
 }
 
+const PREVIEWABLE_IMAGE = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+  "image/avif",
+]);
+
 export function imagePreviewSrc(file: InboxAttachment): string | undefined {
-  if (!file.data_base64 || !file.media_type.startsWith("image/")) {
-    return undefined;
-  }
-  return `data:${file.media_type};base64,${file.data_base64}`;
+  if (!file.data_base64) return undefined;
+  const declared = file.media_type === "image/jpg" ? "image/jpeg" : file.media_type;
+  const media = PREVIEWABLE_IMAGE.has(declared) ? declared : imageMediaFromName(file.filename);
+  if (!media) return undefined;
+  return `data:${media};base64,${file.data_base64}`;
+}
+
+function imageMediaFromName(filename: string): string | undefined {
+  const ext = filename.slice(filename.lastIndexOf(".") + 1).toLowerCase();
+  if (ext === "png") return "image/png";
+  if (ext === "jpg" || ext === "jpeg") return "image/jpeg";
+  if (ext === "gif") return "image/gif";
+  if (ext === "webp") return "image/webp";
+  if (ext === "avif") return "image/avif";
+  return undefined;
 }
 
 export function collectPreviewImages(
@@ -27,7 +47,9 @@ export function collectPreviewImages(
 ): PreviewImage[] {
   const images: PreviewImage[] = [];
   for (const item of items) {
+    const covers = pairedCoverIndexes(item.attachments ?? []);
     for (const [index, file] of (item.attachments ?? []).entries()) {
+      if (covers.has(index)) continue;
       const src = imagePreviewSrc(file);
       if (!src) {
         continue;

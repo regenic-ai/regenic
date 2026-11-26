@@ -1,4 +1,5 @@
 import { t } from "../../shared/i18n.ts";
+import { plainMessageText } from "./copy-message.ts";
 import type { InboxViewItem, MessageDirection, MessageKind } from "./types";
 import type { InboxThread } from "./inbox";
 
@@ -621,7 +622,7 @@ export function listPreview(thread: InboxThread, title: string): string | null {
   if (!latest) {
     return null;
   }
-  const line = firstLine(latest.body_text, 88);
+  const line = firstLine(plainMessageText(latest.body_text ?? ""), 88);
   if (!line) {
     return null;
   }

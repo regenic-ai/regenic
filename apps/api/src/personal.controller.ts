@@ -18,11 +18,13 @@ import {
   Req,
   Res,
   Sse,
+  StreamableFile,
   UseGuards,
   forwardRef,
 } from "@nestjs/common";
 import type { Request, Response } from "express";
 import { Observable } from "rxjs";
+import { attachmentContentDisposition } from "./attachment-file";
 import { PersonalApiGuard } from "./personal-api.guard";
 import { requestLocale } from "./request-locale";
 import { syncMetricsView } from "./sync-metrics-view";
@@ -297,13 +299,39 @@ export class PersonalController {
         historyPending = pulled.history_pending;
       }
       if (shouldDrainMediaFocus(input)) {
-        void this.connectors.drainMediaForThread(threadId);
+        void this.connectors.drainMediaForThread(threadId, input.before);
       }
       return {
         accepted: true as const,
         thread_id: threadId,
         ...(historyPending !== undefined ? { history_pending: historyPending } : {}),
       };
+    });
+  }
+
+  @Post("events/:eventId/files/:partIndex/retry")
+  @HttpCode(HttpStatus.ACCEPTED)
+  async retryEventFile(
+    @Param("eventId") eventId: string,
+    @Param("partIndex") partIndexRaw: string,
+  ) {
+    const partIndex = Number(partIndexRaw);
+    const result = await this.guard(() => this.inbox.retryAttachment(eventId, partIndex));
+    void this.connectors.drainMediaForThread(result.thread_id);
+    return { accepted: true as const };
+  }
+
+  @Get("events/:eventId/files/:partIndex")
+  async openEventFile(
+    @Param("eventId") eventId: string,
+    @Param("partIndex") partIndexRaw: string,
+  ) {
+    const partIndex = Number(partIndexRaw);
+    const opened = await this.guard(() => this.inbox.openAttachment(eventId, partIndex));
+    return new StreamableFile(Buffer.from(opened.bytes), {
+      type: opened.media_type,
+      disposition: attachmentContentDisposition(opened.filename),
+      length: opened.bytes.byteLength,
     });
   }
 

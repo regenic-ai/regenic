@@ -607,6 +607,7 @@ function selfServeAgents(
     `1. Read the chat with ${tool("read_task_conversation")}. It returns the messages around the current one, including what it replies to.`,
     `2. If the task depends on something earlier, page back with ${tool("read_conversation_window")} using the returned boundary and read_epoch.`,
     `3. Use ${tool("search_conversations")} only when the task needs other chats (for example the same customer's earlier orders). Hits may be about someone else; check before you rely on them.`,
+    "Attachments include a file_url. Fetch it with the same Authorization bearer as these tools. The response is the original file; parse it yourself.",
     selfServe.run_id
       ? `\nPass run_id "${selfServe.run_id}" on every ${WORK_CONTEXT_MCP_SERVER} call.`
       : "",

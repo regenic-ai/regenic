@@ -112,7 +112,142 @@ export function sniffMediaType(bytes: Uint8Array, fallback: string): string {
   ) {
     return "application/pdf";
   }
+  if (
+    bytes.length >= 12 &&
+    bytes[4] === 0x66 &&
+    bytes[5] === 0x74 &&
+    bytes[6] === 0x79 &&
+    bytes[7] === 0x70
+  ) {
+    const brand = Buffer.from(bytes.subarray(8, 12)).toString("ascii");
+    if (brand === "avif" || brand === "avis") return "image/avif";
+    if (brand === "heic" || brand === "heix" || brand === "hevc") return "image/heic";
+    if (brand === "heif" || brand === "mif1") return "image/heif";
+    const compact = brand.replace(/\s+/g, "");
+    if (compact === "qt") return "video/quicktime";
+    if (compact === "M4A" || compact === "M4B" || compact === "M4P") return "audio/mp4";
+    if (
+      compact === "isom" || compact === "iso2" || compact === "iso5" || compact === "iso6"
+      || compact === "mp41" || compact === "mp42" || compact === "avc1" || compact === "dash"
+      || compact === "MSNV" || compact === "M4V" || compact === "M4VH" || compact === "F4V"
+    ) {
+      return "video/mp4";
+    }
+  }
+  if (
+    bytes.length >= 12 &&
+    bytes[0] === 0x52 &&
+    bytes[1] === 0x49 &&
+    bytes[2] === 0x46 &&
+    bytes[3] === 0x46
+  ) {
+    const kind = Buffer.from(bytes.subarray(8, 12)).toString("ascii");
+    if (kind === "WAVE") return "audio/wav";
+    if (kind === "AVI ") return "video/x-msvideo";
+  }
+  if (bytes.length >= 4 && bytes[0] === 0x1a && bytes[1] === 0x45 && bytes[2] === 0xdf && bytes[3] === 0xa3) {
+    const sample = Buffer.from(bytes.subarray(0, Math.min(bytes.length, 64))).toString("latin1");
+    return sample.includes("webm") ? "video/webm" : "video/x-matroska";
+  }
+  if (bytes.length >= 4 && bytes[0] === 0x4f && bytes[1] === 0x67 && bytes[2] === 0x67 && bytes[3] === 0x53) {
+    return "audio/ogg";
+  }
+  if (bytes.length >= 3 && bytes[0] === 0x49 && bytes[1] === 0x44 && bytes[2] === 0x33) {
+    return "audio/mpeg";
+  }
+  if (bytes.length >= 2 && bytes[0] === 0xff && (bytes[1] === 0xf1 || bytes[1] === 0xf9)) {
+    return "audio/aac";
+  }
+  if (bytes.length >= 2 && bytes[0] === 0xff && (bytes[1] & 0xe0) === 0xe0) {
+    return "audio/mpeg";
+  }
+  if (bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04) {
+    const sample = Buffer.from(bytes).toString("latin1");
+    if (sample.includes("word/document.xml")) {
+      return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+    }
+    if (sample.includes("xl/workbook.xml")) {
+      return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+    }
+    if (sample.includes("ppt/presentation.xml")) {
+      return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+    }
+    return fallback === "application/octet-stream" || !fallback.includes("/")
+      ? "application/zip"
+      : fallback;
+  }
+  if (
+    bytes.length >= 8 &&
+    bytes[0] === 0xd0 &&
+    bytes[1] === 0xcf &&
+    bytes[2] === 0x11 &&
+    bytes[3] === 0xe0
+  ) {
+    const sample = Buffer.from(bytes).toString("latin1");
+    if (sample.includes("WordDocument") || includesUtf16(sample, "WordDocument")) {
+      return "application/msword";
+    }
+    if (sample.includes("Workbook") || includesUtf16(sample, "Workbook")) {
+      return "application/vnd.ms-excel";
+    }
+    if (sample.includes("PowerPoint") || includesUtf16(sample, "PowerPoint")) {
+      return "application/vnd.ms-powerpoint";
+    }
+  }
   return fallback.includes("/") ? fallback : "application/octet-stream";
+}
+
+const MEDIA_EXTENSION: Record<string, string> = {
+  "image/png": ".png",
+  "image/jpeg": ".jpg",
+  "image/gif": ".gif",
+  "image/webp": ".webp",
+  "image/avif": ".avif",
+  "image/heic": ".heic",
+  "image/heif": ".heif",
+  "video/mp4": ".mp4",
+  "video/webm": ".webm",
+  "video/quicktime": ".mov",
+  "video/x-matroska": ".mkv",
+  "video/x-msvideo": ".avi",
+  "audio/mpeg": ".mp3",
+  "audio/mp4": ".m4a",
+  "audio/wav": ".wav",
+  "audio/ogg": ".ogg",
+  "audio/aac": ".aac",
+  "application/pdf": ".pdf",
+  "application/msword": ".doc",
+  "application/vnd.ms-excel": ".xls",
+  "application/vnd.ms-powerpoint": ".ppt",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
+  "application/zip": ".zip",
+};
+
+/** Keep a real suffix. Add one when the stored name cannot tell the OS what to open. */
+export function filenameForMedia(filename: string, mediaType: string): string {
+  const ext = MEDIA_EXTENSION[mediaType === "image/jpg" ? "image/jpeg" : mediaType];
+  if (!ext) return filename;
+  if (!hasFilenameSuffix(filename)) return `${filename}${ext}`;
+  if (!/\.(png|jpe?g|gif|webp|avif|hei[cf])$/iu.test(filename)) {
+    return filename;
+  }
+  const current = filename.slice(filename.lastIndexOf(".")).toLowerCase();
+  if (current === ext || (ext === ".jpg" && current === ".jpeg")) return filename;
+  return `${filename.slice(0, filename.lastIndexOf("."))}${ext}`;
+}
+
+function hasFilenameSuffix(filename: string): boolean {
+  const base = filename.split(/[/\\]/u).pop() ?? filename;
+  const dot = base.lastIndexOf(".");
+  return dot > 0 && /^[A-Za-z0-9]{1,8}$/u.test(base.slice(dot + 1));
+}
+
+function includesUtf16(sample: string, text: string): boolean {
+  let encoded = "";
+  for (const char of text) encoded += `${char}\u0000`;
+  return sample.includes(encoded);
 }
 
 export function collectFeishuUserIds(input: {
@@ -293,9 +428,18 @@ function walkPostNodes(
   if (tag === "at") {
     return mentionLabel(value, names);
   }
-  if (tag === "text" || tag === "a") {
+  if (tag === "text") {
     const text = typeof value.text === "string" ? value.text : "";
     return projectFeishuStyles(text, value.style);
+  }
+  if (tag === "a") {
+    const text = typeof value.text === "string" ? value.text : "";
+    const href = typeof value.href === "string" ? value.href.trim() : "";
+    const styled = projectFeishuStyles(text, value.style);
+    if (href && href !== text.trim()) {
+      return styled ? `${styled} (${href})` : href;
+    }
+    return styled || href;
   }
   if (Array.isArray(value.content)) {
     return walkPostNodes(value.content, names);
@@ -986,6 +1130,18 @@ function mediaTypeFromFilename(filename: string): string {
   }
   if (ext === "pdf") {
     return "application/pdf";
+  }
+  if (ext === "doc") return "application/msword";
+  if (ext === "docx") {
+    return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  }
+  if (ext === "xls") return "application/vnd.ms-excel";
+  if (ext === "xlsx") {
+    return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+  }
+  if (ext === "ppt") return "application/vnd.ms-powerpoint";
+  if (ext === "pptx") {
+    return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
   }
   if (ext === "mp4") {
     return "video/mp4";

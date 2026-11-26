@@ -7,6 +7,8 @@ import {
   type AggregateSpec,
   bodyTextFromStored,
   parseStoredContentParts,
+  storedPartContentHash,
+  type AuthorityStore,
   type ContextAuthorityRead,
   type ContextRequestFilters,
   type ContextSelectionReason,
@@ -15,6 +17,7 @@ import {
   type SearchAnswerScope,
   type SearchAppClass,
 } from "@regenic/domain";
+import { base64DecodedSize } from "./attachment-file";
 import { PersonalContextError } from "./personal-context-error";
 import type { SearchConversationLabels } from "./personal-conversation-labels.service";
 import { PersonalRuntimeService } from "./personal-runtime.service";
@@ -46,8 +49,16 @@ export interface ConversationMessage {
   reply_to_event_id?: string;
   occurred_at: string;
   text: string;
-  attachments?: Array<{ media_type: string; filename?: string }>;
+  attachments?: ConversationAttachment[];
   selection_reason: ContextSelectionReason;
+}
+
+export interface ConversationAttachment {
+  media_type: string;
+  filename?: string;
+  part_index: number;
+  content_hash?: string;
+  byte_size?: number;
 }
 
 export interface ConversationWindow {
@@ -185,7 +196,14 @@ export class PersonalConversationContextService {
         selection_reason: reasons?.get(index) ?? "neighbor",
       });
     }
-    return { messages, kept, unreadable };
+    return {
+      messages: await withAttachmentByteSizes(
+        this.runtime.requireHost().get("authority"),
+        messages,
+      ),
+      kept,
+      unreadable,
+    };
   }
 
   async window(input: unknown): Promise<ConversationWindow> {
@@ -1038,14 +1056,48 @@ function answerTranscript(
 function storedMessageContent(bytes: Uint8Array, mediaType: string) {
   const text = bodyTextFromStored(bytes, mediaType)?.trim() ?? "";
   const attachments = mediaType === CONTENT_PARTS_MEDIA_TYPE
-    ? (parseStoredContentParts(bytes) ?? [])
-      .filter((part) => part.role === "attachment")
-      .map((part) => ({
+    ? (parseStoredContentParts(bytes) ?? []).flatMap((part, partIndex) => {
+      if (part.role !== "attachment") return [];
+      const hash = storedPartContentHash(part);
+      const embedded = typeof part.bytes_base64 === "string"
+        ? base64DecodedSize(part.bytes_base64)
+        : undefined;
+      return [{
         media_type: part.media_type || "application/octet-stream",
+        part_index: partIndex,
         ...(part.source_filename ? { filename: part.source_filename } : {}),
-      }))
+        ...(hash ? { content_hash: hash } : {}),
+        ...(embedded !== undefined ? { byte_size: embedded } : {}),
+      }];
+    })
     : [];
   return text || attachments.length ? { text, attachments } : undefined;
+}
+
+async function withAttachmentByteSizes(
+  authority: AuthorityStore,
+  messages: ConversationMessage[],
+): Promise<ConversationMessage[]> {
+  const hashes = [...new Set(messages.flatMap((message) =>
+    (message.attachments ?? []).flatMap((attachment) =>
+      attachment.byte_size === undefined && attachment.content_hash
+        ? [attachment.content_hash]
+        : [],
+    ),
+  ))];
+  if (hashes.length === 0) return messages;
+  const metas = await authority.findBlobs(hashes);
+  return messages.map((message) => {
+    if (!message.attachments?.length) return message;
+    return {
+      ...message,
+      attachments: message.attachments.map((attachment) => {
+        if (attachment.byte_size !== undefined || !attachment.content_hash) return attachment;
+        const size = metas.get(attachment.content_hash)?.byte_size;
+        return size === undefined ? attachment : { ...attachment, byte_size: size };
+      }),
+    };
+  });
 }
 
 function stringAttribute(

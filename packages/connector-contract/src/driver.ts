@@ -537,6 +537,19 @@ export type ConnectorStopReason =
   | "clear"
   | "shutdown";
 
+/** A stored attachment pointer the person asked to download again. */
+export interface AttachmentRetry {
+  thread_id: string;
+  external_id: string;
+  external_locator: string;
+  filename?: string;
+  media_type?: string;
+  occurred_at: string;
+  actor_id?: string;
+  direction?: "inbound" | "outbound";
+  text?: string;
+}
+
 export interface ConnectorStopContext {
   reason: ConnectorStopReason;
   signal: AbortSignal;
@@ -741,6 +754,32 @@ export interface ChannelDriver
       secrets?: ConnectorSecrets;
     },
   ): Promise<void>;
+  /**
+   * Locators still waiting in this install's attachment queue, keyed by thread id.
+   * Return a thread only when this driver owns it. An empty set means nothing
+   * is queued. Must not download bytes or contact the source.
+   */
+  queuedAttachmentLocators?(
+    installation: ConnectorInstallation,
+    threadIds: readonly string[],
+  ): ReadonlyMap<string, ReadonlySet<string>>;
+  /**
+   * Subset of the queue whose bytes are being downloaded now.
+   * Omit a thread when nothing is in flight. Must not download bytes.
+   */
+  pullingAttachmentLocators?(
+    installation: ConnectorInstallation,
+    threadIds: readonly string[],
+  ): ReadonlyMap<string, ReadonlySet<string>>;
+  /**
+   * Put one stored pointer back on the attachment queue.
+   * Return false when this driver does not own the locator.
+   * Must not download bytes; the kernel drains the queue afterwards.
+   */
+  retryAttachment?(
+    installation: ConnectorInstallation,
+    input: AttachmentRetry,
+  ): boolean;
   /**
    * Clear connector-owned operational caches after Core data is cleared.
    * The hook cannot access Authority, Ingest, or Blob services.
