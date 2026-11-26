@@ -2223,7 +2223,7 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
       ).json();
       assert.equal(typed.config.scope.match.unit_kind, "crm.order_review");
       assert.equal(typed.config.trigger.kind, "push");
-      const pullVague = await fetch(`${origin}/v1/me/flows`, {
+      const pullAppResponse = await fetch(`${origin}/v1/me/flows`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: flowJson({
@@ -2235,7 +2235,10 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
           write_back_thread_id: "dsh:results",
         }),
       });
-      assert.equal(pullVague.status, 400);
+      const pullApp = await pullAppResponse.json();
+      assert.equal(pullAppResponse.status, 201, JSON.stringify(pullApp));
+      assert.deepEqual(pullApp.config.scope.match, { source: "feishu" });
+      assert.equal(pullApp.config.trigger.kind, "pull");
       const pullTasks = await (
         await fetch(`${origin}/v1/me/flows`, {
           method: "POST",
@@ -2274,7 +2277,7 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
       assert.ok(pulled.next_run_at);
       assert.equal(created.config.handler.params.prompt, "Reply with a decision.");
       const recipes = await (await fetch(`${origin}/v1/me/flows`)).json();
-      assert.equal(recipes.length, 4);
+      assert.equal(recipes.length, 5);
       const listed = recipes.find((recipe) => recipe.name === "Feishu tasks");
       assert.equal(listed.config.handler.params.prompt, "Reply with a decision.");
       assert.equal(listed.config.include_context, true);
@@ -2305,7 +2308,7 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
         }),
       });
       assert.equal(cleared.status, 201);
-      assert.deepEqual((await cleared.json()).config.scope.match, { record_class: "task", source: "feishu" });
+      assert.deepEqual((await cleared.json()).config.scope.match, { source: "feishu" });
       const clearedDestination = await fetch(`${origin}/v1/me/flows/${created.id}`, {
         method: "POST",
         headers: { "content-type": "application/json" },
