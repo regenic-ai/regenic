@@ -89,6 +89,8 @@ export function dueWorkBatchTimeoutMs(
   const waves = Math.max(1, liveHistoryWaves + mediaWaves);
   // Each list already stops at the poll timeout. The batch clock has to
   // cover every wave of this claim; a flat 30s cuts the later waves.
+  // The extra 5s is the only room for ingest after the source call, including
+  // the shared-body wait. That wait must stay shorter than this slack.
   return Math.max(connectorSyncTimeoutMs(), waves * pollMs + 5_000);
 }
 

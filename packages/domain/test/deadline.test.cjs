@@ -168,7 +168,7 @@ describe("deadline", () => {
   it("waits out a shared blob write for one page commit", () => {
     const { blobReserveRetryDelayMs } = require("../dist/ingestion-service");
     assert.equal(blobReserveRetryDelayMs(0), 200);
-    assert.equal(blobReserveRetryDelayMs(7_900), 100);
-    assert.equal(blobReserveRetryDelayMs(8_000), null);
+    assert.equal(blobReserveRetryDelayMs(3_900), 100);
+    assert.equal(blobReserveRetryDelayMs(4_000), null);
   });
 });

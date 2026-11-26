@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { Inject, Injectable, OnModuleDestroy } from "@nestjs/common";
-import type {
-  ContextProjectionJob,
-  ContextProjectionOutboxStore,
-  ContextProjectionRunner,
-  EventRecord,
+import {
+  yieldToEventLoop,
+  type ContextProjectionJob,
+  type ContextProjectionOutboxStore,
+  type ContextProjectionRunner,
+  type EventRecord,
 } from "@regenic/domain";
 import { WorkerRuntimeService } from "./worker-runtime.service";
 
@@ -12,8 +13,10 @@ const PROJECTION_TICK_MS = 2_000;
 const PROJECTION_LEASE_MS = 30_000;
 /** Store claim cap. A full claim means the queue still has more. */
 const PROJECTION_CLAIM_LIMIT = 100;
-/** Stay under a typical event-loop yield. Idle waits PROJECTION_TICK_MS once caught up. */
+/** Do not start another claim after this. Claimed jobs yield between lexical chunks. */
 const PROJECTION_SLICE_MS = 80;
+/** Let the event loop run between lexical writes of one claimed batch. */
+const PROJECTION_LEXICAL_CHUNK = 8;
 const PROJECTION_HEARTBEAT_MS = 10_000;
 const PROJECTION_GENERATION = "continuous-v2";
 const MAX_RETRY_MS = 5 * 60_000;
@@ -68,8 +71,11 @@ export class ContextProjectionService implements OnModuleDestroy {
         await this.advanceLexicalMaintenance(runner);
       }
       const held: ContextProjectionJobGroup[] = [];
+      const leased: ContextProjectionJob[] = [];
+      const heartbeat = startProjectionLeaseHeartbeat(outbox, () => leased, this.owner);
       const deadline = Date.now() + PROJECTION_SLICE_MS;
       let more = !this.bootstrapped;
+      try {
       while (!this.stopping && Date.now() < deadline) {
         const claimed = await outbox.claimContextProjectionJobs({
           owner: this.owner,
@@ -77,6 +83,7 @@ export class ContextProjectionService implements OnModuleDestroy {
           lease_ms: PROJECTION_LEASE_MS,
           limit: PROJECTION_CLAIM_LIMIT,
         });
+        leased.push(...claimed);
         if (claimed.length === 0) {
           if (!this.bootstrapped && Date.now() < deadline) {
             await this.advanceLexicalMaintenance(runner);
@@ -92,21 +99,17 @@ export class ContextProjectionService implements OnModuleDestroy {
           authority.getEvent(orgId, eventId),
         );
         for (const group of groups) {
-          if (!group.thread_id) {
+          if (group.thread_id) {
+            try {
+              await indexLexicalChunk(runner, group, PROJECTION_GENERATION);
+              held.push(group);
+            } catch {
+              await failProjectionJobs(outbox, group.jobs, this.owner);
+            }
+          } else {
             held.push(group);
-            continue;
           }
-          try {
-            await runner.syncLexicalIndex(
-              group.org_id,
-              PROJECTION_GENERATION,
-              group.jobs.map((job) => job.event_id),
-              group.thread_id,
-            );
-            held.push(group);
-          } catch {
-            await failProjectionJobs(outbox, group.jobs, this.owner);
-          }
+          await yieldToEventLoop();
         }
         if (claimed.length < PROJECTION_CLAIM_LIMIT) {
           if (!this.bootstrapped) {
@@ -124,6 +127,9 @@ export class ContextProjectionService implements OnModuleDestroy {
       await this.settleThreads(outbox, runner, held);
       if (more && !this.stopping) {
         this.continueSoon();
+      }
+      } finally {
+        await heartbeat.stop();
       }
     } catch (error) {
       if (!this.stopping) {
@@ -192,6 +198,62 @@ export class ContextProjectionService implements OnModuleDestroy {
 }
 
 class ProjectionLeaseLostError extends Error {}
+
+function startProjectionLeaseHeartbeat(
+  outbox: ContextProjectionOutboxStore,
+  jobs: () => readonly ContextProjectionJob[],
+  owner: string,
+): { stop(): Promise<void> } {
+  let stopped = false;
+  let chain = Promise.resolve();
+  const timer = setInterval(() => {
+    const current = jobs();
+    if (current.length === 0 || stopped) {
+      return;
+    }
+    const now = new Date().toISOString();
+    chain = chain.then(async () => {
+      if (stopped) {
+        return;
+      }
+      await Promise.all(current.map((job) =>
+        outbox.renewContextProjectionJob({
+          id: job.id,
+          owner,
+          now,
+          lease_ms: PROJECTION_LEASE_MS,
+        }),
+      ));
+    }).catch(() => undefined);
+  }, PROJECTION_HEARTBEAT_MS);
+  timer.unref?.();
+  return {
+    async stop() {
+      stopped = true;
+      clearInterval(timer);
+      await chain;
+    },
+  };
+}
+
+async function indexLexicalChunk(
+  runner: ContextProjectionRunner,
+  group: ContextProjectionJobGroup,
+  generation: string,
+): Promise<void> {
+  const ids = group.jobs.map((job) => job.event_id);
+  for (let offset = 0; offset < ids.length; offset += PROJECTION_LEXICAL_CHUNK) {
+    await runner.syncLexicalIndex(
+      group.org_id,
+      generation,
+      ids.slice(offset, offset + PROJECTION_LEXICAL_CHUNK),
+      group.thread_id ?? undefined,
+    );
+    if (offset + PROJECTION_LEXICAL_CHUNK < ids.length) {
+      await yieldToEventLoop();
+    }
+  }
+}
 
 async function withProjectionLease<T>(
   outbox: ContextProjectionOutboxStore,

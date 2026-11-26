@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { Inject, Injectable, OnModuleDestroy } from "@nestjs/common";
 import {
   searchInProgress,
+  yieldToEventLoop,
   type ContextProjectionJob,
   type ContextProjectionOutboxStore,
   type ContextProjectionRunner,
@@ -21,11 +22,13 @@ const PROJECTION_LEASE_MS = 30_000;
 /** Store claim cap. A full claim means the queue still has more. */
 const PROJECTION_CLAIM_LIMIT = 100;
 /**
- * Keep one slice shorter than the elevated event-loop lag threshold so a
- * catch-up does not trip history defer. The idle timer still waits
- * PROJECTION_TICK_MS once a claim comes back short.
+ * Do not start another claim after this. Jobs already claimed are indexed in
+ * small chunks that yield, and their lease is renewed until they settle.
+ * The idle timer still waits PROJECTION_TICK_MS once a claim comes back short.
  */
 const PROJECTION_SLICE_MS = 80;
+/** Let the event loop run between lexical writes of one claimed batch. */
+const PROJECTION_LEXICAL_CHUNK = 8;
 const PROJECTION_HEARTBEAT_MS = 10_000;
 const PROJECTION_GENERATION = "continuous-v2";
 const MAX_RETRY_MS = 5 * 60_000;
@@ -86,13 +89,17 @@ export class PersonalContextProjectionService implements OnModuleDestroy {
     this.running = true;
     const deadline = Date.now() + PROJECTION_SLICE_MS;
     const held: ContextProjectionJobGroup[] = [];
+    const leased: ContextProjectionJob[] = [];
     let more = false;
     let yielded = false;
+    let outbox: ContextProjectionOutboxStore | undefined;
+    let heartbeat: ProjectionLeaseHeartbeat | undefined;
     try {
       const host = this.runtime.requireHost();
       const authority = host.get("authority");
-      const outbox = host.get("context-projection-outbox") as ContextProjectionOutboxStore;
+      outbox = host.get("context-projection-outbox") as ContextProjectionOutboxStore;
       const runner = host.get("context-projections") as ContextProjectionRunner;
+      heartbeat = startProjectionLeaseHeartbeat(outbox, () => leased, this.owner);
       if (!this.bootstrapped) {
         await this.advanceLexicalMaintenance(runner);
       }
@@ -111,6 +118,7 @@ export class PersonalContextProjectionService implements OnModuleDestroy {
           lease_ms: PROJECTION_LEASE_MS,
           limit: PROJECTION_CLAIM_LIMIT,
         });
+        leased.push(...claimed);
         if (claimed.length === 0) {
           if (!this.bootstrapped && Date.now() < deadline) {
             await this.advanceLexicalMaintenance(runner);
@@ -136,11 +144,10 @@ export class PersonalContextProjectionService implements OnModuleDestroy {
             continue;
           }
           try {
-            await runner.syncLexicalIndex(
-              group.org_id,
+            await indexLexicalChunk(
+              runner,
+              group,
               PROJECTION_GENERATION,
-              group.jobs.map((job) => job.event_id),
-              group.thread_id ?? undefined,
             );
             held.push(group);
           } catch (error) {
@@ -149,6 +156,7 @@ export class PersonalContextProjectionService implements OnModuleDestroy {
             }
             await failProjectionJobs(outbox, group.jobs, this.owner);
           }
+          await yieldToEventLoop();
         }
         if (claimed.length < PROJECTION_CLAIM_LIMIT) {
           // Caught up with ingest. Use the rest of the slice to publish a
@@ -165,12 +173,15 @@ export class PersonalContextProjectionService implements OnModuleDestroy {
       if (!yielded && !this.bootstrapped) {
         more = true;
       }
-      await this.settleThreads(outbox, runner, held);
+      if (outbox) {
+        await this.settleThreads(outbox, runner, held);
+      }
     } catch (error) {
       if (!this.stopping) {
         console.error("context projection worker failed", describeProjectionFailure(error));
       }
     } finally {
+      await heartbeat?.stop();
       this.running = false;
       if (more && !yielded && !this.stopping) {
         this.continueSoon();
@@ -275,6 +286,67 @@ export class PersonalContextProjectionService implements OnModuleDestroy {
 }
 
 class ProjectionLeaseLostError extends Error {}
+
+interface ProjectionLeaseHeartbeat {
+  stop(): Promise<void>;
+}
+
+function startProjectionLeaseHeartbeat(
+  outbox: ContextProjectionOutboxStore,
+  jobs: () => readonly ContextProjectionJob[],
+  owner: string,
+): ProjectionLeaseHeartbeat {
+  let stopped = false;
+  let chain = Promise.resolve();
+  const timer = setInterval(() => {
+    const current = jobs();
+    if (current.length === 0 || stopped) {
+      return;
+    }
+    const now = new Date().toISOString();
+    chain = chain.then(async () => {
+      if (stopped) {
+        return;
+      }
+      await Promise.all(current.map((job) =>
+        outbox.renewContextProjectionJob({
+          id: job.id,
+          owner,
+          now,
+          lease_ms: PROJECTION_LEASE_MS,
+        }),
+      ));
+    }).catch(() => undefined);
+  }, PROJECTION_HEARTBEAT_MS);
+  timer.unref?.();
+  return {
+    async stop() {
+      stopped = true;
+      clearInterval(timer);
+      await chain;
+    },
+  };
+}
+
+async function indexLexicalChunk(
+  runner: ContextProjectionRunner,
+  group: ContextProjectionJobGroup,
+  generation: string,
+): Promise<void> {
+  const ids = group.jobs.map((job) => job.event_id);
+  const threadId = group.thread_id ?? undefined;
+  for (let offset = 0; offset < ids.length; offset += PROJECTION_LEXICAL_CHUNK) {
+    await runner.syncLexicalIndex(
+      group.org_id,
+      generation,
+      ids.slice(offset, offset + PROJECTION_LEXICAL_CHUNK),
+      threadId,
+    );
+    if (offset + PROJECTION_LEXICAL_CHUNK < ids.length) {
+      await yieldToEventLoop();
+    }
+  }
+}
 
 async function withProjectionLease<T>(
   outbox: ContextProjectionOutboxStore,

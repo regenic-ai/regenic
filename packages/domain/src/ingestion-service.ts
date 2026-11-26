@@ -178,8 +178,12 @@ type PlannedEvent =
 type PlannedConversationEffect = PlannedEvent | PlannedReplay;
 
 const BLOB_RESERVE_WAIT_MS = 200;
-/** A sibling page can hold the same content-addressed body until its commit finishes. */
-const BLOB_RESERVE_BUDGET_MS = 8_000;
+/**
+ * A sibling page may still be committing this content hash. This wait has to
+ * finish inside the due-work batch slack (5s after the source poll timeout).
+ * A longer wait is reported as a batch timeout and the fetched page is dropped.
+ */
+const BLOB_RESERVE_BUDGET_MS = 4_000;
 
 /** How long to wait before another reserve, or null once the budget is spent. */
 export function blobReserveRetryDelayMs(elapsedMs: number): number | null {
