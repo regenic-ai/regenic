@@ -48,17 +48,17 @@ describe("Semantic search Chinese baseline", () => {
     assert.equal(report.metrics.unauthorized_selections, 0);
     assert.equal(report.metrics.citation_coverage, 1);
     assert.equal(report.metrics.negative_selection_rate, 0);
-    assert.equal(report.metrics.stale_selections, 12);
+    assert.equal(report.metrics.stale_selections, 8);
     assert.equal(report.metrics.safety_passed, false);
-    assert.equal(report.metrics.mean_recall_at_k, 0.405882352941);
-    assert.equal(report.metrics.mean_ndcg_at_k, 0.3699521057);
-    assert.equal(report.metrics.mean_reciprocal_rank_at_k, 0.56130952381);
+    assert.equal(report.metrics.mean_recall_at_k, 0.442156862745);
+    assert.equal(report.metrics.mean_ndcg_at_k, 0.404008098321);
+    assert.equal(report.metrics.mean_reciprocal_rank_at_k, 0.584716386555);
     assert.deepEqual(report.metrics.by_task, {
       lookup: {
         positive_case_count: 12,
         mean_recall_at_k: 0.506944444444,
-        mean_reciprocal_rank_at_k: 0.428571428571,
-        mean_ndcg_at_k: 0.362810084905,
+        mean_reciprocal_rank_at_k: 0.44246031746,
+        mean_ndcg_at_k: 0.374496554642,
       },
       anaphora: {
         positive_case_count: 12,
@@ -74,15 +74,15 @@ describe("Semantic search Chinese baseline", () => {
       },
       temporal: {
         positive_case_count: 12,
-        mean_recall_at_k: 0.283333333333,
-        mean_reciprocal_rank_at_k: 0.6375,
-        mean_ndcg_at_k: 0.311334179906,
+        mean_recall_at_k: 0.447222222222,
+        mean_reciprocal_rank_at_k: 0.75625,
+        mean_ndcg_at_k: 0.463780864757,
       },
       update: {
         positive_case_count: 12,
-        mean_recall_at_k: 0.395833333333,
+        mean_recall_at_k: 0.4375,
         mean_reciprocal_rank_at_k: 0.676388888889,
-        mean_ndcg_at_k: 0.382904361689,
+        mean_ndcg_at_k: 0.411755165291,
       },
       boundary: {
         positive_case_count: 8,

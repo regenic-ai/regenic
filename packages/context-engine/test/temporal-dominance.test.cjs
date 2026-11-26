@@ -96,4 +96,14 @@ describe("Temporal dominance", () => {
     const ids = await selected("现在南坡门方案还能用吗", ["plan-old"]);
     assert.deepEqual(ids.slice().sort(), ["plan-new", "plan-old"]);
   });
+
+  it("ranks the statement from the named day ahead of the other day", async () => {
+    assert.equal((await selected("在 2026-03-02 那时南坡门方案怎么走"))[0], "plan-new");
+    assert.equal((await selected("在 2026-01-02 那时南坡门方案怎么走"))[0], "plan-old");
+  });
+
+  it("keeps a protected statement that is far from the named day", async () => {
+    const ids = await selected("在 2026-03-02 那时南坡门方案怎么走", ["plan-old"]);
+    assert.deepEqual(ids.slice().sort(), ["plan-new", "plan-old"]);
+  });
 });
