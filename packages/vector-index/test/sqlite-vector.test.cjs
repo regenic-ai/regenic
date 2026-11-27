@@ -372,6 +372,66 @@ describe("SQLite vector projection and independent durable jobs", () => {
     assert.deepEqual((await query(f.index, authorized, { limit: 1, query: "other", search_kind: "files" })).matched.map((hit) => hit.event_id), ["file"]);
   });
 
+  it("runs message, file, and all searches through partitioned native KNN", async (t) => {
+    const f = await fixture(t);
+    await reconcile(f.index, [head("file"), head("message"), head("both"), head("overflow")]);
+    for (const job of await claim(f.index)) {
+      if (job.event_id === "file") {
+        const value = chunk([1, 0]);
+        value.origin = { part_index: 1, content_hash: hash, mode: "text", start: 0, text: "xx" };
+        value.text_hash = createHash("sha256").update("xx").digest("hex");
+        await f.index.complete({ job, owner: "owner", now: at, chunks: [value] });
+      } else if (job.event_id === "message") {
+        await f.index.complete({ job, owner: "owner", now: at, chunks: [chunk([0.8, 0.6])] });
+      } else if (job.event_id === "overflow") {
+        await f.index.complete({ job, owner: "owner", now: at, chunks: [{ ...chunk([0.6, 0.8]), end: 4 }] });
+      } else {
+        const text = "nebula";
+        await f.index.complete({ job, owner: "owner", now: at, chunks: [
+          chunk([0, 1]),
+          {
+            ordinal: 1, start: 2, end: 2 + text.length, vector: [0.6, 0.8],
+            text_hash: createHash("sha256").update(text).digest("hex"),
+            origin: { part_index: 1, content_hash: hash, mode: "text", start: 0, text },
+          },
+        ] });
+      }
+    }
+    const authorized = [
+      { event_id: "file", content_hash: hash, body_length: 0 },
+      { event_id: "message", content_hash: hash, body_length: 2 },
+      { event_id: "both", content_hash: hash, body_length: 2 },
+      { event_id: "overflow", content_hash: hash, body_length: 2 },
+    ];
+    const authorization_hash = contextVectorAuthorizationHash(authorized);
+    const messages = await query(f.index, authorized, {
+      authorization_hash, search_kind: "messages", limit: 2, query: "other",
+    });
+    assert.equal(messages.acceleration.algorithm_version, "sqlite-vec-authorized-exact-v1");
+    assert.equal(messages.acceleration.authorization_update, "rebuilt");
+    assert.deepEqual(messages.matched.map((hit) => hit.event_id), ["message", "both"]);
+    assert.ok(messages.matched.every((hit) => hit.search_matches === undefined));
+    const files = await query(f.index, authorized, {
+      authorization_hash, search_kind: "files", limit: 1, query: "other",
+    });
+    assert.equal(files.acceleration.authorization_update, "reused");
+    assert.deepEqual(files.matched.map((hit) => hit.event_id), ["file"]);
+    const all = await query(f.index, authorized, {
+      authorization_hash, search_kind: "all", limit: 4, query: "nebula",
+    });
+    assert.equal(all.acceleration.authorized_chunks, 5);
+    assert.deepEqual(all.matched.map((hit) => hit.event_id), ["both", "file", "message", "overflow"]);
+    assert.equal(all.matched.find((hit) => hit.event_id === "both").search_matches.some((match) => match.lexical), true);
+    assert.equal(all.matched.find((hit) => hit.event_id === "overflow").search_matches, undefined);
+    f.reopen();
+    const reopened = await query(f.index, authorized, {
+      authorization_hash, search_kind: "all", limit: 4, query: "nebula",
+    });
+    assert.equal(reopened.acceleration.authorization_update, "reused");
+    assert.equal(reopened.acceleration.authorized_chunks, 5);
+    assert.deepEqual(reopened.matched.map((hit) => hit.event_id), ["both", "file", "message", "overflow"]);
+  });
+
   it("round-trips attachment provenance through fenced checkpoints and authorized completed reads", async (t) => {
     const f = await fixture(t);
     await reconcile(f.index, [head("origin")]);

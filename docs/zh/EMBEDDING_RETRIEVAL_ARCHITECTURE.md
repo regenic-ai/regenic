@@ -884,9 +884,7 @@ coverage key；首次 staging 只在 organization、generation、授权 hash/cou
 变化时发生。compact proof 仍验证当前授权集合，投影发布、reconcile、generation 删除、
 视觉权限变化和组织清理会同步失效缓存。
 
-随后无显式 message/file 过滤的语义路径加入授权域原生精确 KNN 加速：只把当前授权且
-coverage/source-head 有效的 chunk 复制到连接内 `sqlite-vec` 临时表，原生 cosine KNN
-先选出少量 Event，再读取这些 Event 的完整 chunk，并沿用原有完整性校验和精确余弦重排。
+授权域内的语义路径，包括消息、文件和全部，都走原生精确 KNN。向量在写入分块时进入向量库里的三张持久 `sqlite-vec` `vec0`：正文、附件，以及越过正文长度、又没有附件来源的剩余 chunk。这三张表跟着数据库走，进程重启后还在。消息只查正文表，文件只查附件表，全部合并三张表。搜索只发 `MATCH … AND k`，不再把向量复制进连接内的临时表。授权集合变化时按事件增量插入或删除。已有数据缺索引时，第一次搜索分批补齐，每批之间让出事件循环，健康检查不会被整表复制堵住。补齐完成后，原生 cosine KNN 先选出少量 Event，再读取这些 Event 的完整 chunk，并沿用原有完整性校验、文件片段标注和精确余弦重排。
 候选窗口从 `max(limit * 4, 100)` 开始；如果 Event 边界距离并列就翻倍，最坏扩到全表，
 因此保留全局稳定 top-k，不降低召回率，也不是近似 ANN。
 
@@ -897,10 +895,11 @@ coverage/source-head 有效的 chunk 复制到连接内 `sqlite-vec` 临时表�
 测量高 30.61 MiB。这些数字不包含 Authority 枚举、query embedding 和答案生成，不能作为
 端到端延迟承诺。
 
-这是**授权域内精确 KNN 加速**：未授权向量不会进入临时表、候选生成、计数或排名，不能
-替换成全库 KNN 后过滤 ACL。带 message/file `search_kind` 的查询继续走原精确过滤路径。
+这是**授权域内精确 KNN 加速**：未授权向量不会进入持久 vec0、候选生成、计数或排名，不能
+替换成全库 KNN 后过滤 ACL。消息和文件各自只在对应分区里取精确 top-k，不会先在全表
+算出最近邻再丢掉另一种 chunk。
 投影发布、reconcile、generation 删除、视觉权限变化和组织清理会同步失效授权快照与
-临时向量表。原生扩展无法加载时 sidecar 会发出显式 warning，并保留旧精确扫描路径。
+这三张持久向量表。原生扩展无法加载时 sidecar 会发出显式 warning，并保留旧精确扫描路径。
 
 2026-11-21 将“任何授权/投影变化都全量重建”改为可验证的增量维护。检索器只保留一个
 当前授权集合，并用 256 位模加累加器绑定 Event/hash/body-length 多重集；新增和撤回由
