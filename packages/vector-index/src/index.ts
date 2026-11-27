@@ -133,8 +133,9 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
           );
           CREATE INDEX IF NOT EXISTS jobs_due ON jobs(org_id, generation, status, retry_at, lease_until, id);
           CREATE INDEX IF NOT EXISTS jobs_pending_id ON jobs(org_id, generation, id) WHERE status='pending';
-          CREATE INDEX IF NOT EXISTS jobs_failed_id ON jobs(org_id, generation, id) WHERE status='failed';
-          CREATE INDEX IF NOT EXISTS jobs_running_id ON jobs(org_id, generation, id) WHERE status='running';
+          CREATE INDEX IF NOT EXISTS jobs_running_lease ON jobs(org_id, generation, lease_until) WHERE status='running';
+          DROP INDEX IF EXISTS jobs_failed_id;
+          DROP INDEX IF EXISTS jobs_running_id;
           CREATE TABLE IF NOT EXISTS staged_chunks (
             job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
             ordinal INTEGER NOT NULL, start INTEGER NOT NULL, end INTEGER NOT NULL,
@@ -711,7 +712,8 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
       // A dead owner leaves the row running after its lease. Park it back in
       // its original queue position; staged chunks stay for the next claim.
       const expired = this.db.prepare(`SELECT id, started_at, lease_until, processing_ms FROM jobs
-        WHERE org_id=? AND generation=? AND status='running' AND lease_until<=?`).all(
+        WHERE org_id=? AND generation=? AND status='running' AND lease_until<=?
+        ORDER BY lease_until`).all(
         input.org_id, input.generation, input.now,
       ) as Array<{ id: number; started_at: string | null; lease_until: string | null; processing_ms: number }>;
       const release = this.db.prepare(`UPDATE jobs SET status='pending',owner=NULL,lease_until=NULL,retry_at=NULL,
@@ -723,31 +725,21 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
         const activeMs = Math.max(0, Math.min(leaseMs, nowMs) - startedMs);
         release.run(row.processing_ms + activeMs, row.id);
       }
-      // Due work is pending, a failed job whose retry time has arrived, or a
-      // running job whose lease expired. Each status keeps an id-ordered partial
-      // index, so this reads at most `limit` rows from each instead of sorting
-      // every job in the generation.
-      const rows = this.db.prepare(`SELECT * FROM (
-        SELECT * FROM (
-          SELECT * FROM jobs WHERE org_id=? AND generation=? AND status='pending'
-          ORDER BY id ${direction} LIMIT ?
-        )
-        UNION ALL
-        SELECT * FROM (
-          SELECT * FROM jobs WHERE org_id=? AND generation=? AND status='failed' AND retry_at<=?
-          ORDER BY id ${direction} LIMIT ?
-        )
-        UNION ALL
-        SELECT * FROM (
-          SELECT * FROM jobs WHERE org_id=? AND generation=? AND status='running' AND lease_until<=?
-          ORDER BY id ${direction} LIMIT ?
-        )
-      ) ORDER BY id ${direction} LIMIT ?`).all(
+      // The queue is pending, ordered by id. A failure stays failed until its
+      // backoff elapses; only those due rows are merged back by their original id.
+      // Expired leases were already returned to pending above, so they keep their place.
+      const pending = this.db.prepare(`SELECT * FROM jobs
+        WHERE org_id=? AND generation=? AND status='pending'
+        ORDER BY id ${direction} LIMIT ?`).all(
         input.org_id, input.generation, input.limit,
-        input.org_id, input.generation, input.now, input.limit,
-        input.org_id, input.generation, input.now, input.limit,
-        input.limit,
       ) as JobRow[];
+      const dueFailed = this.db.prepare(`SELECT * FROM jobs
+        WHERE org_id=? AND generation=? AND status='failed' AND retry_at<=?`).all(
+        input.org_id, input.generation, input.now,
+      ) as JobRow[];
+      const rows = dueFailed.length === 0 ? pending : [...pending, ...dueFailed]
+        .sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0) * (direction === "DESC" ? -1 : 1))
+        .slice(0, input.limit);
       const until = new Date(Date.parse(input.now) + input.lease_ms).toISOString();
       for (const row of rows) {
         const staleAttemptMs = row.started_at

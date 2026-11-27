@@ -67,24 +67,44 @@ describe("SQLite vector projection and independent durable jobs", () => {
     )).map((job) => job.external_id), ["old", "middle", "new"]);
   });
 
-  it("finds the next due job from the status id index", async (t) => {
+  it("keeps completed history out of the claim and admits a failure only after its retry time", async (t) => {
     const f = await fixture(t);
-    await reconcile(f.index, [head("old"), head("new")]);
+    await reconcile(f.index, [head("old"), head("new"), head("waiting")]);
     const database = new Database(f.path, { readonly: true });
     try {
-      const plan = database.prepare(`EXPLAIN QUERY PLAN
-        SELECT * FROM jobs WHERE org_id=? AND generation=? AND status='pending'
-        ORDER BY id DESC LIMIT 1`).all("org", generation.id)
+      const plan = (sql, ...params) => database.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...params)
         .map((row) => row.detail).join("\n");
-      assert.match(plan, /USING INDEX jobs_pending_id/);
-      assert.doesNotMatch(plan, /TEMP B-TREE/);
+      const pending = plan(`SELECT * FROM jobs WHERE org_id=? AND generation=? AND status='pending'
+        ORDER BY id DESC LIMIT ?`, "org", generation.id, 1);
+      assert.match(pending, /INDEX jobs_pending_id/);
+      assert.doesNotMatch(pending, /TEMP B-TREE/);
+      const due = database.prepare(`EXPLAIN QUERY PLAN
+        SELECT * FROM jobs WHERE org_id=? AND generation=? AND status='failed' AND retry_at<=?`)
+        .all("org", generation.id, at).map((row) => row.detail).join("\n");
+      assert.match(due, /retry_at</);
+      assert.doesNotMatch(due, /TEMP B-TREE/);
+      const expired = database.prepare(`EXPLAIN QUERY PLAN
+        SELECT id FROM jobs WHERE org_id=? AND generation=? AND status='running' AND lease_until<=?
+        ORDER BY lease_until`).all("org", generation.id, at).map((row) => row.detail).join("\n");
+      assert.match(expired, /INDEX jobs_running_lease/);
+      assert.doesNotMatch(expired, /TEMP B-TREE/);
     } finally {
       database.close();
     }
-    assert.deepEqual((await f.index.claim({
-      org_id: "org", generation: generation.id, owner: "recent",
-      now: at, lease_ms: 1000, limit: 1, order: "newest",
-    })).map((job) => job.external_id), ["new"]);
+
+    const claimOne = (owner, now, order) => f.index.claim({
+      org_id: "org", generation: generation.id, owner, now, lease_ms: 60_000, limit: 1, order,
+    });
+    const [oldest] = await claimOne("owner", at, "oldest");
+    assert.equal(oldest.external_id, "old");
+    assert.equal(await f.index.fail({
+      job: oldest, owner: "owner", now: at, retry_at: later, error_code: "timeout", retryable: true,
+    }), true);
+    assert.deepEqual((await claimOne("owner", at, "oldest")).map((job) => job.external_id), ["new"]);
+    assert.equal((await f.index.listJobs("org", generation.id))
+      .find((job) => job.external_id === "old").status, "failed");
+    assert.deepEqual((await claimOne("owner", later, "newest")).map((job) => job.external_id), ["waiting"]);
+    assert.deepEqual((await claimOne("retry", later, "newest")).map((job) => job.external_id), ["old"]);
   });
 
   it("revokes visual indexes across generations while preserving contiguous text, namespaces and reindex eligibility", async t => {
