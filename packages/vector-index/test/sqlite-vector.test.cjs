@@ -420,6 +420,35 @@ describe("SQLite vector projection and independent durable jobs", () => {
     assert.equal(summary.timing.recent_processing_ms, 2000);
   });
 
+  it("reports an expired indexing lease as waiting and resumes it in its original queue place", async (t) => {
+    const f = await fixture(t);
+    await reconcile(f.index, [head("abandoned"), head("newer")]);
+    const [abandoned] = await f.index.claim({
+      org_id: "org", generation: generation.id, owner: "gone", now: at, lease_ms: 1000, limit: 1, order: "oldest",
+    });
+    assert.equal(abandoned.external_id, "abandoned");
+    await f.index.stageChunk({ job: abandoned, owner: "gone", now: at, chunk: chunk() });
+    const summary = await f.index.summarizeJobs("org", generation.id, later);
+    assert.equal(summary.counts.running, 0);
+    assert.equal(summary.counts.pending, 2);
+    assert.equal(summary.timing.running_elapsed_ms, undefined);
+
+    const [next] = await f.index.claim({
+      org_id: "org", generation: generation.id, owner: "live", now: later, lease_ms: 1000, limit: 1, order: "newest",
+    });
+    assert.equal(next.external_id, "newer");
+    const jobs = await f.index.listJobs("org", generation.id);
+    const parked = jobs.find((job) => job.external_id === "abandoned");
+    assert.equal(parked.status, "pending");
+    assert.equal(parked.started_at, undefined);
+    assert.equal(parked.processing_ms, 1000);
+    const resumed = await f.index.claim({
+      org_id: "org", generation: generation.id, owner: "live", now: later, lease_ms: 1000, limit: 1, order: "oldest",
+    });
+    assert.equal(resumed[0].external_id, "abandoned");
+    assert.deepEqual(await f.index.loadStagedChunks(resumed[0], "live", later), [chunk()]);
+  });
+
   it("matches 4000 fully covered 768-dimensional authorized vectors within the scale budget", async (t) => {
     const root = await mkdtemp(join(tmpdir(), "regenic-vector-scale-"));
     const path = join(root, "vectors.db");

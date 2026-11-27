@@ -516,6 +516,21 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
     }
     const direction = input.order === "newest" ? "DESC" : "ASC";
     return this.db.transaction(() => {
+      // A dead owner leaves the row running after its lease. Park it back in
+      // its original queue position; staged chunks stay for the next claim.
+      const expired = this.db.prepare(`SELECT id, started_at, lease_until, processing_ms FROM jobs
+        WHERE org_id=? AND generation=? AND status='running' AND lease_until<=?`).all(
+        input.org_id, input.generation, input.now,
+      ) as Array<{ id: number; started_at: string | null; lease_until: string | null; processing_ms: number }>;
+      const release = this.db.prepare(`UPDATE jobs SET status='pending',owner=NULL,lease_until=NULL,retry_at=NULL,
+        processing_ms=?,started_at=NULL,completed_at=NULL WHERE id=?`);
+      const nowMs = Date.parse(input.now);
+      for (const row of expired) {
+        const startedMs = Date.parse(row.started_at ?? input.now);
+        const leaseMs = Date.parse(row.lease_until ?? input.now);
+        const activeMs = Math.max(0, Math.min(leaseMs, nowMs) - startedMs);
+        release.run(row.processing_ms + activeMs, row.id);
+      }
       const rows = this.db.prepare(`SELECT * FROM jobs WHERE org_id=? AND generation=? AND (
         status='pending' OR (status='failed' AND retry_at<=?) OR (status='running' AND lease_until<=?)
       ) ORDER BY id ${direction} LIMIT ?`).all(
@@ -735,8 +750,15 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
     }>;
     for (const row of statuses) counts[row.status] = row.count;
 
+    const expiredRunning = (this.db.prepare(`SELECT COUNT(*) AS count FROM jobs
+      WHERE org_id=? AND generation=? AND status='running' AND (lease_until IS NULL OR lease_until<=?)`)
+      .get(orgId, generation, now) as { count: number }).count;
+    counts.running -= expiredRunning;
+    counts.pending += expiredRunning;
     const running = this.db.prepare(`SELECT started_at,processing_ms FROM jobs
-      WHERE org_id=? AND generation=? AND status='running' AND started_at IS NOT NULL`).all(orgId, generation) as Array<{
+      WHERE org_id=? AND generation=? AND status='running' AND lease_until>? AND started_at IS NOT NULL`).all(
+      orgId, generation, now,
+    ) as Array<{
       started_at: string; processing_ms: number;
     }>;
     const nowMs = Date.parse(now);
