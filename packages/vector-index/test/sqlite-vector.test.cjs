@@ -70,31 +70,31 @@ describe("SQLite vector projection and independent durable jobs", () => {
   it("keeps completed history out of the claim and admits a failure only after its retry time", async (t) => {
     const f = await fixture(t);
     await reconcile(f.index, [head("old"), head("new"), head("waiting")]);
-    const database = new Database(f.path, { readonly: true });
-    try {
-      const plan = (sql, ...params) => database.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...params)
-        .map((row) => row.detail).join("\n");
-      const pending = plan(`SELECT * FROM jobs WHERE org_id=? AND generation=? AND status='pending'
-        ORDER BY id DESC LIMIT ?`, "org", generation.id, 1);
-      assert.match(pending, /INDEX jobs_pending_id/);
-      assert.doesNotMatch(pending, /TEMP B-TREE/);
-      const due = database.prepare(`EXPLAIN QUERY PLAN
-        SELECT * FROM jobs WHERE org_id=? AND generation=? AND status='failed' AND retry_at<=?`)
-        .all("org", generation.id, at).map((row) => row.detail).join("\n");
-      assert.match(due, /retry_at</);
-      assert.doesNotMatch(due, /TEMP B-TREE/);
-      const expired = database.prepare(`EXPLAIN QUERY PLAN
-        SELECT id FROM jobs WHERE org_id=? AND generation=? AND status='running' AND lease_until<=?
-        ORDER BY lease_until`).all("org", generation.id, at).map((row) => row.detail).join("\n");
-      assert.match(expired, /INDEX jobs_running_lease/);
-      assert.doesNotMatch(expired, /TEMP B-TREE/);
-    } finally {
-      database.close();
-    }
-
-    const claimOne = (owner, now, order) => f.index.claim({
-      org_id: "org", generation: generation.id, owner, now, lease_ms: 60_000, limit: 1, order,
-    });
+    const claims = [];
+    const claimOne = async (owner, now, order) => {
+      const recorded = [];
+      const execs = [];
+      const originalPrepare = Database.prototype.prepare;
+      const originalExec = Database.prototype.exec;
+      Database.prototype.prepare = function (sql) {
+        recorded.push(sql);
+        return originalPrepare.call(this, sql);
+      };
+      Database.prototype.exec = function (sql) {
+        execs.push(sql);
+        return originalExec.call(this, sql);
+      };
+      try {
+        const jobs = await f.index.claim({
+          org_id: "org", generation: generation.id, owner, now, lease_ms: 60_000, limit: 1, order,
+        });
+        claims.push({ order, recorded, execs });
+        return jobs;
+      } finally {
+        Database.prototype.prepare = originalPrepare;
+        Database.prototype.exec = originalExec;
+      }
+    };
     const [oldest] = await claimOne("owner", at, "oldest");
     assert.equal(oldest.external_id, "old");
     assert.equal(await f.index.fail({
@@ -105,6 +105,66 @@ describe("SQLite vector projection and independent durable jobs", () => {
       .find((job) => job.external_id === "old").status, "failed");
     assert.deepEqual((await claimOne("owner", later, "newest")).map((job) => job.external_id), ["waiting"]);
     assert.deepEqual((await claimOne("retry", later, "newest")).map((job) => job.external_id), ["old"]);
+
+    await reconcile(f.index, [head("behind"), head("ahead")]);
+    const [ahead] = await claimOne("owner", later, "newest");
+    assert.equal(ahead.external_id, "ahead");
+    assert.equal(await f.index.fail({
+      job: ahead, owner: "owner", now: later, retry_at: later, error_code: "timeout", retryable: true,
+    }), true);
+    assert.deepEqual((await claimOne("owner", later, "newest")).map((job) => job.external_id), ["ahead"]);
+
+    const pending = [];
+    const due = [];
+    const expired = [];
+    for (const claim of claims) {
+      assert.deepEqual(claim.execs, []);
+      const selects = claim.recorded.filter((sql) => /^\s*SELECT\b/i.test(sql));
+      assert.equal(selects.length, 3, selects.join("\n---\n"));
+      const pendingSql = selects.find((sql) => sql.includes("status='pending'"));
+      const dueSql = selects.find((sql) => sql.includes("status='failed'"));
+      const expiredSql = selects.find((sql) => sql.includes("status='running'"));
+      assert.ok(pendingSql && dueSql && expiredSql, selects.join("\n---\n"));
+      assert.equal(new Set([pendingSql, dueSql, expiredSql]).size, 3, selects.join("\n---\n"));
+      const direction = claim.order === "newest" ? "DESC" : "ASC";
+      assert.match(pendingSql, new RegExp(`ORDER BY id ${direction}`));
+      assert.match(pendingSql, /LIMIT \?/);
+      assert.doesNotMatch(pendingSql, /UNION|status='failed'|status='running'/);
+      assert.match(dueSql, /retry_at<=\?/);
+      assert.doesNotMatch(dueSql, /UNION|ORDER BY|LIMIT|status='pending'|status='running'/);
+      assert.match(expiredSql, /started_at/);
+      assert.match(expiredSql, /processing_ms/);
+      assert.match(expiredSql, /ORDER BY lease_until/);
+      assert.doesNotMatch(expiredSql, /UNION|ORDER BY id|status='pending'|status='failed'/);
+      pending.push(pendingSql);
+      due.push(dueSql);
+      expired.push(expiredSql);
+    }
+    const database = new Database(f.path, { readonly: true });
+    try {
+      const explain = (sql, params) => {
+        assert.equal((sql.match(/\?/g) || []).length, params.length, sql);
+        return database.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...params)
+          .map((row) => row.detail).join("\n");
+      };
+      for (const sql of new Set(pending)) {
+        const plan = explain(sql, ["org", generation.id, 1]);
+        assert.match(plan, /INDEX jobs_pending_id/, sql);
+        assert.doesNotMatch(plan, /TEMP B-TREE/, sql);
+      }
+      for (const sql of new Set(due)) {
+        const plan = explain(sql, ["org", generation.id, at]);
+        assert.match(plan, /retry_at</, sql);
+        assert.doesNotMatch(plan, /TEMP B-TREE/, sql);
+      }
+      for (const sql of new Set(expired)) {
+        const plan = explain(sql, ["org", generation.id, at]);
+        assert.match(plan, /INDEX jobs_running_lease/, sql);
+        assert.doesNotMatch(plan, /TEMP B-TREE/, sql);
+      }
+    } finally {
+      database.close();
+    }
   });
 
   it("revokes visual indexes across generations while preserving contiguous text, namespaces and reindex eligibility", async t => {
