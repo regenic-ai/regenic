@@ -586,3 +586,34 @@ it("does not disguise invalid/oversized query input as a successful lexical fall
       (error) => error.code === code);
   }
 });
+
+it("rejects a vector origin bound to the wrong attachment hash", async () => {
+  const source = event("file", "ordinary");
+  source.search_parts = [{
+    part_index: 1, media_type: "image/png", filename: "target.png", content_hash: "b".repeat(64),
+  }];
+  const plan = {
+    request: { ...request, query: "landscape", search_kind: "files" },
+    events: [source], read_epoch: "authority:1", recorded_at: "2026-10-17T00:00:00.000Z",
+    principal_policy_hash: "b".repeat(64),
+  };
+  const index = {
+    async matchAuthorized(input) {
+      return {
+        generation: generation.id, covered: input.authorized,
+        matched: [{
+          ...input.authorized[0], score: 0.9, chunk_ordinal: 0, start: 0, end: source.text.length,
+          search_matches: [{
+            origin: { part_index: 1, content_hash: "f".repeat(64), mode: "visual", start: 0 },
+            score: 1, lexical: false,
+          }],
+        }],
+      };
+    },
+  };
+  const provider = { descriptor, async countTokens() { return [12]; }, async embed() { return [[1, 0]]; } };
+  await assert.rejects(
+    new HybridEventRetriever(new DeterministicEventRetriever(), provider, index, generation).retrieve(plan),
+    (error) => error.code === "invalid_candidate",
+  );
+});

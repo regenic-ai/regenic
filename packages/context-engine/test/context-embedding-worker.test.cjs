@@ -132,6 +132,29 @@ describe("independent embedding indexing worker", () => {
     assert.equal(result.matched[0].search_matches[0].origin.mode, "text");
   });
 
+  it("does not treat a token cut at a chunk boundary as a file keyword", async (t) => {
+    const extracted = `${"x".repeat(24)} nebula invoice`;
+    const f = await fixture(t, provider({
+      async countTokens(texts) { return texts.map((text) => Array.from(text).length + 5); },
+      async processAttachment() { return { text: extracted, vectors: [] }; },
+    }));
+    const input = batch("create", "ordinary");
+    input.records[0].content.push({
+      role: "attachment", media_type: "application/pdf",
+      source_filename: "report.pdf", bytes: Buffer.from("%PDF synthetic"),
+    });
+    await f.ingest.ingest(input);
+    assert.deepEqual(await f.worker.runOnce(), { processed: 1, failed: 0, superseded: 0 });
+    const [job] = await f.index.listJobs("org", generation.id);
+    const fragments = (await f.index.matchAuthorized({
+      org_id: "org", generation: generation.id,
+      authorized: [{ event_id: job.event_id, content_hash: job.content_hash }],
+      query_vector: [1, 0], query: "ne", search_kind: "files", limit: 50,
+    })).matched[0].search_matches;
+    assert.ok(fragments.some((hit) => hit.origin.text.endsWith(" ne")));
+    assert.ok(fragments.every((hit) => !hit.lexical));
+  });
+
   it("resumes a 567-chunk attachment across batches without publishing partial coverage or repeating inference", async (t) => {
     const large = embeddingGeneration(descriptor, 32, 1024);
     const extracted = "x".repeat(27 * 566 + 1);
