@@ -178,6 +178,21 @@ export interface ContextEvidenceSource {
    * Absent means the caller reads the epoch from openRead.
    */
   openReadEpoch?(request: ContextRequest): Promise<string>;
+  /**
+   * Changes when any authority commit lands, including same-connection writes.
+   * Equal stamps mean the last openRead is still the current lifecycle.
+   */
+  openReadStamp?(): Promise<string>;
+  /**
+   * File path of the authority database. Personal search uses it to filter
+   * current heads inside the index instead of copying them into the process.
+   */
+  databasePath?(): string | undefined;
+  /**
+   * Current-head metadata for the ids a ranked index query already returned.
+   * Missing ids are not current heads and must not be displayed.
+   */
+  loadCurrentEvents?(orgId: string, eventIds: string[]): Promise<ContextSourceEvent[]>;
   materialize?(
     events: AuthorizedContextSourceEvent[],
   ): Promise<AuthorizedContextSourceEvent[]>;
@@ -212,6 +227,11 @@ export interface ContextAuthorityReader {
    * Absent means the caller takes the epoch from a full read.
    */
   openContextReadEpoch?(orgId: string, query?: ContextAuthorityReadQuery): Promise<string>;
+  /**
+   * Database-level commit stamp. It is not scoped to one organization:
+   * a matching stamp means no authority commit happened, so every org is unchanged.
+   */
+  openContextMutationStamp?(): Promise<string>;
   /** Thread-scoped read for incremental projection without scanning the org. */
   openContextReadForThread(
     orgId: string,
@@ -225,6 +245,13 @@ export interface ContextAuthorityReader {
     orgId: string,
     query: ContextEventPageQuery,
   ): Promise<ContextEventPage>;
+  /** On-disk authority file. Absent for hosted databases and in-memory stores. */
+  databasePath?(): string;
+  /** Current heads for these ids only. Ids that are not current heads are omitted. */
+  readCurrentHeadsByIds?(
+    orgId: string,
+    eventIds: string[],
+  ): Promise<ContextAuthorityRead["events"]>;
 }
 
 export interface ContextAuthorityReadQuery {
@@ -265,6 +292,17 @@ export interface AuthorizedContextRetrievalPlan {
   recorded_at: string;
   principal_policy_hash: string;
   events: AuthorizedContextSourceEvent[];
+  /**
+   * Present only for personal search against a local authority file.
+   * Retrievers then rank inside the index and materialize this shortlist,
+   * instead of receiving every visible event.
+   */
+  index_scope?: {
+    authority_path: string;
+    /** Lexical shortlist size. Vector search uses its own candidate limit. */
+    limit: number;
+    stamp: string;
+  };
 }
 
 export interface RetrievedContextCandidate {

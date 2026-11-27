@@ -495,7 +495,7 @@ export function PreciseSearch({ onSettings, onOpenConversation, onLocate, locked
               {result.timing ? (
                 <div className="search-timing" aria-label={t("search.timing")}>
                   <span>{t("search.timing.server", { seconds: searchElapsedSeconds(result.timing.total_ms) })}</span>
-                  {searchTimingRows(result.timing, elapsed ?? undefined).map((row) => (
+                  {searchTimingRows(result.timing, elapsed ?? undefined, result.client_decode_ms).map((row) => (
                     <span key={row.id} className="search-timing-stage">
                       {t(searchTimingKey(row.id))}
                       {" "}
@@ -525,6 +525,12 @@ export function PreciseSearch({ onSettings, onOpenConversation, onLocate, locked
                         </dd>
                       </Fragment>
                     ))}
+                    {result.client_decode_ms !== undefined && result.client_decode_ms >= 10 ? (
+                      <Fragment>
+                        <dt>{t("search.timing.decode")}</dt>
+                        <dd>{result.client_decode_ms} ms</dd>
+                      </Fragment>
+                    ) : null}
                   </> : null}
                   {submittedFilters ? <><dt>occurred_after</dt><dd>{submittedFilters.occurred_after}</dd>
                     <dt>occurred_before</dt><dd>{submittedFilters.occurred_before}</dd></> : null}

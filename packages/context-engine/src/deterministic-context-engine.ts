@@ -16,7 +16,9 @@ import {
   validateContextRequest,
   validateContextReplayRequest,
   validateContextSnapshot,
+  noteSearchStage,
   timeSearchStage,
+  timeSearchStageSync,
   type AuthorizedContextRetrievalPlan,
   type ContextArtifactStore,
   type ContextAssemblyResult,
@@ -136,27 +138,34 @@ export class DeterministicContextEngine implements ContextEngine {
       throw new ContextEngineError("invalid_request", validation.issues.map((issue) => issue.message).join("; "));
     }
     const stableRequest = clone(validation.data);
-    const sourceRead = structuredClone(await this.source.openRead(clone(stableRequest)));
-    validateSourceRead(stableRequest, sourceRead);
-    const policyHash = await this.policy.policyHash(clone(stableRequest));
+    const indexedPath = this.indexedSearchPath(stableRequest);
+    if (indexedPath) return this.assembleIndexedSearch(stableRequest, indexedPath);
+    const sourceRead = await timeSearchStage("read", async () => {
+      const read = structuredClone(await this.source.openRead(clone(stableRequest)));
+      validateSourceRead(stableRequest, read);
+      return read;
+    });
+    const policyHash = await timeSearchStage("read", () => this.policy.policyHash(clone(stableRequest)));
     if (!SHA256_PATTERN.test(policyHash)) {
       throw new ContextEngineError("invalid_request", "Policy hash must be a lowercase SHA-256 value");
     }
-    const visibleLifecycleEvents = await this.authorizedLifecycleEvents(
+    const visibleLifecycleEvents = await timeSearchStage("policy", () => this.authorizedLifecycleEvents(
       stableRequest,
       sourceRead.events,
-    );
-    const authorizedReadEpoch = authorizedReadEpochFor(
-      sourceRead,
-      visibleLifecycleEvents,
-      policyHash,
-      stableRequest.org_id,
-    );
-    const lifecycleMetadata = resolveEventLifecycle(
-      visibleLifecycleEvents,
-      stableRequest,
-      sourceRead.recorded_at,
-    );
+    ));
+    const { authorizedReadEpoch, lifecycleMetadata } = timeSearchStageSync("epoch", () => ({
+      authorizedReadEpoch: authorizedReadEpochFor(
+        sourceRead,
+        visibleLifecycleEvents,
+        policyHash,
+        stableRequest.org_id,
+      ),
+      lifecycleMetadata: resolveEventLifecycle(
+        visibleLifecycleEvents,
+        stableRequest,
+        sourceRead.recorded_at,
+      ),
+    }));
     const materialized = new Map<string, AuthorizedContextSourceEvent>();
     const loading = new Map<string, Promise<AuthorizedContextSourceEvent>>();
     const metadataById = new Map(lifecycleMetadata.map((source) => [source.event.event_id, source]));
@@ -193,83 +202,212 @@ export class DeterministicContextEngine implements ContextEngine {
     };
     const protectedEventIds = await this.protectedEventIds(plan);
     const retrievers = this.supportingRetrievers(stableRequest);
-    const retrievalRuns = await Promise.all(retrievers.map(async (active) => {
+    const cloneStarted = performance.now();
+    const prepared = await Promise.all(retrievers.map(async (active) => {
       const events = active.capabilities.lazy_materialization
         ? lifecycleMetadata
         : await materialize(allEventIds);
-      return {
-        active,
-        result: normalizeRetrievalResult(await active.retriever.retrieve(
-          structuredClone({ ...plan, events }),
-          materialize,
-        )),
-      };
+      return { active, plan: structuredClone({ ...plan, events }) };
     }));
-    const lifecycleEvents = lifecycleMetadata.map((source) => materialized.get(source.event.event_id) ?? source);
+    noteSearchStage("prepare", performance.now() - cloneStarted);
+    const retrievalRuns = await Promise.all(prepared.map(async ({ active, plan: retrievalPlan }) => ({
+      active,
+      result: normalizeRetrievalResult(await active.retriever.retrieve(retrievalPlan, materialize)),
+    })));
     const retrievalTrace = retrievalRuns.flatMap((run) => run.result.trace ? [run.result.trace] : []);
-    if (retrievalTrace.length) {
-      const latestEpoch = await this.readEpoch(stableRequest);
-      if (latestEpoch !== sourceRead.read_epoch ||
-        await this.policy.policyHash(clone(stableRequest)) !== policyHash) {
-        throw new ContextEngineError("source_boundary", "Authority or policy changed during retrieval; retry the request");
+    const lifecycleEvents = await timeSearchStage("confirm", async () => {
+      const events = lifecycleMetadata.map((source) => materialized.get(source.event.event_id) ?? source);
+      if (retrievalTrace.length) {
+        const latestEpoch = await this.readEpoch(stableRequest);
+        if (latestEpoch !== sourceRead.read_epoch ||
+          await this.policy.policyHash(clone(stableRequest)) !== policyHash) {
+          throw new ContextEngineError("source_boundary", "Authority or policy changed during retrieval; retry the request");
+        }
+        const allowedIds = new Set(events.map((source) => source.event.event_id));
+        if (retrievalTrace.some((trace) => trace.routes.some((route) => !allowedIds.has(route.event_id)))) {
+          throw new ContextEngineError("invalid_candidate", "Retrieval trace contains an unauthorized Event");
+        }
       }
-      const allowedIds = new Set(lifecycleEvents.map((source) => source.event.event_id));
-      if (retrievalTrace.some((trace) => trace.routes.some((route) => !allowedIds.has(route.event_id)))) {
-        throw new ContextEngineError("invalid_candidate", "Retrieval trace contains an unauthorized Event");
-      }
-    }
-    const retrieved = retrievalRuns.flatMap(({ active, result }) =>
-      result.candidates.map((value) => ({ active, value })),
-    );
-    const ranked = await this.fuse(retrieved, stableRequest, lifecycleEvents, protectedEventIds);
-    assertProtectedCandidates(protectedEventIds, ranked);
-    const dominated = suppressSupersededEvidence(stableRequest.query, ranked, protectedEventIds);
-    const candidates = preferEvidenceNearQueryDate(stableRequest.query, dominated, protectedEventIds);
-    const assembled = this.assembleBudget(stableRequest, candidates, protectedEventIds);
-    const degradationFlags = degradationFlagsFor(
-      retrievers,
-      retrievalRuns.flatMap((run) => run.result.degradation_flags ?? []),
-    );
-    const requestHash = hashContextRequest(stableRequest);
-    const bundlePayload = createBundlePayload({
-      request: stableRequest,
-      selected: assembled.selected,
-      sections: assembled.sections,
-      conflicts: conflictsFor(assembled.selected),
-      redactions: assembled.redactions,
-      ledger: assembled.ledger,
-      degradationFlags,
+      return events;
     });
-    const snapshot = createSnapshot({
-      request: stableRequest,
-      requestHash,
+    return this.finishAssembly({
+      stableRequest,
+      retrievers,
+      retrievalRuns,
+      lifecycleEvents,
+      protectedEventIds,
       policyHash,
       readEpoch: authorizedReadEpoch,
       recordedAt: sourceRead.recorded_at,
-      retrievalProfileVersion: this.retrievalProfile.version,
-      retrievalTrace,
-      assemblyProfileVersion: this.assemblyProfile.version,
-      bundlePayloadHash: hashContextBundlePayload(bundlePayload),
-      selected: assembled.selected,
-      ledger: assembled.ledger,
-      degradationFlags,
     });
-    const bundle = createBundle(snapshot.id, bundlePayload);
-    assertValidResult(snapshot, bundle);
-    await this.artifacts.putSnapshot(snapshot);
-    await this.artifacts.putBundle(bundle);
-    if (stableRequest.filters?.thread_ids?.length === 1) {
-      await this.artifacts.putSnapshotIndex({
-        org_id: stableRequest.org_id,
-        thread_id: stableRequest.filters.thread_ids[0],
-        snapshot_id: snapshot.id,
-        principal: stableRequest.principal,
-        consumer_id: stableRequest.consumer_id,
-        purpose: stableRequest.purpose,
-        allowed_uses: stableRequest.allowed_uses,
-        created_at: snapshot.created_at,
-      });
+  }
+
+  private indexedSearchPath(request: ContextRequest): string | undefined {
+    if (
+      request.consumer_id !== "personal-context-search"
+      || request.temporal.mode !== "current"
+      || !request.query?.trim()
+      || request.anchors?.length
+      || !this.source.loadCurrentEvents
+      || !this.source.openReadStamp
+    ) return undefined;
+    const path = this.source.databasePath?.();
+    if (!path || path === ":memory:" || path.includes("\0")) return undefined;
+    return path;
+  }
+
+  private async assembleIndexedSearch(
+    stableRequest: ContextRequest,
+    authorityPath: string,
+  ): Promise<ContextAssemblyResult> {
+    const recordedAt = new Date().toISOString();
+    const policyHash = await timeSearchStage("read", () => this.policy.policyHash(clone(stableRequest)));
+    if (!SHA256_PATTERN.test(policyHash)) {
+      throw new ContextEngineError("invalid_request", "Policy hash must be a lowercase SHA-256 value");
     }
+    const stamp = await timeSearchStage("epoch", async () => {
+      const value = await this.source.openReadStamp!();
+      if (!value.trim()) throw new ContextEngineError("source_boundary", "Authority stamp is empty");
+      return value;
+    });
+    const readEpoch = `authorized-stamp:${stamp}:${policyHash}`;
+    const requested = Math.max(stableRequest.budget.max_items, stableRequest.budget.max_raw_evidence);
+    const limit = Math.min(200, Math.max(50, requested * 10));
+    const loaded = new Map<string, AuthorizedContextSourceEvent>();
+    const materialize: ContextEventMaterializer = async (eventIds) => {
+      const unique = [...new Set(eventIds)];
+      const missing = unique.filter((id) => !loaded.has(id));
+      if (missing.length > 0) {
+        const events = await this.source.loadCurrentEvents!(stableRequest.org_id, missing);
+        const authorized = events.map((event) => ({ ...event, status: "current" as const }));
+        const materialized = await timeSearchStage("materialize", () => this.materialize(authorized));
+        const byId = new Map(materialized.map((event) => [event.event.event_id, event]));
+        for (const id of missing) {
+          const event = byId.get(id);
+          if (!event) {
+            throw new ContextEngineError("source_boundary", "Indexed search hit is not a current head");
+          }
+          loaded.set(id, event);
+        }
+      }
+      return unique.map((id) => clone(loaded.get(id)!));
+    };
+    const plan: AuthorizedContextRetrievalPlan = {
+      request: stableRequest,
+      read_epoch: readEpoch,
+      recorded_at: recordedAt,
+      principal_policy_hash: policyHash,
+      events: [],
+      index_scope: { authority_path: authorityPath, limit, stamp },
+    };
+    const protectedEventIds = await timeSearchStage("policy", () => this.protectedEventIds(plan));
+    const retrievers = this.supportingRetrievers(stableRequest);
+    const cloneStarted = performance.now();
+    const prepared = retrievers.map((active) => ({ active, plan: clone(plan) }));
+    noteSearchStage("prepare", performance.now() - cloneStarted);
+    const retrievalRuns = await Promise.all(prepared.map(async ({ active, plan: retrievalPlan }) => ({
+      active,
+      result: normalizeRetrievalResult(await active.retriever.retrieve(retrievalPlan, materialize)),
+    })));
+    const retrievalTrace = retrievalRuns.flatMap((run) => run.result.trace ? [run.result.trace] : []);
+    const lifecycleEvents = await timeSearchStage("confirm", async () => {
+      // Sync commits move the database stamp continuously. The hits were read
+      // as current heads; another message landing elsewhere does not invalidate them.
+      if (await this.policy.policyHash(clone(stableRequest)) !== policyHash) {
+        throw new ContextEngineError("source_boundary", "Authority or policy changed during retrieval; retry the request");
+      }
+      const allowedIds = new Set(loaded.keys());
+      if (retrievalTrace.some((trace) => trace.routes.some((route) => !allowedIds.has(route.event_id)))) {
+        throw new ContextEngineError("invalid_candidate", "Retrieval trace contains an unauthorized Event");
+      }
+      return [...loaded.values()];
+    });
+    return this.finishAssembly({
+      stableRequest,
+      retrievers,
+      retrievalRuns,
+      lifecycleEvents,
+      protectedEventIds,
+      policyHash,
+      readEpoch,
+      recordedAt,
+    });
+  }
+
+  private async finishAssembly(input: {
+    stableRequest: ContextRequest;
+    retrievers: ActiveRetriever[];
+    retrievalRuns: Array<{ active: ActiveRetriever; result: ContextRetrievalResult }>;
+    lifecycleEvents: AuthorizedContextSourceEvent[];
+    protectedEventIds: Set<string>;
+    policyHash: string;
+    readEpoch: string;
+    recordedAt: string;
+  }): Promise<ContextAssemblyResult> {
+    const {
+      stableRequest, retrievers, retrievalRuns, lifecycleEvents, protectedEventIds, policyHash, readEpoch, recordedAt,
+    } = input;
+    const retrievalTrace = retrievalRuns.flatMap((run) => run.result.trace ? [run.result.trace] : []);
+    const retrieved = retrievalRuns.flatMap(({ active, result }) =>
+      result.candidates.map((value) => ({ active, value })),
+    );
+    const ranked = await timeSearchStage("publish", () => this.fuse(
+      retrieved, stableRequest, lifecycleEvents, protectedEventIds,
+    ));
+    const assembled = timeSearchStageSync("publish", () => {
+      assertProtectedCandidates(protectedEventIds, ranked);
+      const dominated = suppressSupersededEvidence(stableRequest.query, ranked, protectedEventIds);
+      const candidates = preferEvidenceNearQueryDate(stableRequest.query, dominated, protectedEventIds);
+      return this.assembleBudget(stableRequest, candidates, protectedEventIds);
+    });
+    const { snapshot, bundle } = timeSearchStageSync("publish", () => {
+      const degradationFlags = degradationFlagsFor(
+        retrievers,
+        retrievalRuns.flatMap((run) => run.result.degradation_flags ?? []),
+      );
+      const bundlePayload = createBundlePayload({
+        request: stableRequest,
+        selected: assembled.selected,
+        sections: assembled.sections,
+        conflicts: conflictsFor(assembled.selected),
+        redactions: assembled.redactions,
+        ledger: assembled.ledger,
+        degradationFlags,
+      });
+      const snapshot = createSnapshot({
+        request: stableRequest,
+        requestHash: hashContextRequest(stableRequest),
+        policyHash,
+        readEpoch,
+        recordedAt,
+        retrievalProfileVersion: this.retrievalProfile.version,
+        retrievalTrace,
+        assemblyProfileVersion: this.assemblyProfile.version,
+        bundlePayloadHash: hashContextBundlePayload(bundlePayload),
+        selected: assembled.selected,
+        ledger: assembled.ledger,
+        degradationFlags,
+      });
+      const bundle = createBundle(snapshot.id, bundlePayload);
+      assertValidResult(snapshot, bundle);
+      return { snapshot, bundle };
+    });
+    await timeSearchStage("publish", async () => {
+      await this.artifacts.putSnapshot(snapshot);
+      await this.artifacts.putBundle(bundle);
+      if (stableRequest.filters?.thread_ids?.length === 1) {
+        await this.artifacts.putSnapshotIndex({
+          org_id: stableRequest.org_id,
+          thread_id: stableRequest.filters.thread_ids[0]!,
+          snapshot_id: snapshot.id,
+          principal: stableRequest.principal,
+          consumer_id: stableRequest.consumer_id,
+          purpose: stableRequest.purpose,
+          allowed_uses: stableRequest.allowed_uses,
+          created_at: snapshot.created_at,
+        });
+      }
+    });
     return { snapshot, bundle };
   }
 

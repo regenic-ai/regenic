@@ -350,21 +350,21 @@ export class PersonalAgentContextController {
   }
 
   private async search(args: Record<string, unknown>, locale: CopyLocale) {
-    const result = await this.context.searchExpanded(args);
-    if (!result.conversations.length) return result;
-    const labels = await this.labels.describe(result.conversations, locale);
-    return {
-      ...result,
-      conversations: result.conversations.map((conversation) => ({
-        ...conversation,
-        title: labels.threads.get(conversation.thread_id)?.title ?? null,
-        channel_label: labels.threads.get(conversation.thread_id)?.channel_label ?? null,
-        messages: withFileUrls(conversation.messages.map((message) => ({
-          ...message,
-          actor_label: labels.actors.get(message.event_id) ?? null,
-        })), (eventId, partIndex) => this.access.fileUrl(eventId, partIndex)),
-      })),
-    };
+    return this.context.searchExpanded(args, async (result) => {
+      const labels = await this.labels.describe(result.conversations, locale);
+      return {
+        ...result,
+        conversations: result.conversations.map((conversation) => ({
+          ...conversation,
+          title: labels.threads.get(conversation.thread_id)?.title ?? null,
+          channel_label: labels.threads.get(conversation.thread_id)?.channel_label ?? null,
+          messages: withFileUrls(conversation.messages.map((message) => ({
+            ...message,
+            actor_label: labels.actors.get(message.event_id) ?? null,
+          })), (eventId, partIndex) => this.access.fileUrl(eventId, partIndex)),
+        })),
+      };
+    });
   }
 }
 

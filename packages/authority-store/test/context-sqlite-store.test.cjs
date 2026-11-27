@@ -402,6 +402,14 @@ describe("SQLite context artifact store", () => {
     });
     assert.equal(scoped.events.length, 1);
     assert.equal(await split.openContextReadEpoch("example-org"), (await split.openContextRead("example-org")).read_epoch);
+    assert.equal(await split.openContextMutationStamp(), await split.openContextMutationStamp());
+    assert.equal(split.databasePath(), require("node:path").resolve(path));
+    assert.deepEqual(await split.readCurrentHeadsByIds("example-org", [event.id]), [{
+      ...event,
+      ...metadata,
+      content_media_type: "text/plain",
+    }]);
+    assert.deepEqual(await split.readCurrentHeadsByIds("example-org", ["missing-event"]), []);
     assert.equal(
       await split.openContextReadEpoch("example-org", { filters: { thread_ids: ["thread-1"] } }),
       scoped.read_epoch,

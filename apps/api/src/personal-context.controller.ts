@@ -54,9 +54,7 @@ export class PersonalContextController {
   @Post("search/expand")
   @HttpCode(HttpStatus.OK)
   searchExpanded(@Body() body: unknown, @Query("locale") locale?: string) {
-    return this.guard(async () => {
-      const result = await this.context.searchExpanded(body);
-      if (!result.conversations.length) return result;
+    return this.guard(() => this.context.searchExpanded(body, async (result) => {
       const labels = await this.conversationLabels.describe(
         result.conversations,
         requestLocale(locale),
@@ -73,7 +71,7 @@ export class PersonalContextController {
           })),
         })),
       };
-    });
+    }));
   }
 
   @Post("search/window")

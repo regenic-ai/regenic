@@ -59,6 +59,14 @@ export interface MatchAuthorizedContextLexicalResult
   coverage?: ContextLexicalCoverageProof;
 }
 
+export interface RankedLexicalMatchResult {
+  available: boolean;
+  generation?: string;
+  matched: ContextLexicalKey[];
+  authorized_count: number;
+  covered_count: number;
+}
+
 export interface ContextLexicalIndex {
   getStatus(orgId: string): Promise<ContextLexicalIndexStatus>;
   replaceOrganization(input: ReplaceContextLexicalIndex): Promise<void>;
@@ -66,6 +74,13 @@ export interface ContextLexicalIndex {
   matchAuthorized(
     input: MatchAuthorizedContextLexicalInput,
   ): Promise<MatchAuthorizedContextLexicalResult>;
+  /**
+   * Rank authorized current heads inside FTS. The caller does not pass the key list:
+   * the index attaches the authority file and applies the head predicate itself.
+   */
+  matchRanked?(
+    input: import("./search-head-filter").RankedHeadQuery & { query: string; limit: number },
+  ): Promise<RankedLexicalMatchResult>;
   /**
    * True when stored documents predate filename and attachment text.
    * Absent on indexes that do not track that coverage.

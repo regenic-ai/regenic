@@ -4,6 +4,7 @@ import {
   timeSearchStage,
   contextLexicalAuthorizationHash,
   type AuthorizedContextRetrievalPlan,
+  type RankedLexicalMatchResult,
   type ContextLexicalIndex,
   type ContextLexicalKey,
   type ContextEventMaterializer,
@@ -17,6 +18,7 @@ import {
   eventCandidatesFor,
   retrievalTimeFor,
 } from "./deterministic-event-retriever";
+import { ContextEngineError } from "./deterministic-context-engine";
 
 export const INDEXED_EVENT_RETRIEVER_ID = "event-lexical-indexed";
 const HASH_PATTERN = /^[a-f0-9]{64}$/;
@@ -51,6 +53,9 @@ export class IndexedEventRetriever implements ContextRetriever {
   ): Promise<ContextRetrievalResult> {
     if (plan.request.requested_kinds && !plan.request.requested_kinds.includes("event")) {
       return { candidates: [] };
+    }
+    if (plan.index_scope && typeof this.index.matchRanked === "function") {
+      return this.retrieveRanked(plan, materialize);
     }
     const eligible = eligibleEventSources(plan);
     const candidatesFor = async (sources: typeof eligible) => {
@@ -92,6 +97,48 @@ export class IndexedEventRetriever implements ContextRetriever {
     return {
       candidates: await candidatesFor(candidates),
       degradation_flags: degradationFlags(result, coveredCount, authorized.length),
+    };
+  }
+
+  private async retrieveRanked(
+    plan: AuthorizedContextRetrievalPlan,
+    materialize?: ContextEventMaterializer,
+  ): Promise<ContextRetrievalResult> {
+    const scope = plan.index_scope!;
+    const result = await this.index.matchRanked!({
+      org_id: plan.request.org_id,
+      query: plan.request.query ?? "",
+      limit: scope.limit,
+      authority_path: scope.authority_path,
+      ...(plan.request.filters ? { filters: plan.request.filters } : {}),
+      stamp: scope.stamp,
+    });
+    const flags = rankedDegradation(result);
+    if (!result.available || !result.generation || !materialize || result.matched.length === 0) {
+      return { candidates: [], degradation_flags: flags };
+    }
+    const loaded = await materialize(result.matched.map((key) => key.event_id));
+    const hashes = new Map(result.matched.map((key) => [key.event_id, key.content_hash]));
+    const sources = loaded.filter((source) => source.event.content_hash === hashes.get(source.event.event_id));
+    if (sources.length !== result.matched.length) {
+      throw new ContextEngineError("source_boundary", "Ranked lexical hit is not the current head");
+    }
+    const eligible = eligibleEventSources({ ...plan, events: sources });
+    const candidates = await eventCandidatesFor(eligible, plan.request, retrievalTimeFor(plan));
+    return {
+      candidates,
+      degradation_flags: flags,
+      trace: {
+        retriever_id: this.id,
+        profile: "indexed-head-v1",
+        mode: "lexical",
+        authorized_count: result.authorized_count,
+        covered_count: result.covered_count,
+        routes: candidates.map((candidate, rank) => ({
+          event_id: candidate.candidate.resource_id,
+          lexical_rank: rank + 1,
+        })),
+      },
     };
   }
 }
@@ -174,6 +221,13 @@ function validateKeys(keys: ContextLexicalKey[], allowed: Set<string>): Set<stri
     values.add(value);
   }
   return values;
+}
+
+function rankedDegradation(result: RankedLexicalMatchResult): string[] {
+  if (!result.available) return ["lexical_index_absent"];
+  if (!result.generation) return ["lexical_index_unbuilt"];
+  if (result.covered_count < result.authorized_count) return ["lexical_index_partial"];
+  return [];
 }
 
 function degradationFlags(

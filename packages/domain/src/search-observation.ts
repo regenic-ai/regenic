@@ -6,6 +6,10 @@ import { AsyncLocalStorage } from "node:async_hooks";
  * up and compared. Stages are not part of the context snapshot hash.
  */
 export const SEARCH_STAGE_IDS = [
+  "read",
+  "policy",
+  "epoch",
+  "prepare",
   "materialize",
   "tokenize",
   "lexical",
@@ -13,7 +17,11 @@ export const SEARCH_STAGE_IDS = [
   "vector",
   "authorize",
   "rerank",
+  "confirm",
+  "publish",
   "expand",
+  "label_events",
+  "labels",
 ] as const;
 
 export type SearchStageId = (typeof SEARCH_STAGE_IDS)[number];

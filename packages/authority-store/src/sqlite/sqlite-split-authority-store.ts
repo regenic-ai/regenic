@@ -175,6 +175,7 @@ export class SqliteSplitAuthorityStore
   private constructor(
     private readonly reader: SqliteWriteClient,
     private readonly writer: SqliteWriteClient,
+    private readonly path: string,
   ) {}
 
   static async open(path: string): Promise<SqliteSplitAuthorityStore> {
@@ -182,11 +183,15 @@ export class SqliteSplitAuthorityStore
     const writer = await SqliteWriteClient.open(resolved);
     try {
       const reader = await SqliteWriteClient.open(resolved, { readonly: true });
-      return new SqliteSplitAuthorityStore(reader, writer);
+      return new SqliteSplitAuthorityStore(reader, writer, resolved);
     } catch (error) {
       await writer.close();
       throw error;
     }
+  }
+
+  databasePath(): string {
+    return this.path;
   }
 
   get readonly(): boolean {
@@ -274,6 +279,17 @@ export class SqliteSplitAuthorityStore
 
   async openContextReadEpoch(orgId: string, query?: ContextAuthorityReadQuery): Promise<string> {
     return this.reader.call("openContextReadEpoch", [orgId, query]);
+  }
+
+  async openContextMutationStamp(): Promise<string> {
+    return this.reader.call("openContextMutationStamp", []);
+  }
+
+  async readCurrentHeadsByIds(
+    orgId: string,
+    eventIds: string[],
+  ): Promise<ContextAuthorityRead["events"]> {
+    return this.reader.call("readCurrentHeadsByIds", [orgId, eventIds]);
   }
 
   async openContextReadForThread(

@@ -153,6 +153,26 @@ function parseAuthorizationAccumulator(value: string): bigint {
 }
 
 export interface ContextVectorIndex {
+  /**
+   * Nearest current heads. Authorization comes from the attached authority file,
+   * not from a key list copied into the process.
+   */
+  matchRanked?(
+    input: import("./search-head-filter").RankedHeadQuery & {
+      generation: string;
+      query_vector: number[];
+      limit: number;
+    },
+  ): Promise<{
+    matched: Array<ContextLexicalKey & {
+      score: number;
+      chunk_ordinal: number;
+      start: number;
+      end: number;
+    }>;
+    authorized_count: number;
+    covered_count: number;
+  }>;
   matchAuthorizedText?(input: {
     org_id: string;
     generation: string;
@@ -290,4 +310,9 @@ export interface ContextEmbeddingRunner {
   }): Promise<{ processed: number; failed: number; superseded: number }>;
   stop(): Promise<void>;
   clearProjection(): Promise<void>;
+  /**
+   * True once after the last run stopped on the time or job budget with work
+   * still queued. A pause or an empty queue does not ask for another pass.
+   */
+  wantsImmediateResume?(): boolean;
 }

@@ -2,6 +2,7 @@ import {
   ContextSearchInputSchema,
   observeSearch,
   searchObservationActive,
+  timeSearchStageSync,
   type ContextEngine,
   type ContextRequest,
   type EvidenceReference,
@@ -68,8 +69,9 @@ export class ContextSearcher {
       return { ...value, timing };
     }
     const { snapshot, bundle } = await this.context.assemble(structuredClone(request));
-    const trace = snapshot.retrieval_trace?.find((entry) => entry.retriever_id === "event-hybrid");
-    const items = bundle.sections.flatMap((section) => section.items).map((item, index) => {
+    const trace = snapshot.retrieval_trace?.find((entry) => entry.retriever_id === "event-hybrid")
+      ?? snapshot.retrieval_trace?.find((entry) => entry.retriever_id === "event-lexical-indexed");
+    const items = timeSearchStageSync("publish", () => bundle.sections.flatMap((section) => section.items).map((item, index) => {
       const reference = item.evidence.find((entry) =>
         entry.event_id === item.resource_id && entry.content_hash === item.content_hash);
       if (item.kind !== "event" || !item.content_hash || typeof item.text !== "string" || !reference) {
@@ -87,7 +89,7 @@ export class ContextSearcher {
         evidence: item.evidence,
         ...(item.search_matches ? { matches: item.search_matches } : {}),
       };
-    });
+    }));
     return {
       request_id: request.id, snapshot_id: snapshot.id, read_epoch: snapshot.read_epoch,
       retrieval_profile: snapshot.retrieval_profile_version,

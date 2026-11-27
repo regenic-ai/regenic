@@ -152,16 +152,26 @@ export class PersonalContextService {
   private async searchObserved(input: unknown) {
     return this.runContext(async () => {
       const { appClass, body } = splitSearchAppClass(input);
-      const request = contextSearchRequest(await this.filtersForSearch(body, appClass), {
+      const request = contextSearchRequest(await timeSearchStage("read", () => this.filtersForSearch(body, appClass)), {
         id: randomUUID(), org_id: this.runtime.orgId(), principal: this.principal(),
       });
       return new ContextSearcher(this.runtime.requireHost().get("context")).search(request);
     });
   }
 
-  async searchExpanded(input: unknown) {
-    if (searchObservationActive()) return this.searchExpandedObserved(input);
-    const { value, timing } = await observeSearch(() => this.searchExpandedObserved(input));
+  async searchExpanded<Presented extends object>(
+    input: unknown,
+    present?: (
+      result: Awaited<ReturnType<PersonalContextService["searchExpandedObserved"]>>,
+    ) => Promise<Presented>,
+  ) {
+    const run = async () => {
+      const result = await this.searchExpandedObserved(input);
+      if (!present || result.conversations.length === 0) return result;
+      return timeSearchStage("labels", () => present(result));
+    };
+    if (searchObservationActive()) return run();
+    const { value, timing } = await observeSearch(run);
     return { ...value, timing };
   }
 
@@ -1639,7 +1649,7 @@ export class PersonalContextService {
         throw error;
       }
       if (error.code === "source_boundary" || error.code === "invalid_candidate") {
-        console.warn("context retrieval unavailable", error.code);
+        console.warn("context retrieval unavailable", error.code, error.message);
         throw new PersonalContextError("retrieval_unavailable", HttpStatus.SERVICE_UNAVAILABLE,
           "Context retrieval changed or is unavailable; retry the request");
       }

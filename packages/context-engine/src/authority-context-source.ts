@@ -32,6 +32,31 @@ export class AuthorityContextEvidenceSource implements ContextEvidenceSource {
     private readonly strictText = false,
   ) {}
 
+  async openReadStamp(): Promise<string> {
+    if (!this.authority.openContextMutationStamp) {
+      throw new Error("Context authority cannot report a mutation stamp");
+    }
+    const stamp = await this.authority.openContextMutationStamp();
+    if (typeof stamp !== "string" || !stamp.trim()) {
+      throw new Error("Context authority returned an invalid mutation stamp");
+    }
+    return stamp;
+  }
+
+  databasePath(): string | undefined {
+    const path = this.authority.databasePath?.();
+    if (!path || path === ":memory:" || path.includes("\0")) return undefined;
+    return path;
+  }
+
+  async loadCurrentEvents(orgId: string, eventIds: string[]): Promise<ContextSourceEvent[]> {
+    if (!this.authority.readCurrentHeadsByIds) {
+      throw new Error("Context authority cannot load current heads");
+    }
+    const rows = await this.authority.readCurrentHeadsByIds(orgId, eventIds);
+    return rows.map(sourceEventFromRecord);
+  }
+
   async openReadEpoch(request: ContextRequest): Promise<string> {
     const query = { filters: request.filters, anchors: request.anchors };
     const epoch = this.authority.openContextReadEpoch
@@ -522,6 +547,29 @@ function groupEvents(
     groups.set(key, values);
   }
   return groups;
+}
+
+function sourceEventFromRecord(source: ContextAuthorityRead["events"][number]): ContextSourceEvent {
+  return {
+    event: {
+      event_id: source.id,
+      org_id: source.org_id,
+      source: source.source,
+      external_id: source.external_id,
+      operation: source.operation,
+      occurred_at: source.occurred_at,
+      ingested_at: source.ingested_at,
+      ...(source.content_hash ? { content_hash: source.content_hash } : {}),
+      ...(source.parent_event_id ? { parent_event_id: source.parent_event_id } : {}),
+    },
+    ...(source.thread_id ? { thread_id: source.thread_id } : {}),
+    ...(source.actor_id ? { actor_id: source.actor_id } : {}),
+    required_scope_ids: [...(source.required_scope_ids ?? [])],
+    ...(source.direction_tags ? { direction_tags: [...source.direction_tags] } : {}),
+    ...(source.weight_hints ? { weight_hints: structuredClone(source.weight_hints) } : {}),
+    ...(source.attrs ? { attrs: structuredClone(source.attrs) } : {}),
+    ...(source.content_media_type ? { content_media_type: source.content_media_type } : {}),
+  };
 }
 
 function identityKey(source: string, externalId: string): string {
