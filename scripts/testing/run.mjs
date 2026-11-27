@@ -32,9 +32,7 @@ try {
     command(["--filter", "@regenic/api...", "build"]);
     command(["--filter", "@regenic/desktop", "test"]);
     command(["--filter", "@regenic/desktop", "build"]);
-    const smokeEnv = { ...env };
-    if (process.platform === "linux") smokeEnv.REGENIC_ELECTRON_SMOKE_SKIP_CRASH = "1";
-    run(pnpm, ["--filter", "@regenic/desktop", "test:semantic:electron"], { env: smokeEnv });
+    run(pnpm, ["--filter", "@regenic/desktop", "test:semantic:electron"], { env });
     command(["--filter", "@regenic/desktop", "test:database-settings:electron"]);
   } else {
     command(["--filter", "@regenic/api...", "build"]);
