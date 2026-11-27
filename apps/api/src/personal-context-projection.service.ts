@@ -196,7 +196,7 @@ export class PersonalContextProjectionService implements OnModuleDestroy {
         more = true;
       }
       if (outbox) {
-        await this.settleThreads(outbox, runner, held);
+        await this.settleThreads(outbox, held);
       }
     } catch (error) {
       if (!this.stopping) {
@@ -270,7 +270,6 @@ export class PersonalContextProjectionService implements OnModuleDestroy {
 
   private async settleThreads(
     outbox: ContextProjectionOutboxStore,
-    runner: ContextProjectionRunner,
     held: ContextProjectionJobGroup[],
   ): Promise<void> {
     for (const group of coalesceProjectionGroups(held)) {
@@ -278,15 +277,6 @@ export class PersonalContextProjectionService implements OnModuleDestroy {
         return;
       }
       try {
-        await withProjectionLease(outbox, group.jobs, this.owner, async () => {
-          if (group.thread_id) {
-            await runner.projectThread(
-              group.org_id,
-              PROJECTION_GENERATION,
-              group.thread_id,
-            );
-          }
-        });
         const completedAt = new Date().toISOString();
         for (const job of group.jobs) {
           const completed = await outbox.completeContextProjectionJob({
@@ -368,42 +358,6 @@ async function indexLexicalChunk(
     if (offset + PROJECTION_LEXICAL_CHUNK < ids.length) {
       await yieldToEventLoop();
     }
-  }
-}
-
-async function withProjectionLease<T>(
-  outbox: ContextProjectionOutboxStore,
-  jobs: ContextProjectionJob[],
-  owner: string,
-  run: () => Promise<T>,
-): Promise<T> {
-  let leaseLost = false;
-  let heartbeat = Promise.resolve();
-  const timer = setInterval(() => {
-    heartbeat = heartbeat.then(async () => {
-      const now = new Date().toISOString();
-      const renewed = await Promise.all(jobs.map((job) =>
-        outbox.renewContextProjectionJob({
-          id: job.id,
-          owner,
-          now,
-          lease_ms: PROJECTION_LEASE_MS,
-        }),
-      ));
-      leaseLost = leaseLost || renewed.some((value) => !value);
-    }).catch(() => {
-      leaseLost = true;
-    });
-  }, PROJECTION_HEARTBEAT_MS);
-  try {
-    const value = await run();
-    await heartbeat;
-    if (leaseLost) {
-      throw new ProjectionLeaseLostError();
-    }
-    return value;
-  } finally {
-    clearInterval(timer);
   }
 }
 

@@ -77,13 +77,22 @@ export function authorizedHeadWhere(
   return { sql: clauses.join(" AND "), params };
 }
 
+/** Org, generation, and filters. A sync commit does not change this key. */
+export function authorizedHeadFilterKey(
+  orgId: string,
+  filters: ContextRequestFilters | undefined,
+  generation: string,
+): string {
+  return `${orgId}\0${generation}\0${canonicalContextJson(filters ?? {})}`;
+}
+
 export function authorizedHeadScopeKey(
   stamp: string,
   orgId: string,
   filters: ContextRequestFilters | undefined,
   generation: string,
 ): string {
-  return `${stamp}\0${orgId}\0${generation}\0${canonicalContextJson(filters ?? {})}`;
+  return `${stamp}\0${authorizedHeadFilterKey(orgId, filters, generation)}`;
 }
 
 export function authorityHeadFrom(whereSql: string): string {

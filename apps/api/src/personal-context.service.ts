@@ -70,13 +70,6 @@ import {
   ContextQuestionError,
   type ContextAnswerResult,
 } from "@regenic/context-engine";
-import {
-  CONTEXT_RECORD_PAGE_MAX,
-  contextRecordPage,
-  contextRecordSummary,
-  type ContextRecordPage,
-  type ContextRecordSummary,
-} from "./context-record-view";
 import { PersonalRuntimeService } from "./personal-runtime.service";
 import { openEventAttachment } from "./attachment-file";
 import { PersonalContextError } from "./personal-context-error";
@@ -530,42 +523,6 @@ export class PersonalContextService {
       org_id: this.runtime.orgId(),
     });
   }
-
-  async listArtifactSummaries(): Promise<ContextRecordSummary[]> {
-    const indexes = await this.runtime.requireHost().get("context-artifacts").listArtifactIndexes({
-      org_id: this.runtime.orgId(),
-    });
-    return indexes.map((index) => contextRecordSummary(index));
-  }
-
-  async getArtifactRecord(
-    artifactId: string,
-    offset?: string,
-    limit?: string,
-  ): Promise<ContextRecordPage> {
-    const id = requiredString(artifactId, "artifact_id");
-    const parsedOffset = optionalBoundedInt(offset, "offset", 1_000_000_000, 0);
-    const parsedLimit = optionalBoundedInt(limit, "limit", CONTEXT_RECORD_PAGE_MAX, 1);
-    const artifact = await this.runtime
-      .requireHost()
-      .get("context-artifacts")
-      .getArtifact(this.runtime.orgId(), id);
-    if (!artifact) {
-      throw new PersonalContextError("not_found", HttpStatus.NOT_FOUND, "Context record was not found");
-    }
-    return contextRecordPage(artifact, {
-      ...(parsedOffset === undefined ? {} : { offset: parsedOffset }),
-      ...(parsedLimit === undefined ? {} : { limit: parsedLimit }),
-    });
-  }
-
-
-
-
-
-
-
-
 
   async createProposal(input: unknown): Promise<ProposalRecord> {
     const body = strictBody(input, new Set([
@@ -1787,33 +1744,6 @@ function modelError(error: unknown): PersonalContextError {
     HttpStatus.BAD_GATEWAY,
     "Model provider request failed",
   );
-}
-
-function optionalBoundedInt(
-  value: string | undefined,
-  name: string,
-  max: number,
-  min: number,
-): number | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  if (!/^\d+$/.test(value)) {
-    throw new PersonalContextError(
-      "invalid_request",
-      HttpStatus.BAD_REQUEST,
-      `${name} must be an integer`,
-    );
-  }
-  const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed < min || parsed > max) {
-    throw new PersonalContextError(
-      "invalid_request",
-      HttpStatus.BAD_REQUEST,
-      `${name} is out of range`,
-    );
-  }
-  return parsed;
 }
 
 function requiredString(value: unknown, name: string): string {

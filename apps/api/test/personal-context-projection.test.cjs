@@ -134,7 +134,7 @@ function eventRecord(orgId, eventId, threadId) {
 }
 
 describe("PersonalContextProjectionService", () => {
-  it("projects an ingested Event into a durable thread summary and completes its outbox job", async (t) => {
+  it("indexes an ingested Event for search and completes its outbox job", async (t) => {
     const root = await mkdtemp(join(tmpdir(), "regenic-context-projection-"));
     const host = await createPersonalHost({
       database: join(root, "authority.db"),
@@ -180,11 +180,7 @@ describe("PersonalContextProjectionService", () => {
       org_id: "example-org",
       kinds: ["thread_summary"],
     });
-    assert.equal(artifacts.length, 1);
-    assert.equal(artifacts[0].attrs.thread_id, "thread-1");
-    assert.equal(artifacts[0].attrs.messages[0].text, "A durable summary source");
-    assert.equal(artifacts[0].body_storage, "artifact");
-    assert.equal(await host.get("blobs").exists(artifacts[0].body_hash), false);
+    assert.equal(artifacts.length, 0);
     assert.equal(await host.get("blobs").exists(contentHash), true);
     const lexical = await host.get("context-lexical-index").matchAuthorized({
       org_id: "example-org",
@@ -275,7 +271,7 @@ describe("PersonalContextProjectionService", () => {
     );
   });
 
-  it("projects each thread once and completes every claimed job", async () => {
+  it("indexes each thread's messages and completes every claimed job", async () => {
     const { service, calls } = fixture([
       job(),
       job({ id: "job-2", event_id: "event-2", attempts: 2 }),
@@ -292,10 +288,7 @@ describe("PersonalContextProjectionService", () => {
 
     assert.equal(calls.claims.length, 1);
     assert.equal(calls.claims[0].limit, 100);
-    assert.deepEqual(calls.projects, [
-      { orgId: "example-org", generation: "continuous-v2", threadId: "thread-1" },
-      { orgId: "other-org", generation: "continuous-v2", threadId: "thread-other" },
-    ]);
+    assert.deepEqual(calls.projects, []);
     assert.deepEqual(calls.indexSyncs, [
       {
         orgId: "example-org",
@@ -363,10 +356,11 @@ describe("PersonalContextProjectionService", () => {
   it("fails a group with bounded backoff and a secret-safe error code", async () => {
     const { service, calls } = fixture(
       [job({ attempts: 3 })],
-      async () => {
-        throw new Error("secret message body");
-      },
+      async () => [],
       async (orgId, eventId) => eventRecord(orgId, eventId, "thread-1"),
+      async (_orgId, _generation, eventIds) => {
+        if (eventIds) throw new Error("secret message body");
+      },
     );
 
     await service.runOnce(new Date("2026-08-30T00:01:00.000Z"));
@@ -388,8 +382,11 @@ describe("PersonalContextProjectionService", () => {
     const blocked = new Promise((resolve) => { release = resolve; });
     const { service, calls } = fixture(
       [job()],
-      async () => blocked,
+      async () => [],
       async (orgId, eventId) => eventRecord(orgId, eventId, "thread-1"),
+      async (_orgId, _generation, eventIds) => {
+        if (eventIds) await blocked;
+      },
     );
 
     const first = service.runOnce(new Date("2026-08-30T00:01:00.000Z"));
@@ -402,12 +399,13 @@ describe("PersonalContextProjectionService", () => {
   });
 
   it("projects threads still in history instead of parking bootstrap_pending", async () => {
-    const calls = { projects: [], failures: [] };
+    const calls = { projects: [], failures: [], indexSyncs: [], completes: [] };
     const outbox = {
       async claimContextProjectionJobs() {
         return [job()];
       },
-      async completeContextProjectionJob() {
+      async completeContextProjectionJob(input) {
+        calls.completes.push(input);
         return true;
       },
       async failContextProjectionJob(input) {
@@ -416,7 +414,9 @@ describe("PersonalContextProjectionService", () => {
       },
     };
     const runner = {
-      async syncLexicalIndex() {},
+      async syncLexicalIndex(orgId, generation, eventIds, threadId) {
+        calls.indexSyncs.push({ orgId, generation, eventIds, threadId });
+      },
       async projectThread(orgId, generation, threadId) {
         calls.projects.push({ orgId, generation, threadId });
         return [];
@@ -490,10 +490,15 @@ describe("PersonalContextProjectionService", () => {
       },
     );
     await service.runOnce(new Date("2026-08-30T00:01:00.000Z"));
-    assert.deepEqual(calls.projects, [
-      { orgId: "example-org", generation: "continuous-v2", threadId: "feishu:1" },
-    ]);
+    assert.deepEqual(calls.projects, []);
     assert.equal(calls.failures.length, 0);
+    assert.equal(calls.completes.length, 1);
+    assert.deepEqual(calls.indexSyncs[1], {
+      orgId: "example-org",
+      generation: "continuous-v2",
+      eventIds: ["event-1"],
+      threadId: "feishu:1",
+    });
     await service.onModuleDestroy();
     reset();
     clearOrgSyncPhaseIndex();
@@ -536,7 +541,7 @@ describe("PersonalContextProjectionService", () => {
     await service.onModuleDestroy();
   });
 
-  it("drains the outbox until it is caught up and summarizes each thread once", async () => {
+  it("drains the outbox until every claimed message is indexed", async () => {
     const full = Array.from({ length: 100 }, (_, index) => job({
       id: `job-${index}`,
       event_id: `event-${index}`,
@@ -554,8 +559,7 @@ describe("PersonalContextProjectionService", () => {
     await new Promise((resolve) => setTimeout(resolve, 30));
 
     assert.equal(calls.claims.length, 2);
-    assert.equal(calls.projects.length, 1);
-    assert.equal(calls.projects[0].threadId, "thread-1");
+    assert.equal(calls.projects.length, 0);
     assert.equal(calls.completes.length, 101);
     await service.onModuleDestroy();
   });
@@ -580,7 +584,7 @@ describe("PersonalContextProjectionService", () => {
     await new Promise((resolve) => setTimeout(resolve, 30));
 
     assert.equal(calls.claims.length, 1);
-    assert.equal(calls.projects.length, 1);
+    assert.equal(calls.projects.length, 0);
     assert.equal(calls.completes.length, 100);
     await service.onModuleDestroy();
   });

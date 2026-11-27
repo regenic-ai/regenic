@@ -96,6 +96,32 @@ describe("shared immutable Context artifact segments", () => {
     context.diagnostic(`Stored manifests, previews, and segments: 64=${halfwayBytes} bytes, 128=${finalBytes} bytes; legacy manifests=${legacyBytes} bytes`);
   });
 
+  it("stores a transcript longer than one model payload", async (context) => {
+    const { store } = await storage(context);
+    const count = 10_001;
+    const inputRefs = [];
+    for (let index = 0; index < count; index += 1) {
+      inputRefs.push({
+        event_id: `event-${index}`, source: "synthetic", external_id: `message-${index}`,
+        operation: "create", occurred_at: new Date(Date.UTC(2026, 8, 1, 0, 0, index)).toISOString(),
+        content_hash: createHash("sha256").update(String(index)).digest("hex"),
+      });
+    }
+    const body = { schema_version: "1.0", thread_id: "thread-1", message_count: count };
+    const value = {
+      id: "summary-long", org_id: "example-org", kind: "thread_summary", schema_version: "1.0",
+      algorithm_version: "thread-summary-deterministic-v2", generation: "generation-2",
+      input_refs: inputRefs, input_hash: hashContextArtifactInputs({ input_refs: inputRefs }),
+      body_hash: hashCanonicalContext(body), body_storage: "artifact", status: "proposed",
+      required_scope_ids: ["scope-1"], recorded_at: "2026-08-30T00:01:00.000Z",
+      attrs: body,
+    };
+    await store.putArtifact(value);
+    const restored = await store.getArtifact("example-org", "summary-long");
+    assert.equal(restored.input_refs.length, count);
+    assert.equal(restored.attrs.message_count, count);
+  });
+
   it("restores current and historical manifests after restart without transcript Blobs", async (context) => {
     const binding = await storage(context);
     const { store } = binding;

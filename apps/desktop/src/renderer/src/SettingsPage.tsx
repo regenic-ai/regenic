@@ -12,7 +12,6 @@ import {
   resolveSourceRetention,
 } from "./api";
 import { isMessageKey, type MessageKey } from "../../shared/messages.ts";
-import { ContextRecordsDialog } from "./ContextRecordsDialog";
 import { SemanticSettings } from "./SemanticSettings";
 import { SyncSettings } from "./SyncSettings";
 import { DatabaseSettings } from "./DatabaseSettings";
@@ -68,10 +67,6 @@ function storeHasData(store: StoreView): boolean {
   );
 }
 
-function contextRecordCount(store: Pick<StoreView, "context_artifacts">): number {
-  return store.context_artifacts;
-}
-
 export function SettingsPage({
   onChanged,
   onStoreCleared,
@@ -101,7 +96,6 @@ export function SettingsPage({
   const [dataDone, setDataDone] = useState<string | null>(null);
   const [reclaimConfirming, setReclaimConfirming] = useState(false);
   const [reclaimBusy, setReclaimBusy] = useState(false);
-  const [contextOpen, setContextOpen] = useState(false);
   const [dispatchPolicy, setDispatchPolicy] = useState<PersonalDispatchPolicy | null>(null);
   const [dispatchBusy, setDispatchBusy] = useState(false);
   const [dispatchMessage, setDispatchMessage] = useState<string | null>(null);
@@ -626,16 +620,7 @@ export function SettingsPage({
               <StoreStat label={t("settings.storeMessages")} value={currentStore.events} />
               <StoreStat label={t("settings.storeWork")} value={currentStore.work_items} />
               <StoreStat label={t("settings.storeBlobs")} value={currentStore.blobs} />
-              <StoreStat
-                label={t("settings.storeContext")}
-                value={contextRecordCount(currentStore)}
-                ariaLabel={t("settings.contextOpen")}
-                onClick={() => setContextOpen(true)}
-              />
             </div>
-            {contextOpen ? (
-              <ContextRecordsDialog onClose={() => setContextOpen(false)} />
-            ) : null}
 
             <div className="settings-path">
               <div className="settings-path-text">

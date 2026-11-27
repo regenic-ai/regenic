@@ -300,7 +300,7 @@ export const ContextArtifactSchema: z.ZodType<ContextArtifact> = z
     schema_version: nonEmptyStringSchema,
     algorithm_version: nonEmptyStringSchema,
     generation: nonEmptyStringSchema,
-    input_refs: z.array(EvidenceReferenceSchema).max(10_000),
+    input_refs: z.array(EvidenceReferenceSchema),
     input_hash: contentHashSchema,
     body_hash: contentHashSchema.optional(),
     body_storage: z.literal("artifact").optional(),
@@ -315,6 +315,16 @@ export const ContextArtifactSchema: z.ZodType<ContextArtifact> = z
     if (artifact.body_storage === "artifact" && (artifact.attrs === undefined
       || artifact.body_hash !== hashCanonicalContext(artifact.attrs))) {
       context.addIssue({ code: z.ZodIssueCode.custom, path: ["body_hash"], message: "Artifact-backed body must match its manifest" });
+    }
+    // A model bundle, citation list, and budget stay capped at 10,000. An
+    // artifact-backed transcript is stored as a 32-wide segment tree, so its
+    // logical evidence list can be the whole conversation.
+    if (artifact.body_storage !== "artifact" && artifact.input_refs.length > 10_000) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["input_refs"],
+        message: "Inline artifact evidence exceeds 10000 references",
+      });
     }
     if (artifact.status === "accepted" && artifact.input_refs.length === 0) {
       context.addIssue({ code: z.ZodIssueCode.custom, path: ["input_refs"], message: "Accepted artifacts require evidence" });

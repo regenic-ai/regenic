@@ -995,8 +995,9 @@ def main():
     runtime["threads"] = torch.get_num_threads()
     runtime["visual_enabled"] = args.visual
     # CPU forwards scale almost linearly, so batching does not buy throughput.
-    # MPS and CUDA stay at four segments only while no query is waiting.
-    document_batch = 4 if runtime["device"] in ("mps", "cuda") else 1
+    # MPS and CUDA take a wider batch only while no query is waiting.
+    # A waiting query still splits the next forward to one segment.
+    document_batch = 32 if runtime["device"] in ("mps", "cuda") else 1
     encoder = PriorityEncoder(model, max_document_batch=document_batch)
     if args.download_only:
         logging.warning(
