@@ -2,9 +2,7 @@ import {
   contextProjectionCoordinatorPlugin,
   contextEmbeddingWorkerPlugin,
   hybridEventRetrieverPlugin,
-  acceptedThreadSummaryRetrieverPlugin,
   deterministicEventRetrieverPlugin,
-  deterministicThreadSummaryProjectorPlugin,
   indexedEventRetrieverPlugin,
   personalContextEnginePlugin,
 } from "@regenic/context-engine";
@@ -51,8 +49,6 @@ export async function createKernelHost<A, B>(
     } else {
       if (!options.embedding) await host.plugin(deterministicEventRetrieverPlugin);
     }
-    await host.plugin(acceptedThreadSummaryRetrieverPlugin);
-    await host.plugin(deterministicThreadSummaryProjectorPlugin);
     await host.plugin(contextProjectionCoordinatorPlugin, {
       lexical_index: options.lexicalDatabase === undefined
         ? undefined
