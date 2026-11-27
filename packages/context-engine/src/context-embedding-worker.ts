@@ -27,9 +27,9 @@ const MAX_RUN_JOBS = 100;
 const MAX_RUN_BUDGET_MS = 30_000;
 const CHECKPOINT_BATCH_CHUNKS = 8;
 const EMBED_BATCH = CHECKPOINT_BATCH_CHUNKS;
-// CPU inference runs one document segment at a time inside a single HTTP call.
-// Leasing the provider maximum of 32 holds the whole round until that call
-// returns, which is longer than the client timeout. Stay within one embed batch.
+// One slow attachment after this many published fast groups. Same shape as a
+// weighted queue: text keeps moving, and attachments are not starved.
+const FAST_GROUPS_PER_HEAVY = 3;
 
 type AuthoritySnapshot = { read: ContextSourceRead; stamp?: string };
 type PreparedPlain = { job: EmbeddingJob; text: string; material: ContextEmbeddingMaterial };
@@ -49,6 +49,11 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
   private continueImmediately = false;
   private headsRemain = false;
   private readonly claimSequences = new Map<string, number>();
+  /** Attachments and resumed checkpoints. Kept off the fast claim until their turn. */
+  private readonly slowJobs = new Set<number>();
+  private plainGroupsSinceHeavy = 0;
+  private plainBatchLimit = EMBED_BATCH;
+  private growPlainBatch = false;
 
   constructor(
     private readonly orgId: string,
@@ -64,6 +69,8 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
 
   async runOnce(options: EmbeddingRunOptions = {}): ReturnType<ContextEmbeddingRunner["runOnce"]> {
     if (this.stopped || this.clearing || this.running) return { processed: 0, failed: 0, superseded: 0 };
+    if (this.growPlainBatch && this.plainBatchLimit < EMBED_BATCH) this.plainBatchLimit += 1;
+    this.growPlainBatch = false;
     this.continueImmediately = false;
     this.running = this.runGenerations(options);
     try {
@@ -198,34 +205,80 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
       : await this.loadSnapshot(generation);
     const result = { processed: 0, failed: 0, superseded: 0 };
     let yielded = false;
-    const room = Math.min(EMBED_BATCH, Math.max(0, slots));
+    const room = Math.min(this.plainBatchLimit, EMBED_BATCH, Math.max(0, slots));
     let sequence = this.claimSequences.get(generation.id) ?? 0;
     let claimedCount = 0;
+    let deferredSlow = 0;
     const plain: PreparedPlain[] = [];
     let blocked: EmbeddingJob | undefined;
-    while (claimedCount < room && !blocked && !this.abort.signal.aborted && Date.now() < deadline) {
-      if (claimedCount > 0 && pause?.()) break;
+    const take = async (jobId?: number): Promise<EmbeddingJob | undefined> => {
+      const exclude = [...this.slowJobs].slice(0, 200);
       const [job] = await this.jobs.claim({
         org_id: this.orgId, generation: generation.id, owner: this.owner,
         now: new Date().toISOString(), lease_ms: 90000, limit: 1,
         order: sequence % 4 === 3 ? "oldest" : "newest",
+        ...(jobId !== undefined ? { job_id: jobId } : {}),
+        ...(jobId === undefined && exclude.length ? { exclude_ids: exclude } : {}),
       });
-      if (!job) break;
+      if (!job) return undefined;
       sequence += 1;
       this.claimSequences.set(generation.id, sequence);
+      return job;
+    };
+    while (claimedCount < room && !blocked && !this.abort.signal.aborted && Date.now() < deadline) {
+      if (claimedCount > 0 && pause?.()) break;
+      let forceSlow = false;
+      let job: EmbeddingJob | undefined;
+      // After enough text groups, take one parked attachment even if newer text is waiting.
+      if (plain.length === 0 && this.plainGroupsSinceHeavy >= FAST_GROUPS_PER_HEAVY && this.slowJobs.size > 0) {
+        const nextSlow = this.slowJobs.values().next().value;
+        if (nextSlow !== undefined) {
+          this.slowJobs.delete(nextSlow);
+          forceSlow = true;
+          job = await take(nextSlow);
+        }
+      }
+      if (!job) {
+        forceSlow = false;
+        job = await take();
+      }
+      // Nothing fast remains. Run one parked attachment instead of scanning them again.
+      if (!job && plain.length === 0 && this.slowJobs.size > 0) {
+        const nextSlow = this.slowJobs.values().next().value;
+        if (nextSlow !== undefined) {
+          this.slowJobs.delete(nextSlow);
+          forceSlow = true;
+          job = await take(nextSlow);
+        }
+      }
+      if (!job) break;
       claimedCount += 1;
       try {
         const prepared = await this.preparePlain(job, snapshot, generation);
         if (prepared === "superseded") {
+          this.slowJobs.delete(job.id);
           result.superseded += 1;
           continue;
         }
-        if (prepared === "other") {
-          // An attachment or resumed checkpoint can occupy the model for minutes.
-          // Publish any short texts already leased before taking that call, and
-          // do not leave this job leased beside them.
+        if (prepared === "slow" && !forceSlow && this.plainGroupsSinceHeavy < FAST_GROUPS_PER_HEAVY) {
+          // Park the attachment and keep claiming text. A prefix of only
+          // attachments still gets one turn so that lane cannot stall forever.
+          if (plain.length === 0 && deferredSlow >= EMBED_BATCH - 1) {
+            this.plainGroupsSinceHeavy = 0;
+            blocked = job;
+            break;
+          }
+          this.slowJobs.add(job.id);
+          deferredSlow += 1;
+          claimedCount -= 1;
+          if (!await this.jobs.yieldJob(job, this.owner, new Date().toISOString())) result.superseded += 1;
+          continue;
+        }
+        if (prepared === "slow" || prepared === "single") {
+          if (prepared === "slow") this.plainGroupsSinceHeavy = 0;
           if (plain.length > 0) {
             if (!await this.jobs.yieldJob(job, this.owner, new Date().toISOString())) result.superseded += 1;
+            claimedCount -= 1;
             break;
           }
           blocked = job;
@@ -240,7 +293,9 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
     }
     if (claimedCount === 0) return { claimedCount, read: snapshot.read, stamp: snapshot.stamp, result, yielded };
     if (plain.length > 0) {
+      const processedBefore = result.processed;
       yielded = await this.indexPlainGroup(plain, generation, snapshot, pause, deadline, result);
+      if (result.processed > processedBefore) this.plainGroupsSinceHeavy += 1;
     }
     if (blocked) {
       if (yielded || this.abort.signal.aborted || Date.now() >= deadline) {
@@ -536,10 +591,10 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
     job: EmbeddingJob,
     snapshot: AuthoritySnapshot,
     generation: EmbeddingGeneration,
-  ): Promise<PreparedPlain | "other" | "superseded"> {
+  ): Promise<PreparedPlain | "single" | "slow" | "superseded"> {
     const event = await this.stillCurrent(job, snapshot.read);
     if (!event) return "superseded";
-    if (!this.source.materializeForEmbedding) return "other";
+    if (!this.source.materializeForEmbedding) return "single";
     const authorized: AuthorizedContextSourceEvent = { ...event, status: "current" };
     const material = (await this.source.materializeForEmbedding(
       [authorized], generation.extractor_version,
@@ -548,9 +603,10 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
       throw new EmbeddingError("invalid_response", true);
     }
     const text = material.text;
-    if (material.attachments.length > 0 || typeof text !== "string" || !text.trim()) return "other";
+    if (material.attachments.length > 0) return "slow";
+    if ((await this.jobs.loadStagedChunks(job, this.owner, new Date().toISOString())).length > 0) return "slow";
+    if (typeof text !== "string" || !text.trim()) return "single";
     if (Buffer.byteLength(text, "utf8") > 262144) throw new EmbeddingError("input_too_large", false);
-    if ((await this.jobs.loadStagedChunks(job, this.owner, new Date().toISOString())).length > 0) return "other";
     return { job, text, material };
   }
 
@@ -647,8 +703,8 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
 
   /**
    * Publish short texts as soon as their embed returns. A retryable failure of
-   * more than one text is split and retried, so one slow batch cannot fail or
-   * pin every leased message for the whole client timeout.
+   * more than one text shrinks the next batch instead of replaying halves of
+   * the request that just timed out.
    */
   private async indexShortGroup(
     shorts: PreparedPlain[],
@@ -678,19 +734,23 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
         );
         if (vectors.length !== slice.length) throw new EmbeddingError("invalid_response", true);
         await this.publishShorts(slice, vectors, generation, snapshot, pause, result);
+        if (slice.length >= this.plainBatchLimit) this.growPlainBatch = true;
       } catch (error) {
-        const splittable = slice.length > 1 && error instanceof EmbeddingError && error.retryable
+        const shrink = slice.length > 1 && error instanceof EmbeddingError && error.retryable
           && (error.code === "timeout" || error.code === "unavailable");
-        if (!splittable) {
+        if (!shrink) {
           for (const item of slice) {
             await this.failClaimed(item.job, error);
             result.failed += 1;
           }
           continue;
         }
-        const mid = Math.ceil(slice.length / 2);
-        queue.unshift(slice.slice(mid));
-        queue.unshift(slice.slice(0, mid));
+        this.growPlainBatch = false;
+        this.plainBatchLimit = Math.max(1, Math.floor(slice.length / 2));
+        for (const item of [slice, ...queue.splice(0)].flat()) {
+          if (!await this.jobs.yieldJob(item.job, this.owner, new Date().toISOString())) result.superseded += 1;
+        }
+        return true;
       }
     }
     return false;

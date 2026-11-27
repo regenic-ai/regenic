@@ -287,6 +287,10 @@ export interface EmbeddingJobStore {
     lease_ms: number;
     limit: number;
     order?: "oldest" | "newest";
+    /** Claim this pending or due job, for a slow-lane turn. */
+    job_id?: number;
+    /** Skip these ids so a slow job does not sit at the head of the fast lane. */
+    exclude_ids?: number[];
   }): Promise<EmbeddingJob[]>;
   renew(job: EmbeddingJob, owner: string, now: string, leaseMs: number): Promise<boolean>;
   complete(input: {

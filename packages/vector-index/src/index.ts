@@ -728,14 +728,15 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
       // The queue is pending, ordered by id. A failure stays failed until its
       // backoff elapses; only those due rows are merged back by their original id.
       // Expired leases were already returned to pending above, so they keep their place.
+      const filter = claimIdFilter(input);
       const pending = this.db.prepare(`SELECT * FROM jobs
-        WHERE org_id=? AND generation=? AND status='pending'
+        WHERE org_id=? AND generation=? AND status='pending'${filter.sql}
         ORDER BY id ${direction} LIMIT ?`).all(
-        input.org_id, input.generation, input.limit,
+        input.org_id, input.generation, ...filter.params, input.limit,
       ) as JobRow[];
       const dueFailed = this.db.prepare(`SELECT * FROM jobs
-        WHERE org_id=? AND generation=? AND status='failed' AND retry_at<=?`).all(
-        input.org_id, input.generation, input.now,
+        WHERE org_id=? AND generation=? AND status='failed' AND retry_at<=?${filter.sql}`).all(
+        input.org_id, input.generation, input.now, ...filter.params,
       ) as JobRow[];
       const rows = dueFailed.length === 0 ? pending : [...pending, ...dueFailed]
         .sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0) * (direction === "DESC" ? -1 : 1))
@@ -2236,6 +2237,19 @@ function jobFromRow(row: JobRow): EmbeddingJob {
     ...(row.error_code ? { error_code: row.error_code } : {}),
   };
 }
+function claimIdFilter(input: { job_id?: number; exclude_ids?: number[] }): { sql: string; params: number[] } {
+  if (input.job_id !== undefined) {
+    if (!Number.isSafeInteger(input.job_id) || input.job_id < 1) throw new Error("Invalid embedding job id");
+    return { sql: " AND id=?", params: [input.job_id] };
+  }
+  const exclude = input.exclude_ids ?? [];
+  if (exclude.length > 200 || exclude.some((id) => !Number.isSafeInteger(id) || id < 1)) {
+    throw new Error("Invalid embedding claim exclusion");
+  }
+  if (!exclude.length) return { sql: "", params: [] };
+  return { sql: ` AND id NOT IN (${exclude.map(() => "?").join(",")})`, params: exclude };
+}
+
 function required(value: string): void { if (typeof value !== "string" || !value.trim()) throw new Error("Vector namespace is required"); }
 function validHash(value: string | undefined): boolean { return typeof value === "string" && /^[a-f0-9]{64}$/.test(value); }
 function validateAuthorizationKey(key: ContextVectorAuthorizationKey): void {

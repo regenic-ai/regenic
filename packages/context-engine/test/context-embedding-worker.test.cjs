@@ -592,7 +592,7 @@ describe("independent embedding indexing worker", () => {
     assert.equal(reads, 0);
   });
 
-  it("splits a short-message group after a retryable timeout and still publishes each one", async (t) => {
+  it("shrinks the next short batch after a timeout instead of replaying halves", async (t) => {
     const batches = [];
     const f = await fixture(t, provider({
       async embed(texts) {
@@ -605,11 +605,49 @@ describe("independent embedding indexing worker", () => {
       await f.ingest.ingest(batch("create", `message-${index}`, `delivery-${index}`, `message-${index}`));
     }
     assert.deepEqual(await f.worker.runOnce({ max_jobs: 4, time_budget_ms: 30_000 }), {
+      processed: 0, failed: 0, superseded: 0,
+    });
+    assert.deepEqual(await f.worker.runOnce({ max_jobs: 4, time_budget_ms: 30_000 }), {
+      processed: 0, failed: 0, superseded: 0,
+    });
+    assert.deepEqual(await f.worker.runOnce({ max_jobs: 4, time_budget_ms: 30_000 }), {
       processed: 4, failed: 0, superseded: 0,
     });
-    assert.deepEqual(batches, [4, 2, 1, 1, 2, 1, 1]);
+    assert.deepEqual(batches, [4, 2, 1, 1, 1, 1]);
     const jobs = await f.index.listJobs("org", generation.id);
     assert.equal(jobs.filter((job) => job.status === "succeeded").length, 4);
+  });
+
+  it("publishes queued text before an attachment and still gives the attachment a turn", async (t) => {
+    let attachments = 0;
+    const f = await fixture(t, provider({
+      async processAttachment() {
+        attachments += 1;
+        return { text: "spreadsheet", vectors: [] };
+      },
+    }));
+    for (let index = 1; index <= 26; index += 1) {
+      await f.ingest.ingest(batch("create", `message-${index}`, `delivery-${index}`, `message-${index}`));
+    }
+    const file = batch("create", undefined, "file", "file-1");
+    file.records[0].content = [{
+      role: "attachment",
+      media_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      source_filename: "a.xlsx",
+      bytes: Buffer.from("PK\u0003\u0004synthetic"),
+    }];
+    await f.ingest.ingest(file);
+    for (let pass = 0; pass < 3; pass += 1) {
+      const result = await f.worker.runOnce({ max_jobs: 8, time_budget_ms: 30_000 });
+      assert.equal(result.failed, 0);
+      assert.equal(attachments, 0);
+    }
+    const slow = await f.worker.runOnce({ max_jobs: 8, time_budget_ms: 30_000 });
+    assert.ok(attachments > 0);
+    assert.equal(slow.processed, 3);
+    const jobs = await f.index.listJobs("org", generation.id);
+    assert.equal(jobs.find((job) => job.external_id === "file-1").status, "succeeded");
+    assert.equal(jobs.filter((job) => job.external_id.startsWith("message-") && job.status === "succeeded").length, 26);
   });
 
   it("embeds a short-message group in one forward and keeps each vector", async (t) => {
