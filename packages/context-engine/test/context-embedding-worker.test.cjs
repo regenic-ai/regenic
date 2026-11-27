@@ -592,6 +592,26 @@ describe("independent embedding indexing worker", () => {
     assert.equal(reads, 0);
   });
 
+  it("splits a short-message group after a retryable timeout and still publishes each one", async (t) => {
+    const batches = [];
+    const f = await fixture(t, provider({
+      async embed(texts) {
+        batches.push(texts.length);
+        if (texts.length > 1) throw new EmbeddingError("timeout", true);
+        return texts.map(() => [1, 0]);
+      },
+    }));
+    for (let index = 1; index <= 4; index += 1) {
+      await f.ingest.ingest(batch("create", `message-${index}`, `delivery-${index}`, `message-${index}`));
+    }
+    assert.deepEqual(await f.worker.runOnce({ max_jobs: 4, time_budget_ms: 30_000 }), {
+      processed: 4, failed: 0, superseded: 0,
+    });
+    assert.deepEqual(batches, [4, 2, 1, 1, 2, 1, 1]);
+    const jobs = await f.index.listJobs("org", generation.id);
+    assert.equal(jobs.filter((job) => job.status === "succeeded").length, 4);
+  });
+
   it("embeds a short-message group in one forward and keeps each vector", async (t) => {
     const batches = [];
     const f = await fixture(t, provider({

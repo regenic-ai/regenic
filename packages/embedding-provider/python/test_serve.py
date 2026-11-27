@@ -15,7 +15,8 @@ class FakeEncoder:
     def embed(self, texts, mode):
         return [[1.0] + [0.0] * 767 for text in texts]
 
-    def embed_with_counts(self, texts, mode):
+    def embed_with_counts(self, texts, mode, stop=None):
+        del stop
         return self.count(texts, mode), self.embed(texts, mode)
 
 
@@ -228,6 +229,25 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(background_result[0][0], [15])
         self.assertEqual(query_result[0][0], [16])
         self.assertFalse(document.is_alive() or background.is_alive() or query.is_alive())
+
+    def test_document_embed_stops_between_forwards_when_the_client_is_gone(self):
+        calls = []
+
+        class Encoder(FakeEncoder):
+            def embed_with_counts(self, texts, mode, stop=None):
+                calls.append(list(texts))
+                return super().embed_with_counts(texts, mode, stop)
+
+        encoder = PriorityEncoder(Encoder(), max_document_batch=1)
+        seen = {"n": 0}
+
+        def stop():
+            seen["n"] += 1
+            return seen["n"] > 1
+
+        with self.assertRaises(ConnectionError):
+            encoder.embed_with_counts(["a", "b", "c"], "document", stop)
+        self.assertEqual(calls, [["a"]])
 
     def test_query_batches_stay_atomic_and_document_failures_return_no_partial_result(self):
         calls = []
