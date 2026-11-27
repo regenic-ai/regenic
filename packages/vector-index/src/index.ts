@@ -1738,7 +1738,7 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
         this.db.prepare("DELETE FROM vector_authorized").run();
         this.db.prepare(`
           INSERT INTO vector_authorized (event_id, content_hash, body_length)
-          SELECT e.id, e.content_hash, NULL
+          SELECT DISTINCT e.id, e.content_hash, NULL
           ${authorityHeadFrom(where.sql)}
         `).run(...where.params);
       });

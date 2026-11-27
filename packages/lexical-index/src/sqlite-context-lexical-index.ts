@@ -278,7 +278,7 @@ export class SqliteContextLexicalIndex implements ContextLexicalIndex {
         this.database.prepare("DELETE FROM context_lexical_authorization_state").run();
         this.database.prepare(`
           INSERT INTO context_lexical_authorized (event_id, content_hash)
-          SELECT e.id, e.content_hash
+          SELECT DISTINCT e.id, e.content_hash
           ${authorityHeadFrom(where.sql)}
         `).run(...where.params);
       });
