@@ -35,6 +35,7 @@ const RECENT_KEY = "regenic.search.recent";
 const RECENT_LIMIT = 8;
 const DEFAULT_LIMIT = 10;
 const INFORMATIONAL_FLAGS = new Set(["model_absent", "graph_absent", "rerank_absent"]);
+const SEMANTIC_OFF_FLAGS = new Set(["vector_absent", "vector_index_unbuilt"]);
 
 function visibleSearchQuery(value: string): string {
   const text = value.trim();
@@ -316,7 +317,33 @@ export function PreciseSearch({ onSettings, onOpenConversation, onLocate, locked
     const key = `search.flag.${flag}`;
     return isMessageKey(key) ? t(key) : t("search.flag.unknown");
   };
-  const warningTexts = [...new Set(notices.warnings.map(flagText))];
+  const flags = result?.degradation_flags ?? [];
+  const replacedFlags = new Set<string>();
+  const statusTexts: string[] = [];
+  const coverage = result?.coverage;
+  const indexBehind = Boolean(coverage && coverage.covered_count < coverage.authorized_count);
+  if (indexBehind && result?.generation && flags.includes("vector_index_partial")) {
+    replacedFlags.add("vector_index_partial");
+    statusTexts.push(t("search.coverage.semanticPartial", {
+      covered: coverage!.covered_count,
+      authorized: coverage!.authorized_count,
+    }));
+  }
+  if (indexBehind && !result?.generation && flags.includes("lexical_index_partial")) {
+    replacedFlags.add("lexical_index_partial");
+    statusTexts.push(t("search.coverage.lexicalPartial", {
+      covered: coverage!.covered_count,
+      authorized: coverage!.authorized_count,
+    }));
+  }
+  const offerSemantic = !result?.generation && flags.some((flag) => SEMANTIC_OFF_FLAGS.has(flag));
+  if (offerSemantic) {
+    for (const flag of SEMANTIC_OFF_FLAGS) replacedFlags.add(flag);
+  }
+  const warningTexts = [...new Set([
+    ...statusTexts,
+    ...notices.warnings.filter((flag) => !replacedFlags.has(flag)).map(flagText),
+  ])];
   const fileCount = result?.items.reduce((sum, hit) =>
     sum + (hit.matches ?? []).filter((match) => match.kind === "file").length, 0) ?? 0;
   const summary = !result ? "" : result.items.length && kind === "files"
@@ -482,11 +509,6 @@ export function PreciseSearch({ onSettings, onOpenConversation, onLocate, locked
                 title={t(result.generation ? "search.hybridHint" : "search.lexicalHint")}>
                 {t(result.generation ? "search.hybrid" : "search.lexical")}
               </span>
-              {result.coverage ? (
-                <span className="muted" title={t(result.generation ? "search.coverage.semanticHint" : "search.coverage.lexicalHint")}>{t(result.generation ? "search.coverage.semantic" : "search.coverage.lexical", {
-                  covered: result.coverage.covered_count, authorized: result.coverage.authorized_count,
-                })}</span>
-              ) : null}
               {submittedFilters ? <span className="muted">{t("search.timeRange", {
                 from: new Date(submittedFilters.occurred_after).toLocaleDateString(locale),
                 to: new Date(submittedFilters.occurred_before).toLocaleDateString(locale),
@@ -512,6 +534,10 @@ export function PreciseSearch({ onSettings, onOpenConversation, onLocate, locked
                   <dt>profile</dt><dd>{result.retrieval_profile}</dd>
                   <dt>generation</dt><dd>{result.generation ?? "—"}</dd>
                   <dt>read_epoch</dt><dd>{result.read_epoch}</dd>
+                  {result.coverage ? <>
+                    <dt>{t("search.trace.coverage")}</dt>
+                    <dd>{result.coverage.covered_count} / {result.coverage.authorized_count}</dd>
+                  </> : null}
                   {result.timing ? <>
                     <dt>{t("search.timing")}</dt>
                     <dd>{result.timing.total_ms} ms</dd>
@@ -546,9 +572,12 @@ export function PreciseSearch({ onSettings, onOpenConversation, onLocate, locked
                 </svg>
                 {warningTexts.length === 1 ? <p>{warningTexts[0]}</p>
                   : <ul>{warningTexts.map((text) => <li key={text}>{text}</li>)}</ul>}
-                {!result.generation ? (
-                  <button type="button" className="ghost search-notice-action" onClick={onSettings}>{t("search.enableSemantic")}</button>
-                ) : null}
+              </div>
+            ) : null}
+            {offerSemantic ? (
+              <div className="search-suggestion" role="note">
+                <p>{t("search.flag.vector_absent")}</p>
+                <button type="button" className="ghost search-notice-action" onClick={onSettings}>{t("search.enableSemantic")}</button>
               </div>
             ) : null}
             {suggestFiles ? (
