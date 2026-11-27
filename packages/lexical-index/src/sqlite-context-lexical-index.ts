@@ -13,8 +13,13 @@ import {
   type ContextLexicalKey,
   type MatchAuthorizedContextLexicalInput,
   type MatchAuthorizedContextLexicalResult,
+  type RankedHeadQuery,
+  type RankedLexicalMatchResult,
   type ReplaceContextLexicalIndex,
   type UpsertContextLexicalIndex,
+  authorizedHeadScopeKey,
+  authorizedHeadWhere,
+  authorityHeadFrom,
 } from "@regenic/domain";
 
 const HASH_PATTERN = /^[a-f0-9]{64}$/;
@@ -51,6 +56,8 @@ export interface SqliteContextLexicalIndexOptions {
 export class SqliteContextLexicalIndex implements ContextLexicalIndex {
   private readonly database: Database.Database;
   private readonly available: boolean;
+  /** Stamp and filters already loaded into the temp authorized table. */
+  private rankedScopeKey: string | undefined;
 
   constructor(path: string, options: SqliteContextLexicalIndexOptions = {}) {
     mkdirSync(dirname(path), { recursive: true });
@@ -158,6 +165,7 @@ export class SqliteContextLexicalIndex implements ContextLexicalIndex {
     }
     const expression = matchExpression(input.query);
     return this.database.transaction(() => {
+      this.rankedScopeKey = undefined;
       const cached = input.authorization_hash
         ? this.authorizationState(input, status)
         : null;
@@ -249,6 +257,64 @@ export class SqliteContextLexicalIndex implements ContextLexicalIndex {
         matched: sortedKeys(matched),
       };
     })();
+  }
+
+  async matchRanked(input: RankedHeadQuery & { query: string; limit: number }): Promise<RankedLexicalMatchResult> {
+    const status = await this.getStatus(input.org_id);
+    if (!status.available || !status.generation) {
+      return { available: status.available, matched: [], authorized_count: 0, covered_count: 0 };
+    }
+    const scopeKey = authorizedHeadScopeKey(
+      input.stamp,
+      input.org_id,
+      input.filters,
+      status.generation,
+    );
+    if (this.rankedScopeKey !== scopeKey) {
+      const where = authorizedHeadWhere(input.org_id, input.filters);
+      withAttachedAuthority(this.database, input.authority_path, () => {
+        this.database.prepare("DELETE FROM context_lexical_authorized").run();
+        this.database.prepare("DELETE FROM context_lexical_uncovered").run();
+        this.database.prepare("DELETE FROM context_lexical_authorization_state").run();
+        this.database.prepare(`
+          INSERT INTO context_lexical_authorized (event_id, content_hash)
+          SELECT e.id, e.content_hash
+          ${authorityHeadFrom(where.sql)}
+        `).run(...where.params);
+      });
+      this.rankedScopeKey = scopeKey;
+    }
+    const counts = this.database.prepare(`
+      SELECT
+        (SELECT COUNT(*) FROM context_lexical_authorized) AS authorized_count,
+        (SELECT COUNT(*)
+          FROM context_lexical_authorized a
+          JOIN context_lexical_documents d
+            ON d.event_id = a.event_id AND d.content_hash = a.content_hash
+          WHERE d.org_id = ? AND d.generation = ?) AS covered_count
+    `).get(input.org_id, status.generation) as { authorized_count: number; covered_count: number };
+    const expression = matchExpression(input.query ?? "");
+    const limit = Number.isSafeInteger(input.limit) && input.limit > 0 ? input.limit : 0;
+    const matched = expression && limit > 0
+      ? this.database.prepare(`
+          SELECT d.event_id, d.content_hash
+          FROM context_lexical_documents_fts f
+          JOIN context_lexical_documents d ON d.rowid = f.rowid
+          JOIN context_lexical_authorized a
+            ON a.event_id = d.event_id AND a.content_hash = d.content_hash
+          WHERE context_lexical_documents_fts MATCH ?
+            AND d.org_id = ? AND d.generation = ?
+          ORDER BY bm25(context_lexical_documents_fts), d.event_id
+          LIMIT ?
+        `).all(expression, input.org_id, status.generation, limit) as LexicalKeyRow[]
+      : [];
+    return {
+      available: true,
+      generation: status.generation,
+      matched,
+      authorized_count: counts.authorized_count,
+      covered_count: counts.covered_count,
+    };
   }
 
   async ensureGeneration(input: {
@@ -529,6 +595,20 @@ export class SqliteContextLexicalIndex implements ContextLexicalIndex {
     this.database.prepare("DELETE FROM context_lexical_authorization_state").run();
     this.database.prepare("DELETE FROM context_lexical_uncovered").run();
     this.database.prepare("DELETE FROM context_lexical_authorized").run();
+  }
+}
+
+function withAttachedAuthority(db: Database.Database, path: string, run: () => void): void {
+  if (!path || path === ":memory:" || path.includes("\0")) {
+    throw new Error("Authority database path cannot be attached");
+  }
+  const attached = db.prepare("SELECT 1 FROM pragma_database_list WHERE name = 'regenic_auth'").get();
+  if (attached) db.exec("DETACH DATABASE regenic_auth");
+  db.prepare("ATTACH DATABASE ? AS regenic_auth").run(path);
+  try {
+    run();
+  } finally {
+    db.exec("DETACH DATABASE regenic_auth");
   }
 }
 

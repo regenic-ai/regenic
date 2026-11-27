@@ -3,6 +3,7 @@ import {
   ChannelDriverRegistry,
   DEFAULT_COPY_LOCALE,
   conversationId,
+  timeSearchStage,
   type CopyLocale,
   type EventRecord,
 } from "@regenic/domain";
@@ -41,12 +42,12 @@ export class PersonalConversationLabelsService {
     const host = this.runtime.requireHost();
     const authority = host.get("authority");
     const orgId = this.runtime.orgId();
-    const grouped = await Promise.all(conversations.map(async (conversation) => ({
+    const grouped = await timeSearchStage("label_events", () => Promise.all(conversations.map(async (conversation) => ({
       thread_id: conversation.thread_id,
       events: (await Promise.all(conversation.messages.map((message) =>
         authority.getEvent(orgId, message.event_id))))
         .filter((event): event is EventRecord => Boolean(event)),
-    })));
+    }))));
     const events = grouped.flatMap((group) => group.events);
     const [installations, bodies] = await Promise.all([
       authority.listInstallations(orgId),

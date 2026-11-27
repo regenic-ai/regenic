@@ -288,6 +288,22 @@ test("search timing separates tokenization, semantic search, and rerank", () => 
     ["other", 370, null],
     ["network", 300, null],
   ]);
+  const presented = searchTimingRows({
+    total_ms: 2_000,
+    stages: [
+      { id: "expand", elapsed_ms: 200 },
+      { id: "label_events", elapsed_ms: 1_500 },
+      { id: "labels", elapsed_ms: 180 },
+    ],
+  }, 2_400, 160);
+  assert.deepEqual(presented.map((row) => [row.id, row.elapsed_ms]), [
+    ["expand", 200],
+    ["label_events", 1_500],
+    ["labels", 180],
+    ["other", 120],
+    ["decode", 160],
+    ["network", 240],
+  ]);
   const cached = searchTimingRows({
     total_ms: 11_000,
     stages: [
@@ -300,6 +316,26 @@ test("search timing separates tokenization, semantic search, and rerank", () => 
   const semantic = cached.find((row) => row.id === "semantic");
   assert.equal(semantic?.elapsed_ms, 1_500);
   assert.equal(semantic?.cache, "hit");
+  const split = searchTimingRows({
+    total_ms: 2_040,
+    stages: [
+      { id: "read", elapsed_ms: 990 },
+      { id: "policy", elapsed_ms: 4 },
+      { id: "epoch", elapsed_ms: 420 },
+      { id: "prepare", elapsed_ms: 180 },
+      { id: "confirm", elapsed_ms: 310 },
+      { id: "publish", elapsed_ms: 90 },
+      { id: "lexical", elapsed_ms: 40 },
+    ],
+  });
+  assert.deepEqual(split.map((row) => [row.id, row.elapsed_ms]), [
+    ["lexical", 40],
+    ["read", 990],
+    ["epoch", 420],
+    ["prepare", 180],
+    ["confirm", 310],
+    ["publish", 90],
+  ]);
 });
 
 test("search cards load windows from their boundaries and close them when exhausted", () => {

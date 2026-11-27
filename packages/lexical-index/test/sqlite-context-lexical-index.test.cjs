@@ -373,4 +373,70 @@ describe("SQLite Context lexical index", () => {
     await host.dispose();
     assert.throws(() => host.get("context-lexical-index"), /Service is not available/);
   });
+
+  it("ranks current heads inside FTS without taking a key list", async () => {
+    const Database = require("better-sqlite3");
+    const dir = await root();
+    const authorityPath = join(dir, "authority.db");
+    const authority = new Database(authorityPath);
+    authority.exec(`
+      CREATE TABLE events (
+        id TEXT PRIMARY KEY, org_id TEXT NOT NULL, source TEXT NOT NULL, external_id TEXT NOT NULL,
+        operation TEXT NOT NULL, content_hash TEXT, parent_event_id TEXT, thread_id TEXT, actor_id TEXT,
+        required_scope_ids_json TEXT, occurred_at TEXT NOT NULL, ingested_at TEXT NOT NULL
+      );
+      CREATE TABLE source_heads (
+        org_id TEXT NOT NULL, source TEXT NOT NULL, external_id TEXT NOT NULL,
+        current_event_id TEXT NOT NULL, PRIMARY KEY (org_id, source, external_id)
+      );
+      CREATE TABLE blobs (content_hash TEXT PRIMARY KEY, media_type TEXT NOT NULL);
+    `);
+    const insertEvent = authority.prepare(`
+      INSERT INTO events (
+        id, org_id, source, external_id, operation, content_hash, thread_id, actor_id,
+        required_scope_ids_json, occurred_at, ingested_at
+      ) VALUES (?, 'example-org', 'synthetic', ?, 'create', ?, 'thread-1', 'actor-1', ?, '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z')
+    `);
+    const insertHead = authority.prepare(`
+      INSERT INTO source_heads (org_id, source, external_id, current_event_id)
+      VALUES ('example-org', 'synthetic', ?, ?)
+    `);
+    const insertBlob = authority.prepare("INSERT INTO blobs (content_hash, media_type) VALUES (?, 'text/plain')");
+    insertEvent.run("event-a", "message-a", HASH_A, JSON.stringify(["scope"]));
+    insertEvent.run("event-hidden", "message-hidden", HASH_B, "[]");
+    insertEvent.run("event-old", "message-old", HASH_C, JSON.stringify(["scope"]));
+    insertEvent.run("event-gap", "message-gap", "d".repeat(64), JSON.stringify(["scope"]));
+    insertHead.run("message-a", "event-a");
+    insertHead.run("message-hidden", "event-hidden");
+    insertHead.run("message-gap", "event-gap");
+    for (const hash of [HASH_A, HASH_B, HASH_C, "d".repeat(64)]) insertBlob.run(hash);
+    const index = new SqliteContextLexicalIndex(join(dir, "lexical.db"));
+    await index.replaceOrganization(replacement([
+      { event_id: "event-a", content_hash: HASH_A, text: "alpha report" },
+      { event_id: "event-hidden", content_hash: HASH_B, text: "alpha secret" },
+      { event_id: "event-old", content_hash: HASH_C, text: "alpha history" },
+      { event_id: "event-rich", content_hash: "e".repeat(64), text: "alpha alpha alpha" },
+    ]));
+    const first = await index.matchRanked({
+      org_id: "example-org", query: "alpha", limit: 10,
+      authority_path: authorityPath, stamp: "1:0",
+    });
+    assert.deepEqual(first.matched.map((key) => key.event_id), ["event-a"]);
+    assert.equal(first.authorized_count, 2);
+    assert.equal(first.covered_count, 1);
+    authority.prepare("DELETE FROM source_heads WHERE current_event_id = 'event-a'").run();
+    const cached = await index.matchRanked({
+      org_id: "example-org", query: "alpha", limit: 10,
+      authority_path: authorityPath, stamp: "1:0",
+    });
+    assert.deepEqual(cached.matched.map((key) => key.event_id), ["event-a"]);
+    const refreshed = await index.matchRanked({
+      org_id: "example-org", query: "alpha", limit: 10,
+      authority_path: authorityPath, stamp: "1:1",
+    });
+    assert.deepEqual(refreshed.matched, []);
+    assert.equal(refreshed.authorized_count, 1);
+    index.close();
+    authority.close();
+  });
 });

@@ -410,6 +410,38 @@ export async function openContextReadEpoch(
   return read.deferred();
 }
 
+export function contextMutationStamp(db: Database.Database): string {
+  // data_version moves when another connection commits. total_changes moves
+  // when this connection commits. Either one means the cached read is stale.
+  const dataVersion = db.pragma("data_version", { simple: true });
+  const changes = db.prepare("SELECT total_changes() AS n").get() as { n: number };
+  return `${dataVersion}:${changes.n}`;
+}
+
+export function readCurrentHeadsByIds(
+  db: Database.Database,
+  orgId: string,
+  eventIds: string[],
+): ContextAuthorityRead["events"] {
+  const ids = [...new Set(eventIds.filter((id) => id.trim()))];
+  if (!orgId.trim() || ids.length === 0) return [];
+  const rows = db.prepare(`
+    SELECT e.id, e.org_id, e.source, e.external_id, e.operation,
+      e.content_hash, e.parent_event_id, e.thread_id, e.actor_id,
+      e.required_scope_ids_json, e.direction_tags_json, e.weight_hints_json, e.attrs_json,
+      e.occurred_at, e.ingested_at,
+      b.media_type AS content_media_type
+    FROM source_heads h
+    JOIN events e ON e.id = h.current_event_id AND e.org_id = h.org_id
+    LEFT JOIN blobs b ON b.content_hash = e.content_hash
+    WHERE e.org_id = ? AND e.id IN (SELECT value FROM json_each(?))
+  `).all(orgId, JSON.stringify(ids)) as ContextEventRow[];
+  return rows.map((row) => ({
+    ...toEvent(db, row),
+    ...(row.content_media_type ? { content_media_type: row.content_media_type } : {}),
+  }));
+}
+
 export async function openContextReadForThread(db: Database.Database, orgId: string, threadId: string): Promise<ContextAuthorityRead> {
     const scopedThreadId = threadId.trim();
     if (!scopedThreadId) {

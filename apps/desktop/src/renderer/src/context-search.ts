@@ -454,7 +454,16 @@ export type SearchTimingRowId =
   | "materialize"
   | "lexical"
   | "authorize"
+  | "read"
+  | "policy"
+  | "epoch"
+  | "prepare"
+  | "confirm"
+  | "publish"
   | "expand"
+  | "label_events"
+  | "labels"
+  | "decode"
   | "other"
   | "network";
 
@@ -466,10 +475,15 @@ export interface SearchTimingRow {
 
 /**
  * Groups embed and vector search as semantic, and keeps tokenization and rerank
- * separate. `clientMs` is the desktop wait; a large gap becomes the network row.
+ * separate. `clientMs` is the desktop wait. `decodeMs` is the time spent parsing
+ * the response. The remainder, when it is still large, becomes the network row.
  * Stages under 1ms stay hidden unless they carry a cache flag.
  */
-export function searchTimingRows(timing: SearchTimingView, clientMs?: number): SearchTimingRow[] {
+export function searchTimingRows(
+  timing: SearchTimingView,
+  clientMs?: number,
+  decodeMs?: number,
+): SearchTimingRow[] {
   const byId = new Map(timing.stages.map((stage) => [stage.id, stage]));
   const rows: SearchTimingRow[] = [];
   const push = (id: SearchTimingRowId, elapsedMs: number, cache?: "hit" | "miss") => {
@@ -485,15 +499,21 @@ export function searchTimingRows(timing: SearchTimingView, clientMs?: number): S
   }
   const rerank = byId.get("rerank");
   if (rerank) push("rerank", rerank.elapsed_ms);
-  for (const id of ["materialize", "lexical", "authorize", "expand"] as const) {
+  for (const id of ["materialize", "lexical", "authorize", "expand", "label_events", "labels"] as const) {
     const stage = byId.get(id);
     if (stage) push(id, stage.elapsed_ms);
+  }
+  for (const id of ["read", "policy", "epoch", "prepare", "confirm", "publish"] as const) {
+    const stage = byId.get(id);
+    if (stage && stage.elapsed_ms >= 10) push(id, stage.elapsed_ms);
   }
   const accounted = timing.stages.reduce((sum, stage) => sum + stage.elapsed_ms, 0);
   const other = timing.total_ms - accounted;
   if (other >= 50) push("other", other);
-  if (clientMs !== undefined && clientMs - timing.total_ms >= 200) {
-    push("network", clientMs - timing.total_ms);
+  const decode = Math.max(0, Math.round(decodeMs ?? 0));
+  if (decode >= 10) push("decode", decode);
+  if (clientMs !== undefined && clientMs - timing.total_ms - decode >= 200) {
+    push("network", clientMs - timing.total_ms - decode);
   }
   return rows;
 }

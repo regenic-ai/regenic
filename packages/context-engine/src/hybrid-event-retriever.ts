@@ -95,6 +95,7 @@ export class HybridEventRetriever implements ContextRetriever {
     plan: AuthorizedContextRetrievalPlan,
     materialize?: ContextEventMaterializer,
   ): Promise<ContextRetrievalResult> {
+    if (plan.index_scope) return this.retrieveScoped(plan, materialize);
     const lexicalPlan = materialize && !this.lexical.capabilities().lazy_materialization
       ? { ...plan, events: await materialize(plan.events.map((source) => source.event.event_id)) }
       : plan;
@@ -382,6 +383,175 @@ export class HybridEventRetriever implements ContextRetriever {
       degradation_flags: [...(lexical.degradation_flags ?? []),
         ...(embeddingDegradation ? [embeddingDegradation] : []),
         ...(coveredCount + skipped.size < allowed.size ? ["vector_index_partial"] : [])],
+      trace,
+    };
+  }
+
+  private async retrieveScoped(
+    plan: AuthorizedContextRetrievalPlan,
+    materialize?: ContextEventMaterializer,
+  ): Promise<ContextRetrievalResult> {
+    const scope = plan.index_scope!;
+    const lexicalResult = await this.lexical.retrieve(plan, materialize);
+    const lexical = Array.isArray(lexicalResult) ? { candidates: lexicalResult } : lexicalResult;
+    if (!plan.request.query || (plan.request.requested_kinds && !plan.request.requested_kinds.includes("event"))) {
+      return lexical;
+    }
+    const query = plan.request.query;
+    const rankedLexical = [...lexical.candidates].sort((left, right) =>
+      lexicalScore(right) - lexicalScore(left) || compare(left.candidate.resource_id, right.candidate.resource_id));
+    const authorizedCount = lexical.trace?.authorized_count ?? rankedLexical.length;
+    const lexicalCovered = lexical.trace?.covered_count ?? 0;
+    const trace: ContextRetrievalTrace = {
+      retriever_id: this.id,
+      profile: this.profile.version,
+      mode: "lexical",
+      authorized_count: authorizedCount,
+      covered_count: lexicalCovered,
+      routes: rankedLexical.map((candidate, rank) => ({
+        event_id: candidate.candidate.resource_id,
+        lexical_rank: rank + 1,
+      })),
+    };
+    const fallback = (flag: string): ContextRetrievalResult => ({
+      ...lexical,
+      trace,
+      degradation_flags: [...(lexical.degradation_flags ?? []), flag],
+    });
+    if (!materialize || !this.index?.matchRanked) return fallback(this.index ? "vector_index_absent" : "vector_index_absent");
+    const index = this.index;
+    let generation = await this.generations?.activeGeneration(plan.request.org_id) ?? this.generation;
+    if (!generation) return fallback("vector_index_unbuilt");
+    let ranked: Awaited<ReturnType<NonNullable<ContextVectorIndex["matchRanked"]>>>;
+    try {
+      assertEmbeddingDescriptor(this.provider.descriptor, generation.model);
+      const queryVector = await timeSearchStage("embed", () => this.queryVector(
+        plan.request.org_id,
+        generation,
+        query,
+      ));
+      ranked = await timeSearchStage("vector", () => index.matchRanked!({
+        org_id: plan.request.org_id,
+        generation: generation.id,
+        query_vector: [...queryVector],
+        limit: vectorCandidateLimit(plan),
+        authority_path: scope.authority_path,
+        ...(plan.request.filters ? { filters: plan.request.filters } : {}),
+        stamp: scope.stamp,
+      }));
+    } catch (error) {
+      if (error instanceof ContextVectorUnavailableError) return fallback(`vector_index_${error.reason}`);
+      if (!(error instanceof EmbeddingError) || error.code === "input_too_large" || error.code === "invalid_input") throw error;
+      return fallback(error.code === "timeout" ? "embedding_timeout" : "embedding_unavailable");
+    }
+    const loaded = await materialize([
+      ...rankedLexical.map((candidate) => candidate.candidate.resource_id),
+      ...ranked.matched.map((hit) => hit.event_id),
+    ]);
+    const allowed = new Map(loaded.map((source) => [source.event.event_id, source]));
+    for (const hit of ranked.matched) {
+      const source = allowed.get(hit.event_id);
+      if (!source || source.event.content_hash !== hit.content_hash ||
+        !Number.isFinite(hit.score) || hit.score < -1 || hit.score > 1 ||
+        !Number.isSafeInteger(hit.chunk_ordinal) || hit.chunk_ordinal < 0 ||
+        !Number.isSafeInteger(hit.start) || !Number.isSafeInteger(hit.end) || hit.start < 0 || hit.end <= hit.start) {
+        throw new ContextEngineError("invalid_candidate", "Invalid ranked vector hit");
+      }
+    }
+    const searchMatches = new Map<string, ReturnType<typeof searchMatchesFor>>();
+    if (plan.request.search_kind) {
+      for (const hit of ranked.matched) {
+        const source = allowed.get(hit.event_id)!;
+        const matches = searchMatchesFor(source, plan.request, [], this.profile.semantic_evidence_score);
+        if (hit.score >= this.profile.semantic_evidence_score && plan.request.search_kind !== "files") {
+          const body = source.search_body ?? source.text ?? "";
+          if (hit.end <= body.length && !matches.some((match) => match.kind === "message")) {
+            matches.push({
+              kind: "message",
+              via: ["semantic"],
+              ...searchSnippet(body.slice(hit.start, hit.end), undefined, hit.start),
+            });
+          } else if (plan.request.search_kind === "all" && !matches.length) {
+            matches.push({ kind: "event", via: ["semantic"] });
+          }
+        }
+        searchMatches.set(hit.event_id, matches);
+      }
+    }
+    const vector = ranked.matched.filter((hit) => plan.request.search_kind
+      ? searchMatches.get(hit.event_id)!.length > 0
+      : hit.score >= this.profile.vector_min_score)
+      .sort((left, right) => right.score - left.score || compare(left.event_id, right.event_id));
+    const significantTerms = contextLexicalQueryTerms(query).filter((term) =>
+      !/^[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]$/u.test(term));
+    const admittedLexical = rankedLexical.filter((value) => {
+      if (plan.request.search_kind || significantTerms.length === 0) return true;
+      const terms = new Set(contextLexicalTerms(allowed.get(value.candidate.resource_id)?.text));
+      return significantTerms.some((term) => terms.has(term));
+    });
+    const ranks = new Map<string, ContextRetrievalTrace["routes"][number]>(admittedLexical.map((value, rank) => [
+      value.candidate.resource_id,
+      { event_id: value.candidate.resource_id, lexical_rank: rank + 1 },
+    ]));
+    vector.forEach((hit, rank) => {
+      ranks.set(hit.event_id, {
+        ...ranks.get(hit.event_id),
+        event_id: hit.event_id,
+        vector_rank: rank + 1,
+        vector_score: hit.score,
+        chunk_ordinal: hit.chunk_ordinal,
+        start: hit.start,
+        end: hit.end,
+      });
+    });
+    trace.mode = "hybrid";
+    trace.generation = generation.id;
+    trace.model_revision = generation.model.model_revision;
+    trace.authorized_count = ranked.authorized_count;
+    trace.covered_count = ranked.covered_count;
+    trace.routes = [...ranks.values()].sort((left, right) => compare(left.event_id, right.event_id));
+    const candidates = new Map(admittedLexical.map((candidate) => [candidate.candidate.resource_id, candidate]));
+    for (const hit of vector) {
+      const material = eventCandidateMaterialFor(allowed.get(hit.event_id)!, plan.request, retrievalTimeFor(plan));
+      if (!material) continue;
+      const matches = searchMatches.get(hit.event_id);
+      if (matches) {
+        material.item.search_matches = matches;
+        material.item.estimated_tokens = material.candidate.estimated_tokens =
+          Math.ceil(((material.item.text?.length ?? 0) +
+            matches.reduce((sum, match) => sum + (match.snippet?.length ?? match.filename?.length ?? 0), 0)) / 4);
+      }
+      candidates.set(hit.event_id, material);
+    }
+    const lexicalRaw = new Map(admittedLexical.map((value) => [value.candidate.resource_id, lexicalScore(value)]));
+    const vectorRaw = new Map(vector.map((hit) => [hit.event_id, hit.score]));
+    const lexicalRange = scoreRange([...lexicalRaw.values()]);
+    const vectorRange = scoreRange([...vectorRaw.values()]);
+    for (const [id, value] of candidates) {
+      const route = ranks.get(id);
+      if (!route) continue;
+      const recency = value.candidate.scores.recency;
+      value.candidate.scores = {
+        anchor: value.candidate.scores.anchor ?? 0,
+        hybrid: fuseHybridRoute(this.profile, {
+          lexicalRank: route.lexical_rank,
+          lexicalScore: lexicalRaw.get(id),
+          vectorRank: route.vector_rank,
+          vectorScore: vectorRaw.get(id),
+        }, lexicalRange, vectorRange),
+        ...(recency === undefined ? {} : { recency }),
+      };
+    }
+    timeSearchStageSync("rerank", () => {
+      rerankThreads(candidates, allowed, ranks, query);
+    });
+    trace.routes = [...ranks.values()].sort((left, right) => compare(left.event_id, right.event_id));
+    return {
+      candidates: [...candidates.values()].sort((left, right) => compare(left.candidate.candidate_id, right.candidate.candidate_id)),
+      degradation_flags: [
+        ...(lexical.degradation_flags ?? []),
+        ...(ranked.covered_count < ranked.authorized_count ? ["vector_index_partial"] : []),
+      ],
       trace,
     };
   }

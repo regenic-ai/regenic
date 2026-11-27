@@ -1838,7 +1838,10 @@ export async function searchPersonalContext(
     body: JSON.stringify(input), signal,
   });
   if (!response.ok) throwKernelError(await response.json(), `context search ${response.status}`);
-  return response.json() as Promise<PersonalExpandedSearchResult>;
+  const decodeStarted = performance.now();
+  const body = (await response.json()) as PersonalExpandedSearchResult;
+  body.client_decode_ms = Math.round(performance.now() - decodeStarted);
+  return body;
 }
 
 export async function fetchSearchWindow(

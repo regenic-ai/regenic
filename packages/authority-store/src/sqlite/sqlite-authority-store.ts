@@ -204,6 +204,8 @@ import {
   listEvents,
   markTombstone,
   openContextRead,
+  contextMutationStamp,
+  readCurrentHeadsByIds,
   openContextReadEpoch,
   openContextReadForThread,
   openContextEventPage,
@@ -444,10 +446,12 @@ export class SqliteAuthorityStore
 
   readonly atomicSyncPage = true;
   private readonly database: Database.Database;
+  private readonly path: string;
 
   readonly readonly: boolean;
 
   constructor(path: string, options: SqliteOpenOptions = {}) {
+    this.path = path;
     this.readonly = options.readonly === true;
     mkdirSync(dirname(path), { recursive: true });
     this.database = new Database(
@@ -540,6 +544,21 @@ export class SqliteAuthorityStore
 
   async openContextReadEpoch(orgId: string, query?: ContextAuthorityReadQuery): Promise<string> {
     return openContextReadEpoch(this.database, orgId, query);
+  }
+
+  async openContextMutationStamp(): Promise<string> {
+    return contextMutationStamp(this.database);
+  }
+
+  databasePath(): string {
+    return this.path;
+  }
+
+  async readCurrentHeadsByIds(
+    orgId: string,
+    eventIds: string[],
+  ): Promise<ContextAuthorityRead["events"]> {
+    return readCurrentHeadsByIds(this.database, orgId, eventIds);
   }
 
   async openContextReadForThread(

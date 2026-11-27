@@ -574,7 +574,7 @@ export interface PersonalContextSearchResult {
   timing?: {
     total_ms: number;
     stages: Array<{
-      id: "materialize" | "tokenize" | "lexical" | "embed" | "vector" | "authorize" | "rerank" | "expand";
+      id: "read" | "policy" | "epoch" | "prepare" | "materialize" | "tokenize" | "lexical" | "embed" | "vector" | "authorize" | "rerank" | "confirm" | "publish" | "expand" | "label_events" | "labels";
       elapsed_ms: number;
       cache?: "hit" | "miss";
     }>;
@@ -690,6 +690,8 @@ export interface PersonalSearchAnswer {
 export interface PersonalExpandedSearchResult extends PersonalContextSearchResult {
   conversations: PersonalSearchConversation[];
   expansion: { returned_messages: number; max_messages: number };
+  /** Client-only. Time spent parsing the search response, not sent by the server. */
+  client_decode_ms?: number;
 }
 
 export interface PersonalSearchSource {

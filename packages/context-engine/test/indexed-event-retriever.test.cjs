@@ -121,6 +121,58 @@ function engineFixture(indexOverrides = {}, sourceOverrides = {}) {
 }
 
 describe("indexed Event retrieval", () => {
+  it("searches from the index without loading the authority into memory", async () => {
+    let opened = false;
+    let authorizedCalls = 0;
+    const visible = event("event-visible", "message-visible", HASH_A, "scope-visible");
+    const materializedIds = [];
+    const source = {
+      databasePath: () => "/tmp/regenic-authority.db",
+      async openReadStamp() { return "9:1"; },
+      async openRead() { opened = true; throw new Error("full authority read"); },
+      async loadCurrentEvents(_orgId, ids) {
+        assert.deepEqual(ids, ["event-visible"]);
+        return [structuredClone(visible)];
+      },
+      async materialize(events) {
+        materializedIds.push(...events.map((value) => value.event.event_id));
+        return events.map((value) => ({ ...structuredClone(value), text: "发布批准计划" }));
+      },
+    };
+    const index = {
+      async matchAuthorized() { authorizedCalls += 1; throw new Error("key list"); },
+      async matchRanked(input) {
+        assert.equal(input.authority_path, "/tmp/regenic-authority.db");
+        assert.equal(input.stamp, "9:1");
+        assert.ok(input.limit >= 50);
+        return {
+          available: true,
+          generation: "continuous-v1",
+          matched: [{ event_id: "event-visible", content_hash: HASH_A }],
+          authorized_count: 2,
+          covered_count: 1,
+        };
+      },
+    };
+    const registry = new MemoryContextRetrieverRegistry();
+    registry.register(new IndexedEventRetriever(index));
+    const engine = new DeterministicContextEngine({
+      source, policy: policy(), artifacts: new MemoryContextArtifactStore(), retrievers: registry,
+    });
+    const result = await engine.assemble({
+      ...request(),
+      consumer_id: "personal-context-search",
+    });
+    assert.equal(opened, false);
+    assert.equal(authorizedCalls, 0);
+    assert.deepEqual(materializedIds, ["event-visible"]);
+    assert.equal(result.snapshot.read_epoch, `authorized-stamp:9:1:${POLICY_HASH}`);
+    assert.deepEqual(result.bundle.sections.flatMap((section) => section.items).map((item) => item.resource_id), [
+      "event-visible",
+    ]);
+    assert.ok(result.bundle.degradation_flags.includes("lexical_index_partial"));
+  });
+
   it("materializes and indexes only the authorized lifecycle universe", async () => {
     const { engine, materializedIds, indexInputs } = engineFixture();
 

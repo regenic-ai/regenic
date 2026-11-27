@@ -24,6 +24,10 @@ import {
   type EmbeddingJob,
   type EmbeddingJobSummary,
   type EmbeddingJobStore,
+  type RankedHeadQuery,
+  authorizedHeadScopeKey,
+  authorizedHeadWhere,
+  authorityHeadFrom,
 } from "@regenic/domain";
 
 export class VectorIndexSchemaError extends Error {}
@@ -87,6 +91,8 @@ interface NativeVectorCandidateRow {
 export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVectorGenerationStore, EmbeddingJobStore {
   private readonly db: Database.Database;
   private readonly nativeVectors: boolean;
+  /** Stamp, filters, and generation already staged into the temp knn table. */
+  private rankedScopeKey: string | undefined;
 
   constructor(path: string) {
     mkdirSync(dirname(path), { recursive: true });
@@ -801,6 +807,7 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
   }
 
   async matchAuthorized(input: Parameters<ContextVectorIndex["matchAuthorized"]>[0]): ReturnType<ContextVectorIndex["matchAuthorized"]> {
+    this.rankedScopeKey = undefined;
     try {
       return await this.matchAuthorizedView(input);
     } catch (error) {
@@ -1548,6 +1555,132 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
     }
   }
 
+  async matchRanked(
+    input: RankedHeadQuery & { generation: string; query_vector: number[]; limit: number },
+  ): Promise<{
+    matched: Array<{
+      event_id: string;
+      content_hash: string;
+      score: number;
+      chunk_ordinal: number;
+      start: number;
+      end: number;
+    }>;
+    authorized_count: number;
+    covered_count: number;
+  }> {
+    const generation = this.manifest(input.org_id, input.generation);
+    if (input.query_vector.length !== generation.model.dimensions) {
+      throw new ContextVectorUnavailableError("unavailable");
+    }
+    const scopeKey = authorizedHeadScopeKey(input.stamp, input.org_id, input.filters, input.generation);
+    if (this.rankedScopeKey !== scopeKey) {
+      const where = authorizedHeadWhere(input.org_id, input.filters);
+      withAttachedAuthority(this.db, input.authority_path, () => {
+        this.db.prepare("DELETE FROM vector_authorized").run();
+        this.db.prepare(`
+          INSERT INTO vector_authorized (event_id, content_hash, body_length)
+          SELECT e.id, e.content_hash, NULL
+          ${authorityHeadFrom(where.sql)}
+        `).run(...where.params);
+      });
+      this.stageRankedNative(generation.model.dimensions, input.org_id, input.generation);
+      this.rankedScopeKey = scopeKey;
+    }
+    const counts = this.db.prepare(`
+      SELECT
+        (SELECT COUNT(*) FROM vector_authorized) AS authorized_count,
+        (SELECT COUNT(*)
+          FROM vector_authorized a
+          JOIN coverage c
+            ON c.org_id = ? AND c.generation = ?
+            AND c.event_id = a.event_id AND c.content_hash = a.content_hash) AS covered_count
+    `).get(input.org_id, input.generation) as { authorized_count: number; covered_count: number };
+    const authorizedChunks = this.nativeAuthorizedChunkCount();
+    if (!this.nativeVectors) throw new ContextVectorUnavailableError("unavailable");
+    if (authorizedChunks < 1 || !Number.isSafeInteger(input.limit) || input.limit < 1) {
+      return { matched: [], ...counts };
+    }
+    const query = vectorBuffer(input.query_vector);
+    const statement = this.db.prepare(`
+      SELECT ch.event_id, c.content_hash, ch.ordinal, ch.start, ch.end, ch.vector, v.distance
+      FROM temp.vector_authorized_knn v
+      JOIN chunks ch ON ch.rowid = v.rowid
+      JOIN coverage c
+        ON c.org_id = ? AND c.generation = ? AND c.event_id = ch.event_id
+      JOIN vector_authorized a ON a.event_id = c.event_id AND a.content_hash = c.content_hash
+      WHERE v.embedding MATCH ? AND k = ?
+      ORDER BY v.distance, ch.event_id
+    `);
+    let candidateLimit = Math.min(authorizedChunks, Math.max(input.limit * 4, 100));
+    let rows: RankedVectorRow[] = [];
+    let selected: string[] = [];
+    while (candidateLimit > 0) {
+      rows = statement.all(input.org_id, input.generation, query, candidateLimit) as RankedVectorRow[];
+      const best = new Map<string, number>();
+      for (const row of rows) {
+        if (!Number.isFinite(row.distance) || row.distance < 0 || row.distance > 2) {
+          throw new ContextVectorUnavailableError("corrupt");
+        }
+        const previous = best.get(row.event_id);
+        if (previous === undefined || row.distance < previous) best.set(row.event_id, row.distance);
+      }
+      const ranked = [...best].sort((left, right) => left[1] - right[1] || compare(left[0], right[0]));
+      selected = ranked.slice(0, input.limit).map(([eventId]) => eventId);
+      const boundary = ranked[input.limit - 1]?.[1];
+      const tail = rows.at(-1)?.distance;
+      if (
+        candidateLimit >= authorizedChunks
+        || (selected.length === input.limit && boundary !== undefined && tail !== undefined && boundary < tail)
+      ) break;
+      candidateLimit = Math.min(authorizedChunks, candidateLimit * 2);
+    }
+    const wanted = new Set(selected);
+    const queryNorm = input.query_vector.reduce((sum, value) => sum + value * value, 0);
+    const bestChunk = new Map<string, RankedVectorRow & { score: number }>();
+    for (const row of rows) {
+      if (!wanted.has(row.event_id)) continue;
+      const score = rankedCosine(row.vector, input.query_vector, Math.sqrt(queryNorm), generation.model.dimensions);
+      const previous = bestChunk.get(row.event_id);
+      if (!previous || score > previous.score) bestChunk.set(row.event_id, { ...row, score });
+    }
+    const matched = [...bestChunk.values()]
+      .filter((row) => row.score >= -1 && row.score <= 1 && row.end > row.start)
+      .sort((left, right) => right.score - left.score || compare(left.event_id, right.event_id))
+      .slice(0, input.limit)
+      .map((row) => ({
+        event_id: row.event_id,
+        content_hash: row.content_hash,
+        score: row.score,
+        chunk_ordinal: row.ordinal,
+        start: row.start,
+        end: row.end,
+      }));
+    return { matched, ...counts };
+  }
+
+  private stageRankedNative(dimensions: number, orgId: string, generation: string): number {
+    if (!this.nativeVectors) return 0;
+    this.db.exec(`
+      DROP TABLE IF EXISTS temp.vector_authorized_knn;
+      CREATE VIRTUAL TABLE temp.vector_authorized_knn USING vec0(
+        embedding float[${dimensions}] distance_metric=cosine
+      );
+    `);
+    this.db.prepare(`
+      INSERT INTO temp.vector_authorized_knn (rowid, embedding)
+      SELECT ch.rowid, ch.vector
+      FROM vector_authorized a
+      JOIN coverage c
+        ON c.org_id = ? AND c.generation = ?
+        AND c.event_id = a.event_id AND c.content_hash = a.content_hash
+      JOIN chunks ch
+        ON ch.org_id = c.org_id AND ch.generation = c.generation AND ch.event_id = c.event_id
+      ORDER BY ch.event_id, ch.rowid
+    `).run(orgId, generation);
+    return this.nativeAuthorizedChunkCount();
+  }
+
   private stageNativeAuthorized(
     dimensions: number,
     orgId: string,
@@ -1794,6 +1927,49 @@ function validateAuthorizationKey(key: ContextVectorAuthorizationKey): void {
 function timestamp(value: string): void { if (typeof value !== "string" || new Date(value).toISOString() !== value) throw new Error("Invalid vector timestamp"); }
 function bounded(value: number, min: number, max: number): void { if (!Number.isSafeInteger(value) || value < min || value > max) throw new Error("Invalid vector limit"); }
 function compare(a: string, b: string): number { return a < b ? -1 : a > b ? 1 : 0; }
+interface RankedVectorRow {
+  event_id: string;
+  content_hash: string;
+  ordinal: number;
+  start: number;
+  end: number;
+  vector: Buffer;
+  distance: number;
+}
+
+function withAttachedAuthority(db: Database.Database, path: string, run: () => void): void {
+  if (!path || path === ":memory:" || path.includes("\0")) {
+    throw new Error("Authority database path cannot be attached");
+  }
+  const attached = db.prepare("SELECT 1 FROM pragma_database_list WHERE name = 'regenic_auth'").get();
+  if (attached) db.exec("DETACH DATABASE regenic_auth");
+  db.prepare("ATTACH DATABASE ? AS regenic_auth").run(path);
+  try {
+    run();
+  } finally {
+    db.exec("DETACH DATABASE regenic_auth");
+  }
+}
+
+function rankedCosine(vector: Buffer, query: number[], queryNorm: number, dimensions: number): number {
+  if (vector.byteLength !== dimensions * 4 || !Number.isFinite(queryNorm) || queryNorm === 0) {
+    throw new ContextVectorUnavailableError("corrupt");
+  }
+  let dot = 0;
+  let squared = 0;
+  for (let index = 0; index < dimensions; index += 1) {
+    const value = vector.readFloatLE(index * 4);
+    if (!Number.isFinite(value)) throw new ContextVectorUnavailableError("corrupt");
+    dot += value * query[index]!;
+    squared += value * value;
+  }
+  const vectorNorm = Math.sqrt(squared);
+  if (!Number.isFinite(vectorNorm) || Math.abs(vectorNorm - 1) > 0.001) {
+    throw new ContextVectorUnavailableError("corrupt");
+  }
+  return Number(Math.max(-1, Math.min(1, dot / (queryNorm * vectorNorm))).toFixed(9));
+}
+
 function vectorBuffer(vector: number[]): Buffer {
   const buffer = Buffer.allocUnsafe(vector.length * 4);
   vector.forEach((value, index) => buffer.writeFloatLE(value, index * 4));
