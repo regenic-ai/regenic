@@ -17,6 +17,7 @@ import {
   type RankedLexicalMatchResult,
   type ReplaceContextLexicalIndex,
   type UpsertContextLexicalIndex,
+  authorizedHeadFilterKey,
   authorizedHeadScopeKey,
   authorizedHeadWhere,
   authorityHeadFrom,
@@ -58,6 +59,8 @@ export class SqliteContextLexicalIndex implements ContextLexicalIndex {
   private readonly available: boolean;
   /** Stamp and filters already loaded into the temp authorized table. */
   private rankedScopeKey: string | undefined;
+  /** Filter scope already loaded. A sync stamp change only applies the head delta. */
+  private rankedFilterKey: string | undefined;
 
   constructor(path: string, options: SqliteContextLexicalIndexOptions = {}) {
     mkdirSync(dirname(path), { recursive: true });
@@ -264,14 +267,15 @@ export class SqliteContextLexicalIndex implements ContextLexicalIndex {
     if (!status.available || !status.generation) {
       return { available: status.available, matched: [], authorized_count: 0, covered_count: 0 };
     }
+    const filterKey = authorizedHeadFilterKey(input.org_id, input.filters, status.generation);
     const scopeKey = authorizedHeadScopeKey(
       input.stamp,
       input.org_id,
       input.filters,
       status.generation,
     );
-    if (this.rankedScopeKey !== scopeKey) {
-      const where = authorizedHeadWhere(input.org_id, input.filters);
+    const where = authorizedHeadWhere(input.org_id, input.filters);
+    if (this.rankedFilterKey !== filterKey) {
       withAttachedAuthority(this.database, input.authority_path, () => {
         this.database.prepare("DELETE FROM context_lexical_authorized").run();
         this.database.prepare("DELETE FROM context_lexical_uncovered").run();
@@ -282,8 +286,11 @@ export class SqliteContextLexicalIndex implements ContextLexicalIndex {
           ${authorityHeadFrom(where.sql)}
         `).run(...where.params);
       });
-      this.rankedScopeKey = scopeKey;
+      this.rankedFilterKey = filterKey;
+    } else if (this.rankedScopeKey !== scopeKey) {
+      this.refreshRankedAuthorized(where, input.authority_path);
     }
+    this.rankedScopeKey = scopeKey;
     const counts = this.database.prepare(`
       SELECT
         (SELECT COUNT(*) FROM context_lexical_authorized) AS authorized_count,
@@ -592,9 +599,50 @@ export class SqliteContextLexicalIndex implements ContextLexicalIndex {
   }
 
   private invalidateAuthorizationCache(): void {
+    this.rankedScopeKey = undefined;
+    this.rankedFilterKey = undefined;
     this.database.prepare("DELETE FROM context_lexical_authorization_state").run();
     this.database.prepare("DELETE FROM context_lexical_uncovered").run();
     this.database.prepare("DELETE FROM context_lexical_authorized").run();
+  }
+
+  /** Apply a stamp change by inserting and deleting only the heads that moved. */
+  private refreshRankedAuthorized(
+    where: { sql: string; params: unknown[] },
+    authorityPath: string,
+  ): void {
+    this.database.exec(`
+      CREATE TEMP TABLE IF NOT EXISTS context_lexical_authorized_next (
+        event_id TEXT NOT NULL,
+        content_hash TEXT NOT NULL,
+        PRIMARY KEY (event_id, content_hash)
+      ) WITHOUT ROWID;
+    `);
+    this.database.prepare("DELETE FROM context_lexical_authorized_next").run();
+    withAttachedAuthority(this.database, authorityPath, () => {
+      this.database.prepare(`
+        INSERT INTO context_lexical_authorized_next (event_id, content_hash)
+        SELECT DISTINCT e.id, e.content_hash
+        ${authorityHeadFrom(where.sql)}
+      `).run(...where.params);
+    });
+    this.database.prepare(`
+      DELETE FROM context_lexical_authorized
+      WHERE event_id IN (
+        SELECT old.event_id FROM context_lexical_authorized old
+        LEFT JOIN context_lexical_authorized_next new
+          ON new.event_id = old.event_id AND new.content_hash = old.content_hash
+        WHERE new.event_id IS NULL
+      )
+    `).run();
+    this.database.prepare(`
+      INSERT INTO context_lexical_authorized (event_id, content_hash)
+      SELECT new.event_id, new.content_hash
+      FROM context_lexical_authorized_next new
+      LEFT JOIN context_lexical_authorized old
+        ON old.event_id = new.event_id AND old.content_hash = new.content_hash
+      WHERE old.event_id IS NULL
+    `).run();
   }
 }
 

@@ -277,6 +277,8 @@ export interface EmbeddingJobStore {
     now: string;
     limit: number;
   }): Promise<{ changed: number; done: boolean }>;
+  /** Publish several prepared jobs in one immediate transaction. */
+  publish?(inputs: Array<Parameters<EmbeddingJobStore["complete"]>[0]>): Promise<boolean[]>;
   claim(input: {
     org_id: string;
     generation: string;

@@ -26,6 +26,7 @@ import {
   type EmbeddingJobStore,
   type EmbeddingSourceHead,
   type RankedHeadQuery,
+  authorizedHeadFilterKey,
   authorizedHeadScopeKey,
   authorizedHeadWhere,
   authorityHeadFrom,
@@ -94,6 +95,8 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
   private readonly nativeVectors: boolean;
   /** Stamp, filters, and generation already staged into the temp knn table. */
   private rankedScopeKey: string | undefined;
+  /** Filter scope of the staged knn table. A sync stamp change does not rebuild it. */
+  private rankedFilterKey: string | undefined;
 
   constructor(path: string) {
     mkdirSync(dirname(path), { recursive: true });
@@ -201,6 +204,17 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
             rowid INTEGER NOT NULL,
             PRIMARY KEY (event_id,rowid)
           ) WITHOUT ROWID;
+          CREATE TEMP TABLE IF NOT EXISTS vector_ranked_native_rows (
+            event_id TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
+            rowid INTEGER NOT NULL,
+            PRIMARY KEY (event_id, rowid)
+          ) WITHOUT ROWID;
+          CREATE TEMP TABLE IF NOT EXISTS vector_authorized_next (
+            event_id TEXT PRIMARY KEY,
+            content_hash TEXT NOT NULL,
+            body_length INTEGER
+          ) WITHOUT ROWID;
           CREATE TEMP TABLE IF NOT EXISTS vector_authorization_state (
             singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
             org_id TEXT NOT NULL,
@@ -249,6 +263,10 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
   }
 
   close(): void { if (this.db.open) this.db.close(); }
+
+  private immediate<T>(work: () => T): T {
+    return this.db.inTransaction ? work() : this.db.transaction(work).immediate();
+  }
 
   async setVisualEnabled(orgId: string, enabled: boolean): Promise<void> {
     required(orgId);
@@ -778,7 +796,7 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
     }
     validateEmbeddingVector(chunk.vector, generation.model.dimensions);
     if (chunk.origin) parseOrigin(JSON.stringify(chunk.origin), chunk.text_hash, chunk.end - chunk.start);
-    return this.db.transaction(() => {
+    return this.immediate(() => {
       if (!this.ownsJob(job, owner, now)) return false;
       this.assertVisualPermission(job.org_id, [chunk]);
       const previous = this.db.prepare("SELECT ordinal,end FROM staged_chunks WHERE job_id=? ORDER BY ordinal DESC LIMIT 1")
@@ -791,7 +809,7 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
       this.db.prepare("INSERT INTO staged_chunks VALUES (?,?,?,?,?,?,?)")
         .run(job.id, chunk.ordinal, chunk.start, chunk.end, chunk.text_hash, bytes, chunk.origin ? JSON.stringify(chunk.origin) : null);
       return true;
-    }).immediate();
+    });
   }
 
   async yieldJob(job: EmbeddingJob, owner: string, now: string): Promise<boolean> {
@@ -806,6 +824,14 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
   }
 
   async complete(input: Parameters<EmbeddingJobStore["complete"]>[0]): Promise<boolean> {
+    return this.writeComplete(input);
+  }
+
+  async publish(inputs: Array<Parameters<EmbeddingJobStore["complete"]>[0]>): Promise<boolean[]> {
+    return this.immediate(() => inputs.map((input) => this.writeComplete(input)));
+  }
+
+  private writeComplete(input: Parameters<EmbeddingJobStore["complete"]>[0]): boolean {
     const { job, owner, now, chunks } = input;
     required(owner); timestamp(now);
     const generation = this.manifest(job.org_id, job.generation);
@@ -823,7 +849,7 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
       if (chunk.origin) parseOrigin(JSON.stringify(chunk.origin), chunk.text_hash, chunk.end - chunk.start);
       end = chunk.end;
     }
-    return this.db.transaction(() => {
+    return this.immediate(() => {
       if (!this.ownsJob(job, owner, now)) return false;
       const authorizationState = this.currentVectorAuthorizationState(
         job.org_id,
@@ -888,7 +914,7 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
         this.updateVectorAuthorizationCounts(nativeChunkCount, projectionRevision);
       }
       return true;
-    }).immediate();
+    });
   }
 
   async fail(input: Parameters<EmbeddingJobStore["fail"]>[0]): Promise<boolean> {
@@ -995,6 +1021,8 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
 
   async matchAuthorized(input: Parameters<ContextVectorIndex["matchAuthorized"]>[0]): ReturnType<ContextVectorIndex["matchAuthorized"]> {
     this.rankedScopeKey = undefined;
+    this.rankedFilterKey = undefined;
+    this.db.prepare("DELETE FROM vector_ranked_native_rows").run();
     try {
       return await this.matchAuthorizedView(input);
     } catch (error) {
@@ -1760,9 +1788,10 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
     if (input.query_vector.length !== generation.model.dimensions) {
       throw new ContextVectorUnavailableError("unavailable");
     }
+    const filterKey = authorizedHeadFilterKey(input.org_id, input.filters, input.generation);
     const scopeKey = authorizedHeadScopeKey(input.stamp, input.org_id, input.filters, input.generation);
-    if (this.rankedScopeKey !== scopeKey) {
-      const where = authorizedHeadWhere(input.org_id, input.filters);
+    const where = authorizedHeadWhere(input.org_id, input.filters);
+    if (this.rankedFilterKey !== filterKey || !this.rankedKnnReady()) {
       withAttachedAuthority(this.db, input.authority_path, () => {
         this.db.prepare("DELETE FROM vector_authorized").run();
         this.db.prepare(`
@@ -1772,8 +1801,11 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
         `).run(...where.params);
       });
       this.stageRankedNative(generation.model.dimensions, input.org_id, input.generation);
-      this.rankedScopeKey = scopeKey;
+      this.rankedFilterKey = filterKey;
+    } else if (this.rankedScopeKey !== scopeKey) {
+      this.refreshRankedAuthorized(where, input.authority_path, input.org_id, input.generation);
     }
+    this.rankedScopeKey = scopeKey;
     const counts = this.db.prepare(`
       SELECT
         (SELECT COUNT(*) FROM vector_authorized) AS authorized_count,
@@ -1854,6 +1886,7 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
         embedding float[${dimensions}] distance_metric=cosine
       );
     `);
+    this.db.prepare("DELETE FROM vector_ranked_native_rows").run();
     this.db.prepare(`
       INSERT INTO temp.vector_authorized_knn (rowid, embedding)
       SELECT ch.rowid, ch.vector
@@ -1865,7 +1898,88 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
         ON ch.org_id = c.org_id AND ch.generation = c.generation AND ch.event_id = c.event_id
       ORDER BY ch.event_id, ch.rowid
     `).run(orgId, generation);
+    this.db.prepare(`
+      INSERT INTO vector_ranked_native_rows (event_id, content_hash, rowid)
+      SELECT ch.event_id, a.content_hash, ch.rowid
+      FROM vector_authorized a
+      JOIN coverage c
+        ON c.org_id = ? AND c.generation = ?
+        AND c.event_id = a.event_id AND c.content_hash = a.content_hash
+      JOIN chunks ch
+        ON ch.org_id = c.org_id AND ch.generation = c.generation AND ch.event_id = c.event_id
+    `).run(orgId, generation);
     return this.nativeAuthorizedChunkCount();
+  }
+
+  /** Apply a stamp change without copying vectors that are already in the knn table. */
+  private refreshRankedAuthorized(
+    where: { sql: string; params: unknown[] },
+    authorityPath: string,
+    orgId: string,
+    generation: string,
+  ): void {
+    this.db.prepare("DELETE FROM vector_authorized_next").run();
+    withAttachedAuthority(this.db, authorityPath, () => {
+      this.db.prepare(`
+        INSERT INTO vector_authorized_next (event_id, content_hash, body_length)
+        SELECT DISTINCT e.id, e.content_hash, NULL
+        ${authorityHeadFrom(where.sql)}
+      `).run(...where.params);
+    });
+    this.immediate(() => {
+      const removed = this.db.prepare(`
+        SELECT old.event_id FROM vector_authorized old
+        LEFT JOIN vector_authorized_next new
+          ON new.event_id = old.event_id AND new.content_hash = old.content_hash
+        WHERE new.event_id IS NULL
+      `).pluck().all() as string[];
+      const rowids = this.db.prepare(
+        "SELECT rowid FROM vector_ranked_native_rows WHERE event_id=?",
+      ).pluck();
+      const deleteKnn = this.db.prepare("DELETE FROM temp.vector_authorized_knn WHERE rowid=?");
+      const deleteMap = this.db.prepare("DELETE FROM vector_ranked_native_rows WHERE event_id=?");
+      for (const eventId of removed) {
+        for (const rowid of rowids.all(eventId) as number[]) deleteKnn.run(rowid);
+        deleteMap.run(eventId);
+      }
+      this.db.prepare("DELETE FROM vector_authorized").run();
+      this.db.prepare(`
+        INSERT INTO vector_authorized (event_id, content_hash, body_length)
+        SELECT event_id, content_hash, body_length FROM vector_authorized_next
+      `).run();
+      this.db.prepare(`
+        INSERT INTO temp.vector_authorized_knn (rowid, embedding)
+        SELECT ch.rowid, ch.vector
+        FROM vector_authorized a
+        JOIN coverage c
+          ON c.org_id = ? AND c.generation = ?
+          AND c.event_id = a.event_id AND c.content_hash = a.content_hash
+        JOIN chunks ch
+          ON ch.org_id = c.org_id AND ch.generation = c.generation AND ch.event_id = c.event_id
+        WHERE NOT EXISTS (
+          SELECT 1 FROM vector_ranked_native_rows r WHERE r.rowid = ch.rowid
+        )
+      `).run(orgId, generation);
+      this.db.prepare(`
+        INSERT OR IGNORE INTO vector_ranked_native_rows (event_id, content_hash, rowid)
+        SELECT ch.event_id, a.content_hash, ch.rowid
+        FROM vector_authorized a
+        JOIN coverage c
+          ON c.org_id = ? AND c.generation = ?
+          AND c.event_id = a.event_id AND c.content_hash = a.content_hash
+        JOIN chunks ch
+          ON ch.org_id = c.org_id AND ch.generation = c.generation AND ch.event_id = c.event_id
+        WHERE NOT EXISTS (
+          SELECT 1 FROM vector_ranked_native_rows r WHERE r.rowid = ch.rowid
+        )
+      `).run(orgId, generation);
+    });
+  }
+
+  private rankedKnnReady(): boolean {
+    return Boolean(this.nativeVectors && this.db.prepare(
+      "SELECT 1 FROM sqlite_temp_master WHERE type='table' AND name='vector_authorized_knn'",
+    ).get());
   }
 
   private stageNativeAuthorized(
@@ -2023,7 +2137,10 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
       DROP TABLE IF EXISTS temp.vector_authorized_knn;
       DROP TABLE IF EXISTS temp.vector_native_candidate_events;
       DELETE FROM vector_authorized_native_rows;
+      DELETE FROM vector_ranked_native_rows;
     `);
+    this.rankedScopeKey = undefined;
+    this.rankedFilterKey = undefined;
     this.db.prepare("DELETE FROM vector_authorization_state").run();
     this.db.prepare("DELETE FROM vector_uncovered").run();
     this.db.prepare("DELETE FROM vector_skipped").run();

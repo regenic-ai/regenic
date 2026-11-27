@@ -592,7 +592,7 @@ describe("independent embedding indexing worker", () => {
     assert.equal(reads, 0);
   });
 
-  it("embeds four single-chunk messages in one forward and keeps each vector", async (t) => {
+  it("embeds a short-message group in one forward and keeps each vector", async (t) => {
     const batches = [];
     const f = await fixture(t, provider({
       async embed(texts) {
@@ -614,7 +614,7 @@ describe("independent embedding indexing worker", () => {
       processed: 6, failed: 0, superseded: 0,
     });
     assert.equal(reads, 0);
-    assert.deepEqual(batches.map((batch) => batch.length), [4, 2]);
+    assert.deepEqual(batches.map((batch) => batch.length), [6]);
     assert.equal(batches[0][3], "oldest");
     const jobs = await f.index.listJobs("org", generation.id);
     const oldest = jobs.find((job) => job.external_id === "message-1");

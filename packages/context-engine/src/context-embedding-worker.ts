@@ -27,7 +27,7 @@ const MAX_RUN_JOBS = 100;
 const MAX_RUN_BUDGET_MS = 30_000;
 const CHECKPOINT_BATCH_CHUNKS = 8;
 const EMBED_BATCH = CHECKPOINT_BATCH_CHUNKS;
-const DOCUMENT_GROUP = 4;
+const DOCUMENT_GROUP = 32;
 
 type AuthoritySnapshot = { read: ContextSourceRead; stamp?: string };
 type PreparedPlain = { job: EmbeddingJob; text: string; material: ContextEmbeddingMaterial };
@@ -401,6 +401,9 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
         if (heartbeatFailed) throw new Error("Embedding lease renewal failed");
         if (leaseLost || !await this.stillCurrent(job, snapshot.read)) {
           result.superseded += 1;
+          // The head moved during inference. Page the new event so this run
+          // fences the leased job and can publish the replacement.
+          await this.drainChangedHeads(generation, 1);
           return false;
         }
         const completed = await this.jobs.complete({
@@ -502,12 +505,12 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
   ): Promise<AuthoritySnapshot> {
     const current = await this.captureStamp();
     if (stamp !== undefined && current === stamp) return { read, stamp };
-    const paused = pause?.() === true;
+    // New events are discovered from the sequence watermark at the start of a
+    // run. Publishing does not attach the authority database again.
     if (this.jobs.reconcileChanged && this.authorityPath()) {
-      if (!paused) await this.drainChangedHeads(generation, 1);
-      const after = await this.captureStamp();
-      return { read, stamp: !paused && after === current ? after : undefined };
+      return { read, stamp: current };
     }
+    const paused = pause?.() === true;
     const fresh = await this.openAuthorityRead();
     if (!paused) await this.reconcileRead(fresh, generation);
     const after = await this.captureStamp();
@@ -615,14 +618,39 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
           const confirmed = await this.confirmAuthority(snapshot.read, snapshot.stamp, generation, pause);
           snapshot.read = confirmed.read;
           snapshot.stamp = confirmed.stamp;
+          const current: typeof ready = [];
+          let moved = false;
           for (const entry of ready) {
             if (!await this.stillCurrent(entry.item.job, snapshot.read)) {
               result.superseded += 1;
+              moved = true;
               continue;
             }
-            const completed = await this.jobs.complete({
-              job: entry.item.job, owner: this.owner, now: new Date().toISOString(), chunks: entry.chunks,
-            });
+            current.push(entry);
+          }
+          if (moved) await this.drainChangedHeads(generation, 1);
+          const now = new Date().toISOString();
+          const inputs = current.map((entry) => ({
+            job: entry.item.job, owner: this.owner, now, chunks: entry.chunks,
+          }));
+          let published: boolean[];
+          try {
+            published = this.jobs.publish
+              ? await this.jobs.publish(inputs)
+              : await Promise.all(inputs.map((input) => this.jobs.complete(input)));
+          } catch (error) {
+            published = [];
+            for (const input of inputs) {
+              try {
+                published.push(await this.jobs.complete(input));
+              } catch (itemError) {
+                await this.failClaimed(input.job, itemError);
+                result.failed += 1;
+              }
+            }
+            if (published.length === 0 && result.failed === 0) throw error;
+          }
+          for (const completed of published) {
             if (completed) result.processed += 1;
             else result.superseded += 1;
           }
