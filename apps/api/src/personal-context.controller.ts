@@ -179,20 +179,6 @@ export class PersonalContextController {
     return this.guard(() => this.context.listArtifacts());
   }
 
-  @Get("artifact-summaries")
-  listArtifactSummaries() {
-    return this.guard(() => this.context.listArtifactSummaries());
-  }
-
-  @Get("artifacts/:artifactId/record")
-  getArtifactRecord(
-    @Param("artifactId") artifactId: string,
-    @Query("offset") offset?: string,
-    @Query("limit") limit?: string,
-  ) {
-    return this.guard(() => this.context.getArtifactRecord(artifactId, offset, limit));
-  }
-
   @Get("proposals")
   listProposals() {
     return this.guard(() => this.context.listProposals());

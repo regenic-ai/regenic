@@ -516,6 +516,42 @@ describe("context contracts", () => {
     );
   });
 
+  it("keeps the evidence cap on an inline manifest and lets a segmented transcript grow", () => {
+    const inputRefs = Array.from({ length: 10_001 }, (_, index) => evidence({
+      event_id: `event-${index}`,
+      external_id: `message-${index}`,
+    }));
+    const inline = {
+      id: "artifact-inline",
+      org_id: "example-org",
+      kind: "thread_summary",
+      schema_version: "1.0",
+      algorithm_version: "rules-v1",
+      generation: "generation-1",
+      input_refs: inputRefs,
+      input_hash: hashContextArtifactInputs({ input_refs: inputRefs }),
+      status: "proposed",
+      required_scope_ids: ["scope-1"],
+      recorded_at: "2026-08-30T00:01:00.000Z",
+    };
+    const body = { schema_version: "1.0", message_count: inputRefs.length };
+    const segmented = {
+      ...inline,
+      id: "artifact-segmented",
+      body_storage: "artifact",
+      body_hash: hashCanonicalContext(body),
+      attrs: body,
+    };
+
+    const inlineResult = validateContextArtifact(inline);
+    assert.equal(inlineResult.success, false);
+    assert.equal(
+      inlineResult.success ? false : inlineResult.issues.some((issue) => issue.message.includes("10000")),
+      true,
+    );
+    assert.equal(validateContextArtifact(segmented).success, true);
+  });
+
   it("validates candidates without coupling to a retrieval implementation", () => {
     assert.equal(
       validateContextCandidate({

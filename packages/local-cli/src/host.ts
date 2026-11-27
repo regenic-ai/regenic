@@ -5,11 +5,9 @@ import {
 import { fsBlobPlugin } from "@regenic/blob-store";
 import { resolveAuthorityBackend, type AuthorityBackend } from "@regenic/config";
 import {
-  acceptedThreadSummaryRetrieverPlugin,
   contextProjectionCoordinatorPlugin,
   contextEmbeddingWorkerPlugin,
   hybridEventRetrieverPlugin,
-  deterministicThreadSummaryProjectorPlugin,
   indexedEventRetrieverPlugin,
   personalContextEnginePlugin,
 } from "@regenic/context-engine";
@@ -57,8 +55,6 @@ export async function createLocalHost(options: LocalHostOptions): Promise<Host> 
         path: `${options.database}.lexical.db`,
       });
       if (!options.embedding) await host.plugin(indexedEventRetrieverPlugin);
-      await host.plugin(acceptedThreadSummaryRetrieverPlugin);
-      await host.plugin(deterministicThreadSummaryProjectorPlugin);
       await host.plugin(contextProjectionCoordinatorPlugin, {
         lexical_index: host.get("context-lexical-index"),
       });
