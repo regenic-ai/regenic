@@ -483,7 +483,7 @@ export function PreciseSearch({ onSettings, onOpenConversation, onLocate, locked
                 {t(result.generation ? "search.hybrid" : "search.lexical")}
               </span>
               {result.coverage ? (
-                <span className="muted">{t("search.coverage", {
+                <span className="muted" title={t(result.generation ? "search.coverage.semanticHint" : "search.coverage.lexicalHint")}>{t(result.generation ? "search.coverage.semantic" : "search.coverage.lexical", {
                   covered: result.coverage.covered_count, authorized: result.coverage.authorized_count,
                 })}</span>
               ) : null}
