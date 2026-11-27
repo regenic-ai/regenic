@@ -7,10 +7,14 @@ const { SqliteSplitAuthorityStore } = require("@regenic/authority-store/sqlite")
 const { FsBlobStore } = require("@regenic/blob-store");
 const { SqliteContextVectorIndex } = require("@regenic/vector-index");
 const { SqliteContextLexicalIndex } = require("@regenic/lexical-index");
-const { IngestionService, embeddingGeneration, EmbeddingError, MemoryContextRetrieverRegistry } = require("@regenic/domain");
+const {
+  IngestionService, embeddingGeneration, EmbeddingError, MemoryContextRetrieverRegistry,
+  MemoryContextProjectorRegistry,
+} = require("@regenic/domain");
 const {
   AuthorityContextEvidenceSource, ContextEmbeddingWorker, ContextSearcher, contextSearchRequest,
   DeterministicContextEngine, IndexedEventRetriever, HybridEventRetriever,
+  ContextProjectionCoordinator,
 } = require("../dist");
 
 const descriptor = {
@@ -19,6 +23,7 @@ const descriptor = {
   normalization: "l2", similarity: "cosine", numeric_format: "float32",
 };
 const generation = embeddingGeneration(descriptor, 32, 1024);
+const LEXICAL_GENERATION = "continuous-v2";
 const body = (text) => ({ role: "body", media_type: "text/plain", text });
 const file = (name, text, media = "text/plain") => ({
   role: "attachment", source_filename: name, media_type: media,
@@ -59,6 +64,10 @@ async function fixture(t, providerOverrides = {}) {
     },
   });
   const worker = new ContextEmbeddingWorker("org", source, provider, index, index, generation, index);
+  const lexicalProjection = new ContextProjectionCoordinator(
+    authority, authority, new MemoryContextProjectorRegistry(), blobs, lexical,
+  );
+  const ingested = [];
   t.after(async () => {
     await worker.stop(); index.close(); lexical.close(); await authority.close();
     await rm(root, { recursive: true, force: true });
@@ -84,9 +93,22 @@ async function fixture(t, providerOverrides = {}) {
       });
       assert.equal(result.records[0].status, "accepted");
       const read = await source.openRead({ org_id: "org" });
-      return read.events.find((event) => event.event.external_id === id && event.event.operation === operation).event;
+      const event = read.events.find((entry) => entry.event.external_id === id && entry.event.operation === operation).event;
+      ingested.push(event);
+      return event;
+    },
+    async project() {
+      for (let offset = 0; offset < ingested.length; offset += 8) {
+        await lexicalProjection.syncLexicalIndex(
+          "org",
+          LEXICAL_GENERATION,
+          ingested.slice(offset, offset + 8).map((event) => event.event_id),
+        );
+      }
+      ingested.length = 0;
     },
     async search(query, kind = "all", limit = 20) {
+      await this.project();
       return new ContextSearcher(engine).search(contextSearchRequest({ query, kind, limit }, {
         id: `query-${sequence++}`, org_id: "org", principal: { actor_type: "human", actor_id: "owner" },
       }));
@@ -101,7 +123,7 @@ it("retains a semantic message in the 50-candidate window despite 50 mixed attac
     },
   });
   for (let index = 0; index < 50; index++) {
-    await f.ingest(`mixed-${index}`, [body("ordinary"), file("report.pdf", "%PDF synthetic", "application/pdf")]);
+    await f.ingest(`mixed-${index}`, [body("ordinary"), file("report.txt", "nebula invoice")]);
   }
   const message = await f.ingest("message", [body("stellar answer")]);
   assert.equal((await f.worker.runOnce({ max_jobs: 60 })).processed, 51);
@@ -114,36 +136,24 @@ it("retains a semantic message in the 50-candidate window despite 50 mixed attac
   assert.equal((await f.search("nebula", "all", 10)).items.length, 10);
 });
 
-it("finds PDF keywords split by the unchanged 32-token worker chunks, including offline", async (t) => {
+it("finds stored file text from the lexical index while embedding is offline", async (t) => {
   const extracted = `${"x".repeat(24)} nebula invoice`;
-  const f = await fixture(t, {
-    async countTokens(texts) { return texts.map((text) => Array.from(text).length + 5); },
-    async processAttachment(input) {
-      return { text: input.source_filename === "control.pdf" ? "nebula invoice" : extracted, vectors: [] };
-    },
-  });
-  const event = await f.ingest("split", [body("ordinary"), file("report.pdf", "%PDF synthetic", "application/pdf")]);
-  await f.ingest("control", [body("ordinary"), file("control.pdf", "%PDF control", "application/pdf")]);
-  assert.equal((await f.worker.runOnce({ max_jobs: 2 })).processed, 2);
-  const input = {
-    org_id: "org", generation: generation.id, authorized: [{ event_id: event.event_id, content_hash: event.content_hash }],
-    query_vector: [1, 0], limit: 50, query: "ne", search_kind: "files",
-  };
-  const fragments = (await f.index.matchAuthorized(input)).matched[0].search_matches;
-  assert.ok(fragments.some((hit) => hit.origin.text.endsWith(" ne")));
-  assert.ok(fragments.every((hit) => !hit.lexical), "partial chunk tokens must not become file keywords");
+  const f = await fixture(t);
+  const stored = await f.ingest("stored", [body("ordinary"), file("notes.txt", extracted)]);
+  await f.worker.runOnce();
   const online = await f.search("nebula", "files");
   f.offline();
   const offline = await f.search("NEBULA", "files");
   assert.ok(offline.degradation_flags.includes("embedding_unavailable"));
   for (const result of [online, offline]) {
-    assert.equal(result.items.length, 2);
-    const hit = result.items.find((hit) => hit.event_id === event.event_id).matches[0];
+    assert.equal(result.items.length, 1);
+    assert.equal(result.items[0].event_id, stored.event_id);
+    const hit = result.items[0].matches[0];
     assert.equal(hit.part_index, 1);
+    assert.equal(hit.filename, "notes.txt");
     assert.deepEqual(hit.via, ["text"]);
     assert.ok(hit.snippet.includes("nebula"));
     assert.equal(extracted.slice(hit.start, hit.end), hit.snippet);
-    assert.ok(result.items.some((item) => item.matches[0].filename === "control.pdf"));
   }
 });
 
@@ -182,26 +192,23 @@ it("unifies extracted keywords and visual semantics without attributing another 
   await f.ingest("mixed", [
     body("ordinary message"),
     file("wrong.png", "wrong visual", "image/png"),
-    file("report.pdf", "%PDF synthetic", "application/pdf"),
+    file("report.txt", "Extracted nebula invoice terms."),
     file("target.png", "target visual", "image/png"),
   ]);
   assert.equal((await f.worker.runOnce()).processed, 1);
   const keyword = await f.search("nebula", "files");
-  const report = keyword.items[0].matches.find((match) => match.filename === "report.pdf");
+  const report = keyword.items[0].matches.find((match) => match.filename === "report.txt");
   assert.ok(report.via.includes("text"));
   assert.equal("Extracted nebula invoice terms.".slice(report.start, report.end), report.snippet);
   assert.equal(keyword.items[0].matches.some((match) => match.filename === "wrong.png"), false);
-  const semantic = await f.search("landscape", "files");
-  assert.deepEqual(semantic.items[0].matches.map((match) => [match.part_index, match.filename, match.via]), [
-    [3, "target.png", ["visual"]],
-  ]);
-  assert.equal(semantic.items[0].matches[0].start, undefined);
-  assert.equal(semantic.items[0].matches[0].snippet, undefined);
+  const semantic = await f.search("landscape");
+  assert.deepEqual(semantic.items[0].matches, [{ kind: "event", via: ["semantic"] }]);
+  assert.equal((await f.search("landscape", "files")).items.length, 0);
 });
 
 it("searches completed extracted keywords with the provider offline and reports degradation", async (t) => {
   const f = await fixture(t);
-  await f.ingest("offline", [file("report.pdf", "%PDF synthetic", "application/pdf")]);
+  await f.ingest("offline", [body("ordinary"), file("report.txt", "Extracted nebula invoice terms.")]);
   assert.equal((await f.worker.runOnce()).processed, 1);
   f.offline();
   const result = await f.search("nebula", "files");
@@ -227,9 +234,9 @@ it("does not expose hidden filenames or old attachment content after revisions a
   assert.ok(visible.content_hash);
 });
 
-it("deduplicates filename, stored-text and semantic matches for one attachment", async (t) => {
+it("deduplicates filename and stored text for one attachment", async (t) => {
   const f = await fixture(t);
-  await f.ingest("dedup", [body("ordinary"), file("nebula.pdf", "%PDF synthetic", "application/pdf")]);
+  await f.ingest("dedup", [body("ordinary"), file("nebula.txt", "nebula invoice terms")]);
   await f.worker.runOnce();
   const result = await f.search("nebula", "files");
   assert.equal(result.items.length, 1);
@@ -241,26 +248,7 @@ it("keeps legacy unlocated semantic hits at Event level instead of guessing an a
   const f = await fixture(t);
   await f.ingest("legacy", [body("ordinary"), file("target.png", "target visual", "image/png")]);
   await f.worker.runOnce();
-  const match = f.index.matchAuthorized.bind(f.index);
-  f.index.matchAuthorized = async (input) => {
-    const result = await match(input);
-    for (const hit of result.matched) delete hit.search_matches;
-    return result;
-  };
   const all = await f.search("landscape");
   assert.deepEqual(all.items[0].matches, [{ kind: "event", via: ["semantic"] }]);
   assert.equal((await f.search("landscape", "files")).items.length, 0);
-});
-
-it("rejects a vector origin bound to the wrong attachment hash", async (t) => {
-  const f = await fixture(t);
-  await f.ingest("binding", [body("ordinary"), file("target.png", "target visual", "image/png")]);
-  await f.worker.runOnce();
-  const match = f.index.matchAuthorized.bind(f.index);
-  f.index.matchAuthorized = async (input) => {
-    const result = await match(input);
-    result.matched[0].search_matches[0].origin.content_hash = "f".repeat(64);
-    return result;
-  };
-  await assert.rejects(f.search("landscape"), (error) => error.code === "invalid_candidate");
 });

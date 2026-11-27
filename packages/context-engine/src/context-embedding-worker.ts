@@ -7,7 +7,9 @@ import {
   type ContextEmbeddingRunner,
   type ContextEvidenceSource,
   type ContextRequest,
+  type ContextSourceEvent,
   type ContextSourceRead,
+  type ContextEmbeddingMaterial,
   type ContextVectorChunk,
   type ContextVectorIndex,
   type ContextVectorGenerationStore,
@@ -25,6 +27,10 @@ const MAX_RUN_JOBS = 100;
 const MAX_RUN_BUDGET_MS = 30_000;
 const CHECKPOINT_BATCH_CHUNKS = 8;
 const EMBED_BATCH = CHECKPOINT_BATCH_CHUNKS;
+const DOCUMENT_GROUP = 4;
+
+type AuthoritySnapshot = { read: ContextSourceRead; stamp?: string };
+type PreparedPlain = { job: EmbeddingJob; text: string; material: ContextEmbeddingMaterial };
 
 class EmbeddingBatchYield extends Error {}
 
@@ -38,6 +44,8 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
   private clearing = false;
   private running: ReturnType<ContextEmbeddingRunner["runOnce"]> | undefined;
   private generationCursor = 0;
+  private continueImmediately = false;
+  private headsRemain = false;
   private readonly claimSequences = new Map<string, number>();
 
   constructor(
@@ -54,6 +62,7 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
 
   async runOnce(options: EmbeddingRunOptions = {}): ReturnType<ContextEmbeddingRunner["runOnce"]> {
     if (this.stopped || this.clearing || this.running) return { processed: 0, failed: 0, superseded: 0 };
+    this.continueImmediately = false;
     this.running = this.runGenerations(options);
     try {
       return await this.running;
@@ -66,6 +75,12 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
     this.stopped = true;
     this.abort.abort();
     await this.running;
+  }
+
+  wantsImmediateResume(): boolean {
+    const resume = this.continueImmediately;
+    this.continueImmediately = false;
+    return resume;
   }
 
   async clearProjection(): Promise<void> {
@@ -112,8 +127,9 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
     const maxJobs = boundedRunOption(options.max_jobs, DEFAULT_RUN_MAX_JOBS, 1, MAX_RUN_JOBS);
     const budgetMs = boundedRunOption(options.time_budget_ms, DEFAULT_RUN_BUDGET_MS, 1, MAX_RUN_BUDGET_MS);
     const deadline = Date.now() + budgetMs;
+    this.headsRemain = false;
     const total: EmbeddingRunResult = { processed: 0, failed: 0, superseded: 0 };
-    const reads = new Map<string, ContextSourceRead>();
+    const reads = new Map<string, AuthoritySnapshot>();
     let attempted = 0;
 
     work: while (attempted < maxJobs && Date.now() < deadline && !this.abort.signal.aborted && !options.pause_if?.()) {
@@ -122,11 +138,13 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
         const cursor = (this.generationCursor + offset) % manifests.length;
         const generation = manifests[cursor];
         assertEmbeddingDescriptor(this.provider.descriptor, generation.model);
-        const run = await this.run(generation, reads.get(generation.id), options.pause_if);
-        reads.set(generation.id, run.read);
-        if (run.claimed) {
+        const run = await this.run(
+          generation, reads.get(generation.id), options.pause_if, deadline, maxJobs - attempted,
+        );
+        reads.set(generation.id, { read: run.read, stamp: run.stamp });
+        if (run.claimedCount > 0) {
           found = true;
-          attempted += 1;
+          attempted += run.claimedCount;
           total.processed += run.result.processed;
           total.failed += run.result.failed;
           total.superseded += run.result.superseded;
@@ -137,6 +155,9 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
       }
       if (!found) break;
     }
+    const paused = options.pause_if?.() === true;
+    this.continueImmediately = !this.abort.signal.aborted && !paused &&
+      (this.headsRemain || Date.now() >= deadline || attempted >= maxJobs);
     if (this.generations && !this.abort.signal.aborted && reads.has(this.generation.id) &&
       this.generation.extractor_version === "stored-body-and-attachments-v2") {
       const entries = await this.generations.listGenerations(this.orgId);
@@ -165,22 +186,74 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
 
   private async run(
     generation: EmbeddingGeneration,
-    previous?: ContextSourceRead,
-    pause?: () => boolean,
+    previous: AuthoritySnapshot | undefined,
+    pause: (() => boolean) | undefined,
+    deadline: number,
+    slots: number,
   ) {
-    let read = previous ?? await this.read(generation);
-    const claimSequence = this.claimSequences.get(generation.id) ?? 0;
-    const claimed = await this.jobs.claim({
-      org_id: this.orgId, generation: generation.id, owner: this.owner,
-      now: new Date().toISOString(), lease_ms: 90000, limit: 1,
-      order: claimSequence % 4 === 3 ? "oldest" : "newest",
-    });
+    const snapshot: AuthoritySnapshot = previous
+      ? { read: previous.read, stamp: previous.stamp }
+      : await this.loadSnapshot(generation);
     const result = { processed: 0, failed: 0, superseded: 0 };
     let yielded = false;
-    if (claimed.length === 0) return { claimed: false, read, result };
-    this.claimSequences.set(generation.id, claimSequence + 1);
-    for (const job of claimed) {
-      if (this.abort.signal.aborted) break;
+    const room = Math.min(DOCUMENT_GROUP, Math.max(0, slots));
+    let sequence = this.claimSequences.get(generation.id) ?? 0;
+    let claimedCount = 0;
+    const plain: PreparedPlain[] = [];
+    let blocked: EmbeddingJob | undefined;
+    while (claimedCount < room && !blocked && !this.abort.signal.aborted && Date.now() < deadline) {
+      if (claimedCount > 0 && pause?.()) break;
+      const [job] = await this.jobs.claim({
+        org_id: this.orgId, generation: generation.id, owner: this.owner,
+        now: new Date().toISOString(), lease_ms: 90000, limit: 1,
+        order: sequence % 4 === 3 ? "oldest" : "newest",
+      });
+      if (!job) break;
+      sequence += 1;
+      this.claimSequences.set(generation.id, sequence);
+      claimedCount += 1;
+      try {
+        const prepared = await this.preparePlain(job, snapshot, generation);
+        if (prepared === "superseded") {
+          result.superseded += 1;
+          continue;
+        }
+        if (prepared === "other") {
+          blocked = job;
+          break;
+        }
+        plain.push(prepared);
+      } catch (error) {
+        await this.failClaimed(job, error);
+        result.failed += 1;
+        break;
+      }
+    }
+    if (claimedCount === 0) return { claimedCount, read: snapshot.read, stamp: snapshot.stamp, result, yielded };
+    if (plain.length > 0) {
+      yielded = await this.indexPlainGroup(plain, generation, snapshot, pause, deadline, result);
+    }
+    if (blocked) {
+      if (yielded || this.abort.signal.aborted || Date.now() >= deadline) {
+        if (!await this.jobs.yieldJob(blocked, this.owner, new Date().toISOString())) result.superseded += 1;
+        yielded = true;
+      } else {
+        yielded = await this.indexClaimedJob(blocked, generation, snapshot, pause, deadline, result) || yielded;
+      }
+    }
+    return { claimedCount, read: snapshot.read, stamp: snapshot.stamp, result, yielded };
+  }
+
+  private async indexClaimedJob(
+    job: EmbeddingJob,
+    generation: EmbeddingGeneration,
+    snapshot: AuthoritySnapshot,
+    pause: (() => boolean) | undefined,
+    deadline: number,
+    result: { processed: number; failed: number; superseded: number },
+  ): Promise<boolean> {
+    {
+      if (this.abort.signal.aborted) return false;
       let leaseLost = false;
       let heartbeatFailed = false;
       let heartbeat = Promise.resolve();
@@ -190,10 +263,10 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
         }).catch(() => { leaseLost = true; heartbeatFailed = true; });
       }, 20000);
       try {
-        const event = read.events.find((event) => event.event.event_id === job.event_id);
-        if (!event || !isHead(read, job)) {
+        const event = await this.stillCurrent(job, snapshot.read);
+        if (!event) {
           result.superseded += 1;
-          continue;
+          return false;
         }
         const authorized: AuthorizedContextSourceEvent = { ...event, status: "current" };
         const material = this.source.materializeForEmbedding
@@ -219,7 +292,9 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
             job, owner: this.owner, now: new Date().toISOString(), chunk,
           })) throw new Error("Embedding checkpoint lease lost");
           freshChunks++;
-          if (freshChunks >= CHECKPOINT_BATCH_CHUNKS) throw new EmbeddingBatchYield();
+          if (freshChunks < CHECKPOINT_BATCH_CHUNKS) return;
+          freshChunks = 0;
+          if (this.abort.signal.aborted || pause?.() || Date.now() >= deadline) throw new EmbeddingBatchYield();
         };
         const appendText = async (
           value: string,
@@ -319,13 +394,14 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
           generation.extractor_version === "stored-body-and-attachments-v2";
         if (staged.length > chunks.length) throw new Error("Embedding checkpoint content mismatch");
         if (chunks.length === 0 && !noContent) throw new EmbeddingError("invalid_input", false);
-        read = await this.openAuthorityRead();
-        if (!pause?.()) await this.reconcileRead(read, generation);
+        const confirmed = await this.confirmAuthority(snapshot.read, snapshot.stamp, generation, pause);
+        snapshot.read = confirmed.read;
+        snapshot.stamp = confirmed.stamp;
         await heartbeat;
         if (heartbeatFailed) throw new Error("Embedding lease renewal failed");
-        if (leaseLost || !isHead(read, job)) {
+        if (leaseLost || !await this.stillCurrent(job, snapshot.read)) {
           result.superseded += 1;
-          continue;
+          return false;
         }
         const completed = await this.jobs.complete({
           job, owner: this.owner, now: new Date().toISOString(), chunks,
@@ -333,30 +409,273 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
         });
         if (completed) result.processed += 1;
         else result.superseded += 1;
+        return false;
       } catch (error) {
         if (error instanceof EmbeddingBatchYield) {
-          yielded = await this.jobs.yieldJob(job, this.owner, new Date().toISOString());
-          if (!yielded) result.superseded += 1;
-          continue;
+          if (!await this.jobs.yieldJob(job, this.owner, new Date().toISOString())) result.superseded += 1;
+          return true;
         }
-        const code = error instanceof EmbeddingError ? error.code
-          : error instanceof ContextTextMaterialError ? "invalid_input" : "indexing_failed";
-        const retryable = error instanceof ContextTextMaterialError ? false
-          : !(error instanceof EmbeddingError) || error.retryable;
-        const now = new Date();
-        const delay = Math.min(300000, 1000 * 2 ** Math.min(job.attempts, 8));
-        await this.jobs.fail({
-          job, owner: this.owner, now: now.toISOString(),
-          retry_at: new Date(now.getTime() + delay + Math.floor(Math.random() * 1000)).toISOString(),
-          error_code: code, retryable,
-        });
+        await this.failClaimed(job, error);
         result.failed += 1;
+        return false;
       } finally {
         clearInterval(timer);
         await heartbeat;
       }
     }
-    return { claimed: true, read, result, yielded };
+  }
+
+  private async loadSnapshot(generation: EmbeddingGeneration): Promise<AuthoritySnapshot> {
+    const before = await this.captureStamp();
+    if (this.jobs.reconcileChanged && this.authorityPath()) {
+      await this.drainChangedHeads(generation, 8);
+      const after = await this.captureStamp();
+      return {
+        read: {
+          read_epoch: `authorized-stamp:${before ?? "open"}`,
+          recorded_at: new Date().toISOString(),
+          lifecycle_complete: true,
+          lifecycle_heads: [],
+          events: [],
+        },
+        stamp: before !== undefined && before === after ? after : undefined,
+      };
+    }
+    const read = await this.read(generation);
+    const after = await this.captureStamp();
+    return { read, stamp: before !== undefined && before === after ? after : undefined };
+  }
+
+  private async captureStamp(): Promise<string | undefined> {
+    if (!this.source.openReadStamp) return undefined;
+    return this.source.openReadStamp();
+  }
+
+  private authorityPath(): string | undefined {
+    const path = this.source.databasePath?.();
+    if (!path || path === ":memory:" || path.includes("\0")) return undefined;
+    return path;
+  }
+
+  /** Pages changed heads inside SQLite. A full authority snapshot is not copied. */
+  private async drainChangedHeads(generation: EmbeddingGeneration, pages: number): Promise<void> {
+    const path = this.authorityPath();
+    if (!path || !this.jobs.reconcileChanged) return;
+    for (let index = 0; index < pages; index += 1) {
+      if (this.abort.signal.aborted) return;
+      const stamp = await this.captureStamp();
+      const page = await this.jobs.reconcileChanged({
+        org_id: this.orgId,
+        generation: generation.id,
+        authority_path: path,
+        read_epoch: `authorized-stamp:${stamp ?? "open"}`,
+        now: new Date().toISOString(),
+        limit: 200,
+      });
+      if (page.done) {
+        this.headsRemain = false;
+        return;
+      }
+      this.headsRemain = true;
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+  }
+
+  private async stillCurrent(job: EmbeddingJob, read: ContextSourceRead): Promise<ContextSourceEvent | undefined> {
+    if (this.authorityPath() && this.source.loadCurrentEvents) {
+      const loaded = await this.source.loadCurrentEvents(this.orgId, [job.event_id]);
+      const event = loaded.find((entry) => entry.event.event_id === job.event_id);
+      if (!event || event.event.source !== job.source || event.event.external_id !== job.external_id) return undefined;
+      if (job.content_hash && event.event.content_hash !== job.content_hash) return undefined;
+      return event;
+    }
+    const event = read.events.find((entry) => entry.event.event_id === job.event_id);
+    if (!event || !isHead(read, job)) return undefined;
+    return event;
+  }
+
+  private async confirmAuthority(
+    read: ContextSourceRead,
+    stamp: string | undefined,
+    generation: EmbeddingGeneration,
+    pause: (() => boolean) | undefined,
+  ): Promise<AuthoritySnapshot> {
+    const current = await this.captureStamp();
+    if (stamp !== undefined && current === stamp) return { read, stamp };
+    const paused = pause?.() === true;
+    if (this.jobs.reconcileChanged && this.authorityPath()) {
+      if (!paused) await this.drainChangedHeads(generation, 1);
+      const after = await this.captureStamp();
+      return { read, stamp: !paused && after === current ? after : undefined };
+    }
+    const fresh = await this.openAuthorityRead();
+    if (!paused) await this.reconcileRead(fresh, generation);
+    const after = await this.captureStamp();
+    return { read: fresh, stamp: !paused && after === current ? after : undefined };
+  }
+
+  private async preparePlain(
+    job: EmbeddingJob,
+    snapshot: AuthoritySnapshot,
+    generation: EmbeddingGeneration,
+  ): Promise<PreparedPlain | "other" | "superseded"> {
+    const event = await this.stillCurrent(job, snapshot.read);
+    if (!event) return "superseded";
+    if (!this.source.materializeForEmbedding) return "other";
+    const authorized: AuthorizedContextSourceEvent = { ...event, status: "current" };
+    const material = (await this.source.materializeForEmbedding(
+      [authorized], generation.extractor_version,
+    ))[0];
+    if (!material || material.event_id !== job.event_id || !Array.isArray(material.attachments)) {
+      throw new EmbeddingError("invalid_response", true);
+    }
+    const text = material.text;
+    if (material.attachments.length > 0 || typeof text !== "string" || !text.trim()) return "other";
+    if (Buffer.byteLength(text, "utf8") > 262144) throw new EmbeddingError("input_too_large", false);
+    if ((await this.jobs.loadStagedChunks(job, this.owner, new Date().toISOString())).length > 0) return "other";
+    return { job, text, material };
+  }
+
+  private async failClaimed(job: EmbeddingJob, error: unknown): Promise<void> {
+    const code = error instanceof EmbeddingError ? error.code
+      : error instanceof ContextTextMaterialError ? "invalid_input" : "indexing_failed";
+    const retryable = error instanceof ContextTextMaterialError ? false
+      : !(error instanceof EmbeddingError) || error.retryable;
+    const now = new Date();
+    const delay = Math.min(300000, 1000 * 2 ** Math.min(job.attempts, 8));
+    await this.jobs.fail({
+      job, owner: this.owner, now: now.toISOString(),
+      retry_at: new Date(now.getTime() + delay + Math.floor(Math.random() * 1000)).toISOString(),
+      error_code: code, retryable,
+    });
+  }
+
+  private async indexPlainGroup(
+    items: PreparedPlain[],
+    generation: EmbeddingGeneration,
+    snapshot: AuthoritySnapshot,
+    pause: (() => boolean) | undefined,
+    deadline: number,
+    result: { processed: number; failed: number; superseded: number },
+  ): Promise<boolean> {
+    let counts: number[];
+    try {
+      counts = await this.provider.countTokens(
+        items.map((item) => item.text), "document", this.abort.signal,
+      );
+    } catch (error) {
+      for (const item of items) {
+        await this.failClaimed(item.job, error);
+        result.failed += 1;
+      }
+      return false;
+    }
+    if (counts.length !== items.length || counts.some((count) => !Number.isSafeInteger(count) || count < 1)) {
+      const error = new EmbeddingError("invalid_response", true);
+      for (const item of items) {
+        await this.failClaimed(item.job, error);
+        result.failed += 1;
+      }
+      return false;
+    }
+    const shorts: PreparedPlain[] = [];
+    const longs: EmbeddingJob[] = [];
+    items.forEach((item, index) => {
+      if (counts[index] <= generation.chunk_tokens) shorts.push(item);
+      else longs.push(item.job);
+    });
+    if (shorts.length > 0) {
+      let vectors: number[][] | undefined;
+      try {
+        vectors = await this.provider.embed(
+          shorts.map((item) => item.text), "document", this.abort.signal,
+        );
+        if (vectors.length !== shorts.length) throw new EmbeddingError("invalid_response", true);
+      } catch (error) {
+        for (const item of shorts) {
+          await this.failClaimed(item.job, error);
+          result.failed += 1;
+        }
+        vectors = undefined;
+      }
+      if (vectors) {
+        const ready: Array<{ item: PreparedPlain; chunks: ContextVectorChunk[] }> = [];
+        for (let index = 0; index < shorts.length; index += 1) {
+          try {
+            ready.push({
+              item: shorts[index],
+              chunks: await this.stagePlainChunk(shorts[index], vectors[index], generation),
+            });
+          } catch (error) {
+            await this.failClaimed(shorts[index].job, error);
+            result.failed += 1;
+          }
+        }
+        if (ready.length > 0) {
+          const confirmed = await this.confirmAuthority(snapshot.read, snapshot.stamp, generation, pause);
+          snapshot.read = confirmed.read;
+          snapshot.stamp = confirmed.stamp;
+          for (const entry of ready) {
+            if (!await this.stillCurrent(entry.item.job, snapshot.read)) {
+              result.superseded += 1;
+              continue;
+            }
+            const completed = await this.jobs.complete({
+              job: entry.item.job, owner: this.owner, now: new Date().toISOString(), chunks: entry.chunks,
+            });
+            if (completed) result.processed += 1;
+            else result.superseded += 1;
+          }
+        }
+      }
+    }
+    let yielded = false;
+    for (const job of longs) {
+      if (yielded || this.abort.signal.aborted || Date.now() >= deadline || pause?.()) {
+        if (!await this.jobs.yieldJob(job, this.owner, new Date().toISOString())) result.superseded += 1;
+        yielded = true;
+        continue;
+      }
+      if (await this.indexClaimedJob(job, generation, snapshot, pause, deadline, result)) yielded = true;
+    }
+    return yielded;
+  }
+
+  private async stagePlainChunk(
+    item: PreparedPlain,
+    vector: number[],
+    generation: EmbeddingGeneration,
+  ): Promise<ContextVectorChunk[]> {
+    const text = item.text;
+    const staged: ContextVectorChunk[] = [];
+    const provider: EmbeddingProvider = {
+      descriptor: this.provider.descriptor,
+      visualEnabled: this.provider.visualEnabled,
+      async countTokens() { throw new EmbeddingError("unavailable", true); },
+      async planChunks(value: string, _chunkTokens: number, maxChunks: number) {
+        if (value !== text || maxChunks < 1) throw new EmbeddingError("invalid_response", true);
+        return [text];
+      },
+      async embed(values: string[]) {
+        if (values.length !== 1 || values[0] !== text) throw new EmbeddingError("invalid_response", true);
+        return [vector];
+      },
+      async health() { return { status: "ok" }; },
+    };
+    await chunkEmbeddingText(text, provider, generation, this.abort.signal, {
+      chunks: [],
+      save: async (chunk) => {
+        const bound = bindPlainChunk(chunk, text, item.material);
+        if (!await this.jobs.stageChunk({
+          job: item.job, owner: this.owner, now: new Date().toISOString(), chunk: bound,
+        })) throw new Error("Embedding checkpoint lease lost");
+        staged.push(bound);
+      },
+    });
+    if (staged.length !== 1 || staged[0].start !== 0 || staged[0].end !== text.length) {
+      throw new EmbeddingError("invalid_response", true);
+    }
+    return staged;
   }
 }
 
@@ -441,7 +760,6 @@ export async function chunkEmbeddingText(
   }
   if (chunks.length > generation.max_chunks_per_event) throw new EmbeddingError("input_too_large", false);
   if (start === text.length) return chunks;
-  const characters = Array.from(text.slice(start));
   const pending: Array<{ slice: string; start: number; end: number }> = [];
   const flush = async (): Promise<void> => {
     if (pending.length === 0) return;
@@ -467,11 +785,42 @@ export async function chunkEmbeddingText(
     pending.push({ slice, start: sliceStart, end: sliceStart + slice.length });
     if (pending.length >= batchSize()) await flush();
   };
-  if (chunks.length === 0) {
-    const [wholeTokens] = await provider.countTokens([text], "document", signal);
-    if (!Number.isSafeInteger(wholeTokens) || wholeTokens < 1) {
-      throw new EmbeddingError("invalid_response", true);
+  if (provider.planChunks) {
+    const room = generation.max_chunks_per_event - chunks.length;
+    if (room < 1) throw new EmbeddingError("input_too_large", false);
+    let slices: string[] | undefined;
+    try {
+      slices = await provider.planChunks(text.slice(start), generation.chunk_tokens, room, signal);
+    } catch (error) {
+      // An older loopback server has no /chunks route. Keep indexing with local probes.
+      if (!(error instanceof EmbeddingError) || error.code !== "unavailable") throw error;
     }
+    if (slices) {
+      if (!Array.isArray(slices) || slices.length < 1 || slices.length > room ||
+        slices.some((slice) => typeof slice !== "string" || slice.length < 1) ||
+        slices.join("") !== text.slice(start)) {
+        throw new EmbeddingError("invalid_response", true);
+      }
+      for (const slice of slices) {
+        if (signal?.aborted) throw new EmbeddingError("cancelled", true);
+        if (chunks.length + pending.length >= generation.max_chunks_per_event) {
+          throw new EmbeddingError("input_too_large", false);
+        }
+        await queue(slice, start);
+        start += slice.length;
+      }
+      await flush();
+      return chunks;
+    }
+  }
+  const countSlice = async (slice: string): Promise<number> => {
+    const [count] = await provider.countTokens([slice], "document", signal);
+    if (!Number.isSafeInteger(count) || count < 1) throw new EmbeddingError("invalid_response", true);
+    return count;
+  };
+  const characters = Array.from(text.slice(start));
+  if (chunks.length === 0) {
+    const wholeTokens = await countSlice(text);
     if (wholeTokens <= generation.chunk_tokens) {
       if (generation.max_chunks_per_event < 1) throw new EmbeddingError("input_too_large", false);
       await queue(text, 0);
@@ -483,41 +832,86 @@ export async function chunkEmbeddingText(
   while (offset < characters.length) {
     if (signal?.aborted) throw new EmbeddingError("cancelled", true);
     if (chunks.length + pending.length >= generation.max_chunks_per_event) throw new EmbeddingError("input_too_large", false);
-    let low = 1;
-    let high = characters.length - offset;
-    let length = 0;
-    while (low <= high) {
-      const middle = Math.floor((low + high) / 2);
-      const slice = characters.slice(offset, offset + middle).join("");
-      const [count] = await provider.countTokens([slice], "document", signal);
-      if (!Number.isSafeInteger(count) || count < 1) throw new EmbeddingError("invalid_response", true);
-      if (count <= generation.chunk_tokens) { length = middle; low = middle + 1; }
-      else high = middle - 1;
-    }
+    const length = await fittingPrefixLength(characters, offset, generation.chunk_tokens, countSlice);
     if (length === 0) throw new EmbeddingError("input_too_large", false);
     let slice = characters.slice(offset, offset + length).join("");
     const fittingSlice = slice;
+    let sliceLength = length;
     if (offset + length < characters.length) {
       const boundary = Math.max(slice.lastIndexOf("\n"), slice.lastIndexOf("。"), slice.lastIndexOf("！"), slice.lastIndexOf("？"));
       if (boundary > slice.length / 2) {
         slice = slice.slice(0, boundary + 1);
-        length = Array.from(slice).length;
+        sliceLength = Array.from(slice).length;
       }
     }
-    let [tokens] = await provider.countTokens([slice], "document", signal);
+    let tokens = await countSlice(slice);
     if (tokens > generation.chunk_tokens && slice !== fittingSlice) {
       // Removing a tokenizer merge at a preferred boundary can increase the count.
       slice = fittingSlice;
-      length = Array.from(slice).length;
-      [tokens] = await provider.countTokens([slice], "document", signal);
+      sliceLength = length;
+      tokens = await countSlice(slice);
     }
-    if (!Number.isSafeInteger(tokens) || tokens < 1 || tokens > generation.chunk_tokens) throw new EmbeddingError("invalid_response", true);
+    if (tokens > generation.chunk_tokens) throw new EmbeddingError("invalid_response", true);
     await queue(slice, start);
-    offset += length;
+    offset += sliceLength;
     start += slice.length;
   }
   await flush();
   return chunks;
+}
+
+/** Longest code-point prefix whose token count fits, probing a doubling window. */
+async function fittingPrefixLength(
+  characters: string[],
+  offset: number,
+  budget: number,
+  countAt: (slice: string) => Promise<number>,
+): Promise<number> {
+  const remaining = characters.length - offset;
+  const countLength = (length: number) => countAt(characters.slice(offset, offset + length).join(""));
+  let lo = 0;
+  let hi = 1;
+  while (hi < remaining) {
+    if (await countLength(hi) <= budget) {
+      lo = hi;
+      const doubled = hi * 2;
+      hi = doubled > remaining ? remaining : doubled;
+    } else {
+      break;
+    }
+  }
+  if (hi === remaining && lo !== remaining && await countLength(remaining) <= budget) lo = remaining;
+  let low = lo + 1;
+  let high = hi - 1;
+  let length = lo;
+  while (low <= high) {
+    const middle = Math.floor((low + high) / 2);
+    if (await countLength(middle) <= budget) { length = middle; low = middle + 1; }
+    else high = middle - 1;
+  }
+  return length;
+}
+
+function bindPlainChunk(
+  chunk: ContextVectorChunk,
+  value: string,
+  material: ContextEmbeddingMaterial,
+): ContextVectorChunk {
+  const part = material.search_parts?.find((entry) =>
+    entry.content_hash && entry.projection_start !== undefined && entry.text !== undefined &&
+    chunk.start >= entry.projection_start && chunk.end <= entry.projection_start + entry.text.length,
+  );
+  if (!part?.content_hash) return chunk;
+  return {
+    ...chunk,
+    origin: {
+      part_index: part.part_index,
+      content_hash: part.content_hash,
+      mode: "text",
+      start: chunk.start - (part.projection_start ?? 0),
+      text: value.slice(chunk.start, chunk.end),
+    },
+  };
 }
 
 function isHead(read: ContextSourceRead, job: EmbeddingJob): boolean {

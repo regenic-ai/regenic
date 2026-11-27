@@ -36,6 +36,16 @@ export interface EmbeddingProvider {
   readonly descriptor: EmbeddingModelDescriptor;
   readonly visualEnabled?: boolean;
   countTokens(texts: string[], mode: EmbeddingMode, signal?: AbortSignal): Promise<number[]>;
+  /**
+   * Split one document into budget-sized slices with a single planner call.
+   * Slices join back to the input and each one counts at or below chunkTokens.
+   */
+  planChunks?(
+    text: string,
+    chunkTokens: number,
+    maxChunks: number,
+    signal?: AbortSignal,
+  ): Promise<string[]>;
   embed(texts: string[], mode: EmbeddingMode, signal?: AbortSignal): Promise<number[][]>;
   embedWithTokenCounts?(
     texts: string[],

@@ -369,6 +369,137 @@ def validate_request(value):
     return texts, value["mode"]
 
 
+def validate_chunk_request(value):
+    if not isinstance(value, dict) or value.get("descriptor") != DESCRIPTOR:
+        raise InputError(409)
+    text = value.get("text")
+    limit = value.get("chunk_tokens")
+    max_chunks = value.get("max_chunks")
+    if value.get("mode") != "document" or not isinstance(text, str) or not text or len(text.encode("utf-8")) > MAX_TEXT_BYTES:
+        raise InputError(400)
+    if type(limit) is not int or not 32 <= limit <= DESCRIPTOR["max_input_tokens"]:
+        raise InputError(400)
+    if type(max_chunks) is not int or not 1 <= max_chunks <= 1024:
+        raise InputError(400)
+    return text, limit, max_chunks
+
+
+def _preferred_chunk(slice_text, at_end, count, limit):
+    if at_end or not slice_text:
+        return slice_text
+    boundary = max(slice_text.rfind(mark) for mark in ("\n", "。", "！", "？"))
+    if boundary <= len(slice_text) / 2:
+        return slice_text
+    snapped = slice_text[:boundary + 1]
+    if snapped and count(snapped) <= limit:
+        return snapped
+    return slice_text
+
+
+def plan_document_chunks(text, limit, count, max_chunks):
+    """Split text with the same budget and punctuation rule as the worker.
+
+    Probes double until they pass one chunk, so a long document never
+    re-tokenizes its whole remainder for every boundary.
+    """
+    if not isinstance(text, str) or not text or type(limit) is not int or limit < 1:
+        raise InputError(400)
+    if type(max_chunks) is not int or max_chunks < 1:
+        raise InputError(400)
+    if count(text) <= limit:
+        return [text]
+    slices = []
+    cursor = 0
+    while cursor < len(text):
+        if len(slices) >= max_chunks:
+            raise InputError(413)
+        remaining = len(text) - cursor
+        lo = 0
+        hi = 1
+        while hi < remaining:
+            if count(text[cursor:cursor + hi]) <= limit:
+                lo = hi
+                doubled = hi * 2
+                hi = remaining if doubled > remaining else doubled
+            else:
+                break
+        if hi == remaining and lo != remaining and count(text[cursor:]) <= limit:
+            lo = remaining
+        low = lo + 1
+        high = hi - 1
+        fit = lo
+        while low <= high:
+            middle = (low + high) // 2
+            if count(text[cursor:cursor + middle]) <= limit:
+                fit = middle
+                low = middle + 1
+            else:
+                high = middle - 1
+        if fit < 1:
+            raise InputError(413)
+        chosen = _preferred_chunk(text[cursor:cursor + fit], cursor + fit == len(text), count, limit)
+        if not chosen or count(chosen) > limit:
+            raise InputError(409)
+        slices.append(chosen)
+        cursor += len(chosen)
+    return slices
+
+
+def plan_document_chunks_from_offsets(
+    text, limit, offsets, prefix_len, overhead, count, max_chunks, whole_count=None,
+):
+    """Place cuts from one tokenization, then verify each slice still fits.
+
+    Returns None when the offsets do not cover the text. Callers fall back to
+    plan_document_chunks, which only probes a window around one chunk.
+    """
+    if whole_count is None:
+        whole_count = count(text)
+    if whole_count <= limit:
+        return [text]
+    if type(overhead) is not int or overhead < 0 or overhead >= limit or not offsets:
+        return None
+    body = [
+        (start - prefix_len, end - prefix_len)
+        for start, end in offsets
+        if isinstance(start, int) and isinstance(end, int) and start >= prefix_len and end > start
+    ]
+    if not body:
+        return None
+    budget = max(1, limit - overhead)
+    slices = []
+    cursor = 0
+    index = 0
+    while cursor < len(text):
+        if len(slices) >= max_chunks:
+            raise InputError(413)
+        while index < len(body) and body[index][1] <= cursor:
+            index += 1
+        if index >= len(body):
+            return None
+        last = min(len(body) - 1, index + budget - 1)
+        while last + 1 < len(body) and body[last][1] <= cursor:
+            last += 1
+        end = body[last][1]
+        while True:
+            if end > cursor and count(text[cursor:end]) <= limit:
+                break
+            if last <= index:
+                return None
+            last -= 1
+            end = body[last][1]
+        if last + 1 < len(body) and body[last + 1][0] > end:
+            gap = body[last + 1][0]
+            if count(text[cursor:gap]) <= limit:
+                end = gap
+        piece = _preferred_chunk(text[cursor:end], end == len(text), count, limit)
+        if not piece or count(piece) > limit or cursor + len(piece) <= cursor:
+            return None
+        slices.append(piece)
+        cursor += len(piece)
+    return slices if cursor == len(text) and "".join(slices) == text else None
+
+
 class TextEncoder:
     def __init__(self, device, precision="bfloat16", visual_enabled=False):
         from sentence_transformers import SentenceTransformer
@@ -405,6 +536,47 @@ class TextEncoder:
                 padding=False,
             )
             return [len(tokens) for tokens in encoded["input_ids"]]
+
+    def chunk(self, text, mode, limit, max_chunks):
+        prefix = DESCRIPTOR[f"{mode}_template"]
+
+        def count_one(slice_text):
+            if not slice_text:
+                raise InputError(400)
+            counted = self.count([slice_text], mode)[0]
+            if counted > DESCRIPTOR["max_input_tokens"]:
+                raise InputError(413)
+            return counted
+
+        offsets = None
+        full_count = None
+        prefix_tokens = None
+        with self.token_lock:
+            try:
+                encoded = self.tokenizer(
+                    prefix + text,
+                    add_special_tokens=True,
+                    truncation=False,
+                    padding=False,
+                    return_offsets_mapping=True,
+                )
+                offsets = encoded["offset_mapping"] if "offset_mapping" in encoded else None
+                full_count = len(encoded["input_ids"])
+                prefix_tokens = len(self.tokenizer(
+                    prefix, add_special_tokens=True, truncation=False, padding=False,
+                )["input_ids"])
+            except (TypeError, ValueError, KeyError):
+                offsets = None
+        if isinstance(full_count, int) and full_count <= limit:
+            return [text]
+        if offsets is not None and prefix_tokens is not None:
+            planned = plan_document_chunks_from_offsets(
+                text, limit, list(offsets), len(prefix), prefix_tokens, count_one, max_chunks,
+                whole_count=full_count,
+            )
+            if planned is not None:
+                return planned
+        return plan_document_chunks(text, limit, count_one, max_chunks)
 
     def embed(self, texts, mode):
         return self.embed_with_counts(texts, mode)[1]
@@ -548,26 +720,49 @@ class PriorityEncoder:
         # chunking can overlap a forward and cannot fill the document queue.
         return self.encoder.count(texts, mode)
 
+    def chunk(self, text, mode, limit, max_chunks):
+        # Planning is tokenizer work. It must not take the inference lock.
+        return self.encoder.chunk(text, mode, limit, max_chunks)
+
     def embed(self, texts, mode):
         vectors = []
-        for index, batch in enumerate(self.batches(texts, mode)):
-            vectors.extend(self.call("embed", batch, mode, index > 0))
+        started = False
+        for batch in self.document_batches(texts, mode):
+            vectors.extend(self.call("embed", batch, mode, started))
+            started = True
         return vectors
 
     def embed_with_counts(self, texts, mode):
         counts = []
         vectors = []
-        for index, batch in enumerate(self.batches(texts, mode)):
+        started = False
+        for batch in self.document_batches(texts, mode):
             batch_counts, batch_vectors = self.call(
-                "embed_with_counts", batch, mode, index > 0,
+                "embed_with_counts", batch, mode, started,
             )
             counts.extend(batch_counts)
             vectors.extend(batch_vectors)
+            started = True
         return counts, vectors
 
-    def batches(self, texts, mode):
-        size = len(texts) if mode == "query" else self.max_document_batch
-        return [texts[start:start + size] for start in range(0, len(texts), size)]
+    def next_document_batch_size(self):
+        with self.condition:
+            if self.query_queue or self.waiting_queries:
+                return 1
+            return self.max_document_batch
+
+    def document_batches(self, texts, mode):
+        # Re-check before each forward. An idle accelerator may take a small
+        # batch; a waiting query keeps the uninterruptible unit to one segment.
+        if mode == "query":
+            if texts:
+                yield texts
+            return
+        index = 0
+        while index < len(texts):
+            size = min(self.next_document_batch_size(), len(texts) - index)
+            yield texts[index:index + size]
+            index += size
 
     def attachment(self, value):
         return process_attachment(self, value)
@@ -711,7 +906,7 @@ def handler_for(encoder, runtime=None):
             if self.headers.get("Origin") is not None:
                 self.reply(403, {"error": "origin_rejected"})
                 return
-            if self.path not in ("/tokens", "/embed", "/attachment"):
+            if self.path not in ("/tokens", "/embed", "/chunks", "/attachment"):
                 self.reply(404, {"error": "not_found"})
                 return
             attachment_slot = False
@@ -733,6 +928,13 @@ def handler_for(encoder, runtime=None):
                 if self.path == "/attachment":
                     validate_attachment(value)
                     self.reply(200, {"descriptor": DESCRIPTOR, **encoder.attachment(value)})
+                    return
+                if self.path == "/chunks":
+                    text, limit, max_chunks = validate_chunk_request(value)
+                    self.reply(200, {
+                        "descriptor": DESCRIPTOR,
+                        "slices": encoder.chunk(text, "document", limit, max_chunks),
+                    })
                     return
                 texts, mode = validate_request(value)
                 if self.path == "/tokens":
@@ -792,7 +994,10 @@ def main():
     import torch
     runtime["threads"] = torch.get_num_threads()
     runtime["visual_enabled"] = args.visual
-    encoder = PriorityEncoder(model)
+    # CPU forwards scale almost linearly, so batching does not buy throughput.
+    # MPS and CUDA stay at four segments only while no query is waiting.
+    document_batch = 4 if runtime["device"] in ("mps", "cuda") else 1
+    encoder = PriorityEncoder(model, max_document_batch=document_batch)
     if args.download_only:
         logging.warning(
             "embedding_download_verified model_revision=%s precision=%s",
@@ -801,8 +1006,8 @@ def main():
         return
     server = BoundedHTTPServer(("127.0.0.1", args.port), handler_for(encoder, runtime))
     logging.warning(
-        "embedding_ready model_revision=%s device=%s precision=%s port=%d",
-        REVISION, runtime["device"], runtime["precision"], args.port
+        "embedding_ready model_revision=%s device=%s precision=%s port=%d document_batch=%d",
+        REVISION, runtime["device"], runtime["precision"], args.port, document_batch
     )
     try:
         server.serve_forever()

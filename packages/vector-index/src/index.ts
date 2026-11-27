@@ -24,6 +24,7 @@ import {
   type EmbeddingJob,
   type EmbeddingJobSummary,
   type EmbeddingJobStore,
+  type EmbeddingSourceHead,
   type RankedHeadQuery,
   authorizedHeadScopeKey,
   authorizedHeadWhere,
@@ -510,6 +511,141 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
       updateEpoch.run(input.read_epoch, input.org_id, input.generation);
       if (authorizationState) {
         this.updateVectorAuthorizationCounts(nativeChunkCount, projectionRevision);
+      }
+    }).immediate();
+  }
+
+  async reconcileChanged(
+    input: Parameters<NonNullable<EmbeddingJobStore["reconcileChanged"]>>[0],
+  ): Promise<{ changed: number; done: boolean }> {
+    required(input.org_id);
+    required(input.read_epoch);
+    timestamp(input.now);
+    this.manifest(input.org_id, input.generation);
+    if (!Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > 500) {
+      throw new Error("Invalid embedding reconcile page");
+    }
+    const selected: ChangedAuthorityHead[] = [];
+    const chains: ChangedAuthorityChain[] = [];
+    const branched = new Set<string>();
+    withAttachedAuthority(this.db, input.authority_path, () => {
+      selected.push(...this.db.prepare(`
+        SELECT h.source, h.external_id, e.id AS event_id, e.operation, e.content_hash,
+          e.parent_event_id, e.thread_id, e.actor_id, e.required_scope_ids_json,
+          b.media_type
+        FROM regenic_auth.source_heads h
+        JOIN regenic_auth.events e ON e.id = h.current_event_id AND e.org_id = h.org_id
+        LEFT JOIN regenic_auth.blobs b ON b.content_hash = e.content_hash
+        LEFT JOIN source_heads v
+          ON v.org_id = h.org_id AND v.source = h.source AND v.external_id = h.external_id
+        WHERE h.org_id = ? AND (
+          v.event_id IS NULL OR v.event_id != e.id OR NOT EXISTS (
+            SELECT 1 FROM jobs j
+            WHERE j.org_id = h.org_id AND j.generation = ? AND j.source = h.source
+              AND j.external_id = h.external_id AND j.event_id = e.id
+          )
+        )
+        LIMIT ?
+      `).all(input.org_id, input.generation, input.limit + 1) as ChangedAuthorityHead[]);
+      const page = selected.slice(0, input.limit);
+      if (page.length === 0) return;
+      chains.push(...this.db.prepare(`
+        WITH RECURSIVE chain AS (
+          SELECT e.id, e.parent_event_id, e.operation, e.id AS head_id, 0 AS depth
+          FROM regenic_auth.events e
+          WHERE e.org_id = ? AND e.id IN (SELECT value FROM json_each(?))
+          UNION ALL
+          SELECT p.id, p.parent_event_id, p.operation, chain.head_id, chain.depth + 1
+          FROM regenic_auth.events p
+          JOIN chain ON p.id = chain.parent_event_id AND p.org_id = ?
+          WHERE chain.depth < 32
+        )
+        SELECT head_id, id, parent_event_id, operation, depth FROM chain
+      `).all(
+        input.org_id,
+        JSON.stringify(page.map((row) => row.event_id)),
+        input.org_id,
+      ) as ChangedAuthorityChain[]);
+      const parents = this.db.prepare(`
+        SELECT parent_event_id AS id
+        FROM regenic_auth.events
+        WHERE org_id = ? AND parent_event_id IN (SELECT value FROM json_each(?))
+        GROUP BY parent_event_id
+        HAVING COUNT(*) > 1
+      `).all(input.org_id, JSON.stringify([
+        ...page.map((row) => row.event_id),
+        ...chains.map((row) => row.id),
+      ])) as Array<{ id: string }>;
+      for (const parent of parents) {
+        for (const row of chains) {
+          if (row.id === parent.id || row.parent_event_id === parent.id) branched.add(row.head_id);
+        }
+      }
+    });
+    const page = selected.slice(0, input.limit);
+    const done = selected.length <= input.limit;
+    if (page.length === 0) return { changed: 0, done: true };
+    const lineageByHead = new Map<string, ChangedAuthorityChain[]>();
+    for (const row of chains) {
+      const group = lineageByHead.get(row.head_id) ?? [];
+      group.push(row);
+      lineageByHead.set(row.head_id, group);
+    }
+    const eligible: EmbeddingSourceHead[] = [];
+    const caughtUp: ChangedAuthorityHead[] = [];
+    for (const row of page) {
+      const lineage = lineageFor(lineageByHead.get(row.event_id) ?? [], row.event_id);
+      if (!lineage || branched.has(row.event_id) || !changedHeadEligible(row)) {
+        caughtUp.push(row);
+        continue;
+      }
+      eligible.push({
+        source: row.source,
+        external_id: row.external_id,
+        event_id: row.event_id,
+        operation: row.operation as EmbeddingSourceHead["operation"],
+        lineage,
+        ...(row.operation === "tombstone" ? {} : { content_hash: row.content_hash! }),
+      });
+    }
+    if (eligible.length > 0) {
+      await this.reconcile({
+        org_id: input.org_id,
+        generation: input.generation,
+        read_epoch: input.read_epoch,
+        now: input.now,
+        heads: eligible,
+      });
+    }
+    if (caughtUp.length > 0) this.rememberCaughtUpHeads(input.org_id, input.generation, input.now, caughtUp);
+    return { changed: page.length, done };
+  }
+
+  private rememberCaughtUpHeads(
+    orgId: string,
+    generation: string,
+    now: string,
+    heads: ChangedAuthorityHead[],
+  ): void {
+    const previous = this.db.prepare(
+      "SELECT event_id, fence FROM source_heads WHERE org_id=? AND source=? AND external_id=?",
+    );
+    const upsert = this.db.prepare(`INSERT INTO source_heads VALUES (?,?,?,?,?)
+      ON CONFLICT(org_id,source,external_id) DO UPDATE SET event_id=excluded.event_id, fence=excluded.fence`);
+    const skip = this.db.prepare(`INSERT OR IGNORE INTO jobs (
+      org_id,generation,source,external_id,event_id,content_hash,operation,lineage_json,fence,status,completed_at
+    ) VALUES (?,?,?,?,?,?,?,?,?,'skipped',?)`);
+    this.db.transaction(() => {
+      for (const head of heads) {
+        const prior = previous.get(orgId, head.source, head.external_id) as
+          { event_id: string; fence: number } | undefined;
+        const fence = prior ? prior.fence + Number(prior.event_id !== head.event_id) : 1;
+        upsert.run(orgId, head.source, head.external_id, head.event_id, fence);
+        const operation = head.operation === "revise" || head.operation === "tombstone" ? head.operation : "create";
+        skip.run(
+          orgId, generation, head.source, head.external_id, head.event_id,
+          head.content_hash, operation, "[]", fence, now,
+        );
       }
     }).immediate();
   }
@@ -1957,6 +2093,55 @@ interface RankedVectorRow {
   end: number;
   vector: Buffer;
   distance: number;
+}
+
+interface ChangedAuthorityHead {
+  source: string;
+  external_id: string;
+  event_id: string;
+  operation: string;
+  content_hash: string | null;
+  parent_event_id: string | null;
+  thread_id: string | null;
+  actor_id: string | null;
+  required_scope_ids_json: string | null;
+  media_type: string | null;
+}
+
+interface ChangedAuthorityChain {
+  head_id: string;
+  id: string;
+  parent_event_id: string | null;
+  operation: string;
+  depth: number;
+}
+
+function changedHeadEligible(row: ChangedAuthorityHead): boolean {
+  if (!row.thread_id?.trim() || !row.actor_id?.trim()) return false;
+  if (!["create", "revise", "tombstone"].includes(row.operation)) return false;
+  let scopes: unknown;
+  try {
+    scopes = JSON.parse(row.required_scope_ids_json ?? "");
+  } catch {
+    return false;
+  }
+  if (!Array.isArray(scopes) || scopes.length === 0 || scopes.some((scope) => typeof scope !== "string" || !scope.trim())) {
+    return false;
+  }
+  if (row.operation === "tombstone") return true;
+  return Boolean(row.content_hash && row.media_type?.trim());
+}
+
+function lineageFor(rows: ChangedAuthorityChain[], headId: string): string[] | undefined {
+  const ordered = [...rows].sort((left, right) => right.depth - left.depth);
+  const root = ordered[0];
+  if (!root || root.operation !== "create" || root.parent_event_id) return undefined;
+  const lineage = ordered.map((row) => row.id);
+  if (lineage.at(-1) !== headId || new Set(lineage).size !== lineage.length) return undefined;
+  for (let index = 1; index < ordered.length; index += 1) {
+    if (ordered[index]?.parent_event_id !== ordered[index - 1]?.id) return undefined;
+  }
+  return lineage;
 }
 
 function withAttachedAuthority(db: Database.Database, path: string, run: () => void): void {

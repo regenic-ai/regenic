@@ -2,7 +2,10 @@ import http.client
 import json
 import threading
 import unittest
-from serve import BoundedHTTPServer, DESCRIPTOR, InputError, PriorityEncoder, handler_for, validate_request
+from serve import (
+    BoundedHTTPServer, DESCRIPTOR, InputError, PriorityEncoder, handler_for, validate_request,
+    plan_document_chunks, plan_document_chunks_from_offsets,
+)
 
 
 class FakeEncoder:
@@ -371,6 +374,99 @@ class ProtocolTests(unittest.TestCase):
         server.process_request(request, ("127.0.0.1", 12345))
         self.assertTrue(written[0].startswith(b"HTTP/1.0 503"))
         self.assertEqual(closed, [request])
+
+    def test_idle_accelerator_batches_documents_and_a_waiting_query_splits_them(self):
+        calls = []
+
+        class Encoder(FakeEncoder):
+            def embed_with_counts(self, texts, mode):
+                calls.append((mode, list(texts)))
+                return super().embed_with_counts(texts, mode)
+
+        encoder = PriorityEncoder(Encoder(), max_document_batch=4)
+        self.assertEqual(encoder.embed_with_counts(["d0", "d1", "d2"], "document")[0], [7, 7, 7])
+        self.assertEqual(calls, [("document", ["d0", "d1", "d2"])])
+        encoder.query_queue.append(object())
+        self.assertEqual(encoder.next_document_batch_size(), 1)
+        encoder.query_queue.clear()
+        self.assertEqual(encoder.next_document_batch_size(), 4)
+
+    def test_chunk_plan_matches_a_single_tokenization(self):
+        prefix = "document: "
+        text = ("aaaa。\n" + "b" * 40 + "？") * 3
+
+        def count(value):
+            return len(prefix) + 1 + len(value)
+
+        def offsets_for(value):
+            encoded = prefix + value
+            offsets = [(0, 0)]
+            offsets.extend((index, index + 1) for index in range(len(encoded)))
+            return offsets
+
+        limit = 32
+        overhead = len(prefix) + 1
+        searched = plan_document_chunks(text, limit, count, 64)
+        planned = plan_document_chunks_from_offsets(
+            text, limit, offsets_for(text), len(prefix), overhead, count, 64,
+            whole_count=count(text),
+        )
+        self.assertEqual(planned, searched)
+        self.assertEqual("".join(planned), text)
+        self.assertGreater(len(planned), 1)
+        for piece in planned:
+            self.assertLessEqual(count(piece), limit)
+
+        boundary = "a" * 20 + "。"
+        awkward = boundary + "b" * 40
+
+        def awkward_count(value):
+            return 33 if value == boundary else len(value) + 5
+
+        pieces = plan_document_chunks(awkward, 32, awkward_count, 16)
+        self.assertEqual(pieces[0], awkward[:27])
+        self.assertEqual("".join(pieces), awkward)
+        for piece in pieces:
+            self.assertLessEqual(awkward_count(piece), 32)
+        with self.assertRaises(InputError) as rejected:
+            plan_document_chunks("x" * 80, 32, lambda value: len(value) + 5, 1)
+        self.assertEqual(rejected.exception.status, 413)
+
+    def test_chunk_route_returns_slices_without_the_prompt(self):
+        class Encoder(FakeEncoder):
+            def chunk(self, text, mode, limit, max_chunks):
+                if mode != "document":
+                    raise AssertionError(mode)
+                return plan_document_chunks(text, limit, lambda value: len(value) + 5, max_chunks)
+
+        server = BoundedHTTPServer(("127.0.0.1", 0), handler_for(Encoder()))
+        thread = threading.Thread(target=server.serve_forever)
+        thread.start()
+        try:
+            connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+            text = "段落一。\n" + "内容" * 30
+            connection.request("POST", "/chunks", json.dumps({
+                "descriptor": DESCRIPTOR, "mode": "document", "text": text,
+                "chunk_tokens": 32, "max_chunks": 16,
+            }), {"Content-Type": "application/json"})
+            response = connection.getresponse()
+            self.assertEqual(response.status, 200)
+            value = json.loads(response.read())
+            self.assertEqual(value["descriptor"], DESCRIPTOR)
+            self.assertEqual("".join(value["slices"]), text)
+            self.assertGreater(len(value["slices"]), 1)
+            connection.close()
+            connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+            connection.request("POST", "/chunks", json.dumps({
+                "descriptor": DESCRIPTOR, "mode": "document", "text": text,
+                "chunk_tokens": 32, "max_chunks": 16,
+            }), {"Content-Type": "application/json", "Origin": "https://example.com"})
+            self.assertEqual(connection.getresponse().status, 403)
+            connection.close()
+        finally:
+            server.shutdown()
+            thread.join()
+            server.server_close()
 
 
 if __name__ == "__main__":

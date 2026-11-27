@@ -132,6 +132,29 @@ describe("independent embedding indexing worker", () => {
     assert.equal(result.matched[0].search_matches[0].origin.mode, "text");
   });
 
+  it("does not treat a token cut at a chunk boundary as a file keyword", async (t) => {
+    const extracted = `${"x".repeat(24)} nebula invoice`;
+    const f = await fixture(t, provider({
+      async countTokens(texts) { return texts.map((text) => Array.from(text).length + 5); },
+      async processAttachment() { return { text: extracted, vectors: [] }; },
+    }));
+    const input = batch("create", "ordinary");
+    input.records[0].content.push({
+      role: "attachment", media_type: "application/pdf",
+      source_filename: "report.pdf", bytes: Buffer.from("%PDF synthetic"),
+    });
+    await f.ingest.ingest(input);
+    assert.deepEqual(await f.worker.runOnce(), { processed: 1, failed: 0, superseded: 0 });
+    const [job] = await f.index.listJobs("org", generation.id);
+    const fragments = (await f.index.matchAuthorized({
+      org_id: "org", generation: generation.id,
+      authorized: [{ event_id: job.event_id, content_hash: job.content_hash }],
+      query_vector: [1, 0], query: "ne", search_kind: "files", limit: 50,
+    })).matched[0].search_matches;
+    assert.ok(fragments.some((hit) => hit.origin.text.endsWith(" ne")));
+    assert.ok(fragments.every((hit) => !hit.lexical));
+  });
+
   it("resumes a 567-chunk attachment across batches without publishing partial coverage or repeating inference", async (t) => {
     const large = embeddingGeneration(descriptor, 32, 1024);
     const extracted = "x".repeat(27 * 566 + 1);
@@ -147,8 +170,14 @@ describe("independent embedding indexing worker", () => {
       source_filename: "large.xlsx", bytes: Buffer.from("PK\u0003\u0004synthetic"),
     }];
     await f.ingest.ingest(input);
-    assert.deepEqual(await f.worker.runOnce(), { processed: 0, failed: 0, superseded: 0 });
+    let pauses = 0;
+    assert.deepEqual(await f.worker.runOnce({
+      max_jobs: 16,
+      time_budget_ms: 30_000,
+      pause_if: () => ++pauses > 1,
+    }), { processed: 0, failed: 0, superseded: 0 });
     assert.equal(calls, 8);
+    assert.equal(f.worker.wantsImmediateResume(), false);
     const [job] = await f.index.listJobs("org", large.id);
     const query = () => f.index.matchAuthorized({
       org_id: "org", generation: large.id,
@@ -225,7 +254,6 @@ describe("independent embedding indexing worker", () => {
       },
     }));
     await f.ingest.ingest(batch("create", body));
-    assert.equal((await f.worker.runOnce()).failed, 0);
     assert.equal((await f.worker.runOnce()).failed, 1);
     const [failed] = await f.index.listJobs("org", generation.id);
     assert.equal(failed.attempts, 1);
@@ -561,7 +589,75 @@ describe("independent embedding indexing worker", () => {
 
     const second = await f.worker.runOnce({ max_jobs: 2, time_budget_ms: 30_000 });
     assert.deepEqual(second, { processed: 2, failed: 0, superseded: 0 });
-    assert.equal(reads, 5);
+    assert.equal(reads, 0);
+  });
+
+  it("embeds four single-chunk messages in one forward and keeps each vector", async (t) => {
+    const batches = [];
+    const f = await fixture(t, provider({
+      async embed(texts) {
+        batches.push(texts.slice());
+        return texts.map((text) => text.endsWith("oldest") ? [0, 1] : [1, 0]);
+      },
+    }));
+    for (let index = 1; index <= 6; index += 1) {
+      const label = index === 1 ? "oldest" : `message-${index}`;
+      await f.ingest.ingest(batch("create", label, `delivery-${index}`, `message-${index}`));
+    }
+    let reads = 0;
+    const openRead = f.source.openRead.bind(f.source);
+    f.source.openRead = async (...args) => {
+      reads += 1;
+      return openRead(...args);
+    };
+    assert.deepEqual(await f.worker.runOnce({ max_jobs: 6, time_budget_ms: 30_000 }), {
+      processed: 6, failed: 0, superseded: 0,
+    });
+    assert.equal(reads, 0);
+    assert.deepEqual(batches.map((batch) => batch.length), [4, 2]);
+    assert.equal(batches[0][3], "oldest");
+    const jobs = await f.index.listJobs("org", generation.id);
+    const oldest = jobs.find((job) => job.external_id === "message-1");
+    const newer = jobs.find((job) => job.external_id === "message-6");
+    const match = (job, vector) => f.index.matchAuthorized({
+      org_id: "org", generation: generation.id,
+      authorized: [{ event_id: job.event_id, content_hash: job.content_hash }],
+      query_vector: vector, limit: 1,
+    });
+    assert.equal((await match(oldest, [0, 1])).matched[0].event_id, oldest.event_id);
+    assert.equal((await match(newer, [1, 0])).matched[0].event_id, newer.event_id);
+  });
+
+  it("finishes every checkpoint of one event inside the time budget", async (t) => {
+    const body = "x".repeat(27 * 18);
+    let calls = 0;
+    const f = await fixture(t, provider({
+      async embed(texts) {
+        calls += 1;
+        return texts.map(() => [1, 0]);
+      },
+    }));
+    await f.ingest.ingest(batch("create", body));
+    assert.deepEqual(await f.worker.runOnce({ time_budget_ms: 30_000 }), {
+      processed: 1, failed: 0, superseded: 0,
+    });
+    assert.equal(calls, 3);
+    assert.equal(f.worker.wantsImmediateResume(), false);
+  });
+
+  it("asks for another pass when the time budget expires mid-event", async (t) => {
+    const body = "x".repeat(27 * 18);
+    const f = await fixture(t, provider({
+      async embed(texts) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        return texts.map(() => [1, 0]);
+      },
+    }));
+    await f.ingest.ingest(batch("create", body));
+    const partial = await f.worker.runOnce({ time_budget_ms: 1, max_jobs: 100 });
+    assert.deepEqual(partial, { processed: 0, failed: 0, superseded: 0 });
+    assert.equal(f.worker.wantsImmediateResume(), true);
+    assert.equal(f.worker.wantsImmediateResume(), false);
   });
 
   it("embeds several fitting chunks in one forward", async () => {
@@ -599,6 +695,48 @@ describe("independent embedding indexing worker", () => {
     assert.equal(chunks.length, 1);
     assert.equal(countCalls, 1);
     assert.equal(embedCalls, 1);
+  });
+
+  it("plans a long document with one chunk request", async () => {
+    const text = "x".repeat(100);
+    let plans = 0;
+    let counts = 0;
+    const embedding = provider({
+      async planChunks(value, limit, maxChunks) {
+        plans += 1;
+        assert.equal(value, text);
+        assert.equal(limit, generation.chunk_tokens);
+        assert.equal(maxChunks, generation.max_chunks_per_event);
+        const slices = [];
+        for (let index = 0; index < value.length; index += 10) slices.push(value.slice(index, index + 10));
+        return slices;
+      },
+      async countTokens() {
+        counts += 1;
+        return [1];
+      },
+    });
+    const chunks = await chunkEmbeddingText(text, embedding, generation);
+    assert.equal(plans, 1);
+    assert.equal(counts, 0);
+    assert.equal(chunks.map((chunk) => text.slice(chunk.start, chunk.end)).join(""), text);
+    assert.equal(chunks.length, 10);
+  });
+
+  it("falls back to local probes when the chunk route is unavailable", async () => {
+    const text = "x".repeat(60);
+    let counts = 0;
+    const embedding = provider({
+      async planChunks() { throw new EmbeddingError("unavailable", true); },
+      async countTokens(values) {
+        counts += 1;
+        return values.map((value) => Array.from(value).length + 5);
+      },
+    });
+    const chunks = await chunkEmbeddingText(text, embedding, generation);
+    assert.ok(counts > 1);
+    assert.equal(chunks.map((chunk) => text.slice(chunk.start, chunk.end)).join(""), text);
+    for (const chunk of chunks) assert.ok(Array.from(text.slice(chunk.start, chunk.end)).length + 5 <= 32);
   });
 
   it("preserves Unicode source intervals and obeys tokenizer budgets without truncation", async () => {
