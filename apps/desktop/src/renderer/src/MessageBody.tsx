@@ -432,13 +432,13 @@ function renderInline(text: string, mark: (value: string) => ReactNode): ReactNo
       return <code key={index}>{mark(piece.slice(1, -1))}</code>;
     }
     if (piece.startsWith("**") && piece.endsWith("**") && piece.length >= 4) {
-      return <strong key={index}>{mark(piece.slice(2, -2))}</strong>;
+      return <strong key={index}>{renderLinkedText(piece.slice(2, -2), mark)}</strong>;
     }
     if (piece.startsWith("~~") && piece.endsWith("~~") && piece.length >= 4) {
-      return <s key={index}>{mark(piece.slice(2, -2))}</s>;
+      return <s key={index}>{renderLinkedText(piece.slice(2, -2), mark)}</s>;
     }
     if (piece.startsWith("*") && piece.endsWith("*") && piece.length >= 2) {
-      return <em key={index}>{mark(piece.slice(1, -1))}</em>;
+      return <em key={index}>{renderLinkedText(piece.slice(1, -1), mark)}</em>;
     }
     return <span key={index}>{renderLinkedText(piece, mark)}</span>;
   });
