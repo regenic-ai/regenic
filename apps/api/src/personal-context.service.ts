@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { HttpStatus, Inject, Injectable } from "@nestjs/common";
+import { HttpStatus, Inject, Injectable, Optional } from "@nestjs/common";
 import {
   ModelTimeoutError,
   ModelUnavailableError,
@@ -81,6 +81,7 @@ import { PersonalRuntimeService } from "./personal-runtime.service";
 import { openEventAttachment } from "./attachment-file";
 import { PersonalContextError } from "./personal-context-error";
 import { PersonalConversationContextService } from "./personal-conversation-context.service";
+import { PersonalContextProjectionService } from "./personal-context-projection.service";
 import {
   applySearchAppClass,
   isFilterRecord,
@@ -120,6 +121,9 @@ export class PersonalContextService {
     private readonly conversations: PersonalConversationContextService,
     @Inject(ChannelDriverRegistry)
     private readonly drivers: ChannelDriverRegistry,
+    @Optional()
+    @Inject(PersonalContextProjectionService)
+    private readonly projections?: PersonalContextProjectionService,
   ) {}
 
   openAttachment(
@@ -150,6 +154,7 @@ export class PersonalContextService {
   }
 
   private async searchObserved(input: unknown) {
+    await this.projections?.catchUpForSearch();
     return this.runContext(async () => {
       const { appClass, body } = splitSearchAppClass(input);
       const request = contextSearchRequest(await timeSearchStage("read", () => this.filtersForSearch(body, appClass)), {

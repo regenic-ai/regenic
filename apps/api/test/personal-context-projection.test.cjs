@@ -217,6 +217,64 @@ describe("PersonalContextProjectionService", () => {
     assert.equal((await host.get("context-projection-outbox").listContextProjectionJobs("example-org"))[0].status, "succeeded");
   });
 
+  it("indexes a committed message for search while background projection is held", async (t) => {
+    resetInteractiveGate();
+    const root = await mkdtemp(join(tmpdir(), "regenic-context-projection-"));
+    const host = await createPersonalHost({
+      database: join(root, "authority.db"),
+      blobRoot: join(root, "blobs"),
+      orgId: "example-org",
+    });
+    const body = Buffer.from("The release is approved for Monday.", "utf8");
+    const contentHash = createHash("sha256").update(body).digest("hex");
+    await host.get("blobs").put(contentHash, body, "text/plain");
+    const event = await host.get("authority").append({
+      org_id: "example-org",
+      source: "synthetic",
+      external_id: "message-1",
+      content_hash: contentHash,
+      content_media_type: "text/plain",
+      content_byte_size: body.byteLength,
+      occurred_at: "2026-08-30T00:00:00.000Z",
+      thread_id: "thread-1",
+      actor_id: "actor-1",
+      required_scope_ids: ["scope-1"],
+      expected_head_id: null,
+    });
+    const runtime = {
+      isReady: () => true,
+      requireHost: () => host,
+      orgId: () => "example-org",
+    };
+    const kernelRuntime = {
+      shouldDeferBackgroundSync: () => false,
+      shouldDeferHistorySync: () => false,
+    };
+    const service = new PersonalContextProjectionService(runtime, kernelRuntime);
+    t.after(async () => {
+      await service.onModuleDestroy();
+      await host.dispose();
+      await rm(root, { recursive: true, force: true });
+    });
+    const query = {
+      org_id: "example-org",
+      query: "release approved",
+      authorized: [{ event_id: event.id, content_hash: contentHash }],
+    };
+
+    await service.runOnce();
+    assert.deepEqual(
+      (await host.get("context-lexical-index").matchAuthorized(query)).matched,
+      [],
+    );
+
+    await service.catchUpForSearch();
+    assert.deepEqual(
+      (await host.get("context-lexical-index").matchAuthorized(query)).matched,
+      [{ event_id: event.id, content_hash: contentHash }],
+    );
+  });
+
   it("projects each thread once and completes every claimed job", async () => {
     const { service, calls } = fixture([
       job(),
