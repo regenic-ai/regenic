@@ -1836,7 +1836,7 @@ describe("durable executor start", () => {
   it("does not start a trial when atomic work-item preparation loses a race", async (t) => {
     const f = await fixture(t);
     const recipe = await f.ports.authority.putRecipe({
-      ...f.recipe, match: { record_class: "utterance" },
+      ...f.recipe, match: { source: "dsh" },
     });
     const create = t.mock.method(f.ports.authority, "createWorkItem", async () => ({
       outcome: "conflict", reason: "work_exists",

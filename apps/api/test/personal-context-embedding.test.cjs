@@ -10,6 +10,7 @@ const { EMBEDDINGGEMMA_2 } = require("@regenic/embedding-provider");
 const { EmbeddingError } = require("@regenic/domain");
 const { ContextEngineError } = require("@regenic/context-engine");
 const { PersonalContextService } = require("../dist/personal-context.service");
+const { PersonalContextProjectionService } = require("../dist/personal-context-projection.service");
 
 it("expands file-only searches without false message anchors and reauthorizes the exact part on open", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "regenic-api-search-files-"));
@@ -20,8 +21,12 @@ it("expands file-only searches without false message anchors and reauthorizes th
     orgId: "owner", lexicalDatabase: `${database}.lexical.db`,
   });
   t.after(async () => { await host.dispose(); await rm(root, { recursive: true, force: true }); });
-  const runtime = { orgId: () => "owner", requireHost: () => host };
-  const service = new PersonalContextService(runtime);
+  const runtime = { orgId: () => "owner", isReady: () => true, requireHost: () => host };
+  const projections = new PersonalContextProjectionService(runtime, {
+    shouldDeferHistorySync: () => false,
+  });
+  const service = new PersonalContextService(runtime, undefined, undefined, projections);
+  t.after(() => projections.onModuleDestroy());
   const ingest = async (operation, content) => host.get("ingest").ingest({
     schema_version: "1.0", connector_id: "synthetic", org_id: "owner", delivery_id: operation,
     received_at: "2026-10-30T00:00:00.000Z",

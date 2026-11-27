@@ -903,9 +903,9 @@ describe("personal context API", () => {
       conversation.messages.map((message) => [message.external_id, message.text, message.attachments]),
       [
         ["customer-b:1", "opening-line before the photos", undefined],
-        ["customer-b:2", "", [{ media_type: "image/png", filename: "image.png" }]],
+        ["customer-b:2", "", [{ media_type: "image/png", filename: "image.png", part_index: 0 }]],
         ["customer-b:3", "photo-caption-question: which one?", undefined],
-        ["customer-b:4", "", [{ media_type: "application/pdf", filename: "brief.pdf" }]],
+        ["customer-b:4", "", [{ media_type: "application/pdf", filename: "brief.pdf", part_index: 0 }]],
         ["customer-b:5", "closing-line after the photos", undefined],
       ],
     );

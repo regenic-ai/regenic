@@ -27,6 +27,8 @@ const PROJECTION_CLAIM_LIMIT = 100;
  * The idle timer still waits PROJECTION_TICK_MS once a claim comes back short.
  */
 const PROJECTION_SLICE_MS = 80;
+/** Bound a search's wait for messages that are committed but not yet indexed. */
+const SEARCH_CATCHUP_MS = 1_000;
 /** Let the event loop run between lexical writes of one claimed batch. */
 const PROJECTION_LEXICAL_CHUNK = 8;
 const PROJECTION_HEARTBEAT_MS = 10_000;
@@ -77,17 +79,37 @@ export class PersonalContextProjectionService implements OnModuleDestroy {
     this.stopBackground();
   }
 
-  async runOnce(now = new Date()): Promise<void> {
+  /**
+   * Index pending outbox jobs before a search reads them. The background
+   * worker stays paused until the first UI read, so this is the only way a
+   * search issued in that window can see a message that was just committed.
+   * Text-version maintenance stays on the background worker.
+   */
+  async catchUpForSearch(now = new Date()): Promise<void> {
+    const deadline = Date.now() + SEARCH_CATCHUP_MS;
+    while (!this.stopping && Date.now() < deadline) {
+      if (this.running) {
+        await yieldToEventLoop();
+        continue;
+      }
+      const more = await this.runOnce(now, { catchUp: true });
+      if (!more) return;
+    }
+  }
+
+  async runOnce(now = new Date(), options?: { catchUp?: boolean }): Promise<boolean> {
+    const catchUp = options?.catchUp === true;
     if (this.running || this.stopping || !this.runtime.isReady()) {
-      return;
+      return false;
     }
     // Search and projection share one authority reader. Yield the slice
     // instead of waiting behind each other. The outbox keeps the jobs.
-    if (this.shouldYield()) {
-      return;
+    // A search catch-up is that search, so it does not yield to itself.
+    if (!catchUp && this.shouldYield()) {
+      return false;
     }
     this.running = true;
-    const deadline = Date.now() + PROJECTION_SLICE_MS;
+    const deadline = Date.now() + (catchUp ? SEARCH_CATCHUP_MS : PROJECTION_SLICE_MS);
     const held: ContextProjectionJobGroup[] = [];
     const leased: ContextProjectionJob[] = [];
     let more = false;
@@ -100,7 +122,7 @@ export class PersonalContextProjectionService implements OnModuleDestroy {
       outbox = host.get("context-projection-outbox") as ContextProjectionOutboxStore;
       const runner = host.get("context-projections") as ContextProjectionRunner;
       heartbeat = startProjectionLeaseHeartbeat(outbox, () => leased, this.owner);
-      if (!this.bootstrapped) {
+      if (!catchUp && !this.bootstrapped) {
         await this.advanceLexicalMaintenance(runner);
       }
       const phaseIndexByOrg = new Map<
@@ -108,7 +130,7 @@ export class PersonalContextProjectionService implements OnModuleDestroy {
         Awaited<ReturnType<typeof loadOrgSyncPhaseIndex>>
       >();
       while (!this.stopping && Date.now() < deadline) {
-        if (this.shouldYield()) {
+        if (!catchUp && this.shouldYield()) {
           yielded = true;
           break;
         }
@@ -120,7 +142,7 @@ export class PersonalContextProjectionService implements OnModuleDestroy {
         });
         leased.push(...claimed);
         if (claimed.length === 0) {
-          if (!this.bootstrapped && Date.now() < deadline) {
+          if (!catchUp && !this.bootstrapped && Date.now() < deadline) {
             await this.advanceLexicalMaintenance(runner);
             if (!this.bootstrapped) {
               more = true;
@@ -161,7 +183,7 @@ export class PersonalContextProjectionService implements OnModuleDestroy {
         if (claimed.length < PROJECTION_CLAIM_LIMIT) {
           // Caught up with ingest. Use the rest of the slice to publish a
           // text-version walk, then stop until the idle timer.
-          if (!this.bootstrapped) {
+          if (!catchUp && !this.bootstrapped) {
             more = true;
             continue;
           }
@@ -170,7 +192,7 @@ export class PersonalContextProjectionService implements OnModuleDestroy {
         }
         more = true;
       }
-      if (!yielded && !this.bootstrapped) {
+      if (!catchUp && !yielded && !this.bootstrapped) {
         more = true;
       }
       if (outbox) {
@@ -183,10 +205,11 @@ export class PersonalContextProjectionService implements OnModuleDestroy {
     } finally {
       await heartbeat?.stop();
       this.running = false;
-      if (more && !yielded && !this.stopping) {
+      if (!catchUp && more && !yielded && !this.stopping) {
         this.continueSoon();
       }
     }
+    return more && !yielded;
   }
 
   private shouldYield(): boolean {
