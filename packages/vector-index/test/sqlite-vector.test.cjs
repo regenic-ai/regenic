@@ -938,6 +938,7 @@ describe("reconcile changed authority heads without a full snapshot", () => {
     db.exec(`
       CREATE TABLE source_heads (org_id TEXT, source TEXT, external_id TEXT, current_event_id TEXT);
       CREATE TABLE events (
+        sequence INTEGER PRIMARY KEY AUTOINCREMENT,
         id TEXT, org_id TEXT, source TEXT, external_id TEXT, operation TEXT,
         content_hash TEXT, parent_event_id TEXT, thread_id TEXT, actor_id TEXT,
         required_scope_ids_json TEXT
@@ -945,7 +946,10 @@ describe("reconcile changed authority heads without a full snapshot", () => {
       CREATE TABLE blobs (content_hash TEXT, media_type TEXT);
     `);
     const insertHead = db.prepare("INSERT INTO source_heads VALUES (?,?,?,?)");
-    const insertEvent = db.prepare(`INSERT INTO events VALUES (?,?,?,?,?,?,?,?,?,?)`);
+    const insertEvent = db.prepare(`INSERT INTO events (
+      id, org_id, source, external_id, operation, content_hash, parent_event_id,
+      thread_id, actor_id, required_scope_ids_json
+    ) VALUES (?,?,?,?,?,?,?,?,?,?)`);
     db.prepare("INSERT INTO blobs VALUES (?,?)").run(hash, "text/plain");
     const add = (id, eligible = true) => {
       insertHead.run("org", "synthetic", id, id);

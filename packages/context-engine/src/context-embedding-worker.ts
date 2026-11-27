@@ -457,7 +457,7 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
     return path;
   }
 
-  /** Pages changed heads inside SQLite. A full authority snapshot is not copied. */
+  /** Pages authority events after the stored sequence. Already indexed heads are not scanned again. */
   private async drainChangedHeads(generation: EmbeddingGeneration, pages: number): Promise<void> {
     const path = this.authorityPath();
     if (!path || !this.jobs.reconcileChanged) return;
