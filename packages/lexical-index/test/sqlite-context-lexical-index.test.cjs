@@ -407,6 +407,7 @@ describe("SQLite Context lexical index", () => {
     insertEvent.run("event-old", "message-old", HASH_C, JSON.stringify(["scope"]));
     insertEvent.run("event-gap", "message-gap", "d".repeat(64), JSON.stringify(["scope"]));
     insertHead.run("message-a", "event-a");
+    insertHead.run("message-a-alias", "event-a");
     insertHead.run("message-hidden", "event-hidden");
     insertHead.run("message-gap", "event-gap");
     for (const hash of [HASH_A, HASH_B, HASH_C, "d".repeat(64)]) insertBlob.run(hash);
