@@ -118,6 +118,13 @@
   white-space: pre;
 }
 
+.rich-body a {
+  color: var(--accent);
+  overflow-wrap: anywhere;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 .rich-body em {
   font-style: italic;
 }

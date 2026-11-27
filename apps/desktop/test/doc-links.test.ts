@@ -34,19 +34,24 @@ describe("cloud doc cards", () => {
     const bare = "达人已更新脚本同步在文档https://ecncw7du1qtr.feishu.cn/docx/J2OrdbIhVoRs7Sx7RlEcM5winNf?from=from_copylink";
     assert.equal(cloudDocLinks(bare)[0]?.title, "");
     assert.equal(cloudDocLinks(bare)[0]?.kind, "DOC");
-    assert.equal(textWithoutCloudDocs(bare), "达人已更新脚本同步在文档");
+    assert.equal(textWithoutCloudDocs(bare), bare);
 
     const html = "<p>@youssef please check: https://docs.google.com/document/d/1Wgojia1WXZxo2fktqTjcVCpBLh5k-3hTJfO-n87GLOQ/edit?usp=sharing</p>";
     const google = cloudDocLinks(html)[0];
     assert.equal(google?.title, "");
     assert.equal(google?.host, "google");
     assert.equal(google?.url.endsWith("</p>"), false);
-    assert.equal(textWithoutCloudDocs(html).includes("</p>"), false);
-    assert.equal(textWithoutCloudDocs(html).includes("docs.google.com"), false);
+    const plainGoogle = textWithoutCloudDocs(html);
+    assert.equal(plainGoogle.includes("</p>"), false);
+    assert.equal(plainGoogle.includes(google?.url ?? "missing"), true);
 
     const drive = "please check: https://drive.google.com/file/d/1iswqP41CPsRVoIcHGTk4du6Whb3BjLi_/view?usp=drivesdk";
     assert.equal(cloudDocLinks(drive)[0]?.kind, "FILE");
-    assert.equal(textWithoutCloudDocs(drive), "please check:");
+    assert.equal(textWithoutCloudDocs(drive), drive);
+
+    const labeled = "麻烦审核： short: https://docs.google.com/document/d/shortId/edit long: https://docs.google.com/document/d/longId/edit";
+    assert.deepEqual(cloudDocLinks(labeled).map((link) => link.title), ["", ""]);
+    assert.equal(textWithoutCloudDocs(labeled), labeled);
   });
 
   it("labels a spreadsheet by its extension and size", () => {
