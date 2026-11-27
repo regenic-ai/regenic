@@ -36,10 +36,12 @@ export async function embeddingCommand(
         await host.get("context-vector-index").registerGeneration(orgId, target);
       }
       const progress = { processed: 0, failed: 0, superseded: 0 };
+      const worker = host.get("context-embedding-worker");
       for (let index = 0; index < limit; index++) {
-        const result = await host.get("context-embedding-worker").runOnce();
+        const result = await worker.runOnce();
         progress.processed += result.processed; progress.failed += result.failed; progress.superseded += result.superseded;
-        if (result.processed + result.failed + result.superseded === 0) break;
+        const resume = worker.wantsImmediateResume?.() ?? false;
+        if (result.processed + result.failed + result.superseded === 0 && !resume) break;
       }
       writeJson(stdout, { generation: target.id, ...progress });
     } else if (command === "context-embedding-retry") {

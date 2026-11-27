@@ -900,3 +900,60 @@ describe("SQLite vector projection and independent durable jobs", () => {
     assert.equal((await claim(index, "manual", later))[0].attempts, 3);
   });
 });
+
+describe("reconcile changed authority heads without a full snapshot", () => {
+  it("indexes only heads that are not already current and skips the rest", async (t) => {
+    const f = await fixture(t);
+    const authority = join(f.path, "../authority.db");
+    const db = new Database(authority);
+    db.exec(`
+      CREATE TABLE source_heads (org_id TEXT, source TEXT, external_id TEXT, current_event_id TEXT);
+      CREATE TABLE events (
+        id TEXT, org_id TEXT, source TEXT, external_id TEXT, operation TEXT,
+        content_hash TEXT, parent_event_id TEXT, thread_id TEXT, actor_id TEXT,
+        required_scope_ids_json TEXT
+      );
+      CREATE TABLE blobs (content_hash TEXT, media_type TEXT);
+    `);
+    const insertHead = db.prepare("INSERT INTO source_heads VALUES (?,?,?,?)");
+    const insertEvent = db.prepare(`INSERT INTO events VALUES (?,?,?,?,?,?,?,?,?,?)`);
+    db.prepare("INSERT INTO blobs VALUES (?,?)").run(hash, "text/plain");
+    const add = (id, eligible = true) => {
+      insertHead.run("org", "synthetic", id, id);
+      insertEvent.run(
+        id, "org", "synthetic", id, "create", hash, null, "thread",
+        eligible ? "owner" : "",
+        JSON.stringify(["personal"]),
+      );
+    };
+    add("kept");
+    add("hidden", false);
+    add("next");
+    const input = {
+      org_id: "org", generation: generation.id, authority_path: authority,
+      read_epoch: "authorized-stamp:1", now: at, limit: 10,
+    };
+    const first = await f.index.reconcileChanged(input);
+    assert.equal(first.done, true);
+    assert.equal(first.changed, 3);
+    const jobs = await f.index.listJobs("org", generation.id);
+    assert.equal(jobs.find((job) => job.external_id === "hidden").status, "skipped");
+    assert.deepEqual(jobs.filter((job) => job.status !== "skipped").map((job) => job.external_id).sort(), ["kept", "next"]);
+    const second = await f.index.reconcileChanged(input);
+    assert.deepEqual(second, { changed: 0, done: true });
+    const other = embeddingGeneration(model, 64);
+    await f.index.registerGeneration("org", other);
+    const copied = await f.index.reconcileChanged({ ...input, generation: other.id });
+    assert.equal(copied.changed, 3);
+    assert.equal(copied.done, true);
+    add("later");
+    const third = await f.index.reconcileChanged(input);
+    assert.equal(third.changed, 1);
+    assert.equal(third.done, true);
+    assert.deepEqual(
+      (await f.index.listJobs("org", generation.id)).filter((job) => job.status !== "skipped").map((job) => job.external_id).sort(),
+      ["kept", "later", "next"],
+    );
+    db.close();
+  });
+});

@@ -85,6 +85,25 @@ export class LocalHttpEmbeddingProvider implements EmbeddingProvider {
     return value.counts;
   }
 
+  async planChunks(text: string, chunkTokens: number, maxChunks: number, signal?: AbortSignal): Promise<string[]> {
+    if (typeof text !== "string" || !text.length || Buffer.byteLength(text, "utf8") > 262144 ||
+      !Number.isSafeInteger(chunkTokens) || chunkTokens < 32 || chunkTokens > this.descriptor.max_input_tokens ||
+      !Number.isSafeInteger(maxChunks) || maxChunks < 1 || maxChunks > 1024) {
+      throw new EmbeddingError("invalid_input", false);
+    }
+    const body = JSON.stringify({
+      descriptor: this.descriptor, mode: "document", text, chunk_tokens: chunkTokens, max_chunks: maxChunks,
+    });
+    if (Buffer.byteLength(body, "utf8") > 1048576) throw new EmbeddingError("invalid_input", false);
+    const value = await this.requestBody("chunks", body, signal, this.timeout);
+    if (!Array.isArray(value.slices) || value.slices.length < 1 || value.slices.length > maxChunks ||
+      value.slices.some((slice) => typeof slice !== "string" || slice.length < 1) ||
+      value.slices.join("") !== text) {
+      throw new EmbeddingError("invalid_response", true);
+    }
+    return value.slices as string[];
+  }
+
   async embed(texts: string[], mode: EmbeddingMode, signal?: AbortSignal): Promise<number[][]> {
     const value = await this.call("embed", texts, mode, signal);
     return this.vectors(value, texts.length);

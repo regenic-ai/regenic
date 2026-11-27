@@ -40,6 +40,8 @@ export class PersonalRuntimeService implements OnModuleInit, OnModuleDestroy {
   private compactTimer: ReturnType<typeof setTimeout> | undefined;
   private compactFinished = false;
   private embeddingTimer: ReturnType<typeof setInterval> | undefined;
+  private embeddingResume: ReturnType<typeof setTimeout> | undefined;
+  private embeddingStopped = false;
   private embeddingEnabled = false;
   private readonly disposeHooks: Array<() => Promise<void>> = [];
 
@@ -111,20 +113,30 @@ export class PersonalRuntimeService implements OnModuleInit, OnModuleDestroy {
     markKernelReady();
     this.scheduleCompact();
     if (!this.embeddingTimer && this.embeddingEnabled && this.host && shouldStartBackgroundWork() && shouldRunInProcessContextJobs()) {
-      this.embeddingTimer = setInterval(() => {
-        if (!isHumanIdle() || searchInProgress() || !this.host) return;
-        if (this.host.get("context-vector-status").status !== "ready") return;
-        void this.host.get("context-embedding-worker").runOnce({
-          max_jobs: 100,
-          time_budget_ms: 30_000,
-          pause_if: () => !isHumanIdle() || searchInProgress(),
-        }).then((result) => {
-          if (result.failed) console.warn("embedding jobs failed", result.failed);
-        }).catch(() => {
-          console.error("embedding reconciliation failed", "indexing_failed");
-        });
-      }, 2000);
+      this.embeddingStopped = false;
+      this.embeddingTimer = setInterval(() => this.runEmbeddingPass(), 2000);
     }
+  }
+
+  private runEmbeddingPass(): void {
+    if (this.embeddingStopped || !isHumanIdle() || searchInProgress() || !this.host) return;
+    if (this.host.get("context-vector-status").status !== "ready") return;
+    const worker = this.host.get("context-embedding-worker");
+    void worker.runOnce({
+      max_jobs: 100,
+      time_budget_ms: 30_000,
+      pause_if: () => !isHumanIdle() || searchInProgress(),
+    }).then((result) => {
+      if (result.failed) console.warn("embedding jobs failed", result.failed);
+      if (this.embeddingStopped || !worker.wantsImmediateResume?.()) return;
+      if (this.embeddingResume) return;
+      this.embeddingResume = setTimeout(() => {
+        this.embeddingResume = undefined;
+        this.runEmbeddingPass();
+      }, 0);
+    }).catch(() => {
+      console.error("embedding reconciliation failed", "indexing_failed");
+    });
   }
 
   async onModuleDestroy(): Promise<void> {
@@ -137,9 +149,14 @@ export class PersonalRuntimeService implements OnModuleInit, OnModuleDestroy {
         cleanupErrors.push(error);
       }
     }
+    this.embeddingStopped = true;
     if (this.embeddingTimer) {
       clearInterval(this.embeddingTimer);
       this.embeddingTimer = undefined;
+    }
+    if (this.embeddingResume) {
+      clearTimeout(this.embeddingResume);
+      this.embeddingResume = undefined;
     }
     this.compactFinished = true;
     if (this.compactTimer) {

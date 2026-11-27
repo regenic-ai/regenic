@@ -40,15 +40,21 @@ describe("local embedding provider", () => {
     const requests = [];
     const subject = provider(async (url, init) => {
       requests.push({ url, ...JSON.parse(init.body), redirect: init.redirect });
+      if (url.endsWith("/chunks")) return response({ slices: ["第一段。", "第二段"] });
       return url.endsWith("/tokens") ? response({ counts: [12] }) : response({ vectors: [vector()] });
     });
+    assert.deepEqual(await subject.planChunks("第一段。第二段", 128, 4), ["第一段。", "第二段"]);
     assert.deepEqual(await subject.countTokens(["中文"], "document"), [12]);
     assert.deepEqual(await subject.embed(["question"], "query"), [vector()]);
     assert.equal(requests[0].mode, "document");
-    assert.deepEqual(requests[0].texts, ["中文"]);
-    assert.equal(requests[1].mode, "query");
-    assert.equal(requests[1].descriptor.model_revision, "914f7f89142e33e77833254d9c9b90c3cef7303b");
-    assert.equal(requests[1].redirect, "error");
+    assert.equal(requests[0].text, "第一段。第二段");
+    assert.equal(requests[0].chunk_tokens, 128);
+    assert.equal(requests[0].max_chunks, 4);
+    assert.equal(requests[1].mode, "document");
+    assert.deepEqual(requests[1].texts, ["中文"]);
+    assert.equal(requests[2].mode, "query");
+    assert.equal(requests[2].descriptor.model_revision, "914f7f89142e33e77833254d9c9b90c3cef7303b");
+    assert.equal(requests[2].redirect, "error");
     assert.equal(subject.descriptor.dimensions, 768);
   });
 

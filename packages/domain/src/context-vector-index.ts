@@ -265,6 +265,18 @@ export interface EmbeddingJobStore {
     heads: EmbeddingSourceHead[];
     now: string;
   }): Promise<void>;
+  /**
+   * Compare authority heads inside SQLite and reconcile one page of changes.
+   * The full event history stays in the authority database.
+   */
+  reconcileChanged?(input: {
+    org_id: string;
+    generation: string;
+    authority_path: string;
+    read_epoch: string;
+    now: string;
+    limit: number;
+  }): Promise<{ changed: number; done: boolean }>;
   claim(input: {
     org_id: string;
     generation: string;
