@@ -108,7 +108,7 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
       this.db.pragma("secure_delete = ON");
       this.db.pragma("busy_timeout = 5000");
       const version = this.db.pragma("user_version", { simple: true });
-      if (version !== 0 && version !== 1 && version !== 2 && version !== 3 && version !== 4 && version !== 5 && version !== 6 && version !== 7 && version !== 8) throw new VectorIndexSchemaError("Unsupported vector index schema");
+      if (version !== 0 && version !== 1 && version !== 2 && version !== 3 && version !== 4 && version !== 5 && version !== 6 && version !== 7 && version !== 8 && version !== 9) throw new VectorIndexSchemaError("Unsupported vector index schema");
       this.db.transaction(() => {
         this.db.exec(`
           CREATE TABLE IF NOT EXISTS generations (
@@ -127,7 +127,7 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
             operation TEXT NOT NULL, lineage_json TEXT NOT NULL, fence INTEGER NOT NULL,
             status TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
             owner TEXT, lease_until TEXT, retry_at TEXT, error_code TEXT,
-            started_at TEXT, completed_at TEXT, processing_ms INTEGER NOT NULL DEFAULT 0,
+            started_at TEXT, completed_at TEXT, processing_ms INTEGER NOT NULL DEFAULT 0, lane TEXT,
             UNIQUE (org_id, generation, event_id),
             FOREIGN KEY (org_id, generation) REFERENCES generations(org_id, generation) ON DELETE CASCADE
           );
@@ -254,11 +254,19 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
           }
           this.db.exec("UPDATE jobs SET started_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE status='running' AND started_at IS NULL;");
         }
+        const jobColumns = this.db.pragma("table_info(jobs)") as Array<{ name: string }>;
+        if (!jobColumns.some((column) => column.name === "lane")) {
+          this.db.exec("ALTER TABLE jobs ADD COLUMN lane TEXT;");
+        }
+        this.db.exec(`
+          CREATE INDEX IF NOT EXISTS jobs_pending_fast ON jobs(org_id, generation, id) WHERE status='pending' AND lane IS NULL;
+          CREATE INDEX IF NOT EXISTS jobs_pending_slow ON jobs(org_id, generation, id) WHERE status='pending' AND lane='slow';
+        `);
         const generationColumns = this.db.pragma("table_info(generations)") as Array<{ name: string }>;
         if (!generationColumns.some((column) => column.name === "reconciled_sequence")) {
           this.db.exec("ALTER TABLE generations ADD COLUMN reconciled_sequence INTEGER NOT NULL DEFAULT 0;");
         }
-        this.db.pragma("user_version = 8");
+        this.db.pragma("user_version = 9");
       }).immediate();
     } catch (error) {
       this.db.close();
@@ -824,6 +832,14 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
       chunk.vector.forEach((value, i) => bytes.writeFloatLE(value, i * 4));
       this.db.prepare("INSERT INTO staged_chunks VALUES (?,?,?,?,?,?,?)")
         .run(job.id, chunk.ordinal, chunk.start, chunk.end, chunk.text_hash, bytes, chunk.origin ? JSON.stringify(chunk.origin) : null);
+      return true;
+    });
+  }
+
+  async noteSlowLane(job: EmbeddingJob, owner: string, now: string): Promise<boolean> {
+    return this.immediate(() => {
+      if (!this.ownsJob(job, owner, now)) return false;
+      this.db.prepare("UPDATE jobs SET lane='slow' WHERE id=?").run(job.id);
       return true;
     });
   }
@@ -2237,17 +2253,15 @@ function jobFromRow(row: JobRow): EmbeddingJob {
     ...(row.error_code ? { error_code: row.error_code } : {}),
   };
 }
-function claimIdFilter(input: { job_id?: number; exclude_ids?: number[] }): { sql: string; params: number[] } {
+function claimIdFilter(input: { job_id?: number; lane?: "fast" | "slow" }): { sql: string; params: number[] } {
   if (input.job_id !== undefined) {
     if (!Number.isSafeInteger(input.job_id) || input.job_id < 1) throw new Error("Invalid embedding job id");
     return { sql: " AND id=?", params: [input.job_id] };
   }
-  const exclude = input.exclude_ids ?? [];
-  if (exclude.length > 200 || exclude.some((id) => !Number.isSafeInteger(id) || id < 1)) {
-    throw new Error("Invalid embedding claim exclusion");
-  }
-  if (!exclude.length) return { sql: "", params: [] };
-  return { sql: ` AND id NOT IN (${exclude.map(() => "?").join(",")})`, params: exclude };
+  if (input.lane === "fast") return { sql: " AND lane IS NULL", params: [] };
+  if (input.lane === "slow") return { sql: " AND lane='slow'", params: [] };
+  if (input.lane !== undefined) throw new Error("Invalid embedding claim lane");
+  return { sql: "", params: [] };
 }
 
 function required(value: string): void { if (typeof value !== "string" || !value.trim()) throw new Error("Vector namespace is required"); }

@@ -650,6 +650,43 @@ describe("independent embedding indexing worker", () => {
     assert.equal(jobs.filter((job) => job.external_id.startsWith("message-") && job.status === "succeeded").length, 26);
   });
 
+  it("publishes older text before a run of newer attachments and keeps that lane after restart", async (t) => {
+    let attachments = 0;
+    const embedding = provider({
+      async processAttachment() {
+        attachments += 1;
+        return { text: "spreadsheet", vectors: [] };
+      },
+    });
+    const f = await fixture(t, embedding);
+    await f.ingest.ingest(batch("create", "older text", "delivery-text", "message-1"));
+    for (let index = 1; index <= 8; index += 1) {
+      const file = batch("create", undefined, `file-${index}`, `file-${index}`);
+      file.records[0].content = [{
+        role: "attachment",
+        media_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        source_filename: "a.xlsx",
+        bytes: Buffer.from("PK\u0003\u0004synthetic"),
+      }];
+      await f.ingest.ingest(file);
+    }
+    const first = await f.worker.runOnce({ max_jobs: 1, time_budget_ms: 30_000 });
+    assert.equal(first.processed, 1);
+    assert.equal(attachments, 0);
+    assert.equal((await f.index.listJobs("org", generation.id))
+      .filter((job) => job.external_id.startsWith("file-") && job.status === "pending").length, 8);
+    const restarted = new ContextEmbeddingWorker("org", f.source, embedding, f.index, f.index, generation, f.index);
+    try {
+      const slow = await restarted.runOnce({ max_jobs: 1, time_budget_ms: 30_000 });
+      assert.equal(slow.processed, 1);
+      assert.ok(attachments > 0);
+      assert.equal((await f.index.listJobs("org", generation.id))
+        .filter((job) => job.external_id.startsWith("file-") && job.status === "pending").length, 7);
+    } finally {
+      await restarted.stop();
+    }
+  });
+
   it("embeds a short-message group in one forward and keeps each vector", async (t) => {
     const batches = [];
     const f = await fixture(t, provider({

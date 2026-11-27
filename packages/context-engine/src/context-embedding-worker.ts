@@ -49,8 +49,6 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
   private continueImmediately = false;
   private headsRemain = false;
   private readonly claimSequences = new Map<string, number>();
-  /** Attachments and resumed checkpoints. Kept off the fast claim until their turn. */
-  private readonly slowJobs = new Set<number>();
   private plainGroupsSinceHeavy = 0;
   private plainBatchLimit = EMBED_BATCH;
   private growPlainBatch = false;
@@ -208,68 +206,52 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
     const room = Math.min(this.plainBatchLimit, EMBED_BATCH, Math.max(0, slots));
     let sequence = this.claimSequences.get(generation.id) ?? 0;
     let claimedCount = 0;
-    let deferredSlow = 0;
     const plain: PreparedPlain[] = [];
     let blocked: EmbeddingJob | undefined;
-    const take = async (jobId?: number): Promise<EmbeddingJob | undefined> => {
-      const exclude = [...this.slowJobs].slice(0, 200);
+    const take = async (lane: "fast" | "slow"): Promise<EmbeddingJob | undefined> => {
       const [job] = await this.jobs.claim({
         org_id: this.orgId, generation: generation.id, owner: this.owner,
-        now: new Date().toISOString(), lease_ms: 90000, limit: 1,
+        now: new Date().toISOString(), lease_ms: 90000, limit: 1, lane,
         order: sequence % 4 === 3 ? "oldest" : "newest",
-        ...(jobId !== undefined ? { job_id: jobId } : {}),
-        ...(jobId === undefined && exclude.length ? { exclude_ids: exclude } : {}),
       });
       if (!job) return undefined;
       sequence += 1;
       this.claimSequences.set(generation.id, sequence);
       return job;
     };
+    const rememberSlow = async (job: EmbeddingJob): Promise<boolean> => {
+      if (await this.jobs.noteSlowLane(job, this.owner, new Date().toISOString())) return true;
+      result.superseded += 1;
+      return false;
+    };
     while (claimedCount < room && !blocked && !this.abort.signal.aborted && Date.now() < deadline) {
       if (claimedCount > 0 && pause?.()) break;
       let forceSlow = false;
       let job: EmbeddingJob | undefined;
-      // After enough text groups, take one parked attachment even if newer text is waiting.
-      if (plain.length === 0 && this.plainGroupsSinceHeavy >= FAST_GROUPS_PER_HEAVY && this.slowJobs.size > 0) {
-        const nextSlow = this.slowJobs.values().next().value;
-        if (nextSlow !== undefined) {
-          this.slowJobs.delete(nextSlow);
-          forceSlow = true;
-          job = await take(nextSlow);
-        }
+      // After enough published text groups, one slow job goes first even if newer text is waiting.
+      if (plain.length === 0 && this.plainGroupsSinceHeavy >= FAST_GROUPS_PER_HEAVY) {
+        job = await take("slow");
+        forceSlow = job !== undefined;
       }
-      if (!job) {
-        forceSlow = false;
-        job = await take();
-      }
-      // Nothing fast remains. Run one parked attachment instead of scanning them again.
-      if (!job && plain.length === 0 && this.slowJobs.size > 0) {
-        const nextSlow = this.slowJobs.values().next().value;
-        if (nextSlow !== undefined) {
-          this.slowJobs.delete(nextSlow);
-          forceSlow = true;
-          job = await take(nextSlow);
-        }
+      if (!job) job = await take("fast");
+      // The fast lane is empty. One parked attachment still gets a turn.
+      if (!job && plain.length === 0) {
+        job = await take("slow");
+        forceSlow = job !== undefined;
       }
       if (!job) break;
       claimedCount += 1;
       try {
         const prepared = await this.preparePlain(job, snapshot, generation);
         if (prepared === "superseded") {
-          this.slowJobs.delete(job.id);
           result.superseded += 1;
           continue;
         }
+        if (prepared === "slow" && !forceSlow && !await rememberSlow(job)) {
+          claimedCount -= 1;
+          continue;
+        }
         if (prepared === "slow" && !forceSlow && this.plainGroupsSinceHeavy < FAST_GROUPS_PER_HEAVY) {
-          // Park the attachment and keep claiming text. A prefix of only
-          // attachments still gets one turn so that lane cannot stall forever.
-          if (plain.length === 0 && deferredSlow >= EMBED_BATCH - 1) {
-            this.plainGroupsSinceHeavy = 0;
-            blocked = job;
-            break;
-          }
-          this.slowJobs.add(job.id);
-          deferredSlow += 1;
           claimedCount -= 1;
           if (!await this.jobs.yieldJob(job, this.owner, new Date().toISOString())) result.superseded += 1;
           continue;

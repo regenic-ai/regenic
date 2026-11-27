@@ -67,6 +67,37 @@ describe("SQLite vector projection and independent durable jobs", () => {
     )).map((job) => job.external_id), ["old", "middle", "new"]);
   });
 
+  it("claims text from the fast lane and leaves a marked attachment for the slow lane", async t => {
+    const f = await fixture(t);
+    await reconcile(f.index, [head("text"), head("file")]);
+    const [file] = await f.index.claim({
+      org_id: "org", generation: generation.id, owner: "owner",
+      now: at, lease_ms: 1000, limit: 1, order: "newest",
+    });
+    assert.equal(file.external_id, "file");
+    assert.equal(await f.index.noteSlowLane(file, "owner", at), true);
+    assert.equal(await f.index.yieldJob(file, "owner", at), true);
+    assert.deepEqual((await f.index.claim({
+      org_id: "org", generation: generation.id, owner: "fast",
+      now: at, lease_ms: 1000, limit: 10, lane: "fast", order: "newest",
+    })).map((job) => job.external_id), ["text"]);
+    assert.deepEqual((await f.index.claim({
+      org_id: "org", generation: generation.id, owner: "slow",
+      now: at, lease_ms: 1000, limit: 10, lane: "slow", order: "newest",
+    })).map((job) => job.external_id), ["file"]);
+    const database = new Database(f.path, { readonly: true });
+    try {
+      const plan = database.prepare(`EXPLAIN QUERY PLAN SELECT * FROM jobs
+        WHERE org_id=? AND generation=? AND status='pending' AND lane IS NULL
+        ORDER BY id DESC LIMIT ?`).all("org", generation.id, 1)
+        .map((row) => row.detail).join("\n");
+      assert.match(plan, /INDEX jobs_pending_fast/);
+      assert.doesNotMatch(plan, /TEMP B-TREE/);
+    } finally {
+      database.close();
+    }
+  });
+
   it("keeps completed history out of the claim and admits a failure only after its retry time", async (t) => {
     const f = await fixture(t);
     await reconcile(f.index, [head("old"), head("new"), head("waiting")]);
