@@ -287,6 +287,13 @@ export interface EmbeddingJobStore {
     lease_ms: number;
     limit: number;
     order?: "oldest" | "newest";
+    /** Claim this pending or due job. */
+    job_id?: number;
+    /**
+     * Fast skips jobs already marked slow. Slow claims only those jobs.
+     * Omit it to keep the original pending order.
+     */
+    lane?: "fast" | "slow";
   }): Promise<EmbeddingJob[]>;
   renew(job: EmbeddingJob, owner: string, now: string, leaseMs: number): Promise<boolean>;
   complete(input: {
@@ -309,6 +316,8 @@ export interface EmbeddingJobStore {
   loadStagedChunks(job: EmbeddingJob, owner: string, now: string): Promise<ContextVectorChunk[]>;
   stageChunk(input: { job: EmbeddingJob; owner: string; now: string; chunk: ContextVectorChunk }): Promise<boolean>;
   yieldJob(job: EmbeddingJob, owner: string, now: string): Promise<boolean>;
+  /** Remember a leased job as slow so later fast claims skip it, including after restart. */
+  noteSlowLane(job: EmbeddingJob, owner: string, now: string): Promise<boolean>;
   retryQuarantined(orgId: string, generation: string, eventId: string): Promise<boolean>;
   retryFailed(orgId: string, generation: string, limit: number): Promise<number>;
 }

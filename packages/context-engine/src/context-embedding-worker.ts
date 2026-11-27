@@ -27,7 +27,9 @@ const MAX_RUN_JOBS = 100;
 const MAX_RUN_BUDGET_MS = 30_000;
 const CHECKPOINT_BATCH_CHUNKS = 8;
 const EMBED_BATCH = CHECKPOINT_BATCH_CHUNKS;
-const DOCUMENT_GROUP = 32;
+// One slow attachment after this many published fast groups. Same shape as a
+// weighted queue: text keeps moving, and attachments are not starved.
+const FAST_GROUPS_PER_HEAVY = 3;
 
 type AuthoritySnapshot = { read: ContextSourceRead; stamp?: string };
 type PreparedPlain = { job: EmbeddingJob; text: string; material: ContextEmbeddingMaterial };
@@ -47,6 +49,9 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
   private continueImmediately = false;
   private headsRemain = false;
   private readonly claimSequences = new Map<string, number>();
+  private plainGroupsSinceHeavy = 0;
+  private plainBatchLimit = EMBED_BATCH;
+  private growPlainBatch = false;
 
   constructor(
     private readonly orgId: string,
@@ -62,6 +67,8 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
 
   async runOnce(options: EmbeddingRunOptions = {}): ReturnType<ContextEmbeddingRunner["runOnce"]> {
     if (this.stopped || this.clearing || this.running) return { processed: 0, failed: 0, superseded: 0 };
+    if (this.growPlainBatch && this.plainBatchLimit < EMBED_BATCH) this.plainBatchLimit += 1;
+    this.growPlainBatch = false;
     this.continueImmediately = false;
     this.running = this.runGenerations(options);
     try {
@@ -196,21 +203,43 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
       : await this.loadSnapshot(generation);
     const result = { processed: 0, failed: 0, superseded: 0 };
     let yielded = false;
-    const room = Math.min(DOCUMENT_GROUP, Math.max(0, slots));
+    const room = Math.min(this.plainBatchLimit, EMBED_BATCH, Math.max(0, slots));
     let sequence = this.claimSequences.get(generation.id) ?? 0;
     let claimedCount = 0;
     const plain: PreparedPlain[] = [];
     let blocked: EmbeddingJob | undefined;
-    while (claimedCount < room && !blocked && !this.abort.signal.aborted && Date.now() < deadline) {
-      if (claimedCount > 0 && pause?.()) break;
+    const take = async (lane: "fast" | "slow"): Promise<EmbeddingJob | undefined> => {
       const [job] = await this.jobs.claim({
         org_id: this.orgId, generation: generation.id, owner: this.owner,
-        now: new Date().toISOString(), lease_ms: 90000, limit: 1,
+        now: new Date().toISOString(), lease_ms: 90000, limit: 1, lane,
         order: sequence % 4 === 3 ? "oldest" : "newest",
       });
-      if (!job) break;
+      if (!job) return undefined;
       sequence += 1;
       this.claimSequences.set(generation.id, sequence);
+      return job;
+    };
+    const rememberSlow = async (job: EmbeddingJob): Promise<boolean> => {
+      if (await this.jobs.noteSlowLane(job, this.owner, new Date().toISOString())) return true;
+      result.superseded += 1;
+      return false;
+    };
+    while (claimedCount < room && !blocked && !this.abort.signal.aborted && Date.now() < deadline) {
+      if (claimedCount > 0 && pause?.()) break;
+      let forceSlow = false;
+      let job: EmbeddingJob | undefined;
+      // After enough published text groups, one slow job goes first even if newer text is waiting.
+      if (plain.length === 0 && this.plainGroupsSinceHeavy >= FAST_GROUPS_PER_HEAVY) {
+        job = await take("slow");
+        forceSlow = job !== undefined;
+      }
+      if (!job) job = await take("fast");
+      // The fast lane is empty. One parked attachment still gets a turn.
+      if (!job && plain.length === 0) {
+        job = await take("slow");
+        forceSlow = job !== undefined;
+      }
+      if (!job) break;
       claimedCount += 1;
       try {
         const prepared = await this.preparePlain(job, snapshot, generation);
@@ -218,7 +247,22 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
           result.superseded += 1;
           continue;
         }
-        if (prepared === "other") {
+        if (prepared === "slow" && !forceSlow && !await rememberSlow(job)) {
+          claimedCount -= 1;
+          continue;
+        }
+        if (prepared === "slow" && !forceSlow && this.plainGroupsSinceHeavy < FAST_GROUPS_PER_HEAVY) {
+          claimedCount -= 1;
+          if (!await this.jobs.yieldJob(job, this.owner, new Date().toISOString())) result.superseded += 1;
+          continue;
+        }
+        if (prepared === "slow" || prepared === "single") {
+          if (prepared === "slow") this.plainGroupsSinceHeavy = 0;
+          if (plain.length > 0) {
+            if (!await this.jobs.yieldJob(job, this.owner, new Date().toISOString())) result.superseded += 1;
+            claimedCount -= 1;
+            break;
+          }
           blocked = job;
           break;
         }
@@ -231,7 +275,9 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
     }
     if (claimedCount === 0) return { claimedCount, read: snapshot.read, stamp: snapshot.stamp, result, yielded };
     if (plain.length > 0) {
+      const processedBefore = result.processed;
       yielded = await this.indexPlainGroup(plain, generation, snapshot, pause, deadline, result);
+      if (result.processed > processedBefore) this.plainGroupsSinceHeavy += 1;
     }
     if (blocked) {
       if (yielded || this.abort.signal.aborted || Date.now() >= deadline) {
@@ -337,7 +383,13 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
         }
         if (material?.attachments.length) {
           if (!this.provider.processAttachment) throw new EmbeddingError("unavailable", true);
-          for (const attachment of material.attachments) {
+          for (const [index, attachment] of material.attachments.entries()) {
+            // Each attachment is one request of up to five minutes. The file
+            // already started is the only leased job; later files wait for a
+            // pass that still has budget.
+            if (index > 0 && (this.abort.signal.aborted || pause?.() || Date.now() >= deadline)) {
+              throw new EmbeddingBatchYield();
+            }
             const processed = await this.provider.processAttachment({
               media_type: attachment.media_type,
               ...(attachment.source_filename ? { source_filename: attachment.source_filename } : {}),
@@ -521,10 +573,10 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
     job: EmbeddingJob,
     snapshot: AuthoritySnapshot,
     generation: EmbeddingGeneration,
-  ): Promise<PreparedPlain | "other" | "superseded"> {
+  ): Promise<PreparedPlain | "single" | "slow" | "superseded"> {
     const event = await this.stillCurrent(job, snapshot.read);
     if (!event) return "superseded";
-    if (!this.source.materializeForEmbedding) return "other";
+    if (!this.source.materializeForEmbedding) return "single";
     const authorized: AuthorizedContextSourceEvent = { ...event, status: "current" };
     const material = (await this.source.materializeForEmbedding(
       [authorized], generation.extractor_version,
@@ -533,9 +585,10 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
       throw new EmbeddingError("invalid_response", true);
     }
     const text = material.text;
-    if (material.attachments.length > 0 || typeof text !== "string" || !text.trim()) return "other";
+    if (material.attachments.length > 0) return "slow";
+    if ((await this.jobs.loadStagedChunks(job, this.owner, new Date().toISOString())).length > 0) return "slow";
+    if (typeof text !== "string" || !text.trim()) return "single";
     if (Buffer.byteLength(text, "utf8") > 262144) throw new EmbeddingError("input_too_large", false);
-    if ((await this.jobs.loadStagedChunks(job, this.owner, new Date().toISOString())).length > 0) return "other";
     return { job, text, material };
   }
 
@@ -553,7 +606,38 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
     });
   }
 
+  /** Keep every leased job in this group alive while a model call is in flight. */
+  private holdLeases(jobs: EmbeddingJob[]): () => Promise<void> {
+    let pending = Promise.resolve();
+    const timer = setInterval(() => {
+      pending = pending.then(async () => {
+        const now = new Date().toISOString();
+        for (const job of jobs) await this.jobs.renew(job, this.owner, now, 90000);
+      }).catch(() => undefined);
+    }, 20000);
+    return async () => {
+      clearInterval(timer);
+      await pending;
+    };
+  }
+
   private async indexPlainGroup(
+    items: PreparedPlain[],
+    generation: EmbeddingGeneration,
+    snapshot: AuthoritySnapshot,
+    pause: (() => boolean) | undefined,
+    deadline: number,
+    result: { processed: number; failed: number; superseded: number },
+  ): Promise<boolean> {
+    const release = this.holdLeases(items.map((item) => item.job));
+    try {
+      return await this.indexHeldPlainGroup(items, generation, snapshot, pause, deadline, result);
+    } finally {
+      await release();
+    }
+  }
+
+  private async indexHeldPlainGroup(
     items: PreparedPlain[],
     generation: EmbeddingGeneration,
     snapshot: AuthoritySnapshot,
@@ -587,77 +671,7 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
       if (counts[index] <= generation.chunk_tokens) shorts.push(item);
       else longs.push(item.job);
     });
-    if (shorts.length > 0) {
-      let vectors: number[][] | undefined;
-      try {
-        vectors = await this.provider.embed(
-          shorts.map((item) => item.text), "document", this.abort.signal,
-        );
-        if (vectors.length !== shorts.length) throw new EmbeddingError("invalid_response", true);
-      } catch (error) {
-        for (const item of shorts) {
-          await this.failClaimed(item.job, error);
-          result.failed += 1;
-        }
-        vectors = undefined;
-      }
-      if (vectors) {
-        const ready: Array<{ item: PreparedPlain; chunks: ContextVectorChunk[] }> = [];
-        for (let index = 0; index < shorts.length; index += 1) {
-          try {
-            ready.push({
-              item: shorts[index],
-              chunks: await this.stagePlainChunk(shorts[index], vectors[index], generation),
-            });
-          } catch (error) {
-            await this.failClaimed(shorts[index].job, error);
-            result.failed += 1;
-          }
-        }
-        if (ready.length > 0) {
-          const confirmed = await this.confirmAuthority(snapshot.read, snapshot.stamp, generation, pause);
-          snapshot.read = confirmed.read;
-          snapshot.stamp = confirmed.stamp;
-          const current: typeof ready = [];
-          let moved = false;
-          for (const entry of ready) {
-            if (!await this.stillCurrent(entry.item.job, snapshot.read)) {
-              result.superseded += 1;
-              moved = true;
-              continue;
-            }
-            current.push(entry);
-          }
-          if (moved) await this.drainChangedHeads(generation, 1);
-          const now = new Date().toISOString();
-          const inputs = current.map((entry) => ({
-            job: entry.item.job, owner: this.owner, now, chunks: entry.chunks,
-          }));
-          let published: boolean[];
-          try {
-            published = this.jobs.publish
-              ? await this.jobs.publish(inputs)
-              : await Promise.all(inputs.map((input) => this.jobs.complete(input)));
-          } catch (error) {
-            published = [];
-            for (const input of inputs) {
-              try {
-                published.push(await this.jobs.complete(input));
-              } catch (itemError) {
-                await this.failClaimed(input.job, itemError);
-                result.failed += 1;
-              }
-            }
-            if (published.length === 0 && result.failed === 0) throw error;
-          }
-          for (const completed of published) {
-            if (completed) result.processed += 1;
-            else result.superseded += 1;
-          }
-        }
-      }
-    }
-    let yielded = false;
+    let yielded = await this.indexShortGroup(shorts, generation, snapshot, pause, deadline, result);
     for (const job of longs) {
       if (yielded || this.abort.signal.aborted || Date.now() >= deadline || pause?.()) {
         if (!await this.jobs.yieldJob(job, this.owner, new Date().toISOString())) result.superseded += 1;
@@ -667,6 +681,123 @@ export class ContextEmbeddingWorker implements ContextEmbeddingRunner {
       if (await this.indexClaimedJob(job, generation, snapshot, pause, deadline, result)) yielded = true;
     }
     return yielded;
+  }
+
+  /**
+   * Publish short texts as soon as their embed returns. A retryable failure of
+   * more than one text shrinks the next batch instead of replaying halves of
+   * the request that just timed out.
+   */
+  private async indexShortGroup(
+    shorts: PreparedPlain[],
+    generation: EmbeddingGeneration,
+    snapshot: AuthoritySnapshot,
+    pause: (() => boolean) | undefined,
+    deadline: number,
+    result: { processed: number; failed: number; superseded: number },
+  ): Promise<boolean> {
+    const queue: PreparedPlain[][] = shorts.length > 0 ? [shorts] : [];
+    let embedded = false;
+    while (queue.length > 0) {
+      // The slice already leased for this pass is embedded even if the user
+      // resumes. Pause and the time budget apply before the next slice.
+      if (this.abort.signal.aborted || (embedded && (pause?.() || Date.now() >= deadline))) {
+        for (const item of queue.splice(0).flat()) {
+          if (!await this.jobs.yieldJob(item.job, this.owner, new Date().toISOString())) result.superseded += 1;
+        }
+        return true;
+      }
+      embedded = true;
+      const slice = queue.shift();
+      if (!slice) break;
+      try {
+        const vectors = await this.provider.embed(
+          slice.map((item) => item.text), "document", this.abort.signal,
+        );
+        if (vectors.length !== slice.length) throw new EmbeddingError("invalid_response", true);
+        await this.publishShorts(slice, vectors, generation, snapshot, pause, result);
+        if (slice.length >= this.plainBatchLimit) this.growPlainBatch = true;
+      } catch (error) {
+        const shrink = slice.length > 1 && error instanceof EmbeddingError && error.retryable
+          && (error.code === "timeout" || error.code === "unavailable");
+        if (!shrink) {
+          for (const item of slice) {
+            await this.failClaimed(item.job, error);
+            result.failed += 1;
+          }
+          continue;
+        }
+        this.growPlainBatch = false;
+        this.plainBatchLimit = Math.max(1, Math.floor(slice.length / 2));
+        for (const item of [slice, ...queue.splice(0)].flat()) {
+          if (!await this.jobs.yieldJob(item.job, this.owner, new Date().toISOString())) result.superseded += 1;
+        }
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private async publishShorts(
+    slice: PreparedPlain[],
+    vectors: number[][],
+    generation: EmbeddingGeneration,
+    snapshot: AuthoritySnapshot,
+    pause: (() => boolean) | undefined,
+    result: { processed: number; failed: number; superseded: number },
+  ): Promise<void> {
+    const ready: Array<{ item: PreparedPlain; chunks: ContextVectorChunk[] }> = [];
+    for (let index = 0; index < slice.length; index += 1) {
+      try {
+        ready.push({
+          item: slice[index],
+          chunks: await this.stagePlainChunk(slice[index], vectors[index], generation),
+        });
+      } catch (error) {
+        await this.failClaimed(slice[index].job, error);
+        result.failed += 1;
+      }
+    }
+    if (ready.length === 0) return;
+    const confirmed = await this.confirmAuthority(snapshot.read, snapshot.stamp, generation, pause);
+    snapshot.read = confirmed.read;
+    snapshot.stamp = confirmed.stamp;
+    const current: typeof ready = [];
+    let moved = false;
+    for (const entry of ready) {
+      if (!await this.stillCurrent(entry.item.job, snapshot.read)) {
+        result.superseded += 1;
+        moved = true;
+        continue;
+      }
+      current.push(entry);
+    }
+    if (moved) await this.drainChangedHeads(generation, 1);
+    const now = new Date().toISOString();
+    const inputs = current.map((entry) => ({
+      job: entry.item.job, owner: this.owner, now, chunks: entry.chunks,
+    }));
+    let published: boolean[];
+    try {
+      published = this.jobs.publish
+        ? await this.jobs.publish(inputs)
+        : await Promise.all(inputs.map((input) => this.jobs.complete(input)));
+    } catch (error) {
+      published = [];
+      for (const input of inputs) {
+        try {
+          published.push(await this.jobs.complete(input));
+        } catch (itemError) {
+          await this.failClaimed(input.job, itemError);
+          result.failed += 1;
+        }
+      }
+      if (published.length === 0 && result.failed === 0) throw error;
+    }
+    for (const completed of published) {
+      if (completed) result.processed += 1;
+      else result.superseded += 1;
+    }
   }
 
   private async stagePlainChunk(

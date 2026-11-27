@@ -9,6 +9,7 @@ import json
 import logging
 import re
 import signal
+import socket
 import stat
 import threading
 import zipfile
@@ -78,15 +79,22 @@ class HTMLText(HTMLParser):
 class AttachmentProcessor:
     """Bounded, in-memory extraction. Archive paths and external links are never opened."""
 
-    def __init__(self, encoder, visual_enabled=True):
+    def __init__(self, encoder, visual_enabled=True, stop=None):
         self.encoder = encoder
         self.visual_enabled = visual_enabled
+        self.stop = stop
         self.skipped_visual = False
         self.texts = []
         self.text_bytes = 0
         self.vectors = []
         self.expanded_bytes = 0
         self.entries = 0
+
+    def ensure_connected(self):
+        # Pages and frames are separate forwards. A client that already gave up
+        # must not keep the inference lock busy for the rest of the file.
+        if self.stop and self.stop():
+            raise ConnectionError("client_disconnected")
 
     def text(self, value):
         if not value.strip():
@@ -97,6 +105,7 @@ class AttachmentProcessor:
         self.texts.append(value)
 
     def image(self, image):
+        self.ensure_connected()
         if not self.visual_enabled:
             self.skipped_visual = True
             return
@@ -111,6 +120,7 @@ class AttachmentProcessor:
     def process(self, data, media_type="", filename="", depth=0):
         from PIL import Image, UnidentifiedImageError
 
+        self.ensure_connected()
         if not data:
             raise InputError(400)
         if len(data) > MAX_ATTACHMENT_BYTES or depth > 3:
@@ -157,6 +167,7 @@ class AttachmentProcessor:
             if len(document) > MAX_MEDIA_VECTORS:
                 raise InputError(413)
             for page in document:
+                self.ensure_connected()
                 try:
                     with closing(page.get_textpage()) as textpage:
                         self.text(textpage.get_text_bounded())
@@ -277,6 +288,7 @@ class AttachmentProcessor:
             pending = []
 
             def flush():
+                self.ensure_connected()
                 if len(self.vectors) >= MAX_MEDIA_VECTORS:
                     raise InputError(413)
                 self.vectors.append(self.encoder.video(pending))
@@ -335,7 +347,7 @@ def validate_attachment(value):
     return data, media_type.split(";", 1)[0].strip().lower(), filename
 
 
-def process_attachment(encoder, value):
+def process_attachment(encoder, value, stop=None):
     import av
     import pypdfium2 as pdfium
     from defusedxml.common import DefusedXmlException
@@ -345,9 +357,12 @@ def process_attachment(encoder, value):
     try:
         processor = AttachmentProcessor(
             encoder, value.get("visual_enabled", False) and getattr(encoder, "visual_enabled", False),
+            stop,
         )
         processor.process(*validate_attachment(value))
         return processor.result()
+    except ConnectionError:
+        raise
     except (Image.DecompressionBombError, Image.DecompressionBombWarning) as error:
         raise InputError(413) from error
     except (av.FFmpegError, pdfium.PdfiumError, DefusedXmlException,
@@ -724,19 +739,23 @@ class PriorityEncoder:
         # Planning is tokenizer work. It must not take the inference lock.
         return self.encoder.chunk(text, mode, limit, max_chunks)
 
-    def embed(self, texts, mode):
+    def embed(self, texts, mode, stop=None):
         vectors = []
         started = False
         for batch in self.document_batches(texts, mode):
+            if stop is not None and stop():
+                raise ConnectionError("client_disconnected")
             vectors.extend(self.call("embed", batch, mode, started))
             started = True
         return vectors
 
-    def embed_with_counts(self, texts, mode):
+    def embed_with_counts(self, texts, mode, stop=None):
         counts = []
         vectors = []
         started = False
         for batch in self.document_batches(texts, mode):
+            if stop is not None and stop():
+                raise ConnectionError("client_disconnected")
             batch_counts, batch_vectors = self.call(
                 "embed_with_counts", batch, mode, started,
             )
@@ -764,8 +783,8 @@ class PriorityEncoder:
             yield texts[index:index + size]
             index += size
 
-    def attachment(self, value):
-        return process_attachment(self, value)
+    def attachment(self, value, stop=None):
+        return process_attachment(self, value, stop)
 
     def image(self, image):
         return self.call("image", image, "document")
@@ -927,7 +946,7 @@ def handler_for(encoder, runtime=None):
                 value = json.loads(body)
                 if self.path == "/attachment":
                     validate_attachment(value)
-                    self.reply(200, {"descriptor": DESCRIPTOR, **encoder.attachment(value)})
+                    self.reply(200, {"descriptor": DESCRIPTOR, **encoder.attachment(value, self.client_disconnected)})
                     return
                 if self.path == "/chunks":
                     text, limit, max_chunks = validate_chunk_request(value)
@@ -940,7 +959,7 @@ def handler_for(encoder, runtime=None):
                 if self.path == "/tokens":
                     self.reply(200, {"descriptor": DESCRIPTOR, "counts": encoder.count(texts, mode)})
                 else:
-                    counts, vectors = encoder.embed_with_counts(texts, mode)
+                    counts, vectors = encoder.embed_with_counts(texts, mode, self.client_disconnected)
                     self.reply(200, {
                         "descriptor": DESCRIPTOR, "counts": counts, "vectors": vectors,
                     })
@@ -958,6 +977,24 @@ def handler_for(encoder, runtime=None):
             finally:
                 if attachment_slot:
                     self.server.attachment_slots.release()
+
+        def client_disconnected(self):
+            sock = self.connection
+            previous = sock.gettimeout()
+            try:
+                sock.settimeout(0)
+                try:
+                    peeked = sock.recv(1, socket.MSG_PEEK)
+                except (BlockingIOError, TimeoutError, InterruptedError):
+                    return False
+                except OSError:
+                    return True
+                return peeked == b""
+            finally:
+                try:
+                    sock.settimeout(previous)
+                except OSError:
+                    return True
 
         def reply(self, status, value):
             body = json.dumps(value, allow_nan=False).encode("utf-8")
