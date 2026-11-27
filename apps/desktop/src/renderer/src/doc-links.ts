@@ -37,10 +37,11 @@ export function cloudDocLinks(text: string): CloudDocLink[] {
   return found;
 }
 
-/** The card replaces the address, the way a chat doc unfurl replaces the bare link. */
+/** A titled card replaces its address. A bare link stays beside the words that name it. */
 export function textWithoutCloudDocs(text: string): string {
   let next = plainMessageText(text);
   for (const link of cloudDocLinks(next)) {
+    if (!link.title) continue;
     const escaped = link.url.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const markdown = new RegExp(`\\[[^\\]\\n]{0,120}\\]\\(\\s*${escaped}\\s*\\)`, "gu");
     const titled = new RegExp(`\\S{1,80}\\s*\\(\\s*${escaped}\\s*\\)`, "gu");

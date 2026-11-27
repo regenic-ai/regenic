@@ -11,10 +11,7 @@ import {
   fileTypeLabel,
   formatFileSize,
   textWithoutCloudDocs,
-  type CloudDocHost,
-  type CloudDocKind,
 } from "./doc-links";
-import type { MessageKey } from "../../shared/messages";
 import { InlineMedia } from "./InlineMedia";
 import { imagePreviewSrc } from "./image-preview";
 import { useLocale } from "./LocaleContext";
@@ -98,7 +95,7 @@ export const MessageBody = memo(function MessageBody({
   }
   const source = plainMessageText(stripAttachmentLines(text));
   const visible = textWithoutCloudDocs(source);
-  const docs = cloudDocLinks(source);
+  const docs = cloudDocLinks(source).filter((doc) => doc.title);
   const mark = (value: string) => markFind(value, findQuery, findCurrent);
   return (
     <div className="rich-body">
@@ -264,7 +261,7 @@ export const MessageBody = memo(function MessageBody({
       {docs.length > 0 ? (
         <div className="msg-files">
           {docs.map((doc) => {
-            const name = doc.title || t(cloudDocFallbackKey(doc.host, doc.kind));
+            const name = doc.title;
             return (
               <button
                 key={doc.url}
@@ -426,20 +423,7 @@ function FileCard({
   );
 }
 
-function cloudDocFallbackKey(host: CloudDocHost, kind: CloudDocKind): MessageKey {
-  if (host === "google") {
-    if (kind === "XLS") return "file.cloud.googleSheet";
-    if (kind === "PPT") return "file.cloud.googleSlides";
-    if (kind === "FILE") return "file.cloud.googleFile";
-    return "file.cloud.googleDoc";
-  }
-  if (kind === "XLS") return "file.cloud.feishuSheet";
-  if (kind === "PPT") return "file.cloud.feishuSlides";
-  if (kind === "BASE") return "file.cloud.feishuBase";
-  if (kind === "WIKI") return "file.cloud.feishuWiki";
-  if (kind === "FILE") return "file.cloud.feishuFile";
-  return "file.cloud.feishuDoc";
-}
+const BARE_URL = /https?:\/\/[^\s<>)\]]+/giu;
 
 function renderInline(text: string, mark: (value: string) => ReactNode): ReactNode[] {
   const pieces = text.split(/(`[^`]+`|\*\*[^*]+\*\*|~~[^~]+~~|\*[^*]+\*)/g);
@@ -448,16 +432,48 @@ function renderInline(text: string, mark: (value: string) => ReactNode): ReactNo
       return <code key={index}>{mark(piece.slice(1, -1))}</code>;
     }
     if (piece.startsWith("**") && piece.endsWith("**") && piece.length >= 4) {
-      return <strong key={index}>{mark(piece.slice(2, -2))}</strong>;
+      return <strong key={index}>{renderLinkedText(piece.slice(2, -2), mark)}</strong>;
     }
     if (piece.startsWith("~~") && piece.endsWith("~~") && piece.length >= 4) {
-      return <s key={index}>{mark(piece.slice(2, -2))}</s>;
+      return <s key={index}>{renderLinkedText(piece.slice(2, -2), mark)}</s>;
     }
     if (piece.startsWith("*") && piece.endsWith("*") && piece.length >= 2) {
-      return <em key={index}>{mark(piece.slice(1, -1))}</em>;
+      return <em key={index}>{renderLinkedText(piece.slice(1, -1), mark)}</em>;
     }
-    return <span key={index}>{mark(piece)}</span>;
+    return <span key={index}>{renderLinkedText(piece, mark)}</span>;
   });
+}
+
+function renderLinkedText(text: string, mark: (value: string) => ReactNode): ReactNode {
+  const nodes: ReactNode[] = [];
+  let cursor = 0;
+  let index = 0;
+  for (const match of text.matchAll(BARE_URL)) {
+    const start = match.index ?? 0;
+    const raw = match[0];
+    const url = raw.replace(/[.,;:!?。！？，、]+$/u, "");
+    if (!url) continue;
+    if (start > cursor) nodes.push(<span key={`t${index}`}>{mark(text.slice(cursor, start))}</span>);
+    nodes.push(
+      <a
+        key={`a${index}`}
+        href={url}
+        onClick={(event) => {
+          event.preventDefault();
+          openExternal(url);
+        }}
+      >
+        {mark(url)}
+      </a>,
+    );
+    const tail = raw.slice(url.length);
+    if (tail) nodes.push(<span key={`p${index}`}>{mark(tail)}</span>);
+    cursor = start + raw.length;
+    index += 1;
+  }
+  if (cursor === 0) return mark(text);
+  if (cursor < text.length) nodes.push(<span key="end">{mark(text.slice(cursor))}</span>);
+  return nodes;
 }
 
 function markFind(text: string, query: string, current: boolean): ReactNode {
