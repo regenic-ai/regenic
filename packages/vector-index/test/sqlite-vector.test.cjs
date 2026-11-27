@@ -67,6 +67,26 @@ describe("SQLite vector projection and independent durable jobs", () => {
     )).map((job) => job.external_id), ["old", "middle", "new"]);
   });
 
+  it("finds the next due job from the status id index", async (t) => {
+    const f = await fixture(t);
+    await reconcile(f.index, [head("old"), head("new")]);
+    const database = new Database(f.path, { readonly: true });
+    try {
+      const plan = database.prepare(`EXPLAIN QUERY PLAN
+        SELECT * FROM jobs WHERE org_id=? AND generation=? AND status='pending'
+        ORDER BY id DESC LIMIT 1`).all("org", generation.id)
+        .map((row) => row.detail).join("\n");
+      assert.match(plan, /USING INDEX jobs_pending_id/);
+      assert.doesNotMatch(plan, /TEMP B-TREE/);
+    } finally {
+      database.close();
+    }
+    assert.deepEqual((await f.index.claim({
+      org_id: "org", generation: generation.id, owner: "recent",
+      now: at, lease_ms: 1000, limit: 1, order: "newest",
+    })).map((job) => job.external_id), ["new"]);
+  });
+
   it("revokes visual indexes across generations while preserving contiguous text, namespaces and reindex eligibility", async t => {
     const f = await fixture(t);
     const second = embeddingGeneration(model, 64);

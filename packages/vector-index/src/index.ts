@@ -132,6 +132,9 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
             FOREIGN KEY (org_id, generation) REFERENCES generations(org_id, generation) ON DELETE CASCADE
           );
           CREATE INDEX IF NOT EXISTS jobs_due ON jobs(org_id, generation, status, retry_at, lease_until, id);
+          CREATE INDEX IF NOT EXISTS jobs_pending_id ON jobs(org_id, generation, id) WHERE status='pending';
+          CREATE INDEX IF NOT EXISTS jobs_failed_id ON jobs(org_id, generation, id) WHERE status='failed';
+          CREATE INDEX IF NOT EXISTS jobs_running_id ON jobs(org_id, generation, id) WHERE status='running';
           CREATE TABLE IF NOT EXISTS staged_chunks (
             job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
             ordinal INTEGER NOT NULL, start INTEGER NOT NULL, end INTEGER NOT NULL,
@@ -720,10 +723,30 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
         const activeMs = Math.max(0, Math.min(leaseMs, nowMs) - startedMs);
         release.run(row.processing_ms + activeMs, row.id);
       }
-      const rows = this.db.prepare(`SELECT * FROM jobs WHERE org_id=? AND generation=? AND (
-        status='pending' OR (status='failed' AND retry_at<=?) OR (status='running' AND lease_until<=?)
+      // Due work is pending, a failed job whose retry time has arrived, or a
+      // running job whose lease expired. Each status keeps an id-ordered partial
+      // index, so this reads at most `limit` rows from each instead of sorting
+      // every job in the generation.
+      const rows = this.db.prepare(`SELECT * FROM (
+        SELECT * FROM (
+          SELECT * FROM jobs WHERE org_id=? AND generation=? AND status='pending'
+          ORDER BY id ${direction} LIMIT ?
+        )
+        UNION ALL
+        SELECT * FROM (
+          SELECT * FROM jobs WHERE org_id=? AND generation=? AND status='failed' AND retry_at<=?
+          ORDER BY id ${direction} LIMIT ?
+        )
+        UNION ALL
+        SELECT * FROM (
+          SELECT * FROM jobs WHERE org_id=? AND generation=? AND status='running' AND lease_until<=?
+          ORDER BY id ${direction} LIMIT ?
+        )
       ) ORDER BY id ${direction} LIMIT ?`).all(
-        input.org_id, input.generation, input.now, input.now, input.limit,
+        input.org_id, input.generation, input.limit,
+        input.org_id, input.generation, input.now, input.limit,
+        input.org_id, input.generation, input.now, input.limit,
+        input.limit,
       ) as JobRow[];
       const until = new Date(Date.parse(input.now) + input.lease_ms).toISOString();
       for (const row of rows) {
