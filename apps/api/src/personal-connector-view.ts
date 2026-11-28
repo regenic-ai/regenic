@@ -335,6 +335,11 @@ export interface EngineInstallationView {
   /** Newest successful check: sync-state touch, push watermark, or a succeeded attempt. */
   last_checked_at?: string;
   last_attempt: IngestAttempt | null;
+  /**
+   * Newest hard failure still inside the retained attempt window.
+   * Soft misses are not included. Null when that window has none.
+   */
+  last_hard_failure: IngestAttempt | null;
   pairing_code?: string;
   sync?: SyncProgressView;
 }
@@ -368,6 +373,56 @@ export function installationCheckedAt(input: {
   return best;
 }
 
+/**
+ * How many recent attempts the installation card may read.
+ * Matches ingest-attempt retention. This is not a second fault log.
+ */
+export const RECENT_ATTEMPT_WINDOW = 64;
+
+/**
+ * Same codes as domain `isSyncSoftMiss` and the desktop soft-sync tone.
+ * A later success may clear these. They are not a durable fault.
+ */
+const SOFT_ATTEMPT_CODES = new Set([
+  "blob_reservation_conflict",
+  "deadline_exceeded",
+  "lease_unavailable",
+]);
+
+export function isSoftAttemptFailure(errorCode: string | null | undefined): boolean {
+  const code = errorCode?.trim();
+  return Boolean(code && SOFT_ATTEMPT_CODES.has(code));
+}
+
+/** Newest hard failure in a newest-first attempt list. */
+export function latestHardFailure(
+  attempts: readonly IngestAttempt[],
+): IngestAttempt | null {
+  return attempts.find(
+    (item) => item.status === "failed" && !isSoftAttemptFailure(item.error_code),
+  ) ?? null;
+}
+
+export async function loadInstallationAttempts(
+  store: {
+    latestAttempt(id: string): Promise<IngestAttempt | null>;
+    listAttempts?(id: string, limit?: number): Promise<IngestAttempt[]>;
+  },
+  installationId: string,
+): Promise<{ latest: IngestAttempt | null; hardFailure: IngestAttempt | null }> {
+  const attempts = store.listAttempts
+    ? await store.listAttempts(installationId, RECENT_ATTEMPT_WINDOW)
+    : compactAttempt(await store.latestAttempt(installationId));
+  return {
+    latest: attempts[0] ?? null,
+    hardFailure: latestHardFailure(attempts),
+  };
+}
+
+function compactAttempt(attempt: IngestAttempt | null): IngestAttempt[] {
+  return attempt ? [attempt] : [];
+}
+
 export function toInstallationView(
   installation: ConnectorInstallation,
   lastAttempt: IngestAttempt | null,
@@ -377,6 +432,7 @@ export function toInstallationView(
     sync?: SyncProgressView | null;
     lastPushAt?: string;
     syncTouchAt?: string | null;
+    hardFailure?: IngestAttempt | null;
   },
 ): EngineInstallationView {
   const driver = drivers.get(installation.connector_type);
@@ -398,6 +454,13 @@ export function toInstallationView(
     lastPushAt: extras?.lastPushAt,
     attempt: lastAttempt,
   });
+  const hardFailure = extras?.hardFailure !== undefined
+    ? extras.hardFailure
+    : lastAttempt &&
+        lastAttempt.status === "failed" &&
+        !isSoftAttemptFailure(lastAttempt.error_code)
+      ? lastAttempt
+      : null;
   return {
     id: installation.id,
     connector_type: installation.connector_type,
@@ -424,6 +487,7 @@ export function toInstallationView(
     ...(extras?.lastPushAt ? { last_push_at: extras.lastPushAt } : {}),
     ...(lastCheckedAt ? { last_checked_at: lastCheckedAt } : {}),
     last_attempt: lastAttempt,
+    last_hard_failure: hardFailure,
     ...(extras?.sync ? { sync: extras.sync } : {}),
   };
 }

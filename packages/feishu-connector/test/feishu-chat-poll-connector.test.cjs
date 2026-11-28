@@ -827,6 +827,33 @@ describe("FeishuChatPollConnector", () => {
       "需求文档 (https://example.feishu.cn/docx/abc)",
     );
     assert.equal(extractFeishuText("image", "{}"), undefined);
+    assert.equal(extractFeishuText("interactive", "{\"title\":\"card\"}"), undefined);
+    assert.equal(
+      extractFeishuText("merge_forward", JSON.stringify({ title: "群聊的聊天记录" })),
+      "群聊的聊天记录",
+    );
+    assert.equal(
+      extractFeishuText(
+        "merge_forward",
+        JSON.stringify({
+          title: "群聊的聊天记录",
+          items: [
+            {
+              msg_type: "text",
+              sender: { name: "Ada" },
+              body: { content: JSON.stringify({ text: "hello" }) },
+            },
+            {
+              sender_name: "Bea",
+              text: "note",
+            },
+          ],
+        }),
+      ),
+      "群聊的聊天记录\nAda: hello\nBea: note",
+    );
+    assert.equal(extractFeishuText("merge_forward", "{}"), "聊天记录");
+    assert.equal(extractFeishuText("merge_forward", undefined), "聊天记录");
     assert.deepEqual(
       extractFeishuMedia("image", JSON.stringify({ image_key: "img_1" })),
       [{ kind: "image", key: "img_1", filename: "image.png", media_type: "image/png" }],
@@ -865,6 +892,35 @@ describe("FeishuChatPollConnector", () => {
         new Map([["ou_2", "Ben"]]),
       ),
       "@Ben please look",
+    );
+  });
+
+  it("stores a merged forward and still drops an unrecognized type", async () => {
+    const connector = createConnector({
+      async listMessages() {
+        return {
+          items: [
+            textItem({
+              message_id: "om_forward",
+              msg_type: "merge_forward",
+              body: { content: JSON.stringify({ title: "群聊的聊天记录" }) },
+            }),
+            textItem({
+              message_id: "om_sticker",
+              msg_type: "sticker",
+              body: { content: JSON.stringify({ file_key: "sticker" }) },
+            }),
+          ],
+          has_more: false,
+        };
+      },
+    });
+    const result = await connector.poll(null);
+    assert.equal(result.batch.records.length, 1);
+    assert.equal(result.batch.records[0].external_id, "oc_1:om_forward");
+    assert.equal(
+      result.batch.records[0].content.find((part) => part.role === "body").text,
+      "群聊的聊天记录",
     );
   });
 

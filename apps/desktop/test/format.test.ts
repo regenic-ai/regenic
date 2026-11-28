@@ -6,7 +6,7 @@ import {
   networkWatchHint,
 } from "../src/renderer/src/connector-errors.ts";
 import { KernelRequestError } from "../src/renderer/src/kernel-request.ts";
-import { attemptSummary, formatChatTime } from "../src/renderer/src/format.ts";
+import { attemptSummary, formatChatTime, recoveredFailureSummary } from "../src/renderer/src/format.ts";
 import {
   engineChip,
   namedPullProgress,
@@ -571,11 +571,13 @@ describe("connector card health", () => {
     );
   });
 
-  it("keeps a receive failure on the card until a later check moves past it", () => {
+  it("keeps a hard failure after a later check, and lets a soft miss go quiet", () => {
     const failed = {
+      id: "attempt-fail",
       status: "failed",
       started_at: "2026-11-23T01:00:00.000Z",
       finished_at: "2026-11-23T01:00:00.000Z",
+      error_code: "missing_credentials",
     };
     assert.equal(
       connectorCardMode({
@@ -583,22 +585,87 @@ describe("connector card health", () => {
         syncable: true,
         hasConversations: true,
         lastAttempt: failed,
+        hardFailure: failed,
         lastCheckedAt: "2026-11-23T00:30:00.000Z",
         nowMs: now,
       }).mode,
       "attempt",
     );
-    assert.deepEqual(
+    assert.equal(
       connectorCardMode({
         status: "enabled",
         syncable: true,
         hasConversations: true,
         lastAttempt: failed,
+        hardFailure: failed,
+        lastCheckedAt: fresh,
+        nowMs: now,
+      }).mode,
+      "attempt",
+    );
+    assert.equal(
+      connectorCardMode({
+        status: "needs_attention",
+        syncable: true,
+        hasConversations: true,
+        lastAttempt: failed,
+        hardFailure: failed,
+        lastCheckedAt: fresh,
+        nowMs: now,
+      }).mode,
+      "attempt",
+    );
+    const soft = { ...failed, id: "attempt-soft", error_code: "deadline_exceeded" };
+    assert.deepEqual(
+      connectorCardMode({
+        status: "enabled",
+        syncable: true,
+        hasConversations: true,
+        lastAttempt: soft,
+        hardFailure: null,
         lastCheckedAt: fresh,
         nowMs: now,
       }),
       { mode: "quiet", staleChip: false },
     );
+    assert.equal(
+      connectorCardMode({
+        status: "enabled",
+        syncable: true,
+        hasConversations: true,
+        lastAttempt: {
+          id: "attempt-ok",
+          status: "succeeded",
+          started_at: fresh,
+          finished_at: fresh,
+        },
+        hardFailure: failed,
+        lastCheckedAt: failed.finished_at,
+        nowMs: now,
+      }).mode,
+      "recovered",
+    );
+  });
+
+  it("words a settled hard failure as recovered", () => {
+    setActiveLocale("en");
+    assert.match(
+      recoveredFailureSummary({
+        started_at: "2026-11-23T01:00:00.000Z",
+        finished_at: "2026-11-23T01:00:00.000Z",
+        error_code: "missing_credentials",
+      }),
+      /Last failure · missing_credentials · .+ · recovered/,
+    );
+    setActiveLocale("zh");
+    assert.match(
+      recoveredFailureSummary({
+        started_at: "2026-11-23T01:00:00.000Z",
+        finished_at: "2026-11-23T01:00:00.000Z",
+      }),
+      /上次失败 · .+ · 已恢复/,
+    );
+    setActiveLocale("en");
   });
 
   it("does not call a quiet connector stale while an attempt is still running", () => {

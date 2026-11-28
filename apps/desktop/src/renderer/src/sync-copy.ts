@@ -1,4 +1,10 @@
 import { t } from "../../shared/i18n.ts";
+import {
+  hardFailureSettled,
+  isSoftSyncFailure,
+  laterCheckMovedPast,
+  resolveHardFailure,
+} from "./connector-alerts.ts";
 import type {
   EngineInstallationView,
   SyncProgressView,
@@ -11,7 +17,7 @@ import type {
  */
 export const SYNC_CHECK_STALE_MS = 15 * 60 * 1000;
 
-export type ConnectorCardMode = "attempt" | "waiting" | "stale" | "quiet";
+export type ConnectorCardMode = "attempt" | "waiting" | "stale" | "quiet" | "recovered";
 
 export function syncCheckIsStale(
   checkedAt: string | null | undefined,
@@ -28,25 +34,30 @@ export function syncCheckIsStale(
   return nowMs - at >= staleMs;
 }
 
-function checkMovedPast(
-  checkedAt: string | null | undefined,
-  attempt: { started_at: string; finished_at?: string },
-): boolean {
-  const checked = checkedAt ? Date.parse(checkedAt) : Number.NaN;
-  const at = Date.parse(attempt.finished_at ?? attempt.started_at);
-  return Number.isFinite(checked) && Number.isFinite(at) && checked > at;
-}
-
 /**
  * What the installation card should say about sync health.
- * A fresh caught-up connector stays quiet. Time shows up for a failed receive
- * or a check that has gone stale.
+ * A fresh caught-up connector stays quiet. A soft miss shows only until the
+ * next successful check. A hard failure stays: still broken, recovered after
+ * a later success, or unchanged while status is needs_attention.
  */
 export function connectorCardMode(input: {
   status: "enabled" | "disabled" | "needs_attention";
   syncable: boolean;
   hasConversations: boolean;
-  lastAttempt: { status: string; started_at: string; finished_at?: string } | null;
+  lastAttempt: {
+    id?: string;
+    status: string;
+    started_at: string;
+    finished_at?: string;
+    error_code?: string;
+  } | null;
+  hardFailure?: {
+    id?: string;
+    status: string;
+    started_at: string;
+    finished_at?: string;
+    error_code?: string;
+  } | null;
   lastCheckedAt?: string | null;
   nowMs?: number;
 }): { mode: ConnectorCardMode; staleChip: boolean } {
@@ -55,7 +66,44 @@ export function connectorCardMode(input: {
   if (attempt?.status === "running") {
     return { mode: "attempt", staleChip: false };
   }
-  if (attempt?.status === "failed" && !checkMovedPast(input.lastCheckedAt, attempt)) {
+  const hard = input.status === "disabled"
+    ? null
+    : resolveHardFailure({
+      lastAttempt: attempt,
+      hardFailure: input.hardFailure,
+    });
+  const settled = hard
+    ? hardFailureSettled({
+      status: input.status,
+      lastCheckedAt: input.lastCheckedAt,
+      lastAttempt: attempt,
+      hardFailure: hard,
+    })
+    : false;
+  if (hard && !settled) {
+    return { mode: "attempt", staleChip: false };
+  }
+  if (
+    attempt &&
+    attempt.status === "failed" &&
+    isSoftSyncFailure(attempt.error_code) &&
+    !laterCheckMovedPast(input.lastCheckedAt, attempt)
+  ) {
+    return { mode: "attempt", staleChip: false };
+  }
+  if (hard && settled) {
+    const stale =
+      input.status === "enabled" &&
+      input.syncable &&
+      input.hasConversations &&
+      syncCheckIsStale(input.lastCheckedAt, now);
+    return { mode: "recovered", staleChip: Boolean(stale && input.lastCheckedAt) };
+  }
+  if (
+    attempt &&
+    attempt.status === "failed" &&
+    !laterCheckMovedPast(input.lastCheckedAt, attempt)
+  ) {
     return { mode: "attempt", staleChip: false };
   }
   if (input.status === "enabled" && !attempt && !input.hasConversations) {

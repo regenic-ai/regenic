@@ -71,6 +71,7 @@ import { wrapDriverError } from "./personal-connector-poll";
 import {
   connectorCatalog,
   catalogFromDrivers,
+  loadInstallationAttempts,
   toInstallationView,
   type ConnectorCatalogItem,
   type EngineInstallationView,
@@ -1182,15 +1183,16 @@ export class PersonalInboxService {
       installations.map(async (installation) => {
         const store = authority as SyncStore & {
           latestAttempt(id: string): Promise<IngestAttempt | null>;
+          listAttempts?(id: string, limit?: number): Promise<IngestAttempt[]>;
         };
         const driver = this.drivers.get(installation.connector_type);
-        const [liveSync, attempt, pushWatermarks, syncTouchAt] = await Promise.all([
+        const [liveSync, attempts, pushWatermarks, syncTouchAt] = await Promise.all([
           tier.sync_progress === "live"
             ? loadSyncProgress(store, installation.id, { hiddenThreadIds })
             : Promise.resolve(null),
           tier.include_install_attempts
-            ? store.latestAttempt(installation.id)
-            : Promise.resolve(null),
+            ? loadInstallationAttempts(store, installation.id)
+            : Promise.resolve({ latest: null, hardFailure: null }),
           driver
             ? authority.summarizePushWatermarks(installation.id)
             : Promise.resolve(null),
@@ -1199,12 +1201,12 @@ export class PersonalInboxService {
         const sync = tier.sync_progress === "snapshot"
           ? this.kernelRuntime.syncSnapshots.peekProgress(installation.id)
           : liveSync;
-        if (attempt) {
-          this.kernelRuntime.publishInstallAttempt(installation.id, attempt);
+        if (attempts.latest) {
+          this.kernelRuntime.publishInstallAttempt(installation.id, attempts.latest);
         }
         return toInstallationView(
           installation,
-          attempt,
+          attempts.latest,
           this.drivers,
           query.locale,
           {
@@ -1213,6 +1215,7 @@ export class PersonalInboxService {
               ? { lastPushAt: pushWatermarks.last_updated_at }
               : {}),
             syncTouchAt,
+            hardFailure: attempts.hardFailure,
           },
         );
       }),

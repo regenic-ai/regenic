@@ -1,8 +1,28 @@
+import { isSoftSyncFailure } from "./connector-alerts.ts";
 import type {
+  EngineInstallationView,
+  IngestAttempt,
   PersonalEngineView,
   PersonalHeartbeatView,
   PullStatusView,
 } from "./types.ts";
+
+function notePulseAttempt(
+  installation: EngineInstallationView,
+  attempt: IngestAttempt | null | undefined,
+): Partial<Pick<EngineInstallationView, "last_attempt" | "last_hard_failure">> {
+  if (attempt === undefined) {
+    return {};
+  }
+  if (
+    attempt &&
+    attempt.status === "failed" &&
+    !isSoftSyncFailure(attempt.error_code)
+  ) {
+    return { last_attempt: attempt, last_hard_failure: attempt };
+  }
+  return { last_attempt: attempt };
+}
 
 const EMPTY_PULL: PullStatusView = {
   interval_ms: 0,
@@ -43,9 +63,7 @@ export function applyHeartbeatToEngine(
           return {
             ...installation,
             ...(pulse.sync ? { sync: pulse.sync } : {}),
-            ...(pulse.last_attempt !== undefined
-              ? { last_attempt: pulse.last_attempt }
-              : {}),
+            ...notePulseAttempt(installation, pulse.last_attempt),
           };
         });
   return {

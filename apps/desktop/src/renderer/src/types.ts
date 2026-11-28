@@ -837,6 +837,8 @@ export interface EngineInstallationView {
   last_push_at?: string;
   last_checked_at?: string;
   last_attempt: IngestAttempt | null;
+  /** Newest hard failure still in the retained attempt window. */
+  last_hard_failure?: IngestAttempt | null;
   pairing_code?: string;
   sync?: SyncProgressView;
 }
