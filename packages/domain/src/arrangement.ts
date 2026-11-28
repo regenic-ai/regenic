@@ -136,7 +136,7 @@ export function arrangeMessage(input: ArrangementInput): ArrangementDecision {
     return decision(input, "current_work", ["task"], 0.88, decidedAt);
   }
 
-  if (input.kind === "assistant" || input.kind === "system") {
+  if (input.kind === "assistant") {
     return decision(
       input,
       "outside_current_work",
