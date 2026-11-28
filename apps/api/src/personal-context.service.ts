@@ -54,6 +54,7 @@ import {
   ChannelDriverRegistry,
   type SearchAppClass,
   type ContextAuthorityRead,
+  type ContextVectorIndex,
   CONTENT_PARTS_MEDIA_TYPE,
   parseStoredContentParts,
   storedPartContentHash,
@@ -118,6 +119,53 @@ export class PersonalContextService {
     @Inject(PersonalContextProjectionService)
     private readonly projections?: PersonalContextProjectionService,
   ) {}
+
+  /** Warm the default ordinary-app vector index after listen, before anyone searches. */
+  startAfterListen(): void {
+    void this.warmSearchIndex();
+  }
+
+  private async warmSearchIndex(): Promise<void> {
+    try {
+      const host = this.runtime.getHost();
+      if (!host) return;
+      const status = host.get("context-vector-status") as { status?: string } | undefined;
+      if (status?.status !== "ready") return;
+      const generations = host.get("context-vector-generations") as {
+        activeGeneration(orgId: string): Promise<{ id: string } | undefined>;
+      };
+      const index = host.get("context-vector-index") as ContextVectorIndex;
+      if (!index.prepareRanked) return;
+      const authority = host.get("authority") as {
+        databasePath?: () => string;
+        openContextMutationStamp?: () => Promise<string>;
+      };
+      const authorityPath = authority.databasePath?.();
+      const generation = await generations.activeGeneration(this.runtime.orgId());
+      if (!authorityPath || !generation || !authority.openContextMutationStamp) return;
+      const filters = await applySearchAppClass(this.runtime, this.drivers, undefined, "app");
+      const stamp = await authority.openContextMutationStamp();
+      const ranked = {
+        org_id: this.runtime.orgId(),
+        authority_path: authorityPath,
+        stamp,
+        ...(filters ? { filters } : {}),
+      };
+      await index.prepareRanked({ ...ranked, generation: generation.id });
+      const lexical = host.get("context-lexical-index") as {
+        prepareRanked?(input: typeof ranked): Promise<void>;
+      };
+      if (lexical.prepareRanked) {
+        try {
+          await lexical.prepareRanked(ranked);
+        } catch (error) {
+          console.error("lexical index warm failed", error instanceof Error ? error.message : error);
+        }
+      }
+    } catch (error) {
+      console.error("vector index warm failed", error instanceof Error ? error.message : error);
+    }
+  }
 
   openAttachment(
     eventId: string,

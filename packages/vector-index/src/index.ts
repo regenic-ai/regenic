@@ -29,7 +29,9 @@ import {
   authorizedHeadFilterKey,
   authorizedHeadScopeKey,
   authorizedHeadWhere,
-  authorityHeadFrom,
+  authorityEventsAfterSql,
+  authorityHeadPageSql,
+  authorityHeadQualifyFrom,
 } from "@regenic/domain";
 
 export class VectorIndexSchemaError extends Error {}
@@ -85,6 +87,14 @@ interface VectorAuthorizationStateRow {
   projection_revision: number;
 }
 
+const NATIVE_KNN_PARTITIONS = [
+  "vector_authorized_knn_messages",
+  "vector_authorized_knn_files",
+  "vector_authorized_knn_rest",
+] as const;
+
+type NativeKnnPartition = (typeof NATIVE_KNN_PARTITIONS)[number];
+
 interface NativeVectorCandidateRow {
   event_id: string;
   distance: number;
@@ -97,6 +107,10 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
   private rankedScopeKey: string | undefined;
   /** Filter scope of the staged knn table. A sync stamp change does not rebuild it. */
   private rankedFilterKey: string | undefined;
+  /** One authorized-index build at a time. Search waits; it does not start a second copy. */
+  private knnMaintenance: Promise<void> | null = null;
+  /** One ranked-index build at a time, shared by startup and search. */
+  private rankedWarm: Promise<void> | null = null;
 
   constructor(path: string) {
     mkdirSync(dirname(path), { recursive: true });
@@ -190,23 +204,38 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
             ON vector_projection_changes(org_id,generation,revision);
           INSERT OR IGNORE INTO vector_projection_revisions(org_id,generation,revision)
             SELECT org_id,generation,0 FROM generations;
-          CREATE TEMP TABLE IF NOT EXISTS vector_authorized (
+          CREATE TABLE IF NOT EXISTS vector_authorized (
             event_id TEXT PRIMARY KEY,
             content_hash TEXT NOT NULL,
             body_length INTEGER
           ) WITHOUT ROWID;
-          CREATE TEMP TABLE IF NOT EXISTS vector_uncovered (
+          CREATE TABLE IF NOT EXISTS vector_uncovered (
             event_id TEXT PRIMARY KEY,
             content_hash TEXT NOT NULL
           ) WITHOUT ROWID;
-          CREATE TEMP TABLE IF NOT EXISTS vector_skipped (
+          CREATE TABLE IF NOT EXISTS vector_skipped (
             event_id TEXT PRIMARY KEY,
             content_hash TEXT NOT NULL
           ) WITHOUT ROWID;
-          CREATE TEMP TABLE IF NOT EXISTS vector_authorized_native_rows (
+          CREATE TABLE IF NOT EXISTS vector_authorized_native_rows (
             event_id TEXT NOT NULL,
             rowid INTEGER NOT NULL,
             PRIMARY KEY (event_id,rowid)
+          ) WITHOUT ROWID;
+          CREATE TABLE IF NOT EXISTS vector_knn_meta (
+            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+            dimensions INTEGER NOT NULL CHECK (dimensions > 0)
+          ) WITHOUT ROWID;
+          CREATE TABLE IF NOT EXISTS vector_ranked_scope (
+            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+            org_id TEXT NOT NULL,
+            generation TEXT NOT NULL,
+            filter_key TEXT NOT NULL,
+            scope_key TEXT NOT NULL,
+            dimensions INTEGER NOT NULL CHECK (dimensions > 0),
+            native_chunk_count INTEGER NOT NULL CHECK (native_chunk_count >= 0),
+            head_sequence INTEGER,
+            head_count INTEGER
           ) WITHOUT ROWID;
           CREATE TEMP TABLE IF NOT EXISTS vector_ranked_native_rows (
             event_id TEXT NOT NULL,
@@ -219,7 +248,15 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
             content_hash TEXT NOT NULL,
             body_length INTEGER
           ) WITHOUT ROWID;
-          CREATE TEMP TABLE IF NOT EXISTS vector_authorization_state (
+          CREATE TEMP TABLE IF NOT EXISTS vector_head_tail (
+            event_id TEXT PRIMARY KEY
+          ) WITHOUT ROWID;
+          CREATE TEMP TABLE IF NOT EXISTS vector_knn_backfill_batch (
+            event_id TEXT NOT NULL,
+            ordinal INTEGER NOT NULL,
+            chunk_rowid INTEGER NOT NULL PRIMARY KEY
+          );
+          CREATE TABLE IF NOT EXISTS vector_authorization_state (
             singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
             org_id TEXT NOT NULL,
             generation TEXT NOT NULL,
@@ -265,6 +302,13 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
         const generationColumns = this.db.pragma("table_info(generations)") as Array<{ name: string }>;
         if (!generationColumns.some((column) => column.name === "reconciled_sequence")) {
           this.db.exec("ALTER TABLE generations ADD COLUMN reconciled_sequence INTEGER NOT NULL DEFAULT 0;");
+        }
+        const scopeColumns = this.db.pragma("table_info(vector_ranked_scope)") as Array<{ name: string }>;
+        if (!scopeColumns.some((column) => column.name === "head_sequence")) {
+          this.db.exec("ALTER TABLE vector_ranked_scope ADD COLUMN head_sequence INTEGER;");
+        }
+        if (!scopeColumns.some((column) => column.name === "head_count")) {
+          this.db.exec("ALTER TABLE vector_ranked_scope ADD COLUMN head_count INTEGER;");
         }
         this.db.pragma("user_version = 9");
       }).immediate();
@@ -1055,6 +1099,7 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
     this.rankedScopeKey = undefined;
     this.rankedFilterKey = undefined;
     this.db.prepare("DELETE FROM vector_ranked_native_rows").run();
+    this.db.prepare("DELETE FROM vector_ranked_scope").run();
     try {
       return await this.matchAuthorizedView(input);
     } catch (error) {
@@ -1093,6 +1138,9 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
     ) {
       throw new Error("Invalid vector authorization accumulator");
     }
+    const authorizationMaintenance = input.authorization_hash && this.nativeVectors
+      ? await this.ensureAuthorizedKnn(input, generation.model.dimensions)
+      : undefined;
     return this.db.transaction(() => {
       this.synchronizeProjectionChanges(
         input.org_id,
@@ -1103,7 +1151,7 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
         ? this.vectorAuthorizationState(input)
         : null;
       let authorizationUpdate: "rebuilt" | "reused" | "delta" =
-        state ? "reused" : "rebuilt";
+        authorizationMaintenance ?? (state ? "reused" : "rebuilt");
       if (!state && input.authorization_hash && input.authorization_delta) {
         state = this.applyVectorAuthorizationDelta(
           input,
@@ -1120,20 +1168,13 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
         ).all() as Array<{ event_id: string; content_hash: string }>;
         coveredCount = state.covered_count;
         nativeAuthorizedChunks = state.native_chunk_count;
-        if (
-          nativeAuthorizedChunks === 0
-          && coveredCount > 0
-          && input.search_kind === undefined
-        ) {
-          nativeAuthorizedChunks = this.stageNativeAuthorized(
-            generation.model.dimensions,
-            input.org_id,
-            input.generation,
-          );
-          this.db.prepare(
-            "UPDATE vector_authorization_state SET native_chunk_count=? WHERE singleton=1",
-          ).run(nativeAuthorizedChunks);
+        if (this.nativeVectors && nativeAuthorizedChunks === 0 && coveredCount > 0) {
+          throw new ContextVectorUnavailableError("corrupt");
         }
+      } else if (!input.authorization_hash) {
+        this.fillJsAuthorization(input.authorized);
+        uncovered = [];
+        coveredCount = 0;
       } else {
         const seen = new Set<string>();
         for (const key of input.authorized) {
@@ -1141,22 +1182,20 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
           if (seen.has(key.event_id)) throw new Error("Invalid vector authorization key");
           seen.add(key.event_id);
         }
-        let authorizationAccumulator: string | undefined;
-        if (input.authorization_hash !== undefined) {
-          authorizationAccumulator = contextVectorAuthorizationAccumulator(input.authorized);
-          if (
-            input.authorization_hash !== contextVectorAuthorizationHashFromAccumulator(
-              input.authorized.length,
-              authorizationAccumulator,
-            )
-            || (
-              input.authorization_accumulator !== undefined
-              && input.authorization_accumulator !== authorizationAccumulator
-            )
-          ) {
-            throw new Error("Invalid vector authorization hash or accumulator");
-          }
+        const authorizationAccumulator = contextVectorAuthorizationAccumulator(input.authorized);
+        if (
+          input.authorization_hash !== contextVectorAuthorizationHashFromAccumulator(
+            input.authorized.length,
+            authorizationAccumulator,
+          )
+          || (
+            input.authorization_accumulator !== undefined
+            && input.authorization_accumulator !== authorizationAccumulator
+          )
+        ) {
+          throw new Error("Invalid vector authorization hash or accumulator");
         }
+        if (this.nativeVectors) throw new ContextVectorUnavailableError("corrupt");
         this.invalidateVectorAuthorization();
         const authorize = this.db.prepare(
           "INSERT INTO vector_authorized (event_id, content_hash, body_length) VALUES (?, ?, ?)",
@@ -1181,39 +1220,31 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
           "INSERT INTO vector_uncovered (event_id,content_hash) VALUES (?,?)",
         );
         for (const key of uncovered) saveUncovered.run(key.event_id, key.content_hash);
-        if (input.authorization_hash) {
-          this.stageVectorSkipped(input.org_id, input.generation);
-          nativeAuthorizedChunks = input.search_kind === undefined
-            ? this.stageNativeAuthorized(
-              generation.model.dimensions,
-              input.org_id,
-              input.generation,
-            )
-            : 0;
-          this.db.prepare(`INSERT INTO vector_authorization_state (
-            singleton,org_id,generation,authorization_hash,authorization_accumulator,authorized_count,
-            covered_count,native_chunk_count,projection_revision
-          ) VALUES (1,?,?,?,?,?,?,?,?)`).run(
-            input.org_id,
-            input.generation,
-            input.authorization_hash,
-            authorizationAccumulator ?? null,
-            input.authorized.length,
-            coveredCount,
-            nativeAuthorizedChunks,
-            this.projectionRevision(input.org_id, input.generation),
-          );
-        }
+        this.stageVectorSkipped(input.org_id, input.generation);
+        this.db.prepare(`INSERT INTO vector_authorization_state (
+          singleton,org_id,generation,authorization_hash,authorization_accumulator,authorized_count,
+          covered_count,native_chunk_count,projection_revision
+        ) VALUES (1,?,?,?,?,?,?,?,?)`).run(
+          input.org_id,
+          input.generation,
+          input.authorization_hash,
+          authorizationAccumulator,
+          input.authorized.length,
+          coveredCount,
+          nativeAuthorizedChunks,
+          this.projectionRevision(input.org_id, input.generation),
+        );
       }
-      const accelerated = input.authorization_hash
-        && nativeAuthorizedChunks > 0
-        && input.search_kind === undefined
-        ? this.nativeAuthorizedRows(input, nativeAuthorizedChunks)
+      const authorizationTable = input.authorization_hash
+        ? "vector_authorized"
+        : "vector_js_authorized";
+      const accelerated = input.authorization_hash && nativeAuthorizedChunks > 0
+        ? this.nativeAuthorizedRows(input)
         : undefined;
       const rows = accelerated?.rows ?? this.db.prepare(`
         SELECT c.event_id, c.content_hash, a.body_length, c.chunk_count,
                ch.ordinal, ch.start, ch.end, ch.vector, ch.origin_json, ch.text_hash
-        FROM vector_authorized a
+        FROM ${authorizationTable} a
         JOIN coverage c
           ON c.event_id=a.event_id AND c.content_hash=a.content_hash
         JOIN source_heads h
@@ -1362,7 +1393,7 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
         ? this.db.prepare(
           "SELECT event_id,content_hash FROM vector_skipped ORDER BY event_id",
         ).all() as Array<{ event_id: string; content_hash: string }>
-        : this.db.prepare(`SELECT j.event_id,j.content_hash FROM vector_authorized a
+        : this.db.prepare(`SELECT j.event_id,j.content_hash FROM ${authorizationTable} a
           JOIN jobs j ON j.event_id=a.event_id AND j.content_hash=a.content_hash
           JOIN source_heads h ON h.org_id=j.org_id AND h.source=j.source
             AND h.external_id=j.external_id AND h.event_id=j.event_id AND h.fence=j.fence
@@ -1381,7 +1412,7 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
           },
         } : {}),
         matched: matched.slice(0, input.limit),
-        ...(accelerated ? {
+        ...(accelerated && accelerated.candidateChunks > 0 ? {
           acceleration: {
             algorithm_version: "sqlite-vec-authorized-exact-v1" as const,
             authorized_chunks: nativeAuthorizedChunks,
@@ -1598,12 +1629,7 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
     }
     if (
       state.native_chunk_count > 0
-      && (
-        !this.nativeVectors
-        || !this.db.prepare(
-          "SELECT 1 FROM sqlite_temp_master WHERE type='table' AND name='vector_authorized_knn'",
-        ).get()
-      )
+      && (!this.nativeVectors || !this.nativeKnnPartitionsReady())
     ) {
       return null;
     }
@@ -1693,28 +1719,25 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
     generation: string,
     eventId: string,
   ): number {
-    if (
-      !this.nativeVectors
-      || !this.db.prepare(
-        "SELECT 1 FROM sqlite_temp_master WHERE type='table' AND name='vector_authorized_knn'",
-      ).get()
-    ) {
-      return 0;
-    }
+    if (!this.nativeVectors || !this.nativeKnnPartitionsReady()) return 0;
     const rowids = this.db.prepare(
       "SELECT rowid FROM vector_authorized_native_rows WHERE event_id=?",
     ).pluck().all(eventId) as number[];
-    const remove = this.db.prepare(
-      "DELETE FROM temp.vector_authorized_knn WHERE rowid=?",
-    );
-    const exists = this.db.prepare(
-      "SELECT 1 FROM temp.vector_authorized_knn WHERE rowid=?",
-    );
+    const remove = NATIVE_KNN_PARTITIONS.map((partition) => this.db.prepare(
+      `DELETE FROM ${partition} WHERE rowid=?`,
+    ));
+    const exists = NATIVE_KNN_PARTITIONS.map((partition) => this.db.prepare(
+      `SELECT 1 FROM ${partition} WHERE rowid=?`,
+    ));
     let removed = 0;
     for (const rowid of rowids) {
-      if (!exists.get(rowid)) continue;
-      remove.run(rowid);
-      removed += 1;
+      let found = false;
+      for (let index = 0; index < NATIVE_KNN_PARTITIONS.length; index += 1) {
+        if (!exists[index].get(rowid)) continue;
+        remove[index].run(rowid);
+        found = true;
+      }
+      if (found) removed += 1;
     }
     this.db.prepare(
       "DELETE FROM vector_authorized_native_rows WHERE event_id=?",
@@ -1756,20 +1779,29 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
       }
       return 0;
     }
-    if (
-      !this.nativeVectors
-      || !this.db.prepare(
-        "SELECT 1 FROM sqlite_temp_master WHERE type='table' AND name='vector_authorized_knn'",
-      ).get()
-    ) {
-      return 0;
-    }
+    if (!this.nativeVectors || !this.nativeKnnPartitionsReady()) return 0;
+    const bodyLength = key.body_length ?? null;
     this.db.prepare(`
-      INSERT INTO temp.vector_authorized_knn(rowid,embedding)
+      INSERT INTO vector_authorized_knn_messages(rowid,embedding)
       SELECT rowid,vector FROM chunks
       WHERE org_id=? AND generation=? AND event_id=?
+        AND origin_json IS NULL AND (? IS NULL OR "end" <= ?)
+      ORDER BY rowid
+    `).run(orgId, generation, key.event_id, bodyLength, bodyLength);
+    this.db.prepare(`
+      INSERT INTO vector_authorized_knn_files(rowid,embedding)
+      SELECT rowid,vector FROM chunks
+      WHERE org_id=? AND generation=? AND event_id=?
+        AND origin_json IS NOT NULL
       ORDER BY rowid
     `).run(orgId, generation, key.event_id);
+    this.db.prepare(`
+      INSERT INTO vector_authorized_knn_rest(rowid,embedding)
+      SELECT rowid,vector FROM chunks
+      WHERE org_id=? AND generation=? AND event_id=?
+        AND origin_json IS NULL AND ? IS NOT NULL AND "end" > ?
+      ORDER BY rowid
+    `).run(orgId, generation, key.event_id, bodyLength, bodyLength);
     this.db.prepare(`
       INSERT INTO vector_authorized_native_rows(event_id,rowid)
       SELECT event_id,rowid FROM chunks
@@ -1820,24 +1852,7 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
     if (input.query_vector.length !== generation.model.dimensions) {
       throw new ContextVectorUnavailableError("unavailable");
     }
-    const filterKey = authorizedHeadFilterKey(input.org_id, input.filters, input.generation);
-    const scopeKey = authorizedHeadScopeKey(input.stamp, input.org_id, input.filters, input.generation);
-    const where = authorizedHeadWhere(input.org_id, input.filters);
-    if (this.rankedFilterKey !== filterKey || !this.rankedKnnReady()) {
-      withAttachedAuthority(this.db, input.authority_path, () => {
-        this.db.prepare("DELETE FROM vector_authorized").run();
-        this.db.prepare(`
-          INSERT INTO vector_authorized (event_id, content_hash, body_length)
-          SELECT DISTINCT e.id, e.content_hash, NULL
-          ${authorityHeadFrom(where.sql)}
-        `).run(...where.params);
-      });
-      this.stageRankedNative(generation.model.dimensions, input.org_id, input.generation);
-      this.rankedFilterKey = filterKey;
-    } else if (this.rankedScopeKey !== scopeKey) {
-      this.refreshRankedAuthorized(where, input.authority_path, input.org_id, input.generation);
-    }
-    this.rankedScopeKey = scopeKey;
+    await this.prepareRanked(input);
     const counts = this.db.prepare(`
       SELECT
         (SELECT COUNT(*) FROM vector_authorized) AS authorized_count,
@@ -1847,27 +1862,39 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
             ON c.org_id = ? AND c.generation = ?
             AND c.event_id = a.event_id AND c.content_hash = a.content_hash) AS covered_count
     `).get(input.org_id, input.generation) as { authorized_count: number; covered_count: number };
-    const authorizedChunks = this.nativeAuthorizedChunkCount();
+    const authorizedChunks = this.rankedNativeChunkCount();
     if (!this.nativeVectors) throw new ContextVectorUnavailableError("unavailable");
     if (authorizedChunks < 1 || !Number.isSafeInteger(input.limit) || input.limit < 1) {
       return { matched: [], ...counts };
     }
     const query = vectorBuffer(input.query_vector);
-    const statement = this.db.prepare(`
+    const statements = NATIVE_KNN_PARTITIONS.map((partition) => this.db.prepare(`
       SELECT ch.event_id, c.content_hash, ch.ordinal, ch.start, ch.end, ch.vector, v.distance
-      FROM temp.vector_authorized_knn v
+      FROM ${partition} v
       JOIN chunks ch ON ch.rowid = v.rowid
       JOIN coverage c
         ON c.org_id = ? AND c.generation = ? AND c.event_id = ch.event_id
       JOIN vector_authorized a ON a.event_id = c.event_id AND a.content_hash = c.content_hash
       WHERE v.embedding MATCH ? AND k = ?
       ORDER BY v.distance, ch.event_id
-    `);
+    `));
     let candidateLimit = Math.min(authorizedChunks, Math.max(input.limit * 4, 100));
     let rows: RankedVectorRow[] = [];
     let selected: string[] = [];
     while (candidateLimit > 0) {
-      rows = statement.all(input.org_id, input.generation, query, candidateLimit) as RankedVectorRow[];
+      const merged: RankedVectorRow[] = [];
+      for (let index = 0; index < NATIVE_KNN_PARTITIONS.length; index += 1) {
+        const count = this.nativeKnnCount(NATIVE_KNN_PARTITIONS[index]);
+        if (count < 1) continue;
+        merged.push(...statements[index].all(
+          input.org_id,
+          input.generation,
+          query,
+          Math.min(candidateLimit, count),
+        ) as RankedVectorRow[]);
+      }
+      merged.sort((left, right) => left.distance - right.distance || compare(left.event_id, right.event_id));
+      rows = merged.slice(0, candidateLimit);
       const best = new Map<string, number>();
       for (const row of rows) {
         if (!Number.isFinite(row.distance) || row.distance < 0 || row.distance > 2) {
@@ -1910,154 +1937,546 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
     return { matched, ...counts };
   }
 
-  private stageRankedNative(dimensions: number, orgId: string, generation: string): number {
-    if (!this.nativeVectors) return 0;
-    this.db.exec(`
-      DROP TABLE IF EXISTS temp.vector_authorized_knn;
-      CREATE VIRTUAL TABLE temp.vector_authorized_knn USING vec0(
-        embedding float[${dimensions}] distance_metric=cosine
+  /**
+   * Build the persistent ranked index for one authority filter. Startup and
+   * search share one run, so a search does not copy the corpus again.
+   */
+  async prepareRanked(input: RankedHeadQuery & { generation: string }): Promise<void> {
+    if (this.rankedWarm) {
+      await this.rankedWarm;
+      return this.prepareRanked(input);
+    }
+    let resolveWaiters: () => void = () => {};
+    let rejectWaiters: (error: unknown) => void = () => {};
+    const gate = new Promise<void>((resolve, reject) => {
+      resolveWaiters = resolve;
+      rejectWaiters = reject;
+    });
+    this.rankedWarm = gate;
+    void gate.catch(() => {});
+    try {
+      await this.maintainRanked(input);
+      resolveWaiters();
+    } catch (error) {
+      rejectWaiters(error);
+      throw error;
+    } finally {
+      if (this.rankedWarm === gate) this.rankedWarm = null;
+    }
+  }
+
+  private async maintainRanked(input: RankedHeadQuery & { generation: string }): Promise<void> {
+    const generation = this.manifest(input.org_id, input.generation);
+    const filterKey = authorizedHeadFilterKey(input.org_id, input.filters, input.generation);
+    const scopeKey = authorizedHeadScopeKey(input.stamp, input.org_id, input.filters, input.generation);
+    const where = authorizedHeadWhere(input.org_id, input.filters);
+    const persisted = this.rankedScope();
+    const reusable = Boolean(
+      persisted
+      && persisted.org_id === input.org_id
+      && persisted.generation === input.generation
+      && persisted.filter_key === filterKey
+      && persisted.dimensions === generation.model.dimensions
+      && this.nativeKnnPartitionsReady()
+      && persisted.native_chunk_count === this.nativeAuthorizedChunkCount(),
+    );
+    if (!reusable) {
+      const marker = this.readHeadMarker(input.authority_path, input.org_id);
+      await this.replaceRankedAuthorized(where, input.authority_path, input.org_id);
+      const indexed = await this.stageRankedNative(generation.model.dimensions, input.org_id, input.generation);
+      this.saveRankedScope(
+        input.org_id, input.generation, filterKey, scopeKey, generation.model.dimensions, indexed, marker,
       );
-    `);
-    this.db.prepare("DELETE FROM vector_ranked_native_rows").run();
-    this.db.prepare(`
-      INSERT INTO temp.vector_authorized_knn (rowid, embedding)
-      SELECT ch.rowid, ch.vector
-      FROM vector_authorized a
-      JOIN coverage c
-        ON c.org_id = ? AND c.generation = ?
-        AND c.event_id = a.event_id AND c.content_hash = a.content_hash
-      JOIN chunks ch
-        ON ch.org_id = c.org_id AND ch.generation = c.generation AND ch.event_id = c.event_id
-      ORDER BY ch.event_id, ch.rowid
-    `).run(orgId, generation);
+    } else if (persisted!.scope_key !== scopeKey) {
+      const marker = this.readHeadMarker(input.authority_path, input.org_id);
+      if (!this.headMarkerMatches(persisted!, marker)) {
+        await this.syncRankedAuthorized(
+          where,
+          input.authority_path,
+          input.org_id,
+          input.generation,
+          generation.model.dimensions,
+          persisted!.head_sequence,
+        );
+      }
+      this.saveRankedScope(
+        input.org_id,
+        input.generation,
+        filterKey,
+        scopeKey,
+        generation.model.dimensions,
+        this.nativeAuthorizedChunkCount(),
+        marker,
+      );
+    }
+    this.rankedFilterKey = filterKey;
+    this.rankedScopeKey = scopeKey;
+  }
+
+  private async stageRankedNative(dimensions: number, orgId: string, generation: string): Promise<number> {
+    if (!this.nativeVectors) return 0;
+    this.db.prepare("DELETE FROM vector_authorization_state").run();
+    this.db.prepare("DELETE FROM vector_ranked_scope").run();
+    this.db.transaction(() => {
+      this.db.prepare("DELETE FROM vector_authorized_native_rows").run();
+      this.db.prepare("DELETE FROM vector_ranked_native_rows").run();
+      for (const partition of NATIVE_KNN_PARTITIONS) this.createNativeKnnTable(partition, dimensions);
+      this.db.prepare(`
+        INSERT INTO vector_knn_meta(singleton, dimensions) VALUES (1, ?)
+        ON CONFLICT(singleton) DO UPDATE SET dimensions=excluded.dimensions
+      `).run(dimensions);
+    }).immediate();
+    await this.backfillAuthorizedKnn(orgId, generation);
     this.db.prepare(`
       INSERT INTO vector_ranked_native_rows (event_id, content_hash, rowid)
-      SELECT ch.event_id, a.content_hash, ch.rowid
-      FROM vector_authorized a
-      JOIN coverage c
-        ON c.org_id = ? AND c.generation = ?
-        AND c.event_id = a.event_id AND c.content_hash = a.content_hash
-      JOIN chunks ch
-        ON ch.org_id = c.org_id AND ch.generation = c.generation AND ch.event_id = c.event_id
-    `).run(orgId, generation);
+      SELECT n.event_id, a.content_hash, n.rowid
+      FROM vector_authorized_native_rows n
+      JOIN vector_authorized a ON a.event_id = n.event_id
+    `).run();
     return this.nativeAuthorizedChunkCount();
   }
 
-  /** Apply a stamp change without copying vectors that are already in the knn table. */
-  private refreshRankedAuthorized(
+  /**
+   * A connection stamp moves on every authority write. Head cardinality and the
+   * event-log sequence move only when a head can have changed, so an unrelated
+   * commit does not reread blobs.
+   */
+  private headMarkerMatches(
+    saved: { head_sequence: number | null; head_count: number | null },
+    marker: { sequence: number | null; count: number },
+  ): boolean {
+    return saved.head_count != null
+      && saved.head_count === marker.count
+      && saved.head_sequence === marker.sequence;
+  }
+
+  private readHeadMarker(authorityPath: string, orgId: string): { sequence: number | null; count: number } {
+    return withAttachedAuthority(this.db, authorityPath, () => {
+      const hasSequence = this.db.prepare(
+        "SELECT 1 FROM pragma_table_info('events', 'regenic_auth') WHERE name = 'sequence'",
+      ).get();
+      const sequence = hasSequence
+        ? this.db.prepare("SELECT MAX(sequence) FROM regenic_auth.events").pluck().get() as number | null
+        : null;
+      const count = this.db.prepare(
+        "SELECT COUNT(*) FROM regenic_auth.source_heads WHERE org_id = ?",
+      ).pluck().get(orgId) as number;
+      return { sequence: sequence ?? null, count };
+    });
+  }
+
+  /** First build. Pages head identities, then applies the searchable predicate to that page only. */
+  private async replaceRankedAuthorized(
+    where: { sql: string; params: unknown[] },
+    authorityPath: string,
+    orgId: string,
+  ): Promise<void> {
+    this.db.prepare("DELETE FROM vector_authorized").run();
+    let source = "";
+    let externalId = "";
+    const pageSize = 512;
+    for (;;) {
+      const done = withAttachedAuthority(this.db, authorityPath, () => {
+        this.db.prepare("DELETE FROM vector_head_tail").run();
+        const rows = this.db.prepare(authorityHeadPageSql()).all(
+          orgId, source, externalId, pageSize,
+        ) as Array<{ source: string; external_id: string; event_id: string }>;
+        if (rows.length === 0) return true;
+        const insertId = this.db.prepare("INSERT OR IGNORE INTO vector_head_tail(event_id) VALUES (?)");
+        for (const row of rows) insertId.run(row.event_id);
+        this.db.prepare(`
+          INSERT OR IGNORE INTO vector_authorized (event_id, content_hash, body_length)
+          SELECT DISTINCT e.id, e.content_hash, NULL
+          ${authorityHeadQualifyFrom(where.sql, "vector_head_tail")}
+        `).run(...where.params);
+        const last = rows[rows.length - 1]!;
+        if (last.source === source && last.external_id === externalId) {
+          throw new Error("vector head cursor did not advance");
+        }
+        source = last.source;
+        externalId = last.external_id;
+        return rows.length < pageSize;
+      });
+      if (done) return;
+      await this.yieldEventLoop();
+    }
+  }
+
+  /** Apply head deletions and the event-log tail. Does not reread heads that are already classified. */
+  private async syncRankedAuthorized(
     where: { sql: string; params: unknown[] },
     authorityPath: string,
     orgId: string,
     generation: string,
-  ): void {
-    this.db.prepare("DELETE FROM vector_authorized_next").run();
-    withAttachedAuthority(this.db, authorityPath, () => {
-      this.db.prepare(`
-        INSERT INTO vector_authorized_next (event_id, content_hash, body_length)
-        SELECT DISTINCT e.id, e.content_hash, NULL
-        ${authorityHeadFrom(where.sql)}
-      `).run(...where.params);
-    });
-    this.immediate(() => {
-      const removed = this.db.prepare(`
-        SELECT old.event_id FROM vector_authorized old
-        LEFT JOIN vector_authorized_next new
-          ON new.event_id = old.event_id AND new.content_hash = old.content_hash
-        WHERE new.event_id IS NULL
-      `).pluck().all() as string[];
-      const rowids = this.db.prepare(
-        "SELECT rowid FROM vector_ranked_native_rows WHERE event_id=?",
-      ).pluck();
-      const deleteKnn = this.db.prepare("DELETE FROM temp.vector_authorized_knn WHERE rowid=?");
-      const deleteMap = this.db.prepare("DELETE FROM vector_ranked_native_rows WHERE event_id=?");
-      for (const eventId of removed) {
-        for (const rowid of rowids.all(eventId) as number[]) deleteKnn.run(rowid);
-        deleteMap.run(eventId);
-      }
-      this.db.prepare("DELETE FROM vector_authorized").run();
-      this.db.prepare(`
-        INSERT INTO vector_authorized (event_id, content_hash, body_length)
-        SELECT event_id, content_hash, body_length FROM vector_authorized_next
-      `).run();
-      this.db.prepare(`
-        INSERT INTO temp.vector_authorized_knn (rowid, embedding)
-        SELECT ch.rowid, ch.vector
-        FROM vector_authorized a
-        JOIN coverage c
-          ON c.org_id = ? AND c.generation = ?
-          AND c.event_id = a.event_id AND c.content_hash = a.content_hash
-        JOIN chunks ch
-          ON ch.org_id = c.org_id AND ch.generation = c.generation AND ch.event_id = c.event_id
-        WHERE NOT EXISTS (
-          SELECT 1 FROM vector_ranked_native_rows r WHERE r.rowid = ch.rowid
-        )
-      `).run(orgId, generation);
-      this.db.prepare(`
-        INSERT OR IGNORE INTO vector_ranked_native_rows (event_id, content_hash, rowid)
-        SELECT ch.event_id, a.content_hash, ch.rowid
-        FROM vector_authorized a
-        JOIN coverage c
-          ON c.org_id = ? AND c.generation = ?
-          AND c.event_id = a.event_id AND c.content_hash = a.content_hash
-        JOIN chunks ch
-          ON ch.org_id = c.org_id AND ch.generation = c.generation AND ch.event_id = c.event_id
-        WHERE NOT EXISTS (
-          SELECT 1 FROM vector_ranked_native_rows r WHERE r.rowid = ch.rowid
-        )
-      `).run(orgId, generation);
-    });
-  }
-
-  private rankedKnnReady(): boolean {
-    return Boolean(this.nativeVectors && this.db.prepare(
-      "SELECT 1 FROM sqlite_temp_master WHERE type='table' AND name='vector_authorized_knn'",
-    ).get());
-  }
-
-  private stageNativeAuthorized(
     dimensions: number,
+    previousSequence: number | null,
+  ): Promise<void> {
+    const added = withAttachedAuthority(this.db, authorityPath, () => {
+      const removed = this.db.prepare(`
+        SELECT a.event_id FROM vector_authorized a
+        WHERE NOT EXISTS (
+          SELECT 1 FROM regenic_auth.source_heads h
+          WHERE h.org_id = ? AND h.current_event_id = a.event_id
+        )
+      `).pluck().all(orgId) as string[];
+      for (const eventId of removed) {
+        this.removeNativeAuthorizedEvent(orgId, generation, eventId);
+        this.db.prepare("DELETE FROM vector_ranked_native_rows WHERE event_id=?").run(eventId);
+        this.db.prepare("DELETE FROM vector_authorized WHERE event_id=?").run(eventId);
+      }
+      this.db.prepare("DELETE FROM vector_head_tail").run();
+      if (previousSequence == null) {
+        this.db.prepare(`
+          INSERT INTO vector_head_tail(event_id)
+          SELECT DISTINCT h.current_event_id
+          FROM regenic_auth.source_heads h
+          WHERE h.org_id = ?
+            AND NOT EXISTS (
+              SELECT 1 FROM vector_authorized a WHERE a.event_id = h.current_event_id
+            )
+        `).run(orgId);
+      } else {
+        this.db.prepare(`
+          INSERT INTO vector_head_tail(event_id)
+          ${authorityEventsAfterSql()}
+        `).run(orgId, previousSequence);
+      }
+      return this.db.prepare(`
+        SELECT DISTINCT e.id AS event_id, e.content_hash AS content_hash
+        ${authorityHeadQualifyFrom(where.sql, "vector_head_tail")}
+      `).all(...where.params) as Array<{ event_id: string; content_hash: string }>;
+    });
+    for (const key of added) {
+      const current = this.db.prepare(
+        "SELECT content_hash FROM vector_authorized WHERE event_id=?",
+      ).get(key.event_id) as { content_hash: string } | undefined;
+      if (current?.content_hash === key.content_hash) continue;
+      if (current) this.removeNativeAuthorizedEvent(orgId, generation, key.event_id);
+      this.db.prepare(`
+        INSERT INTO vector_authorized (event_id, content_hash, body_length) VALUES (?, ?, NULL)
+        ON CONFLICT(event_id) DO UPDATE SET
+          content_hash = excluded.content_hash,
+          body_length = NULL
+      `).run(key.event_id, key.content_hash);
+      this.refreshAuthorizedEvent(orgId, generation, {
+        event_id: key.event_id,
+        content_hash: key.content_hash,
+      }, dimensions);
+    }
+  }
+
+  private rankedScope(): {
+    org_id: string;
+    generation: string;
+    filter_key: string;
+    scope_key: string;
+    dimensions: number;
+    native_chunk_count: number;
+    head_sequence: number | null;
+    head_count: number | null;
+  } | undefined {
+    return this.db.prepare(`
+      SELECT org_id, generation, filter_key, scope_key, dimensions, native_chunk_count,
+        head_sequence, head_count
+      FROM vector_ranked_scope WHERE singleton=1
+    `).get() as {
+      org_id: string;
+      generation: string;
+      filter_key: string;
+      scope_key: string;
+      dimensions: number;
+      native_chunk_count: number;
+      head_sequence: number | null;
+      head_count: number | null;
+    } | undefined;
+  }
+
+  private saveRankedScope(
     orgId: string,
     generation: string,
-  ): number {
-    if (!this.nativeVectors) return 0;
+    filterKey: string,
+    scopeKey: string,
+    dimensions: number,
+    nativeChunkCount: number,
+    marker: { sequence: number | null; count: number },
+  ): void {
+    this.db.prepare(`
+      INSERT INTO vector_ranked_scope(
+        singleton, org_id, generation, filter_key, scope_key, dimensions, native_chunk_count,
+        head_sequence, head_count
+      ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(singleton) DO UPDATE SET
+        org_id=excluded.org_id,
+        generation=excluded.generation,
+        filter_key=excluded.filter_key,
+        scope_key=excluded.scope_key,
+        dimensions=excluded.dimensions,
+        native_chunk_count=excluded.native_chunk_count,
+        head_sequence=excluded.head_sequence,
+        head_count=excluded.head_count
+    `).run(
+      orgId, generation, filterKey, scopeKey, dimensions, nativeChunkCount,
+      marker.sequence, marker.count,
+    );
+  }
+
+  private fillJsAuthorization(authorized: ContextVectorAuthorizationKey[]): void {
     this.db.exec(`
-      DROP TABLE IF EXISTS temp.vector_authorized_knn;
-      DELETE FROM vector_authorized_native_rows;
-      CREATE VIRTUAL TABLE temp.vector_authorized_knn USING vec0(
-        embedding float[${dimensions}] distance_metric=cosine
-      );
+      CREATE TEMP TABLE IF NOT EXISTS vector_js_authorized (
+        event_id TEXT PRIMARY KEY,
+        content_hash TEXT NOT NULL,
+        body_length INTEGER
+      ) WITHOUT ROWID;
+      DELETE FROM vector_js_authorized;
     `);
-    this.db.prepare(`
-      INSERT INTO temp.vector_authorized_knn (rowid,embedding)
-      SELECT ch.rowid,ch.vector
+    const insert = this.db.prepare(
+      "INSERT INTO vector_js_authorized (event_id, content_hash, body_length) VALUES (?, ?, ?)",
+    );
+    const seen = new Set<string>();
+    for (const key of authorized) {
+      validateAuthorizationKey(key);
+      if (seen.has(key.event_id)) throw new Error("Invalid vector authorization key");
+      seen.add(key.event_id);
+      insert.run(key.event_id, key.content_hash, key.body_length ?? null);
+    }
+  }
+
+  private static readonly knnBackfillBatch = 1024;
+
+  private yieldEventLoop(): Promise<void> {
+    return new Promise((resolve) => { setImmediate(resolve); });
+  }
+
+  private authorizedKnnReady(
+    input: Parameters<ContextVectorIndex["matchAuthorized"]>[0],
+    dimensions: number,
+  ): boolean {
+    if (!this.nativeVectors || !this.nativeKnnPartitionsReady()) return false;
+    if (this.knnDimensions() !== dimensions) return false;
+    const state = this.vectorAuthorizationState(input);
+    if (!state) return false;
+    return state.native_chunk_count === this.nativeAuthorizedChunkCount();
+  }
+
+  private async ensureAuthorizedKnn(
+    input: Parameters<ContextVectorIndex["matchAuthorized"]>[0],
+    dimensions: number,
+  ): Promise<"rebuilt" | "reused" | "delta"> {
+    if (this.authorizedKnnReady(input, dimensions)) return "reused";
+    if (this.knnMaintenance) {
+      await this.knnMaintenance;
+      return this.ensureAuthorizedKnn(input, dimensions);
+    }
+    let kind: "rebuilt" | "delta" = "rebuilt";
+    const work = (async () => {
+      kind = await this.maintainAuthorizedKnn(input, dimensions);
+    })();
+    this.knnMaintenance = work;
+    try {
+      await work;
+    } finally {
+      if (this.knnMaintenance === work) this.knnMaintenance = null;
+    }
+    if (!this.authorizedKnnReady(input, dimensions)) return this.ensureAuthorizedKnn(input, dimensions);
+    return kind;
+  }
+
+  private async maintainAuthorizedKnn(
+    input: Parameters<ContextVectorIndex["matchAuthorized"]>[0],
+    dimensions: number,
+  ): Promise<"rebuilt" | "delta"> {
+    if (this.tryApplyAuthorizationDelta(input, dimensions)) return "delta";
+    await this.rebuildAuthorizedKnn(input, dimensions);
+    return "rebuilt";
+  }
+
+  private tryApplyAuthorizationDelta(
+    input: Parameters<ContextVectorIndex["matchAuthorized"]>[0],
+    dimensions: number,
+  ): boolean {
+    if (!input.authorization_delta || !this.nativeKnnPartitionsReady()) return false;
+    if (this.knnDimensions() !== dimensions) return false;
+    const state = this.db.transaction(() => this.applyVectorAuthorizationDelta(input, dimensions))();
+    return state !== null;
+  }
+
+  private async rebuildAuthorizedKnn(
+    input: Parameters<ContextVectorIndex["matchAuthorized"]>[0],
+    dimensions: number,
+  ): Promise<void> {
+    const seen = new Set<string>();
+    for (const key of input.authorized) {
+      validateAuthorizationKey(key);
+      if (seen.has(key.event_id)) throw new Error("Invalid vector authorization key");
+      seen.add(key.event_id);
+    }
+    const authorizationAccumulator = contextVectorAuthorizationAccumulator(input.authorized);
+    if (
+      input.authorization_hash !== contextVectorAuthorizationHashFromAccumulator(
+        input.authorized.length,
+        authorizationAccumulator,
+      )
+      || (
+        input.authorization_accumulator !== undefined
+        && input.authorization_accumulator !== authorizationAccumulator
+      )
+    ) {
+      throw new Error("Invalid vector authorization hash or accumulator");
+    }
+    const projectionRevision = this.projectionRevision(input.org_id, input.generation);
+    this.db.transaction(() => {
+      this.invalidateVectorAuthorization();
+    }).immediate();
+    const authorize = this.db.prepare(
+      "INSERT INTO vector_authorized (event_id, content_hash, body_length) VALUES (?, ?, ?)",
+    );
+    for (let offset = 0; offset < input.authorized.length; offset += SqliteContextVectorIndex.knnBackfillBatch) {
+      const batch = input.authorized.slice(offset, offset + SqliteContextVectorIndex.knnBackfillBatch);
+      this.db.transaction(() => {
+        for (const key of batch) authorize.run(key.event_id, key.content_hash, key.body_length ?? null);
+      })();
+      await this.yieldEventLoop();
+    }
+    const uncovered = this.db.prepare(`
+      SELECT a.event_id,a.content_hash
       FROM vector_authorized a
-      JOIN coverage c
+      LEFT JOIN coverage c
         ON c.org_id=? AND c.generation=?
         AND c.event_id=a.event_id AND c.content_hash=a.content_hash
+      LEFT JOIN source_heads h
+        ON h.org_id=c.org_id AND h.source=c.source
+        AND h.external_id=c.external_id AND h.event_id=c.event_id
+      WHERE c.event_id IS NULL OR h.event_id IS NULL
+      ORDER BY a.event_id
+    `).all(input.org_id, input.generation) as Array<{ event_id: string; content_hash: string }>;
+    this.db.transaction(() => {
+      const saveUncovered = this.db.prepare(
+        "INSERT INTO vector_uncovered (event_id,content_hash) VALUES (?,?)",
+      );
+      for (const key of uncovered) saveUncovered.run(key.event_id, key.content_hash);
+      this.stageVectorSkipped(input.org_id, input.generation);
+      for (const partition of NATIVE_KNN_PARTITIONS) this.createNativeKnnTable(partition, dimensions);
+      this.db.prepare(`
+        INSERT INTO vector_knn_meta(singleton, dimensions) VALUES (1, ?)
+        ON CONFLICT(singleton) DO UPDATE SET dimensions=excluded.dimensions
+      `).run(dimensions);
+    }).immediate();
+    const coveredCount = input.authorized.length - uncovered.length;
+    if (coveredCount > 0) await this.backfillAuthorizedKnn(input.org_id, input.generation);
+    const nativeChunkCount = this.nativeAuthorizedChunkCount();
+    this.db.prepare(`INSERT INTO vector_authorization_state (
+      singleton,org_id,generation,authorization_hash,authorization_accumulator,authorized_count,
+      covered_count,native_chunk_count,projection_revision
+    ) VALUES (1,?,?,?,?,?,?,?,?)`).run(
+      input.org_id,
+      input.generation,
+      input.authorization_hash,
+      authorizationAccumulator,
+      input.authorized.length,
+      coveredCount,
+      nativeChunkCount,
+      projectionRevision,
+    );
+  }
+
+  private async backfillAuthorizedKnn(orgId: string, generation: string): Promise<void> {
+    const batch = SqliteContextVectorIndex.knnBackfillBatch;
+    const coveredChunks = `
+      FROM chunks ch
+      JOIN coverage c
+        ON c.org_id=ch.org_id AND c.generation=ch.generation AND c.event_id=ch.event_id
       JOIN source_heads h
         ON h.org_id=c.org_id AND h.source=c.source
         AND h.external_id=c.external_id AND h.event_id=c.event_id
-      JOIN chunks ch
-        ON ch.org_id=c.org_id AND ch.generation=c.generation
-        AND ch.event_id=c.event_id
-      ORDER BY ch.rowid
-    `).run(orgId, generation);
-    this.db.prepare(`
-      INSERT INTO vector_authorized_native_rows(event_id,rowid)
-      SELECT ch.event_id,ch.rowid
-      FROM vector_authorized a
-      JOIN coverage c
-        ON c.org_id=? AND c.generation=?
-        AND c.event_id=a.event_id AND c.content_hash=a.content_hash
-      JOIN source_heads h
-        ON h.org_id=c.org_id AND h.source=c.source
-        AND h.external_id=c.external_id AND h.event_id=c.event_id
-      JOIN chunks ch
-        ON ch.org_id=c.org_id AND ch.generation=c.generation
-        AND ch.event_id=c.event_id
-      ORDER BY ch.event_id,ch.rowid
-    `).run(orgId, generation);
-    return this.nativeAuthorizedChunkCount();
+      JOIN vector_authorized a
+        ON a.event_id=c.event_id AND a.content_hash=c.content_hash
+      WHERE ch.org_id=? AND ch.generation=?
+    `;
+    const fillFirst = this.db.prepare(`
+      INSERT INTO vector_knn_backfill_batch(event_id, ordinal, chunk_rowid)
+      SELECT ch.event_id, ch.ordinal, ch.rowid
+      ${coveredChunks}
+      ORDER BY ch.event_id, ch.ordinal
+      LIMIT ${batch}
+    `);
+    const fillNext = this.db.prepare(`
+      INSERT INTO vector_knn_backfill_batch(event_id, ordinal, chunk_rowid)
+      SELECT ch.event_id, ch.ordinal, ch.rowid
+      ${coveredChunks}
+        AND (ch.event_id, ch.ordinal) > (?, ?)
+      ORDER BY ch.event_id, ch.ordinal
+      LIMIT ${batch}
+    `);
+    const clearBatch = this.db.prepare("DELETE FROM vector_knn_backfill_batch");
+    const batchCount = this.db.prepare(
+      "SELECT count(*) FROM vector_knn_backfill_batch",
+    ).pluck();
+    const batchTail = this.db.prepare(`
+      SELECT event_id, ordinal
+      FROM vector_knn_backfill_batch
+      ORDER BY event_id DESC, ordinal DESC
+      LIMIT 1
+    `);
+    const indexedChunks = `
+      FROM vector_knn_backfill_batch b
+      JOIN chunks ch ON ch.rowid = b.chunk_rowid
+      JOIN vector_authorized a ON a.event_id = ch.event_id
+    `;
+    const insertMessage = this.db.prepare(`
+      INSERT INTO vector_authorized_knn_messages(rowid, embedding)
+      SELECT ch.rowid, ch.vector
+      ${indexedChunks}
+      WHERE ch.origin_json IS NULL
+        AND (a.body_length IS NULL OR ch."end" <= a.body_length)
+    `);
+    const insertFile = this.db.prepare(`
+      INSERT INTO vector_authorized_knn_files(rowid, embedding)
+      SELECT ch.rowid, ch.vector
+      ${indexedChunks}
+      WHERE ch.origin_json IS NOT NULL
+    `);
+    const insertRest = this.db.prepare(`
+      INSERT INTO vector_authorized_knn_rest(rowid, embedding)
+      SELECT ch.rowid, ch.vector
+      ${indexedChunks}
+      WHERE ch.origin_json IS NULL
+        AND a.body_length IS NOT NULL
+        AND ch."end" > a.body_length
+    `);
+    const insertRows = this.db.prepare(`
+      INSERT INTO vector_authorized_native_rows(event_id, rowid)
+      SELECT ch.event_id, ch.rowid
+      ${indexedChunks}
+    `);
+    let cursor: { event_id: string; ordinal: number } | undefined;
+    for (;;) {
+      const filled = this.db.transaction(() => {
+        clearBatch.run();
+        if (cursor) fillNext.run(orgId, generation, cursor.event_id, cursor.ordinal);
+        else fillFirst.run(orgId, generation);
+        const count = batchCount.get() as number;
+        if (count === 0) return 0;
+        insertMessage.run();
+        insertFile.run();
+        insertRest.run();
+        insertRows.run();
+        return count;
+      })();
+      if (filled === 0) return;
+      const next = batchTail.get() as { event_id: string; ordinal: number } | undefined;
+      if (
+        !next
+        || (
+          cursor
+          && next.event_id === cursor.event_id
+          && next.ordinal === cursor.ordinal
+        )
+      ) {
+        throw new Error("vector backfill cursor did not advance");
+      }
+      cursor = next;
+      await this.yieldEventLoop();
+    }
   }
 
   private stageVectorSkipped(orgId: string, generation: string): void {
@@ -2074,44 +2493,112 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
     `).run(orgId, generation);
   }
 
+  private rankedNativeChunkCount(): number {
+    return this.nativeAuthorizedChunkCount();
+  }
+
   private nativeAuthorizedChunkCount(): number {
-    if (
-      !this.nativeVectors
-      || !this.db.prepare(
-        "SELECT 1 FROM sqlite_temp_master WHERE type='table' AND name='vector_authorized_knn'",
-      ).get()
-    ) {
-      return 0;
+    if (!this.nativeVectors || !this.nativeKnnPartitionsReady()) return 0;
+    return NATIVE_KNN_PARTITIONS.reduce((sum, partition) => sum + this.nativeKnnCount(partition), 0);
+  }
+
+  private nativeKnnPartitionsReady(): boolean {
+    return NATIVE_KNN_PARTITIONS.every((partition) => this.mainTableExists(partition));
+  }
+
+  private mainTableExists(name: string): boolean {
+    return Boolean(this.db.prepare(
+      "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+    ).get(name));
+  }
+
+  private knnDimensions(): number | undefined {
+    return this.db.prepare(
+      "SELECT dimensions FROM vector_knn_meta WHERE singleton=1",
+    ).pluck().get() as number | undefined;
+  }
+
+  private tempTableExists(name: string): boolean {
+    return Boolean(this.db.prepare(
+      "SELECT 1 FROM sqlite_temp_master WHERE type='table' AND name=?",
+    ).get(name));
+  }
+
+  private nativeKnnCount(partition: NativeKnnPartition): number {
+    return this.db.prepare(`SELECT count(*) FROM ${partition}`).pluck().get() as number;
+  }
+
+  private createNativeKnnTable(partition: NativeKnnPartition, dimensions: number): void {
+    if (!Number.isSafeInteger(dimensions) || dimensions < 1) {
+      throw new ContextVectorUnavailableError("corrupt");
     }
-    return this.db.prepare("SELECT count(*) FROM temp.vector_authorized_knn")
-      .pluck().get() as number;
+    this.db.exec(`
+      DROP TABLE IF EXISTS ${partition};
+      CREATE VIRTUAL TABLE ${partition} USING vec0(
+        embedding float[${dimensions}] distance_metric=cosine
+      );
+    `);
+  }
+
+  private nativeKnnPartitionsFor(kind: string | undefined): NativeKnnPartition[] {
+    if (kind === "messages") return ["vector_authorized_knn_messages"];
+    if (kind === "files") return ["vector_authorized_knn_files"];
+    return [...NATIVE_KNN_PARTITIONS];
   }
 
   private nativeAuthorizedRows(
     input: Parameters<ContextVectorIndex["matchAuthorized"]>[0],
-    authorizedChunks: number,
-  ): { rows: AuthorizedChunkRow[]; candidateChunks: number } {
+  ): { rows: AuthorizedChunkRow[]; candidateChunks: number } | undefined {
+    if (!this.nativeKnnPartitionsReady()) return undefined;
+    const partitions = this.nativeKnnPartitionsFor(input.search_kind);
+    const counts = partitions.map((partition) => this.nativeKnnCount(partition));
+    const total = counts.reduce((sum, count) => sum + count, 0);
+    if (total < 1) return { rows: [], candidateChunks: 0 };
     const query = vectorBuffer(input.query_vector);
-    const statement = this.db.prepare(`
+    const statements = partitions.map((partition) => this.db.prepare(`
       SELECT ch.event_id,v.distance
-      FROM temp.vector_authorized_knn v
+      FROM ${partition} v
       JOIN chunks ch ON ch.rowid=v.rowid
       WHERE v.embedding MATCH ? AND k=?
       ORDER BY v.distance,ch.event_id
-    `);
-    let candidateLimit = Math.min(
-      authorizedChunks,
-      Math.max(input.limit * 4, 100),
-    );
+    `));
+    let candidateLimit = Math.min(total, Math.max(input.limit * 4, 100));
     let candidates: NativeVectorCandidateRow[] = [];
     let selectedEvents: string[] = [];
     while (candidateLimit > 0) {
-      candidates = statement.all(query, candidateLimit) as NativeVectorCandidateRow[];
-      const best = new Map<string, number>();
+      candidates = [];
+      const unseenBounds: number[] = [];
+      let fullyScanned = true;
+      for (let index = 0; index < partitions.length; index += 1) {
+        const count = counts[index];
+        if (count < 1) continue;
+        const window = Math.min(candidateLimit, count);
+        const rows = statements[index].all(query, window) as NativeVectorCandidateRow[];
+        if (rows.length < 1) throw new ContextVectorUnavailableError("corrupt");
+        if (rows.length < window) {
+          candidates.push(...rows);
+          continue;
+        }
+        for (const candidate of rows) {
+          if (!Number.isFinite(candidate.distance) || candidate.distance < 0 || candidate.distance > 2) {
+            throw new ContextVectorUnavailableError("corrupt");
+          }
+          candidates.push(candidate);
+        }
+        if (window < count) {
+          fullyScanned = false;
+          const tail = rows.at(-1)?.distance;
+          if (tail === undefined) throw new ContextVectorUnavailableError("corrupt");
+          unseenBounds.push(tail);
+        }
+      }
       for (const candidate of candidates) {
         if (!Number.isFinite(candidate.distance) || candidate.distance < 0 || candidate.distance > 2) {
           throw new ContextVectorUnavailableError("corrupt");
         }
+      }
+      const best = new Map<string, number>();
+      for (const candidate of candidates) {
         const previous = best.get(candidate.event_id);
         if (previous === undefined || candidate.distance < previous) {
           best.set(candidate.event_id, candidate.distance);
@@ -2121,19 +2608,21 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
         left[1] - right[1] || compare(left[0], right[0]));
       selectedEvents = ranked.slice(0, input.limit).map(([eventId]) => eventId);
       const boundary = ranked[input.limit - 1]?.[1];
-      const tail = candidates.at(-1)?.distance;
+      const unseenBound = unseenBounds.length ? Math.min(...unseenBounds) : undefined;
       if (
-        candidateLimit >= authorizedChunks
+        fullyScanned
         || (
           selectedEvents.length === input.limit
           && boundary !== undefined
-          && tail !== undefined
-          && boundary < tail
+          && unseenBound !== undefined
+          && boundary < unseenBound
         )
       ) {
         break;
       }
-      candidateLimit = Math.min(authorizedChunks, candidateLimit * 2);
+      const next = Math.min(total, candidateLimit * 2);
+      if (next === candidateLimit) break;
+      candidateLimit = next;
     }
     this.db.exec(`
       CREATE TEMP TABLE IF NOT EXISTS vector_native_candidate_events (
@@ -2165,9 +2654,13 @@ export class SqliteContextVectorIndex implements ContextVectorIndex, ContextVect
   }
 
   private invalidateVectorAuthorization(): void {
+    const partitions = NATIVE_KNN_PARTITIONS.map((partition) => `DROP TABLE IF EXISTS ${partition};`).join("\n");
     this.db.exec(`
       DROP TABLE IF EXISTS temp.vector_authorized_knn;
+      ${partitions}
       DROP TABLE IF EXISTS temp.vector_native_candidate_events;
+      DELETE FROM vector_knn_meta;
+      DELETE FROM vector_ranked_scope;
       DELETE FROM vector_authorized_native_rows;
       DELETE FROM vector_ranked_native_rows;
     `);
@@ -2338,7 +2831,7 @@ function lineageFor(rows: ChangedAuthorityChain[], headId: string): string[] | u
   return lineage;
 }
 
-function withAttachedAuthority(db: Database.Database, path: string, run: () => void): void {
+function withAttachedAuthority<T>(db: Database.Database, path: string, run: () => T): T {
   if (!path || path === ":memory:" || path.includes("\0")) {
     throw new Error("Authority database path cannot be attached");
   }
@@ -2346,7 +2839,7 @@ function withAttachedAuthority(db: Database.Database, path: string, run: () => v
   if (attached) db.exec("DETACH DATABASE regenic_auth");
   db.prepare("ATTACH DATABASE ? AS regenic_auth").run(path);
   try {
-    run();
+    return run();
   } finally {
     db.exec("DETACH DATABASE regenic_auth");
   }

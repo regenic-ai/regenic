@@ -80,19 +80,23 @@ Existing snapshots retain their original profile.
 Lexical SQL remains chunked; vector retrieval retains the global top-k rather
 than truncating the authorization set. Retrieval trace counts cover the full
 authorized universe independently of bundle item budgets. Broad, unfiltered
-queries still enumerate authorized metadata, and exact vector search still
-scans covered vectors on paths with an explicit message/file filter; this is
-not an ANN index or constant-time retrieval.
+queries still enumerate authorized metadata. Exact vector search keeps a
+stable top-k by widening the native KNN window; this is not an ANN index or
+constant-time retrieval.
 
-The vector sidecar reuses a staged authorization snapshot only while its
-organization, generation, authorization hash/count, and projection remain
-unchanged. It returns compact coverage instead of materializing every covered
-key. In the synthetic two-dimensional million-Event isolation benchmark this
-first reduced repeated authorized vector lookup from 14.81 seconds to 8.49
-seconds (42.7%). The unfiltered semantic route now also copies only covered
-authorized chunks into a connection-local `sqlite-vec` table and uses native
-cosine KNN to select a small Event candidate set. Complete chunks for those
-Events are then validated and reranked by the existing exact implementation.
+The vector sidecar keeps the authorized exact index in the database. Covered chunks
+live in three persistent `sqlite-vec` tables split by message body, file attachment,
+and any remaining body-length overflow. Those tables survive process restart.
+Message and file searches query only their partition. An unfiltered or "all"
+search merges the partitions. A search runs `MATCH … AND k` and does not copy
+vectors into a connection-local table. Authorization changes insert or delete the
+affected events. A commit that does not change head cardinality or the event-log
+sequence does not reread the authority database. After the process starts listening, an empty ordinary-app index
+backfills in batches and yields the event loop between batches, so a health check
+is not stuck behind one full-table copy. A search that arrives during that build
+waits for the same run and then queries it. Native cosine KNN then selects a small Event candidate set, and
+the existing exact implementation validates and reranks the complete chunks for
+those Events.
 The KNN window doubles across Event-distance ties, up to a full scan, so stable
 global top-k behavior is preserved rather than approximated.
 
@@ -104,8 +108,9 @@ authorization/native staging took 16.69 seconds. Process RSS after staging was
 1,057.48 MiB, 30.61 MiB above the preceding legacy measurement. These figures exclude
 Authority enumeration, query embedding, and answer generation. This is
 authorization-scoped **exact KNN acceleration**, not ANN: unauthorized vectors
-never enter the temporary table or candidate generation. Message/file-filtered
-searches keep the existing exact filtered path. Projection writes and lifecycle
+never enter the persistent vec0 tables, candidate generation, or ranking. Message and file
+filters select their own partition instead of scanning every covered vector.
+Projection writes and lifecycle
 reconciliation now update an active authorization projection incrementally.
 The retriever binds additions and removals to the previous and current
 authorization states with a 256-bit modular accumulator. The sidecar verifies

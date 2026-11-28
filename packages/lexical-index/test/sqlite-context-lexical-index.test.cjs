@@ -437,7 +437,21 @@ describe("SQLite Context lexical index", () => {
     });
     assert.deepEqual(refreshed.matched, []);
     assert.equal(refreshed.authorized_count, 1);
+    const unchanged = await index.matchRanked({
+      org_id: "example-org", query: "alpha", limit: 10,
+      authority_path: authorityPath, stamp: "1:2",
+    });
+    assert.deepEqual(unchanged.matched, []);
+    assert.equal(unchanged.authorized_count, 1);
     index.close();
+    const reopened = new SqliteContextLexicalIndex(join(dir, "lexical.db"));
+    const persisted = await reopened.matchRanked({
+      org_id: "example-org", query: "alpha", limit: 10,
+      authority_path: authorityPath, stamp: "1:2",
+    });
+    assert.deepEqual(persisted.matched, []);
+    assert.equal(persisted.authorized_count, 1);
+    reopened.close();
     authority.close();
   });
 });

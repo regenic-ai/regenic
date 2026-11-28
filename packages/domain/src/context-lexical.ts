@@ -78,6 +78,8 @@ export interface ContextLexicalIndex {
    * Rank authorized current heads inside FTS. The caller does not pass the key list:
    * the index attaches the authority file and applies the head predicate itself.
    */
+  /** Load the ranked head set before a search. Startup and search share one run. */
+  prepareRanked?(input: import("./search-head-filter").RankedHeadQuery): Promise<void>;
   matchRanked?(
     input: import("./search-head-filter").RankedHeadQuery & { query: string; limit: number },
   ): Promise<RankedLexicalMatchResult>;

@@ -13,6 +13,7 @@ import {
   type BackgroundLeaderLease,
 } from "./background-leader";
 import { PersonalConnectorService } from "./personal-connector.service";
+import { PersonalContextService } from "./personal-context.service";
 import { PersonalExecutorService } from "./personal-executor.service";
 import { PersonalInboxService } from "./personal-inbox.service";
 import { PersonalPluginService } from "./personal-plugin.service";
@@ -37,6 +38,7 @@ export function startPersonalBackgroundWork(
   markBackgroundListen();
   app.get(KernelRuntimeService).startAfterListen();
   app.get(PersonalRuntimeService).startAfterListen();
+  app.get(PersonalContextService).startAfterListen();
   if (!shouldStartBackgroundWork()) {
     return idleLeader();
   }

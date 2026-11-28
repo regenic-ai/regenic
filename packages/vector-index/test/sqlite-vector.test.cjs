@@ -1,4 +1,5 @@
 const assert = require("node:assert/strict");
+const { readFileSync } = require("node:fs");
 const { mkdtemp, rm } = require("node:fs/promises");
 const { tmpdir } = require("node:os");
 const { join } = require("node:path");
@@ -372,6 +373,66 @@ describe("SQLite vector projection and independent durable jobs", () => {
     assert.deepEqual((await query(f.index, authorized, { limit: 1, query: "other", search_kind: "files" })).matched.map((hit) => hit.event_id), ["file"]);
   });
 
+  it("runs message, file, and all searches through partitioned native KNN", async (t) => {
+    const f = await fixture(t);
+    await reconcile(f.index, [head("file"), head("message"), head("both"), head("overflow")]);
+    for (const job of await claim(f.index)) {
+      if (job.event_id === "file") {
+        const value = chunk([1, 0]);
+        value.origin = { part_index: 1, content_hash: hash, mode: "text", start: 0, text: "xx" };
+        value.text_hash = createHash("sha256").update("xx").digest("hex");
+        await f.index.complete({ job, owner: "owner", now: at, chunks: [value] });
+      } else if (job.event_id === "message") {
+        await f.index.complete({ job, owner: "owner", now: at, chunks: [chunk([0.8, 0.6])] });
+      } else if (job.event_id === "overflow") {
+        await f.index.complete({ job, owner: "owner", now: at, chunks: [{ ...chunk([0.6, 0.8]), end: 4 }] });
+      } else {
+        const text = "nebula";
+        await f.index.complete({ job, owner: "owner", now: at, chunks: [
+          chunk([0, 1]),
+          {
+            ordinal: 1, start: 2, end: 2 + text.length, vector: [0.6, 0.8],
+            text_hash: createHash("sha256").update(text).digest("hex"),
+            origin: { part_index: 1, content_hash: hash, mode: "text", start: 0, text },
+          },
+        ] });
+      }
+    }
+    const authorized = [
+      { event_id: "file", content_hash: hash, body_length: 0 },
+      { event_id: "message", content_hash: hash, body_length: 2 },
+      { event_id: "both", content_hash: hash, body_length: 2 },
+      { event_id: "overflow", content_hash: hash, body_length: 2 },
+    ];
+    const authorization_hash = contextVectorAuthorizationHash(authorized);
+    const messages = await query(f.index, authorized, {
+      authorization_hash, search_kind: "messages", limit: 2, query: "other",
+    });
+    assert.equal(messages.acceleration.algorithm_version, "sqlite-vec-authorized-exact-v1");
+    assert.equal(messages.acceleration.authorization_update, "rebuilt");
+    assert.deepEqual(messages.matched.map((hit) => hit.event_id), ["message", "both"]);
+    assert.ok(messages.matched.every((hit) => hit.search_matches === undefined));
+    const files = await query(f.index, authorized, {
+      authorization_hash, search_kind: "files", limit: 1, query: "other",
+    });
+    assert.equal(files.acceleration.authorization_update, "reused");
+    assert.deepEqual(files.matched.map((hit) => hit.event_id), ["file"]);
+    const all = await query(f.index, authorized, {
+      authorization_hash, search_kind: "all", limit: 4, query: "nebula",
+    });
+    assert.equal(all.acceleration.authorized_chunks, 5);
+    assert.deepEqual(all.matched.map((hit) => hit.event_id), ["both", "file", "message", "overflow"]);
+    assert.equal(all.matched.find((hit) => hit.event_id === "both").search_matches.some((match) => match.lexical), true);
+    assert.equal(all.matched.find((hit) => hit.event_id === "overflow").search_matches, undefined);
+    f.reopen();
+    const reopened = await query(f.index, authorized, {
+      authorization_hash, search_kind: "all", limit: 4, query: "nebula",
+    });
+    assert.equal(reopened.acceleration.authorization_update, "reused");
+    assert.equal(reopened.acceleration.authorized_chunks, 5);
+    assert.deepEqual(reopened.matched.map((hit) => hit.event_id), ["both", "file", "message", "overflow"]);
+  });
+
   it("round-trips attachment provenance through fenced checkpoints and authorized completed reads", async (t) => {
     const f = await fixture(t);
     await reconcile(f.index, [head("origin")]);
@@ -618,7 +679,6 @@ describe("SQLite vector projection and independent durable jobs", () => {
       content_hash: contentHash,
     }));
     const authorization_hash = contextVectorAuthorizationHash(authorized);
-    const started = performance.now();
     const result = await index.matchAuthorized({
       org_id: "org",
       generation: scaleGeneration.id,
@@ -627,7 +687,6 @@ describe("SQLite vector projection and independent durable jobs", () => {
       query_vector: [1, ...Array.from({ length: scaleModel.dimensions - 1 }, () => 0)],
       limit: 100,
     });
-    const elapsed = performance.now() - started;
     assert.deepEqual(result.covered, []);
     assert.deepEqual(result.coverage, {
       authorization_hash,
@@ -647,7 +706,36 @@ describe("SQLite vector projection and independent durable jobs", () => {
       result.matched.slice(0, 3).map((value) => value.event_id),
       ["event-00000", "event-00001", "event-00002"],
     );
-    assert.ok(elapsed < 300, `authorized vector search took ${elapsed.toFixed(1)}ms`);
+    const pagePlan = index.db.prepare(`
+      EXPLAIN QUERY PLAN
+      SELECT ch.event_id, ch.ordinal, ch.rowid
+      FROM chunks ch
+      JOIN coverage c
+        ON c.org_id=ch.org_id AND c.generation=ch.generation AND c.event_id=ch.event_id
+      JOIN source_heads h
+        ON h.org_id=c.org_id AND h.source=c.source
+        AND h.external_id=c.external_id AND h.event_id=c.event_id
+      JOIN vector_authorized a
+        ON a.event_id=c.event_id AND a.content_hash=c.content_hash
+      WHERE ch.org_id=? AND ch.generation=?
+        AND (ch.event_id, ch.ordinal) > (?, ?)
+      ORDER BY ch.event_id, ch.ordinal
+      LIMIT 1024
+    `).all("org", scaleGeneration.id, "event-00000", 0).map((row) => row.detail).join("\n");
+    assert.match(pagePlan, /sqlite_autoindex_chunks_1/);
+    assert.match(pagePlan, /\(event_id,ordinal\)>\(\?,\?\)/);
+    assert.doesNotMatch(pagePlan, /TEMP B-TREE|SCAN ch/);
+    const readPlan = index.db.prepare(`
+      EXPLAIN QUERY PLAN
+      SELECT ch.rowid, ch.vector
+      FROM vector_knn_backfill_batch b
+      JOIN chunks ch ON ch.rowid = b.chunk_rowid
+    `).all().map((row) => row.detail).join("\n");
+    assert.match(readPlan, /INTEGER PRIMARY KEY/);
+    const implementation = readFileSync(join(__dirname, "../dist/index.js"), "utf8");
+    assert.match(implementation, /\(ch\.event_id, ch\.ordinal\) > \(\?, \?\)/);
+    assert.match(implementation, /JOIN chunks ch ON ch\.rowid = b\.chunk_rowid/);
+    assert.doesNotMatch(implementation, /ORDER BY ch\.rowid/);
     const reused = await index.matchAuthorized({
       org_id: "org",
       generation: scaleGeneration.id,
@@ -672,6 +760,59 @@ describe("SQLite vector projection and independent durable jobs", () => {
       }),
       /authorization hash/,
     );
+    const authorityPath = join(root, "authority.db");
+    const authority = new Database(authorityPath);
+    authority.exec(`
+      CREATE TABLE events (
+        id TEXT PRIMARY KEY, org_id TEXT NOT NULL, source TEXT NOT NULL, external_id TEXT NOT NULL,
+        operation TEXT NOT NULL, content_hash TEXT, parent_event_id TEXT, thread_id TEXT, actor_id TEXT,
+        required_scope_ids_json TEXT, occurred_at TEXT NOT NULL, ingested_at TEXT NOT NULL
+      );
+      CREATE TABLE source_heads (
+        org_id TEXT NOT NULL, source TEXT NOT NULL, external_id TEXT NOT NULL,
+        current_event_id TEXT NOT NULL, PRIMARY KEY (org_id, source, external_id)
+      );
+      CREATE TABLE blobs (content_hash TEXT PRIMARY KEY, media_type TEXT NOT NULL);
+    `);
+    authority.prepare("INSERT INTO blobs (content_hash, media_type) VALUES (?, 'text/plain')").run(contentHash);
+    const insertEvent = authority.prepare(`
+      INSERT INTO events (
+        id, org_id, source, external_id, operation, content_hash, thread_id, actor_id,
+        required_scope_ids_json, occurred_at, ingested_at
+      ) VALUES (?, 'org', 'synthetic', ?, 'create', ?, 'thread-1', 'actor-1', '["scope"]', '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z')
+    `);
+    const insertAuthorityHead = authority.prepare(`
+      INSERT INTO source_heads (org_id, source, external_id, current_event_id)
+      VALUES ('org', 'synthetic', ?, ?)
+    `);
+    authority.transaction(() => {
+      for (let value = 0; value < 4000; value += 1) {
+        const eventId = `event-${String(value).padStart(5, "0")}`;
+        insertEvent.run(eventId, eventId, contentHash);
+        insertAuthorityHead.run(eventId, eventId);
+      }
+    })();
+    const rankedQuery = {
+      org_id: "org",
+      generation: scaleGeneration.id,
+      authority_path: authorityPath,
+      stamp: "1:0",
+      query_vector: [1, ...Array.from({ length: scaleModel.dimensions - 1 }, () => 0)],
+      limit: 100,
+    };
+    await index.matchRanked(rankedQuery);
+    const started = performance.now();
+    const searched = await index.matchRanked(rankedQuery);
+    const elapsed = performance.now() - started;
+    authority.close();
+    assert.equal(searched.authorized_count, 4000);
+    assert.equal(searched.covered_count, 4000);
+    assert.equal(searched.matched.length, 100);
+    assert.deepEqual(
+      searched.matched.slice(0, 3).map((value) => value.event_id),
+      ["event-00000", "event-00001", "event-00002"],
+    );
+    assert.ok(elapsed < 300, `ranked vector search took ${elapsed.toFixed(1)}ms`);
     index.close();
     const corrupt = new Database(path);
     corrupt.prepare(
