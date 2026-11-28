@@ -1229,74 +1229,74 @@ describe("regenic-local", () => {
 
     const inbox = await run(["inbox", "--database", database, "--org", "local-owner"]);
 
-    assert.equal(inbox.length, 1);
-    assert.equal(inbox[0].event.external_id, "ask-1");
-    assert.equal(inbox[0].decision.disposition, "current_work");
-    assert.deepEqual(inbox[0].decision.reason_codes, ["actionable"]);
+    assert.equal(inbox.length, 2);
+    const item = inbox.find((row) => row.event.external_id === "ask-1");
+    assert.equal(item.decision.disposition, "current_work");
+    assert.deepEqual(item.decision.reason_codes, ["default_personal_attention"]);
     const triaged = await run([
       "inbox-triage", "--database", database, "--org", "local-owner",
-      "--event", inbox[0].event.id, "--disposition", "pending",
+      "--event", item.event.id, "--disposition", "pending",
     ]);
     assert.equal(triaged.disposition, "pending");
     assert.ok(triaged.reason_codes.includes("human_triage"));
     const acknowledged = await run([
       "inbox-ack", "--database", database, "--org", "local-owner",
-      "--event", inbox[0].event.id,
+      "--event", item.event.id,
     ]);
     assert.equal(acknowledged.last_read_external_id, "ask-1");
     assert.equal(acknowledged.last_read_at, "2026-08-12T23:00:00.000Z");
     const folded = await run([
       "inbox-fold", "--database", database, "--org", "local-owner",
-      "--event", inbox[0].event.id,
+      "--event", item.event.id,
     ]);
     assert.equal(folded.hidden, true);
     assert.equal(folded.hidden_reason, "human");
     assert.equal(folded.visibility_version, 1);
     const unfolded = await run([
       "inbox-unfold", "--database", database, "--org", "local-owner",
-      "--event", inbox[0].event.id,
+      "--event", item.event.id,
     ]);
     assert.equal(unfolded.hidden, false);
     assert.equal(unfolded.hidden_reason, null);
     assert.equal(unfolded.visibility_version, 2);
     const pinned = await run([
       "inbox-pin", "--database", database, "--org", "local-owner",
-      "--event", inbox[0].event.id,
+      "--event", item.event.id,
     ]);
     assert.equal(pinned.pinned, true);
     const unpinned = await run([
       "inbox-unpin", "--database", database, "--org", "local-owner",
-      "--event", inbox[0].event.id,
+      "--event", item.event.id,
     ]);
     assert.equal(unpinned.pinned, false);
     const reset = await run([
       "inbox-triage-reset", "--database", database, "--blob-root", blobRoot,
-      "--org", "local-owner", "--event", inbox[0].event.id,
+      "--org", "local-owner", "--event", item.event.id,
     ]);
     assert.equal(reset.disposition, "current_work");
-    assert.deepEqual(reset.reason_codes, ["actionable"]);
+    assert.deepEqual(reset.reason_codes, ["default_personal_attention"]);
     const policyPath = join(root, "pending-policy.json");
     await writeFile(policyPath, JSON.stringify({
       version: 1,
       high_hint_disposition: "current_work",
-      actionable_disposition: "pending",
-      short_text_disposition: "pending",
-      default_disposition: "current_work",
+      actionable_disposition: "current_work",
+      short_text_disposition: "current_work",
+      default_disposition: "pending",
     }));
     await run([
       "dispatch-policy-set", "--database", database, "--org", "local-owner", "--policy", policyPath,
     ]);
     const reapplied = await run([
       "inbox-dispatch-reapply", "--database", database, "--blob-root", blobRoot,
-      "--org", "local-owner", "--event", inbox[0].event.id,
+      "--org", "local-owner", "--event", item.event.id,
     ]);
     assert.equal(reapplied.disposition, "pending");
-    assert.ok(reapplied.reason_codes.includes("policy_actionable"));
+    assert.ok(reapplied.reason_codes.includes("policy_default_personal_attention"));
     assert.ok(reapplied.reason_codes.includes("personal_dispatch_policy"));
-    assert.deepEqual(await run(["inbox", "--database", database, "--org", "local-owner"]), []);
+    assert.equal((await run(["inbox", "--database", database, "--org", "local-owner"])).length, 1);
     const pending = await run(["inbox-pending", "--database", database, "--org", "local-owner"]);
     assert.equal(pending.length, 1);
-    assert.equal(pending[0].event.id, inbox[0].event.id);
+    assert.equal(pending[0].event.id, item.event.id);
     assert.equal(pending[0].decision.disposition, "pending");
   });
 

@@ -129,7 +129,7 @@ describe("fillOpenSlots ordinary push observation", () => {
     await f.ingest("please approve this draft");
     await f.ingest("ordinary update without the condition");
     const pending = await f.ingest("aside");
-    assert.equal((await f.authority.getDisposition(pending)).disposition, "pending");
+    assert.equal((await f.authority.getDisposition(pending)).disposition, "current_work");
     await f.ingest("please approve release", { target: "another" });
     await f.dispatch.fillOpenSlots();
     assert.equal(f.starts.length, 0);
@@ -151,9 +151,9 @@ describe("fillOpenSlots ordinary push observation", () => {
     const f = await fixture(t, { match: { thread_id: "chat:room", text_contains: "[给客户]" } });
     const id = await f.ingest("[给客户]");
     const before = await f.authority.getDisposition(id);
-    assert.equal(before.disposition, "pending");
-    assert.deepEqual(before.reason_codes, ["needs_review"]);
-    assert.deepEqual(await f.authority.listInbox(ORG), []);
+    assert.equal(before.disposition, "current_work");
+    assert.deepEqual(before.reason_codes, ["default_personal_attention"]);
+    assert.equal((await f.authority.listInbox(ORG)).length, 1);
     await f.dispatch.fillOpenSlots();
     assert.equal(f.starts.length, 1);
     assert.equal(f.starts[0].work_item.head_event_id, id);
@@ -356,7 +356,7 @@ describe("fillOpenSlots ordinary push observation", () => {
     assert.equal(pref.hidden, true);
     assert.equal(pref.hidden_reason, "policy");
     const next = await f.ingest("[给客户]");
-    assert.equal((await f.authority.getDisposition(next)).disposition, "pending");
+    assert.equal((await f.authority.getDisposition(next)).disposition, "current_work");
     await f.dispatch.fillOpenSlots();
     assert.equal(f.starts.length, 2);
     await f.dispatch.fillOpenSlots();
@@ -369,7 +369,7 @@ describe("fillOpenSlots ordinary push observation", () => {
       hide_on_success: false,
     });
     const id = await f.ingest("[给客户]");
-    assert.equal((await f.authority.getDisposition(id)).disposition, "pending");
+    assert.equal((await f.authority.getDisposition(id)).disposition, "current_work");
     await f.dispatch.fillOpenSlots();
     const [run] = await f.authority.listWorkRuns(ORG);
     assert.equal(run.hide_on_success, false);

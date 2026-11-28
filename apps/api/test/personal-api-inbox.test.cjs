@@ -151,7 +151,7 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
       await fetch(`${origin}/v1/me/dispatch-policy`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ policy: { ...defaults, actionable_disposition: "pending" } }),
+        body: JSON.stringify({ policy: { ...defaults, default_disposition: "pending" } }),
       });
       const command = inboxCommand("api-dispatch-reapply-1");
       const request = () => fetch(`${origin}/v1/me/inbox/${eventId}/dispatch-policy/reapply`, {
@@ -162,7 +162,7 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
       const decision = await (await request()).json();
       const replay = await (await request()).json();
       assert.equal(decision.disposition, "pending");
-      assert.ok(decision.reason_codes.includes("policy_actionable"));
+      assert.ok(decision.reason_codes.includes("policy_default_personal_attention"));
       assert.ok(decision.reason_codes.includes("personal_dispatch_policy"));
       assert.deepEqual(replay, decision);
       assert.deepEqual(await (await fetch(`${origin}/v1/me/inbox`)).json(), []);
@@ -208,7 +208,7 @@ describe("personal /v1/me", { concurrency: 1 }, () => {
         })
       ).json();
       assert.equal(reset.disposition, "current_work");
-      assert.deepEqual(reset.reason_codes, ["actionable"]);
+      assert.deepEqual(reset.reason_codes, ["default_personal_attention"]);
       assert.equal((await (await fetch(`${origin}/v1/me/inbox`)).json()).length, 1);
     } finally {
       await app.close();

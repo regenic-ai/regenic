@@ -2114,7 +2114,18 @@ describe("sqlite read/write split", () => {
       });
       const service = new IngestionService(new FsBlobStore(join(root, "blobs")), store);
       const seed = createBatch();
-      seed.records[0].content[0].text = "ok";
+      seed.records[0].content = [
+        { role: "body", media_type: "text/plain", text: "ok" },
+        {
+          role: "metadata",
+          media_type: "application/vnd.regenic.surface+json",
+          text: JSON.stringify({
+            channel: "regenic",
+            kind: "assistant",
+            direction: "inbound",
+          }),
+        },
+      ];
       const created = await service.ingest(seed);
       assert.equal((await store.getDisposition(created.records[0].event_id)).disposition, "outside_current_work");
       assert.equal((await store.setConversationPolicyVisibility({

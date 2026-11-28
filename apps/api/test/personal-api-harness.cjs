@@ -99,16 +99,6 @@ async function ingestActionable(database, blobRoot) {
           },
         ],
       },
-      {
-        operation: "create",
-        source: "regenic",
-        external_id: "ack-1",
-        occurred_at: "2026-08-21T00:01:00.000Z",
-        actor: { id: "local-owner" },
-        scope: { id: "personal" },
-        type: "text",
-        content: [{ role: "body", media_type: "text/plain", text: "ok" }],
-      },
     ],
   });
   await authority.createInstallation({

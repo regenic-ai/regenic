@@ -114,13 +114,7 @@ export interface ArrangementInput {
   now?: string;
 }
 
-const NOISE_PATTERN =
-  /^(ok|okay|thanks|thx|ty|lol|lgtm|\+1|ha+|嗯+|好的|收到|谢谢|哈哈|👍|🙏)+[!！.。]*$/i;
-const ACTIONABLE_PATTERN =
-  /[?？]|please|can you|could you|need you|deadline|blocker|urgent|请(帮|看|确认|处理)|帮忙|截止|紧急|阻塞/i;
-
 export function arrangeMessage(input: ArrangementInput): ArrangementDecision {
-  const text = normalizeText(input.text);
   const decidedAt = input.now ?? new Date().toISOString();
   const policy = input.dispatch_policy
     ? validatePersonalDispatchPolicy(input.dispatch_policy)
@@ -142,10 +136,6 @@ export function arrangeMessage(input: ArrangementInput): ArrangementDecision {
     return decision(input, "current_work", ["task"], 0.88, decidedAt);
   }
 
-  if (isNoise(text)) {
-    return decision(input, "outside_current_work", ["noise"], 0, decidedAt);
-  }
-
   if (input.kind === "assistant") {
     return decision(
       input,
@@ -154,24 +144,6 @@ export function arrangeMessage(input: ArrangementInput): ArrangementDecision {
       0.25,
       decidedAt,
     );
-  }
-
-  if (isActionable(text)) {
-    return policyDecision(input, policy.actionable_disposition, "actionable", 0.85, decidedAt);
-  }
-
-  if (input.type === "thread_reply") {
-    return decision(
-      input,
-      "outside_current_work",
-      ["thread_reply_noise"],
-      0.15,
-      decidedAt,
-    );
-  }
-
-  if (text !== undefined && text.length < 8) {
-    return policyDecision(input, policy.short_text_disposition, "needs_review", 0.4, decidedAt);
   }
 
   return policyDecision(
@@ -193,11 +165,7 @@ function policyDecision(
   const defaultPolicy = DEFAULT_PERSONAL_DISPATCH_POLICY;
   const defaultDisposition = defaultReason === "weight_hint"
     ? defaultPolicy.high_hint_disposition
-    : defaultReason === "actionable"
-      ? defaultPolicy.actionable_disposition
-      : defaultReason === "needs_review"
-        ? defaultPolicy.short_text_disposition
-        : defaultPolicy.default_disposition;
+    : defaultPolicy.default_disposition;
   return decision(
     input,
     disposition,
@@ -223,22 +191,6 @@ function decision(
     score,
     decided_at: decidedAt,
   };
-}
-
-function normalizeText(text: string | undefined): string | undefined {
-  if (text === undefined) {
-    return undefined;
-  }
-  const normalized = text.replace(/\s+/g, " ").trim();
-  return normalized.length > 0 ? normalized : "";
-}
-
-function isNoise(text: string | undefined): boolean {
-  return text !== undefined && (text.length === 0 || NOISE_PATTERN.test(text));
-}
-
-function isActionable(text: string | undefined): boolean {
-  return text !== undefined && ACTIONABLE_PATTERN.test(text);
 }
 
 function isHighHint(hints: WeightHints | undefined): boolean {

@@ -569,7 +569,18 @@ describe("IngestionService", () => {
       operation: "revise",
       revision_id: "revision-current-work",
       type: "text",
-      content: [{ role: "body", media_type: "text/plain", text: "ok" }],
+      content: [
+        { role: "body", media_type: "text/plain", text: "ok" },
+        {
+          role: "metadata",
+          media_type: "application/vnd.regenic.surface+json",
+          text: JSON.stringify({
+            channel: "regenic",
+            kind: "assistant",
+            direction: "inbound",
+          }),
+        },
+      ],
     }));
     const revisedId = revised.records[0].event_id;
     assert.equal((await authorityStore.getDisposition(revisedId)).disposition,
@@ -1028,7 +1039,7 @@ describe("IngestionService", () => {
     for (const event of events) {
       const decision = await authorityStore.getDisposition(event.id);
       assert.equal(decision?.disposition, "current_work");
-      assert.deepEqual(decision?.reason_codes, ["actionable"]);
+      assert.deepEqual(decision?.reason_codes, ["default_personal_attention"]);
     }
   });
 
@@ -1066,11 +1077,15 @@ describe("IngestionService", () => {
       const item = await authorityStore.getWorkItemByThread("local-owner", "test-chat:room");
       assert.equal(item.recipe_id, recipe.id);
       const expected = await authorityStore.getDisposition(eventId);
-      assert.equal(expected.disposition, "pending");
+      assert.equal(expected.disposition, "current_work");
       if (humanPending) {
         const transition = await authorityStore.transitionDisposition({
           expected,
-          decision: { ...expected, reason_codes: [...expected.reason_codes, "human_triage"] },
+          decision: {
+            ...expected,
+            disposition: "pending",
+            reason_codes: [...expected.reason_codes, "human_triage"],
+          },
           command: { org_id: recipe.org_id, event_id: eventId, action: "triage",
             disposition: "pending", command_id: "human-pending", issued_at: now },
         });
@@ -1084,7 +1099,10 @@ describe("IngestionService", () => {
           status: "running", start_state: "pending", trigger_kind: "push",
           write_back_required: false, created_at: now, updated_at: now },
       }), !humanPending);
-      assert.equal((await authorityStore.getDisposition(eventId)).disposition, "pending");
+      assert.equal(
+        (await authorityStore.getDisposition(eventId)).disposition,
+        humanPending ? "pending" : "current_work",
+      );
     }
   });
 

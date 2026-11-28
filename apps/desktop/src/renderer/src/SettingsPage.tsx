@@ -463,8 +463,6 @@ export function SettingsPage({
               <div className="dispatch-rules">
                 {([
                   ["high_hint_disposition", "settings.dispatchHigh", "settings.dispatchHighHint"],
-                  ["actionable_disposition", "settings.dispatchActionable", "settings.dispatchActionableHint"],
-                  ["short_text_disposition", "settings.dispatchShort", "settings.dispatchShortHint"],
                   ["default_disposition", "settings.dispatchDefault", "settings.dispatchDefaultHint"],
                 ] as const).map(([field, label, hint]) => (
                   <div className="dispatch-rule" key={field}>
