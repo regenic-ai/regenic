@@ -14,6 +14,7 @@ export const STORE_LOCK_NAME = STORE_LOCK_FILE;
 export interface StoreLockHolder {
   pid: number;
   origin?: string;
+  sidecarPid?: number;
   updatedAt: string;
 }
 
@@ -87,7 +88,7 @@ export function storeLockHeldByOther(
 
 export function acquireStoreLock(
   dataRoot: string,
-  holder: { pid: number; origin?: string },
+  holder: { pid: number; origin?: string; sidecarPid?: number },
   io: StoreLockIo = {},
 ): StoreLockHolder {
   const inspected = inspectStoreLock(dataRoot, holder.pid, io);
@@ -97,6 +98,7 @@ export function acquireStoreLock(
   const lock: StoreLockHolder = {
     pid: holder.pid,
     ...(holder.origin ? { origin: holder.origin } : {}),
+    ...(holder.sidecarPid ? { sidecarPid: holder.sidecarPid } : {}),
     updatedAt: io.now?.() ?? new Date().toISOString(),
   };
   const file = storeLockPath(dataRoot);
@@ -124,21 +126,40 @@ export function releaseStoreLock(
   remove(file);
 }
 
+export function noteStoreLockSidecar(
+  dataRoot: string,
+  ourPid: number,
+  sidecarPid: number,
+  io: StoreLockIo = {},
+): void {
+  if (!Number.isInteger(sidecarPid) || sidecarPid <= 0) return;
+  const inspected = inspectStoreLock(dataRoot, ourPid, io);
+  if (inspected.state !== "ours") return;
+  acquireStoreLock(dataRoot, {
+    pid: ourPid,
+    ...(inspected.lock.origin ? { origin: inspected.lock.origin } : {}),
+    sidecarPid,
+  }, io);
+}
+
 function parseStoreLock(raw: string): StoreLockHolder | null {
   try {
     const parsed = JSON.parse(raw) as {
       pid?: unknown;
       origin?: unknown;
+      sidecarPid?: unknown;
       updatedAt?: unknown;
     };
     if (!Number.isInteger(parsed.pid) || Number(parsed.pid) <= 0) {
       return null;
     }
+    const sidecarPid = Number(parsed.sidecarPid);
     return {
       pid: Number(parsed.pid),
       ...(typeof parsed.origin === "string" && parsed.origin
         ? { origin: parsed.origin }
         : {}),
+      ...(Number.isInteger(sidecarPid) && sidecarPid > 0 ? { sidecarPid } : {}),
       updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : "",
     };
   } catch {

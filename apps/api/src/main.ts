@@ -2,6 +2,7 @@ import "./undici-process-guard";
 import "reflect-metadata";
 import { loadEnv } from "@regenic/config";
 import { createHttpApp, enablePersonalCors, listenHttpApp } from "./http-app";
+import { releaseListenPort, sidecarParentExited } from "./sidecar-shutdown";
 
 const SIDECAR_SHUTDOWN_TIMEOUT_MS = 5_000;
 
@@ -15,9 +16,11 @@ async function bootstrap() {
   const parentPid = Number(process.env.REGENIC_SIDECAR_PARENT_PID);
   if (Number.isSafeInteger(parentPid) && parentPid > 0) {
     const monitor = setInterval(() => {
-      if (process.ppid === parentPid) return;
+      if (!sidecarParentExited(process.ppid, parentPid)) return;
       clearInterval(monitor);
       void (async () => {
+        const server = app.getHttpServer() as { close: (callback: () => void) => void };
+        await releaseListenPort((callback) => server.close(callback));
         let timeout: ReturnType<typeof setTimeout> | undefined;
         const deadline = new Promise<never>((_resolve, reject) => {
           timeout = setTimeout(() => {
