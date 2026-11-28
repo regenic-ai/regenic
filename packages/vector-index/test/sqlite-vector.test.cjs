@@ -1,4 +1,5 @@
 const assert = require("node:assert/strict");
+const { readFileSync } = require("node:fs");
 const { mkdtemp, rm } = require("node:fs/promises");
 const { tmpdir } = require("node:os");
 const { join } = require("node:path");
@@ -708,6 +709,36 @@ describe("SQLite vector projection and independent durable jobs", () => {
       ["event-00000", "event-00001", "event-00002"],
     );
     assert.ok(elapsed < 300, `authorized vector search took ${elapsed.toFixed(1)}ms`);
+    const pagePlan = index.db.prepare(`
+      EXPLAIN QUERY PLAN
+      SELECT ch.event_id, ch.ordinal, ch.rowid
+      FROM chunks ch
+      JOIN coverage c
+        ON c.org_id=ch.org_id AND c.generation=ch.generation AND c.event_id=ch.event_id
+      JOIN source_heads h
+        ON h.org_id=c.org_id AND h.source=c.source
+        AND h.external_id=c.external_id AND h.event_id=c.event_id
+      JOIN vector_authorized a
+        ON a.event_id=c.event_id AND a.content_hash=c.content_hash
+      WHERE ch.org_id=? AND ch.generation=?
+        AND (ch.event_id, ch.ordinal) > (?, ?)
+      ORDER BY ch.event_id, ch.ordinal
+      LIMIT 1024
+    `).all("org", scaleGeneration.id, "event-00000", 0).map((row) => row.detail).join("\n");
+    assert.match(pagePlan, /sqlite_autoindex_chunks_1/);
+    assert.match(pagePlan, /\(event_id,ordinal\)>\(\?,\?\)/);
+    assert.doesNotMatch(pagePlan, /TEMP B-TREE|SCAN ch/);
+    const readPlan = index.db.prepare(`
+      EXPLAIN QUERY PLAN
+      SELECT ch.rowid, ch.vector
+      FROM vector_knn_backfill_batch b
+      JOIN chunks ch ON ch.rowid = b.chunk_rowid
+    `).all().map((row) => row.detail).join("\n");
+    assert.match(readPlan, /INTEGER PRIMARY KEY/);
+    const implementation = readFileSync(join(__dirname, "../dist/index.js"), "utf8");
+    assert.match(implementation, /\(ch\.event_id, ch\.ordinal\) > \(\?, \?\)/);
+    assert.match(implementation, /JOIN chunks ch ON ch\.rowid = b\.chunk_rowid/);
+    assert.doesNotMatch(implementation, /ORDER BY ch\.rowid/);
     const reused = await index.matchAuthorized({
       org_id: "org",
       generation: scaleGeneration.id,

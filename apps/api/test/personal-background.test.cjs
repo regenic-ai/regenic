@@ -108,7 +108,11 @@ describe("startPersonalBackgroundWork", { concurrency: 1 }, () => {
       lease: grantedLease(),
       leaderRetryMs: 0,
     });
-    assert.deepEqual(app.started, ["KernelRuntimeService", "PersonalRuntimeService"]);
+    assert.deepEqual(app.started, [
+      "KernelRuntimeService",
+      "PersonalRuntimeService",
+      "PersonalContextService",
+    ]);
     await leader.tick();
     assert.ok(!app.started.includes("PersonalContextProjectionService"));
     assert.ok(app.started.includes("PersonalConnectorService"));
@@ -122,7 +126,11 @@ describe("startPersonalBackgroundWork", { concurrency: 1 }, () => {
     process.env.REGENIC_START_BACKGROUND = "0";
     const app = fakeApp();
     startPersonalBackgroundWork(app);
-    assert.deepEqual(app.started, ["KernelRuntimeService", "PersonalRuntimeService"]);
+    assert.deepEqual(app.started, [
+      "KernelRuntimeService",
+      "PersonalRuntimeService",
+      "PersonalContextService",
+    ]);
   });
 
   it("starts timers on one postgres replica and leaves the other HTTP-only", async () => {
@@ -146,10 +154,12 @@ describe("startPersonalBackgroundWork", { concurrency: 1 }, () => {
     assert.deepEqual(leaderApp.started, [
       "KernelRuntimeService",
       "PersonalRuntimeService",
+      "PersonalContextService",
     ]);
     assert.deepEqual(followerApp.started, [
       "KernelRuntimeService",
       "PersonalRuntimeService",
+      "PersonalContextService",
     ]);
 
     await leader.tick();

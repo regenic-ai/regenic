@@ -20,7 +20,9 @@ import {
   authorizedHeadFilterKey,
   authorizedHeadScopeKey,
   authorizedHeadWhere,
-  authorityHeadFrom,
+  authorityEventsAfterSql,
+  authorityHeadPageSql,
+  authorityHeadQualifyFrom,
 } from "@regenic/domain";
 
 const HASH_PATTERN = /^[a-f0-9]{64}$/;
@@ -57,10 +59,8 @@ export interface SqliteContextLexicalIndexOptions {
 export class SqliteContextLexicalIndex implements ContextLexicalIndex {
   private readonly database: Database.Database;
   private readonly available: boolean;
-  /** Stamp and filters already loaded into the temp authorized table. */
-  private rankedScopeKey: string | undefined;
-  /** Filter scope already loaded. A sync stamp change only applies the head delta. */
-  private rankedFilterKey: string | undefined;
+  /** One ranked-head sync at a time. Search waits instead of scanning twice. */
+  private rankedWarm: Promise<void> | null = null;
 
   constructor(path: string, options: SqliteContextLexicalIndexOptions = {}) {
     mkdirSync(dirname(path), { recursive: true });
@@ -168,7 +168,6 @@ export class SqliteContextLexicalIndex implements ContextLexicalIndex {
     }
     const expression = matchExpression(input.query);
     return this.database.transaction(() => {
-      this.rankedScopeKey = undefined;
       const cached = input.authorization_hash
         ? this.authorizationState(input, status)
         : null;
@@ -267,35 +266,12 @@ export class SqliteContextLexicalIndex implements ContextLexicalIndex {
     if (!status.available || !status.generation) {
       return { available: status.available, matched: [], authorized_count: 0, covered_count: 0 };
     }
-    const filterKey = authorizedHeadFilterKey(input.org_id, input.filters, status.generation);
-    const scopeKey = authorizedHeadScopeKey(
-      input.stamp,
-      input.org_id,
-      input.filters,
-      status.generation,
-    );
-    const where = authorizedHeadWhere(input.org_id, input.filters);
-    if (this.rankedFilterKey !== filterKey) {
-      withAttachedAuthority(this.database, input.authority_path, () => {
-        this.database.prepare("DELETE FROM context_lexical_authorized").run();
-        this.database.prepare("DELETE FROM context_lexical_uncovered").run();
-        this.database.prepare("DELETE FROM context_lexical_authorization_state").run();
-        this.database.prepare(`
-          INSERT INTO context_lexical_authorized (event_id, content_hash)
-          SELECT DISTINCT e.id, e.content_hash
-          ${authorityHeadFrom(where.sql)}
-        `).run(...where.params);
-      });
-      this.rankedFilterKey = filterKey;
-    } else if (this.rankedScopeKey !== scopeKey) {
-      this.refreshRankedAuthorized(where, input.authority_path);
-    }
-    this.rankedScopeKey = scopeKey;
+    await this.prepareRanked(input);
     const counts = this.database.prepare(`
       SELECT
-        (SELECT COUNT(*) FROM context_lexical_authorized) AS authorized_count,
+        (SELECT COUNT(*) FROM context_lexical_ranked_authorized) AS authorized_count,
         (SELECT COUNT(*)
-          FROM context_lexical_authorized a
+          FROM context_lexical_ranked_authorized a
           JOIN context_lexical_documents d
             ON d.event_id = a.event_id AND d.content_hash = a.content_hash
           WHERE d.org_id = ? AND d.generation = ?) AS covered_count
@@ -307,7 +283,7 @@ export class SqliteContextLexicalIndex implements ContextLexicalIndex {
           SELECT d.event_id, d.content_hash
           FROM context_lexical_documents_fts f
           JOIN context_lexical_documents d ON d.rowid = f.rowid
-          JOIN context_lexical_authorized a
+          JOIN context_lexical_ranked_authorized a
             ON a.event_id = d.event_id AND a.content_hash = d.content_hash
           WHERE context_lexical_documents_fts MATCH ?
             AND d.org_id = ? AND d.generation = ?
@@ -472,6 +448,26 @@ export class SqliteContextLexicalIndex implements ContextLexicalIndex {
         CREATE VIRTUAL TABLE IF NOT EXISTS context_lexical_documents_fts
           USING fts5(terms, tokenize = 'unicode61 remove_diacritics 2');
 
+        CREATE TABLE IF NOT EXISTS context_lexical_ranked_scope (
+          singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+          org_id TEXT NOT NULL,
+          generation TEXT NOT NULL,
+          filter_key TEXT NOT NULL,
+          scope_key TEXT NOT NULL,
+          head_sequence INTEGER,
+          head_count INTEGER
+        );
+
+        CREATE TABLE IF NOT EXISTS context_lexical_ranked_authorized (
+          event_id TEXT NOT NULL,
+          content_hash TEXT NOT NULL,
+          PRIMARY KEY (event_id, content_hash)
+        ) WITHOUT ROWID;
+
+        CREATE TEMP TABLE IF NOT EXISTS context_lexical_head_tail (
+          event_id TEXT PRIMARY KEY
+        ) WITHOUT ROWID;
+
         CREATE TEMP TABLE IF NOT EXISTS context_lexical_authorized (
           event_id TEXT NOT NULL,
           content_hash TEXT NOT NULL,
@@ -576,6 +572,8 @@ export class SqliteContextLexicalIndex implements ContextLexicalIndex {
     }
     this.database.prepare(`DELETE FROM context_lexical_documents WHERE org_id = ?`).run(orgId);
     this.database.prepare(`DELETE FROM context_lexical_meta WHERE org_id = ?`).run(orgId);
+    this.database.prepare("DELETE FROM context_lexical_ranked_authorized").run();
+    this.database.prepare("DELETE FROM context_lexical_ranked_scope").run();
   }
 
   private authorizationState(
@@ -599,54 +597,213 @@ export class SqliteContextLexicalIndex implements ContextLexicalIndex {
   }
 
   private invalidateAuthorizationCache(): void {
-    this.rankedScopeKey = undefined;
-    this.rankedFilterKey = undefined;
     this.database.prepare("DELETE FROM context_lexical_authorization_state").run();
     this.database.prepare("DELETE FROM context_lexical_uncovered").run();
     this.database.prepare("DELETE FROM context_lexical_authorized").run();
   }
 
-  /** Apply a stamp change by inserting and deleting only the heads that moved. */
-  private refreshRankedAuthorized(
+  /**
+   * Build the persistent ranked head set. Startup and search share one run.
+   * An unrelated authority write does not reread every blob.
+   */
+  async prepareRanked(input: RankedHeadQuery): Promise<void> {
+    if (this.rankedWarm) {
+      await this.rankedWarm;
+      return this.prepareRanked(input);
+    }
+    let resolveWaiters: () => void = () => {};
+    let rejectWaiters: (error: unknown) => void = () => {};
+    const gate = new Promise<void>((resolve, reject) => {
+      resolveWaiters = resolve;
+      rejectWaiters = reject;
+    });
+    this.rankedWarm = gate;
+    void gate.catch(() => {});
+    try {
+      await this.maintainRanked(input);
+      resolveWaiters();
+    } catch (error) {
+      rejectWaiters(error);
+      throw error;
+    } finally {
+      if (this.rankedWarm === gate) this.rankedWarm = null;
+    }
+  }
+
+  private async maintainRanked(input: RankedHeadQuery): Promise<void> {
+    const status = await this.getStatus(input.org_id);
+    if (!status.available || !status.generation) return;
+    const filterKey = authorizedHeadFilterKey(input.org_id, input.filters, status.generation);
+    const scopeKey = authorizedHeadScopeKey(input.stamp, input.org_id, input.filters, status.generation);
+    const where = authorizedHeadWhere(input.org_id, input.filters);
+    const persisted = this.rankedScope();
+    const reusable = Boolean(
+      persisted
+      && persisted.org_id === input.org_id
+      && persisted.generation === status.generation
+      && persisted.filter_key === filterKey,
+    );
+    if (!reusable) {
+      const marker = this.readHeadMarker(input.authority_path, input.org_id);
+      await this.replaceRankedAuthorized(where, input.authority_path, input.org_id);
+      this.saveRankedScope(input.org_id, status.generation, filterKey, scopeKey, marker);
+    } else if (persisted!.scope_key !== scopeKey) {
+      const marker = this.readHeadMarker(input.authority_path, input.org_id);
+      if (!this.headMarkerMatches(persisted!, marker)) {
+        this.syncRankedAuthorized(where, input.authority_path, input.org_id, persisted!.head_sequence);
+      }
+      this.saveRankedScope(input.org_id, status.generation, filterKey, scopeKey, marker);
+    }
+  }
+
+  private headMarkerMatches(
+    saved: { head_sequence: number | null; head_count: number | null },
+    marker: { sequence: number | null; count: number },
+  ): boolean {
+    return saved.head_count != null
+      && saved.head_count === marker.count
+      && saved.head_sequence === marker.sequence;
+  }
+
+  private readHeadMarker(authorityPath: string, orgId: string): { sequence: number | null; count: number } {
+    return withAttachedAuthority(this.database, authorityPath, () => {
+      const hasSequence = this.database.prepare(
+        "SELECT 1 FROM pragma_table_info('events', 'regenic_auth') WHERE name = 'sequence'",
+      ).get();
+      const sequence = hasSequence
+        ? this.database.prepare("SELECT MAX(sequence) FROM regenic_auth.events").pluck().get() as number | null
+        : null;
+      const count = this.database.prepare(
+        "SELECT COUNT(*) FROM regenic_auth.source_heads WHERE org_id = ?",
+      ).pluck().get(orgId) as number;
+      return { sequence: sequence ?? null, count };
+    });
+  }
+
+  private async replaceRankedAuthorized(
     where: { sql: string; params: unknown[] },
     authorityPath: string,
+    orgId: string,
+  ): Promise<void> {
+    this.database.prepare("DELETE FROM context_lexical_ranked_authorized").run();
+    let source = "";
+    let externalId = "";
+    const pageSize = 512;
+    for (;;) {
+      const done = withAttachedAuthority(this.database, authorityPath, () => {
+        this.database.prepare("DELETE FROM context_lexical_head_tail").run();
+        const rows = this.database.prepare(authorityHeadPageSql()).all(
+          orgId, source, externalId, pageSize,
+        ) as Array<{ source: string; external_id: string; event_id: string }>;
+        if (rows.length === 0) return true;
+        const insertId = this.database.prepare(
+          "INSERT OR IGNORE INTO context_lexical_head_tail(event_id) VALUES (?)",
+        );
+        for (const row of rows) insertId.run(row.event_id);
+        this.database.prepare(`
+          INSERT OR IGNORE INTO context_lexical_ranked_authorized (event_id, content_hash)
+          SELECT DISTINCT e.id, e.content_hash
+          ${authorityHeadQualifyFrom(where.sql, "context_lexical_head_tail")}
+        `).run(...where.params);
+        const last = rows[rows.length - 1]!;
+        if (last.source === source && last.external_id === externalId) {
+          throw new Error("lexical head cursor did not advance");
+        }
+        source = last.source;
+        externalId = last.external_id;
+        return rows.length < pageSize;
+      });
+      if (done) return;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+  }
+
+  private syncRankedAuthorized(
+    where: { sql: string; params: unknown[] },
+    authorityPath: string,
+    orgId: string,
+    previousSequence: number | null,
   ): void {
-    this.database.exec(`
-      CREATE TEMP TABLE IF NOT EXISTS context_lexical_authorized_next (
-        event_id TEXT NOT NULL,
-        content_hash TEXT NOT NULL,
-        PRIMARY KEY (event_id, content_hash)
-      ) WITHOUT ROWID;
-    `);
-    this.database.prepare("DELETE FROM context_lexical_authorized_next").run();
     withAttachedAuthority(this.database, authorityPath, () => {
       this.database.prepare(`
-        INSERT INTO context_lexical_authorized_next (event_id, content_hash)
+        DELETE FROM context_lexical_ranked_authorized
+        WHERE event_id IN (
+          SELECT a.event_id FROM context_lexical_ranked_authorized a
+          WHERE NOT EXISTS (
+            SELECT 1 FROM regenic_auth.source_heads h
+            WHERE h.org_id = ? AND h.current_event_id = a.event_id
+          )
+        )
+      `).run(orgId);
+      this.database.prepare("DELETE FROM context_lexical_head_tail").run();
+      if (previousSequence == null) {
+        this.database.prepare(`
+          INSERT INTO context_lexical_head_tail(event_id)
+          SELECT DISTINCT h.current_event_id
+          FROM regenic_auth.source_heads h
+          WHERE h.org_id = ?
+            AND NOT EXISTS (
+              SELECT 1 FROM context_lexical_ranked_authorized a WHERE a.event_id = h.current_event_id
+            )
+        `).run(orgId);
+      } else {
+        this.database.prepare(`
+          INSERT INTO context_lexical_head_tail(event_id)
+          ${authorityEventsAfterSql()}
+        `).run(orgId, previousSequence);
+      }
+      this.database.prepare(`
+        INSERT OR IGNORE INTO context_lexical_ranked_authorized (event_id, content_hash)
         SELECT DISTINCT e.id, e.content_hash
-        ${authorityHeadFrom(where.sql)}
+        ${authorityHeadQualifyFrom(where.sql, "context_lexical_head_tail")}
       `).run(...where.params);
     });
+  }
+
+  private rankedScope(): {
+    org_id: string;
+    generation: string;
+    filter_key: string;
+    scope_key: string;
+    head_sequence: number | null;
+    head_count: number | null;
+  } | undefined {
+    return this.database.prepare(`
+      SELECT org_id, generation, filter_key, scope_key, head_sequence, head_count
+      FROM context_lexical_ranked_scope WHERE singleton = 1
+    `).get() as {
+      org_id: string;
+      generation: string;
+      filter_key: string;
+      scope_key: string;
+      head_sequence: number | null;
+      head_count: number | null;
+    } | undefined;
+  }
+
+  private saveRankedScope(
+    orgId: string,
+    generation: string,
+    filterKey: string,
+    scopeKey: string,
+    marker: { sequence: number | null; count: number },
+  ): void {
     this.database.prepare(`
-      DELETE FROM context_lexical_authorized
-      WHERE event_id IN (
-        SELECT old.event_id FROM context_lexical_authorized old
-        LEFT JOIN context_lexical_authorized_next new
-          ON new.event_id = old.event_id AND new.content_hash = old.content_hash
-        WHERE new.event_id IS NULL
-      )
-    `).run();
-    this.database.prepare(`
-      INSERT INTO context_lexical_authorized (event_id, content_hash)
-      SELECT new.event_id, new.content_hash
-      FROM context_lexical_authorized_next new
-      LEFT JOIN context_lexical_authorized old
-        ON old.event_id = new.event_id AND old.content_hash = new.content_hash
-      WHERE old.event_id IS NULL
-    `).run();
+      INSERT INTO context_lexical_ranked_scope (
+        singleton, org_id, generation, filter_key, scope_key, head_sequence, head_count
+      ) VALUES (1, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(singleton) DO UPDATE SET
+        org_id = excluded.org_id,
+        generation = excluded.generation,
+        filter_key = excluded.filter_key,
+        scope_key = excluded.scope_key,
+        head_sequence = excluded.head_sequence,
+        head_count = excluded.head_count
+    `).run(orgId, generation, filterKey, scopeKey, marker.sequence, marker.count);
   }
 }
 
-function withAttachedAuthority(db: Database.Database, path: string, run: () => void): void {
+function withAttachedAuthority<T>(db: Database.Database, path: string, run: () => T): T {
   if (!path || path === ":memory:" || path.includes("\0")) {
     throw new Error("Authority database path cannot be attached");
   }
@@ -654,7 +811,7 @@ function withAttachedAuthority(db: Database.Database, path: string, run: () => v
   if (attached) db.exec("DETACH DATABASE regenic_auth");
   db.prepare("ATTACH DATABASE ? AS regenic_auth").run(path);
   try {
-    run();
+    return run();
   } finally {
     db.exec("DETACH DATABASE regenic_auth");
   }

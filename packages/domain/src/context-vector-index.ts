@@ -157,6 +157,10 @@ export interface ContextVectorIndex {
    * Nearest current heads. Authorization comes from the attached authority file,
    * not from a key list copied into the process.
    */
+  /** Build the ranked index before a search. Startup and search share one run. */
+  prepareRanked?(
+    input: import("./search-head-filter").RankedHeadQuery & { generation: string },
+  ): Promise<void>;
   matchRanked?(
     input: import("./search-head-filter").RankedHeadQuery & {
       generation: string;

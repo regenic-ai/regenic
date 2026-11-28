@@ -104,3 +104,38 @@ export function authorityHeadFrom(whereSql: string): string {
     WHERE ${whereSql}
   `;
 }
+
+/** One page of head identities. The blob predicate is applied afterwards, only to these ids. */
+export function authorityHeadPageSql(): string {
+  return `
+    SELECT h.source AS source, h.external_id AS external_id, h.current_event_id AS event_id
+    FROM regenic_auth.source_heads h
+    WHERE h.org_id = ? AND (h.source, h.external_id) > (?, ?)
+    ORDER BY h.source, h.external_id
+    LIMIT ?
+  `;
+}
+
+/** Events appended after a stored sequence. Reads the event-log tail, not the whole corpus. */
+export function authorityEventsAfterSql(): string {
+  return `
+    SELECT id AS event_id
+    FROM regenic_auth.events
+    WHERE org_id = ? AND sequence > ?
+  `;
+}
+
+/**
+ * Searchable heads among an already bounded id list.
+ * `idTable` is a local temp table of event ids, never caller text.
+ */
+export function authorityHeadQualifyFrom(whereSql: string, idTable: string): string {
+  return `
+    FROM ${idTable} ids
+    JOIN regenic_auth.events e ON e.id = ids.event_id
+    JOIN regenic_auth.source_heads h
+      ON h.org_id = e.org_id AND h.current_event_id = e.id
+    JOIN regenic_auth.blobs b ON b.content_hash = e.content_hash
+    WHERE ${whereSql}
+  `;
+}

@@ -90,9 +90,11 @@ and any remaining body-length overflow. Those tables survive process restart.
 Message and file searches query only their partition. An unfiltered or "all"
 search merges the partitions. A search runs `MATCH … AND k` and does not copy
 vectors into a connection-local table. Authorization changes insert or delete the
-affected events. The first search after an empty index backfills in batches and
-yields the event loop between batches, so a health check is not stuck behind one
-full-table copy. Native cosine KNN then selects a small Event candidate set, and
+affected events. A commit that does not change head cardinality or the event-log
+sequence does not reread the authority database. After the process starts listening, an empty ordinary-app index
+backfills in batches and yields the event loop between batches, so a health check
+is not stuck behind one full-table copy. A search that arrives during that build
+waits for the same run and then queries it. Native cosine KNN then selects a small Event candidate set, and
 the existing exact implementation validates and reranks the complete chunks for
 those Events.
 The KNN window doubles across Event-distance ties, up to a full scan, so stable
