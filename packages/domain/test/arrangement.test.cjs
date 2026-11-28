@@ -71,15 +71,25 @@ describe("arrangeMessage", () => {
     assert.deepEqual(decision.reason_codes, ["actionable"]);
   });
 
-  it("keeps ordinary thread replies out of current work", () => {
-    const decision = arrangeMessage({
+  it("arranges a thread reply with the same rules as a new message", () => {
+    const text = "这个达人底价是多少，你们签了什么合同";
+    const reply = arrangeMessage({
       event: event(),
       type: "thread_reply",
-      text: "I pushed another commit this afternoon.",
+      text,
+    });
+    const message = arrangeMessage({
+      event: event(),
+      type: "message",
+      text,
     });
 
-    assert.equal(decision.disposition, "outside_current_work");
-    assert.deepEqual(decision.reason_codes, ["thread_reply_noise"]);
+    assert.equal(reply.disposition, "current_work");
+    assert.deepEqual(reply.reason_codes, message.reason_codes);
+    assert.deepEqual(
+      arrangeMessage({ event: event(), type: "thread_reply", text: "收到" }).reason_codes,
+      ["noise"],
+    );
   });
 
   it("keeps a task record in current work", () => {

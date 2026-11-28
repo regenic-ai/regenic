@@ -213,7 +213,7 @@ pnpm local import-file --database ./regenic.db --blob-root ./blobs \
 
 ### Inbox
 
-List the messages that need you now. Receipts, deletions, and ordinary thread replies stay in the store and stay out of this list.
+List the messages that need you now. Receipts and deletions stay in the store and stay out of this list. A thread reply is arranged like any other message.
 
 ```bash
 pnpm local inbox --database ./regenic.db --org local-owner

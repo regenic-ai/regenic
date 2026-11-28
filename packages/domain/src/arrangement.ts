@@ -160,16 +160,6 @@ export function arrangeMessage(input: ArrangementInput): ArrangementDecision {
     return policyDecision(input, policy.actionable_disposition, "actionable", 0.85, decidedAt);
   }
 
-  if (input.type === "thread_reply") {
-    return decision(
-      input,
-      "outside_current_work",
-      ["thread_reply_noise"],
-      0.15,
-      decidedAt,
-    );
-  }
-
   if (text !== undefined && text.length < 8) {
     return policyDecision(input, policy.short_text_disposition, "needs_review", 0.4, decidedAt);
   }
