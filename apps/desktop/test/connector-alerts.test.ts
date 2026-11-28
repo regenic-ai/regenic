@@ -178,6 +178,86 @@ describe("connector alerts", () => {
     assert.equal(alerts[0].message, "missing_credentials");
   });
 
+  it("keeps header chrome while the latest attempt is still the hard failure", () => {
+    const view = engine({
+      installations: [
+        installation({
+          last_checked_at: "2026-09-10T00:05:00Z",
+          last_attempt: {
+            id: "a1",
+            status: "failed",
+            accepted_count: 0,
+            duplicate_count: 0,
+            quarantined_count: 0,
+            retryable_failure_count: 0,
+            started_at: "2026-09-10T00:00:00Z",
+            finished_at: "2026-09-10T00:00:01Z",
+            error_code: "missing_credentials",
+          },
+        }),
+      ],
+    });
+    assert.equal(connectorAlerts(view)[0]?.message, "missing_credentials");
+  });
+
+  it("does not raise header chrome after a later success settled a hard failure", () => {
+    const failed = {
+      id: "a1",
+      status: "failed" as const,
+      accepted_count: 0,
+      duplicate_count: 0,
+      quarantined_count: 0,
+      retryable_failure_count: 0,
+      started_at: "2026-09-10T00:00:00Z",
+      finished_at: "2026-09-10T00:00:01Z",
+      error_code: "missing_credentials",
+    };
+    const view = engine({
+      installations: [
+        installation({
+          last_checked_at: "2026-09-10T00:05:00Z",
+          last_attempt: {
+            id: "a2",
+            status: "succeeded",
+            accepted_count: 1,
+            duplicate_count: 0,
+            quarantined_count: 0,
+            retryable_failure_count: 0,
+            started_at: "2026-09-10T00:05:00Z",
+            finished_at: "2026-09-10T00:05:00Z",
+          },
+          last_hard_failure: failed,
+        }),
+      ],
+    });
+    assert.equal(connectorAlerts(view).length, 0);
+    assert.equal(hasConnectorFailure(view), false);
+  });
+
+  it("keeps a needs_attention failure after a later check", () => {
+    const view = engine({
+      installations: [
+        installation({
+          status: "needs_attention",
+          last_checked_at: "2026-09-10T00:05:00Z",
+          last_attempt: {
+            id: "a1",
+            status: "failed",
+            accepted_count: 0,
+            duplicate_count: 0,
+            quarantined_count: 0,
+            retryable_failure_count: 0,
+            started_at: "2026-09-10T00:00:00Z",
+            error_code: "missing_credentials",
+          },
+        }),
+      ],
+    });
+    const alerts = connectorAlerts(view);
+    assert.equal(alerts.length, 2);
+    assert.equal(alerts.some((item) => item.message === "missing_credentials"), true);
+  });
+
   it("flags kernel stopped while installations are enabled", () => {
     const view = engine({ kernel: "stopped" });
     const alerts = connectorAlerts(view);

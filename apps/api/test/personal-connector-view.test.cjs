@@ -11,6 +11,7 @@ const {
   connectorCatalog,
   nextPickedChatNames,
   installationCheckedAt,
+  latestHardFailure,
   toInstallationView,
 } = require("../dist/personal-connector-view");
 
@@ -539,5 +540,44 @@ describe("installation check time", () => {
       { syncTouchAt: "2026-11-23T02:00:00.000Z" },
     );
     assert.equal(view.last_checked_at, "2026-11-23T02:00:00.000Z");
+    assert.equal(view.last_hard_failure, null);
+  });
+
+  it("keeps the newest hard failure and skips a soft miss", () => {
+    const hard = {
+      id: "hard",
+      org_id: "local-owner",
+      connector_installation_id: "feishu-1",
+      stream_key: "feishu",
+      delivery_id: "d1",
+      started_at: "2026-11-23T01:00:00.000Z",
+      finished_at: "2026-11-23T01:00:01.000Z",
+      status: "failed",
+      accepted_count: 0,
+      duplicate_count: 0,
+      quarantined_count: 0,
+      retryable_failure_count: 0,
+      error_code: "missing_credentials",
+    };
+    const soft = { ...hard, id: "soft", started_at: "2026-11-23T02:00:00.000Z", error_code: "deadline_exceeded" };
+    const ok = { ...hard, id: "ok", started_at: "2026-11-23T03:00:00.000Z", status: "succeeded", error_code: undefined };
+    assert.equal(latestHardFailure([ok, soft, hard]).id, "hard");
+    const view = toInstallationView(
+      {
+        id: "feishu-1",
+        org_id: "local-owner",
+        connector_type: "feishu-chat",
+        status: "enabled",
+        config: {},
+        created_at: "2026-08-22T00:00:00.000Z",
+        updated_at: "2026-08-22T00:00:00.000Z",
+      },
+      ok,
+      { get: () => feishuChatDriver },
+      "en",
+      { hardFailure: hard },
+    );
+    assert.equal(view.last_attempt.id, "ok");
+    assert.equal(view.last_hard_failure.id, "hard");
   });
 });

@@ -33,6 +33,61 @@ export function isSoftSyncFailure(errorCode: string | null | undefined): boolean
   return softSyncTone(errorCode) != null;
 }
 
+type FailureClock = {
+  id?: string;
+  status: string;
+  started_at: string;
+  finished_at?: string;
+  error_code?: string;
+};
+
+/** A successful check is strictly newer than the failure. */
+export function laterCheckMovedPast(
+  checkedAt: string | null | undefined,
+  attempt: { started_at: string; finished_at?: string },
+): boolean {
+  const checked = checkedAt ? Date.parse(checkedAt) : Number.NaN;
+  const at = Date.parse(attempt.finished_at ?? attempt.started_at);
+  return Number.isFinite(checked) && Number.isFinite(at) && checked > at;
+}
+
+/** Newest hard failure on the card. Soft misses are not a durable fault. */
+export function resolveHardFailure(input: {
+  lastAttempt: FailureClock | null;
+  hardFailure?: FailureClock | null;
+}): FailureClock | null {
+  const candidate = input.hardFailure
+    ?? (input.lastAttempt?.status === "failed" ? input.lastAttempt : null);
+  if (!candidate || candidate.status !== "failed" || isSoftSyncFailure(candidate.error_code)) {
+    return null;
+  }
+  return candidate;
+}
+
+/**
+ * Settled only after a later attempt succeeds. A newer sync touch or push
+ * watermark does not recover a failure that is still the latest attempt.
+ * `needs_attention` stays until that status is cleared on purpose.
+ */
+export function hardFailureSettled(input: {
+  status: "enabled" | "disabled" | "needs_attention";
+  lastCheckedAt?: string | null;
+  lastAttempt: { id?: string; status: string } | null;
+  hardFailure: FailureClock;
+}): boolean {
+  if (input.status === "needs_attention") {
+    return false;
+  }
+  const latest = input.lastAttempt;
+  if (!latest || latest.status !== "succeeded") {
+    return false;
+  }
+  if (latest.id && input.hardFailure.id) {
+    return latest.id !== input.hardFailure.id;
+  }
+  return laterCheckMovedPast(input.lastCheckedAt, input.hardFailure);
+}
+
 /** Soft poll miss — keep in sync with domain `looksLikeSyncSoftMissMessage`. */
 function looksLikeSyncSoftMissMessage(message: string): boolean {
   const text = message.trim();
@@ -94,16 +149,23 @@ export function connectorAlerts(
         hint: installation.detail,
       });
     }
+    const hard = resolveHardFailure({
+      lastAttempt: installation.last_attempt,
+      hardFailure: installation.last_hard_failure,
+    });
     if (
-      installation.last_attempt?.status === "failed" &&
-      !isSoftSyncFailure(installation.last_attempt.error_code)
+      hard &&
+      !hardFailureSettled({
+        status: installation.status,
+        lastCheckedAt: installation.last_checked_at,
+        lastAttempt: installation.last_attempt,
+        hardFailure: hard,
+      })
     ) {
       push({
         installationId: installation.id,
         name: connectorDisplayName(installation),
-        message:
-          installation.last_attempt.error_code?.trim() ||
-          t("chrome.connectorAttemptFailed"),
+        message: hard.error_code?.trim() || t("chrome.connectorAttemptFailed"),
         hint: null,
       });
     }

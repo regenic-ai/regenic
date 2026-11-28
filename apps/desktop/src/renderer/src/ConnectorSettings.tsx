@@ -27,9 +27,11 @@ import {
   formatTime,
   installationHasStoredConversations,
   installationStatusLabel,
+  recoveredFailureSummary,
   syncProgressSummary,
   syncWorkSettled,
 } from "./format";
+import { hardFailureSettled, isSoftSyncFailure } from "./connector-alerts";
 import { connectorCardMode } from "./sync-copy";
 import { openExternal } from "./CatalogDocs";
 import { useLocale } from "./LocaleContext";
@@ -664,6 +666,39 @@ function visiblePrerequisites(
   );
 }
 
+const FAULT_ACK_KEY = "regenic.connectorFaultAck";
+
+function readFaultAck(installationId: string): string | null {
+  try {
+    const raw = localStorage.getItem(FAULT_ACK_KEY);
+    if (!raw) {
+      return null;
+    }
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object") {
+      return null;
+    }
+    const value = (parsed as Record<string, unknown>)[installationId];
+    return typeof value === "string" ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeFaultAck(installationId: string, attemptId: string): void {
+  try {
+    const raw = localStorage.getItem(FAULT_ACK_KEY);
+    const parsed = raw ? JSON.parse(raw) as unknown : {};
+    const next = parsed && typeof parsed === "object"
+      ? { ...(parsed as Record<string, string>) }
+      : {};
+    next[installationId] = attemptId;
+    localStorage.setItem(FAULT_ACK_KEY, JSON.stringify(next));
+  } catch {
+    // The recovered line stays visible if storage is refused.
+  }
+}
+
 function ConnectorRow({
   id,
   kind,
@@ -695,10 +730,16 @@ function ConnectorRow({
 }) {
   const { t } = useLocale();
   const [nowMs, setNowMs] = useState(() => Date.now());
+  const [ackedFaultId, setAckedFaultId] = useState<string | null>(() =>
+    readFaultAck(installation.id),
+  );
   useEffect(() => {
     const timer = window.setInterval(() => setNowMs(Date.now()), 30_000);
     return () => window.clearInterval(timer);
   }, []);
+  useEffect(() => {
+    setAckedFaultId(readFaultAck(installation.id));
+  }, [installation.id]);
   const statusChip =
     installation.status === "enabled"
       ? "running"
@@ -716,25 +757,50 @@ function ConnectorRow({
     : activeSourceMode;
   const hasConversations = installationHasStoredConversations(installation.sync);
   const settled = syncWorkSettled(installation.sync);
+  const fault = installation.last_hard_failure ?? null;
   const card = connectorCardMode({
     status: installation.status,
     syncable: installation.syncable,
     hasConversations,
     lastAttempt: installation.last_attempt,
+    hardFailure: fault,
     lastCheckedAt: installation.last_checked_at,
     nowMs,
   });
+  const faultId = fault?.id ?? null;
+  const faultAcked = faultId != null && ackedFaultId === faultId;
   const sourceMode = attemptSourceMode ?? "poll";
+  const latestIsSoft =
+    installation.last_attempt?.status === "failed" &&
+    isSoftSyncFailure(installation.last_attempt.error_code);
+  const faultSettled = fault
+    ? hardFailureSettled({
+      status: installation.status,
+      lastCheckedAt: installation.last_checked_at,
+      lastAttempt: installation.last_attempt,
+      hardFailure: fault,
+    })
+    : false;
+  const summaryAttempt =
+    fault &&
+    installation.last_attempt?.status !== "running" &&
+    (card.mode === "recovered" || (card.mode === "attempt" && !latestIsSoft) || !faultSettled)
+      ? fault
+      : installation.last_attempt;
   const activity =
-    card.mode === "stale" && installation.last_checked_at
-      ? t("sync.lastChecked", { when: formatTime(installation.last_checked_at) })
-      : card.mode === "attempt"
-        ? attemptSummary(installation.last_attempt, sourceMode)
-        : card.mode === "waiting"
-          ? sourceMode === "poll"
-            ? t("connector.push.waiting")
-            : attemptSummary(null, sourceMode)
-          : null;
+    card.mode === "recovered"
+      ? faultAcked
+        ? null
+        : recoveredFailureSummary(summaryAttempt)
+      : card.mode === "stale" && installation.last_checked_at
+        ? t("sync.lastChecked", { when: formatTime(installation.last_checked_at) })
+        : card.mode === "attempt"
+          ? attemptSummary(summaryAttempt, sourceMode)
+          : card.mode === "waiting"
+            ? sourceMode === "poll"
+              ? t("connector.push.waiting")
+              : attemptSummary(null, sourceMode)
+            : null;
   return (
     <div id={id} className="install-block">
       <div className="install install-instance">
@@ -770,6 +836,21 @@ function ConnectorRow({
           {activity ? (
             <div className={receivesPush ? "connector-activity" : "muted"}>
               {activity}
+              {card.mode === "recovered" && faultId ? (
+                <>
+                  {" "}
+                  <button
+                    type="button"
+                    className="link muted-link"
+                    onClick={() => {
+                      writeFaultAck(installation.id, faultId);
+                      setAckedFaultId(faultId);
+                    }}
+                  >
+                    {t("sync.dismissFailure")}
+                  </button>
+                </>
+              ) : null}
             </div>
           ) : null}
           {!hasConversations &&

@@ -13,12 +13,31 @@ export interface FeishuMediaRef {
   media_type?: string;
 }
 
+/** Feishu's own label when a merged forward has no title and no nested text. */
+const MERGE_FORWARD_FALLBACK = "聊天记录";
+
 export function extractFeishuText(
   msgType: string,
   content: string | undefined,
   names?: ReadonlyMap<string, string>,
   mentions?: readonly FeishuMention[],
 ): string | undefined {
+  if (msgType === "merge_forward") {
+    return extractMergeForwardText(content, names, mentions, 0);
+  }
+  return extractKnownFeishuText(msgType, content, names, mentions, 0);
+}
+
+function extractKnownFeishuText(
+  msgType: string,
+  content: string | undefined,
+  names: ReadonlyMap<string, string> | undefined,
+  mentions: readonly FeishuMention[] | undefined,
+  depth: number,
+): string | undefined {
+  if (msgType === "merge_forward") {
+    return extractMergeForwardText(content, names, mentions, depth);
+  }
   if (!content) {
     return undefined;
   }
@@ -41,6 +60,91 @@ export function extractFeishuText(
     return text || undefined;
   }
   return undefined;
+}
+
+/**
+ * One history item stays one record. The official payload is a title; child
+ * lines are included only when this item already carries them. No second fetch.
+ */
+function extractMergeForwardText(
+  content: string | undefined,
+  names: ReadonlyMap<string, string> | undefined,
+  mentions: readonly FeishuMention[] | undefined,
+  depth: number,
+): string {
+  if (depth > 2) {
+    return MERGE_FORWARD_FALLBACK;
+  }
+  if (!content?.trim()) {
+    return MERGE_FORWARD_FALLBACK;
+  }
+  let parsed: unknown = content;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    return resolveAtText(content.trim(), mergeFeishuDisplayNames(names, mentions))
+      || MERGE_FORWARD_FALLBACK;
+  }
+  if (!isObject(parsed)) {
+    return MERGE_FORWARD_FALLBACK;
+  }
+  const lines: string[] = [];
+  const title = objectString(parsed, "title");
+  if (title) {
+    lines.push(title);
+  }
+  for (const item of nestedForwardItems(parsed)) {
+    const line = forwardItemLine(item, names, mentions, depth + 1);
+    if (line) {
+      lines.push(line);
+    }
+  }
+  if (lines.length === 0) {
+    const text = objectString(parsed, "text");
+    if (text) {
+      lines.push(text);
+    }
+  }
+  return lines.join("\n") || MERGE_FORWARD_FALLBACK;
+}
+
+function nestedForwardItems(value: Record<string, unknown>): unknown[] {
+  const found: unknown[] = [];
+  for (const key of ["items", "messages", "message_list"]) {
+    const list = value[key];
+    if (Array.isArray(list)) {
+      found.push(...list);
+    }
+  }
+  return found;
+}
+
+function forwardItemLine(
+  item: unknown,
+  names: ReadonlyMap<string, string> | undefined,
+  mentions: readonly FeishuMention[] | undefined,
+  depth: number,
+): string | undefined {
+  if (!isObject(item)) {
+    return undefined;
+  }
+  const msgType = objectString(item, "msg_type");
+  const body = isObject(item.body) ? item.body : undefined;
+  const rawContent = body ? body.content : undefined;
+  const content = typeof rawContent === "string"
+    ? rawContent
+    : isObject(rawContent)
+      ? JSON.stringify(rawContent)
+      : undefined;
+  const text = msgType
+    ? extractKnownFeishuText(msgType, content ?? objectString(item, "text"), names, mentions, depth)
+    : objectString(item, "text");
+  if (!text) {
+    return undefined;
+  }
+  const sender = isObject(item.sender) ? objectString(item.sender, "name") : undefined;
+  const name = sender ?? objectString(item, "sender_name");
+  return name ? `${name}: ${text}` : text;
 }
 
 export function extractFeishuMedia(

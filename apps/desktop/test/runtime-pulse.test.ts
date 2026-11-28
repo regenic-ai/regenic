@@ -123,6 +123,31 @@ describe("runtime pulse", () => {
     assert.equal(next.installations[0]?.last_attempt?.status, "succeeded");
   });
 
+  it("keeps a hard failure when a later pulse succeeds", () => {
+    const failed = {
+      id: "attempt-fail",
+      status: "failed" as const,
+      accepted_count: 0,
+      duplicate_count: 0,
+      quarantined_count: 0,
+      retryable_failure_count: 0,
+      started_at: "2026-01-01T00:00:00.000Z",
+      finished_at: "2026-01-01T00:00:01.000Z",
+      error_code: "missing_credentials",
+    };
+    const current = {
+      ...baseEngine,
+      installations: [{
+        ...baseEngine.installations[0],
+        last_attempt: failed,
+        last_hard_failure: failed,
+      }],
+    };
+    const next = applyHeartbeatToEngine(current, heartbeat);
+    assert.equal(next.installations[0]?.last_attempt?.status, "succeeded");
+    assert.equal(next.installations[0]?.last_hard_failure?.id, "attempt-fail");
+  });
+
   it("does not blank coverage when heartbeat has no sync snapshot yet", () => {
     const current = {
       ...baseEngine,

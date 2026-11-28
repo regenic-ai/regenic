@@ -1474,6 +1474,8 @@ export const en = {
   "sync.none": "No messages yet",
   "sync.syncingWhen": "Loading older messages · {when}",
   "sync.failedWhen": "Failed{code} · {when}",
+  "sync.recoveredWhen": "Last failure{code} · {when} · recovered",
+  "sync.dismissFailure": "Dismiss",
   "sync.okWhen": "Caught up · {count} new · {when}",
   "sync.noneFound": "No conversations yet",
   "sync.coverage":
@@ -3120,6 +3122,8 @@ export const zh: Record<MessageKey, string> = {
   "sync.none": "还没有收到消息",
   "sync.syncingWhen": "正在补旧消息 · {when}",
   "sync.failedWhen": "失败{code} · {when}",
+  "sync.recoveredWhen": "上次失败{code} · {when} · 已恢复",
+  "sync.dismissFailure": "知道了",
   "sync.okWhen": "已跟上 · 新收到 {count} · {when}",
   "sync.noneFound": "还没有会话",
   "sync.coverage": "已发现 {discovered} · 正在补旧消息 {bootstrap_pending} · 已跟上 {steady}",

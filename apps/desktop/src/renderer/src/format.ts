@@ -204,3 +204,20 @@ export function attemptSummary(
   }
   return t("sync.okWhen", { count: attempt.accepted_count, when });
 }
+
+/** Hard failure that a later successful check already settled. */
+export function recoveredFailureSummary(
+  attempt: {
+    started_at: string;
+    finished_at?: string;
+    error_code?: string;
+  } | null,
+): string {
+  const when = attempt
+    ? formatTime(attempt.finished_at ?? attempt.started_at)
+    : "";
+  return t("sync.recoveredWhen", {
+    code: attempt?.error_code ? ` · ${attempt.error_code}` : "",
+    when,
+  });
+}
