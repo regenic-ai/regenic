@@ -71,6 +71,28 @@ describe("leftover kernel port", () => {
     }), null);
   });
 
+  it("reaps a sidecar that is still listening on the stale lock port", () => {
+    assert.equal(leftoverListenerPid({
+      lock: { state: "stale", lock: { pid: 11, origin: "http://127.0.0.1:4370", updatedAt: "" } },
+      port: 4370,
+      listenPid: 44,
+      ourPid: 33,
+      ownsDatabase: false,
+      command: "node apps/api/dist/main.js",
+    }), 44);
+  });
+
+  it("leaves another directory's sidecar listening on a different port", () => {
+    assert.equal(leftoverListenerPid({
+      lock: { state: "stale", lock: { pid: 11, sidecarPid: 22, origin: "http://127.0.0.1:4370", updatedAt: "" } },
+      port: 4371,
+      listenPid: 55,
+      ourPid: 33,
+      ownsDatabase: false,
+      command: "node apps/api/dist/main.js",
+    }), null);
+  });
+
   it("signals term and then kill until the pid is gone", async () => {
     const signals: string[] = [];
     let alive = true;

@@ -24,11 +24,11 @@ export function leftoverListenerPid(input: {
   const pid = input.listenPid;
   if (!pid || pid === input.ourPid) return null;
   if (input.ownsDatabase) return pid;
-  if (input.lock.state === "stale") {
-    const recorded = input.lock.lock.sidecarPid;
-    if (recorded === pid && originPort(input.lock.lock.origin) === input.port) return pid;
-  }
-  if (input.lock.state === "stale" && input.command && isSidecarCommand(input.command)) return pid;
+  if (input.lock.state !== "stale") return null;
+  const lockPort = originPort(input.lock.lock.origin);
+  if (lockPort !== input.port) return null;
+  if (input.lock.lock.sidecarPid === pid) return pid;
+  if (input.command && isSidecarCommand(input.command)) return pid;
   return null;
 }
 

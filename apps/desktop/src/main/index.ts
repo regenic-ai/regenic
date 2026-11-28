@@ -634,6 +634,17 @@ async function stopOwnedSidecarAndWait(graceMs = SIDECAR_STOP_MS): Promise<void>
   throw dataDirectoryError("settings.dataDirKernelStop");
 }
 
+/** A failed stop must keep the store lock so the next launch can find the sidecar pid. */
+async function stopOwnedSidecarForRelease(graceMs?: number): Promise<boolean> {
+  try {
+    await stopOwnedSidecarAndWait(graceMs);
+    return true;
+  } catch (error) {
+    process.stderr.write(`[kernel] ${error instanceof Error ? error.message : error}\n`);
+    return false;
+  }
+}
+
 function dataDirectoryError(key: string): Error {
   if (!isMessageKey(key)) {
     return new Error(key);
@@ -803,11 +814,7 @@ async function startLocalKernel(options?: { forceSpawn?: boolean }): Promise<voi
     });
     sidecarRestartArmed = true;
   } catch (error) {
-    try {
-      await stopOwnedSidecarAndWait();
-    } finally {
-      releaseOwnedStoreLock();
-    }
+    if (await stopOwnedSidecarForRelease()) releaseOwnedStoreLock();
     throw error;
   }
 }
@@ -1566,12 +1573,7 @@ app.on("before-quit", (event) => {
     conversationPresence.stop();
     personalApiKey = null;
     semanticRuntime?.shutdown();
-    try {
-      await stopOwnedSidecarAndWait(2_000);
-    } catch (error) {
-      process.stderr.write(`[kernel] ${error instanceof Error ? error.message : error}\n`);
-    }
-    releaseOwnedStoreLock();
+    if (await stopOwnedSidecarForRelease(2_000)) releaseOwnedStoreLock();
     app.quit();
   })();
 });
