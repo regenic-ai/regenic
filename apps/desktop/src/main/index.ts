@@ -43,6 +43,7 @@ import {
 import {
   acquireStoreLock,
   inspectStoreLock,
+  noteStoreLockSidecar,
   releaseStoreLock,
   storeLockHeldByOther,
 } from "./store-lock";
@@ -51,7 +52,8 @@ import appIconPng from "../brand/app-icon.png?asset";
 import appIconWinPng from "../brand/app-icon-win.png?asset";
 import trayPng from "../brand/tray-mark.png?asset";
 import { editContextRoles } from "./edit-menu";
-import { collectHostStats, resetHostStatCache } from "./host-stats";
+import { collectHostStats, listenPid, resetHostStatCache } from "./host-stats";
+import { reapLeftoverKernel } from "./kernel-reap";
 import { formatBytes, portFromHttpOrigin } from "../shared/host-watch";
 import { waitForPersonalKernel } from "../shared/kernel-ready";
 import {
@@ -617,12 +619,12 @@ function waitForSidecarExit(
   });
 }
 
-async function stopOwnedSidecarAndWait(): Promise<void> {
+async function stopOwnedSidecarAndWait(graceMs = SIDECAR_STOP_MS): Promise<void> {
   const child = requestSidecarStop();
   if (!child || sidecarAlreadyExited(child)) {
     return;
   }
-  if (await waitForSidecarExit(child, SIDECAR_STOP_MS)) {
+  if (await waitForSidecarExit(child, graceMs)) {
     return;
   }
   child.kill("SIGKILL");
@@ -653,6 +655,9 @@ function spawnSidecar(port: number): void {
   });
   sidecar = child;
   lastOwnedSidecarPid = child.pid ?? null;
+  if (ownedStoreRoot && lastOwnedSidecarPid) {
+    noteStoreLockSidecar(ownedStoreRoot, process.pid, lastOwnedSidecarPid);
+  }
   child.stdout?.on("data", (chunk) => {
     process.stdout.write(`[kernel] ${chunk}`);
   });
@@ -694,10 +699,12 @@ function installPersonalApiKeyInjection(): void {
   );
 }
 
+const LOCAL_KERNEL_PORTS = Array.from({ length: 10 }, (_, offset) => DEFAULT_PORT + offset);
+
 async function pickFreeLocalPort(): Promise<{ port: number; origin: string }> {
-  for (let offset = 0; offset < 10; offset += 1) {
-    const port = DEFAULT_PORT + offset;
+  for (const port of LOCAL_KERNEL_PORTS) {
     const origin = `http://127.0.0.1:${port}`;
+    if (await listenPid(port)) continue;
     if ((await probeKernelMode(origin)) === "none") {
       return { port, origin };
     }
@@ -756,6 +763,14 @@ async function storeHeldByLocalKernel(database: string): Promise<boolean> {
 async function startLocalKernel(options?: { forceSpawn?: boolean }): Promise<void> {
   const paths = currentDataPaths();
   const postgres = loadDesktopPreference(settingsFile()).database?.driver === "postgres";
+  if (!postgres && !await reapLeftoverKernel({
+    dataRoot: paths.dataRoot,
+    ourPid: process.pid,
+    ports: LOCAL_KERNEL_PORTS,
+    ownsDatabase: (origin) => originHoldsDatabase(origin, paths.database),
+  })) {
+    throw dataDirectoryError("settings.dataDirReasonHeld");
+  }
   if (!options?.forceSpawn && !postgres) {
     const reusable = await findReusableLocalKernel(paths.database);
     if (reusable) {
@@ -1540,14 +1555,25 @@ app.whenReady().then(async () => {
   });
 });
 
-app.on("before-quit", () => {
+let finishingQuit = false;
+app.on("before-quit", (event) => {
   quitting = true;
   disarmSidecarRestart();
-  conversationPresence.stop();
-  personalApiKey = null;
-  sidecar?.kill();
-  semanticRuntime?.shutdown();
-  releaseOwnedStoreLock();
+  if (finishingQuit) return;
+  event.preventDefault();
+  finishingQuit = true;
+  void (async () => {
+    conversationPresence.stop();
+    personalApiKey = null;
+    semanticRuntime?.shutdown();
+    try {
+      await stopOwnedSidecarAndWait(2_000);
+    } catch (error) {
+      process.stderr.write(`[kernel] ${error instanceof Error ? error.message : error}\n`);
+    }
+    releaseOwnedStoreLock();
+    app.quit();
+  })();
 });
 
 app.on("window-all-closed", () => {
