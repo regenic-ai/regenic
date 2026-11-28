@@ -213,7 +213,7 @@ pnpm local import-file --database ./regenic.db --blob-root ./blobs \
 
 ### Inbox
 
-列出现在要处理的消息。回执和删除记录还在库里，但不出现在这份列表里。跟帖和普通消息用同一套规则。
+列出现在要处理的消息。删除记录还在库里，但不出现在这份列表里。别人发来的消息用同一套规则。应用自己的回复不进入这份列表。
 
 ```bash
 pnpm local inbox --database ./regenic.db --org local-owner

@@ -1082,7 +1082,18 @@ describe("local ingestion persistence", () => {
         operation: "revise",
         revision_id: "revision-current-work",
         type: "text",
-        content: [{ role: "body", media_type: "text/plain", text: "ok" }],
+        content: [
+          { role: "body", media_type: "text/plain", text: "ok" },
+          {
+            role: "metadata",
+            media_type: "application/vnd.regenic.surface+json",
+            text: JSON.stringify({
+              channel: "regenic",
+              kind: "assistant",
+              direction: "inbound",
+            }),
+          },
+        ],
       })), /revision audit unavailable/);
       assert.equal((await harness.authorityStore.findBySourceIdentity({
         org_id: "local-owner",
@@ -1097,7 +1108,18 @@ describe("local ingestion persistence", () => {
         operation: "revise",
         revision_id: "revision-current-work",
         type: "text",
-        content: [{ role: "body", media_type: "text/plain", text: "ok" }],
+        content: [
+          { role: "body", media_type: "text/plain", text: "ok" },
+          {
+            role: "metadata",
+            media_type: "application/vnd.regenic.surface+json",
+            text: JSON.stringify({
+              channel: "regenic",
+              kind: "assistant",
+              direction: "inbound",
+            }),
+          },
+        ],
       }));
       const next = await harness.authorityStore.findBySourceIdentity({
         org_id: "local-owner",
@@ -1370,7 +1392,7 @@ describe("local ingestion persistence", () => {
     assert.equal(inbox.length, 1);
     assert.equal(inbox[0].event.external_id, "source-event-1");
     assert.equal(decision.disposition, "current_work");
-    assert.deepEqual(decision.reason_codes, ["actionable"]);
+    assert.deepEqual(decision.reason_codes, ["default_personal_attention"]);
 
     await harness.service.ingest(
       createBatch({ operation: "tombstone", content: undefined }),

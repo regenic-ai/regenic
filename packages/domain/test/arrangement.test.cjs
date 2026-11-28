@@ -50,46 +50,23 @@ describe("arrangeMessage", () => {
     assert.equal(decision.layer, "L1_event");
   });
 
-  it("filters acknowledgements as noise", () => {
-    const decision = arrangeMessage({
-      event: event(),
-      text: "thanks",
-    });
-
-    assert.equal(decision.disposition, "outside_current_work");
-    assert.deepEqual(decision.reason_codes, ["noise"]);
-  });
-
-  it("keeps actionable requests in current work", () => {
-    const decision = arrangeMessage({
-      event: event(),
-      type: "thread_reply",
-      text: "Can you review the pull request?",
-    });
-
-    assert.equal(decision.disposition, "current_work");
-    assert.deepEqual(decision.reason_codes, ["actionable"]);
-  });
-
   it("arranges a thread reply with the same rules as a new message", () => {
-    const text = "这个达人底价是多少，你们签了什么合同";
-    const reply = arrangeMessage({
-      event: event(),
-      type: "thread_reply",
-      text,
-    });
-    const message = arrangeMessage({
-      event: event(),
-      type: "message",
-      text,
-    });
+    for (const text of ["这个达人底价是多少，你们签了什么合同", "收到", "later"]) {
+      const reply = arrangeMessage({
+        event: event(),
+        type: "thread_reply",
+        text,
+      });
+      const message = arrangeMessage({
+        event: event(),
+        type: "message",
+        text,
+      });
 
-    assert.equal(reply.disposition, "current_work");
-    assert.deepEqual(reply.reason_codes, message.reason_codes);
-    assert.deepEqual(
-      arrangeMessage({ event: event(), type: "thread_reply", text: "收到" }).reason_codes,
-      ["noise"],
-    );
+      assert.equal(reply.disposition, "current_work");
+      assert.deepEqual(reply.reason_codes, ["default_personal_attention"]);
+      assert.deepEqual(reply.reason_codes, message.reason_codes);
+    }
   });
 
   it("keeps a task record in current work", () => {
@@ -123,17 +100,7 @@ describe("arrangeMessage", () => {
     assert.deepEqual(decision.reason_codes, ["assistant_not_current_work"]);
   });
 
-  it("holds short unclear messages as pending", () => {
-    const decision = arrangeMessage({
-      event: event(),
-      text: "later",
-    });
-
-    assert.equal(decision.disposition, "pending");
-    assert.deepEqual(decision.reason_codes, ["needs_review"]);
-  });
-
-  it("keeps an explicit weight hint even when the text looks like noise", () => {
+  it("keeps an explicit weight hint ahead of ordinary text", () => {
     const decision = arrangeMessage({
       event: event(),
       text: "ok",
@@ -154,7 +121,7 @@ describe("arrangeMessage", () => {
     assert.deepEqual(decision.reason_codes, ["weight_hint"]);
   });
 
-  it("applies a personal policy to configurable dispositions only", () => {
+  it("applies the default disposition to user text without a content class", () => {
     const policy = {
       version: 1,
       high_hint_disposition: "pending",
@@ -162,20 +129,27 @@ describe("arrangeMessage", () => {
       short_text_disposition: "outside_current_work",
       default_disposition: "outside_current_work",
     };
-    const actionable = arrangeMessage({
+    const question = arrangeMessage({
       event: event(),
       text: "Please review the release.",
       dispatch_policy: policy,
     });
-    assert.equal(actionable.disposition, "pending");
-    assert.deepEqual(actionable.reason_codes, ["policy_actionable"]);
-    const defaulted = arrangeMessage({
+    const acknowledgement = arrangeMessage({
       event: event(),
-      text: "A detailed status update with no direct request.",
+      text: "收到",
       dispatch_policy: policy,
     });
-    assert.equal(defaulted.disposition, "outside_current_work");
-    assert.deepEqual(defaulted.reason_codes, ["policy_default_personal_attention"]);
+    assert.equal(question.disposition, "outside_current_work");
+    assert.deepEqual(question.reason_codes, ["policy_default_personal_attention"]);
+    assert.deepEqual(acknowledgement.reason_codes, question.reason_codes);
+    const hinted = arrangeMessage({
+      event: event(),
+      text: "ok",
+      weight_hints: { importance: 1 },
+      dispatch_policy: policy,
+    });
+    assert.equal(hinted.disposition, "pending");
+    assert.deepEqual(hinted.reason_codes, ["policy_weight_hint"]);
   });
 
   it("does not let a personal policy override safety filters", () => {
@@ -188,7 +162,7 @@ describe("arrangeMessage", () => {
     };
     assert.equal(
       arrangeMessage({ event: event(), text: "thanks", dispatch_policy: policy }).disposition,
-      "outside_current_work",
+      "current_work",
     );
     assert.equal(
       arrangeMessage({ event: event(), kind: "assistant", text: "pong", dispatch_policy: policy }).disposition,
@@ -200,14 +174,14 @@ describe("arrangeMessage", () => {
     );
   });
 
-  it("filters Chinese acknowledgements and keeps Chinese requests", () => {
+  it("arranges acknowledgements and requests with the same rule", () => {
     assert.deepEqual(
       arrangeMessage({ event: event(), text: "收到" }).reason_codes,
-      ["noise"],
+      ["default_personal_attention"],
     );
     assert.deepEqual(
       arrangeMessage({ event: event(), text: "请确认发布" }).reason_codes,
-      ["actionable"],
+      ["default_personal_attention"],
     );
   });
 });
@@ -268,7 +242,7 @@ describe("IngestionService arrangement", () => {
     assert.deepEqual(audit[0].decision, decision);
   });
 
-  it("arranges accepted events and leaves noise out of the inbox", async () => {
+  it("keeps user messages in the inbox and leaves the machine reply out", async () => {
     const authorityStore = new MemoryAuthorityStore();
     const service = new IngestionService(new MemoryBlobStore(), authorityStore);
 
@@ -299,15 +273,37 @@ describe("IngestionService arrangement", () => {
           type: "message",
           content: [{ role: "body", media_type: "text/plain", text: "ok" }],
         },
+        {
+          operation: "create",
+          source: "regenic",
+          external_id: "bot-1",
+          occurred_at: "2026-08-21T00:02:00.000Z",
+          actor: { id: "bot" },
+          scope: { id: "personal" },
+          type: "message",
+          content: [
+            { role: "body", media_type: "text/plain", text: "这个问题不在可回答的范围内哦" },
+            {
+              role: "metadata",
+              media_type: "application/vnd.regenic.surface+json",
+              text: JSON.stringify({ channel: "regenic", kind: "assistant", direction: "inbound" }),
+            },
+          ],
+        },
       ],
     });
 
     const inbox = await authorityStore.listInbox("local-owner");
     assert.equal(accepted.valid, true);
-    assert.equal(inbox.length, 1);
-    assert.equal(inbox[0].event.external_id, "ask-1");
-    assert.deepEqual(inbox[0].decision.reason_codes, ["actionable"]);
-    assert.equal((await authorityStore.getDisposition(accepted.records[1].event_id)).disposition, "outside_current_work");
+    assert.deepEqual(
+      inbox.map((item) => item.event.external_id).sort(),
+      ["ack-1", "ask-1"],
+    );
+    assert.deepEqual(inbox[0].decision.reason_codes, ["default_personal_attention"]);
+    assert.equal(
+      (await authorityStore.getDisposition(accepted.records[2].event_id)).disposition,
+      "outside_current_work",
+    );
   });
 
   it("drops a source from the inbox when the current head leaves current work", async () => {
@@ -341,7 +337,14 @@ describe("IngestionService arrangement", () => {
         operation: "revise",
         ...record,
         occurred_at: "2026-08-21T00:01:00.000Z",
-        content: [{ role: "body", media_type: "text/plain", text: "ok" }],
+        content: [
+          { role: "body", media_type: "text/plain", text: "ok" },
+          {
+            role: "metadata",
+            media_type: "application/vnd.regenic.surface+json",
+            text: JSON.stringify({ channel: "regenic", kind: "assistant", direction: "inbound" }),
+          },
+        ],
       }],
     });
 
@@ -401,19 +404,15 @@ describe("IngestionService arrangement", () => {
     assert.equal(accepted.valid, true);
     assert.equal(
       (await authorityStore.getDisposition(accepted.records[0].event_id)).disposition,
-      "pending",
-    );
-    assert.deepEqual(
-      (await authorityStore.getDisposition(accepted.records[0].event_id)).reason_codes,
-      ["policy_actionable"],
-    );
-    assert.equal(
-      (await authorityStore.getDisposition(accepted.records[1].event_id)).disposition,
       "outside_current_work",
     );
     assert.deepEqual(
+      (await authorityStore.getDisposition(accepted.records[0].event_id)).reason_codes,
+      ["policy_default_personal_attention"],
+    );
+    assert.deepEqual(
       (await authorityStore.getDisposition(accepted.records[1].event_id)).reason_codes,
-      ["noise"],
+      ["policy_default_personal_attention"],
     );
   });
 
@@ -446,7 +445,7 @@ describe("IngestionService arrangement", () => {
 
     assert.deepEqual(
       (await authorityStore.getDisposition(accepted.records[0].event_id)).reason_codes,
-      ["actionable"],
+      ["default_personal_attention"],
     );
   });
 
@@ -546,7 +545,7 @@ describe("IngestionService arrangement", () => {
     assert.equal(replayed.records[0].event_id, event.id);
     const inbox = await authorityStore.listInbox("local-owner");
     assert.equal(inbox.length, 1);
-    assert.deepEqual(inbox[0].decision.reason_codes, ["actionable"]);
+    assert.deepEqual(inbox[0].decision.reason_codes, ["default_personal_attention"]);
     assert.equal(
       await authorityStore.putDispositionIfAbsent({
         event_id: event.id,
