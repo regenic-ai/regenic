@@ -19,7 +19,6 @@ export async function releaseListenPort(
       resolve();
     };
     const timer = setTimeout(finish, timeoutMs);
-    timer.unref?.();
     try {
       close(finish);
     } catch {
