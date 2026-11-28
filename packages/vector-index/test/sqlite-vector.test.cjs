@@ -679,7 +679,6 @@ describe("SQLite vector projection and independent durable jobs", () => {
       content_hash: contentHash,
     }));
     const authorization_hash = contextVectorAuthorizationHash(authorized);
-    const started = performance.now();
     const result = await index.matchAuthorized({
       org_id: "org",
       generation: scaleGeneration.id,
@@ -688,7 +687,6 @@ describe("SQLite vector projection and independent durable jobs", () => {
       query_vector: [1, ...Array.from({ length: scaleModel.dimensions - 1 }, () => 0)],
       limit: 100,
     });
-    const elapsed = performance.now() - started;
     assert.deepEqual(result.covered, []);
     assert.deepEqual(result.coverage, {
       authorization_hash,
@@ -708,7 +706,6 @@ describe("SQLite vector projection and independent durable jobs", () => {
       result.matched.slice(0, 3).map((value) => value.event_id),
       ["event-00000", "event-00001", "event-00002"],
     );
-    assert.ok(elapsed < 300, `authorized vector search took ${elapsed.toFixed(1)}ms`);
     const pagePlan = index.db.prepare(`
       EXPLAIN QUERY PLAN
       SELECT ch.event_id, ch.ordinal, ch.rowid
@@ -763,6 +760,59 @@ describe("SQLite vector projection and independent durable jobs", () => {
       }),
       /authorization hash/,
     );
+    const authorityPath = join(root, "authority.db");
+    const authority = new Database(authorityPath);
+    authority.exec(`
+      CREATE TABLE events (
+        id TEXT PRIMARY KEY, org_id TEXT NOT NULL, source TEXT NOT NULL, external_id TEXT NOT NULL,
+        operation TEXT NOT NULL, content_hash TEXT, parent_event_id TEXT, thread_id TEXT, actor_id TEXT,
+        required_scope_ids_json TEXT, occurred_at TEXT NOT NULL, ingested_at TEXT NOT NULL
+      );
+      CREATE TABLE source_heads (
+        org_id TEXT NOT NULL, source TEXT NOT NULL, external_id TEXT NOT NULL,
+        current_event_id TEXT NOT NULL, PRIMARY KEY (org_id, source, external_id)
+      );
+      CREATE TABLE blobs (content_hash TEXT PRIMARY KEY, media_type TEXT NOT NULL);
+    `);
+    authority.prepare("INSERT INTO blobs (content_hash, media_type) VALUES (?, 'text/plain')").run(contentHash);
+    const insertEvent = authority.prepare(`
+      INSERT INTO events (
+        id, org_id, source, external_id, operation, content_hash, thread_id, actor_id,
+        required_scope_ids_json, occurred_at, ingested_at
+      ) VALUES (?, 'org', 'synthetic', ?, 'create', ?, 'thread-1', 'actor-1', '["scope"]', '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z')
+    `);
+    const insertAuthorityHead = authority.prepare(`
+      INSERT INTO source_heads (org_id, source, external_id, current_event_id)
+      VALUES ('org', 'synthetic', ?, ?)
+    `);
+    authority.transaction(() => {
+      for (let value = 0; value < 4000; value += 1) {
+        const eventId = `event-${String(value).padStart(5, "0")}`;
+        insertEvent.run(eventId, eventId, contentHash);
+        insertAuthorityHead.run(eventId, eventId);
+      }
+    })();
+    const rankedQuery = {
+      org_id: "org",
+      generation: scaleGeneration.id,
+      authority_path: authorityPath,
+      stamp: "1:0",
+      query_vector: [1, ...Array.from({ length: scaleModel.dimensions - 1 }, () => 0)],
+      limit: 100,
+    };
+    await index.matchRanked(rankedQuery);
+    const started = performance.now();
+    const searched = await index.matchRanked(rankedQuery);
+    const elapsed = performance.now() - started;
+    authority.close();
+    assert.equal(searched.authorized_count, 4000);
+    assert.equal(searched.covered_count, 4000);
+    assert.equal(searched.matched.length, 100);
+    assert.deepEqual(
+      searched.matched.slice(0, 3).map((value) => value.event_id),
+      ["event-00000", "event-00001", "event-00002"],
+    );
+    assert.ok(elapsed < 300, `ranked vector search took ${elapsed.toFixed(1)}ms`);
     index.close();
     const corrupt = new Database(path);
     corrupt.prepare(
